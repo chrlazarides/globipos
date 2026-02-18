@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation } from "wouter";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
@@ -58,9 +57,10 @@ export default function Items() {
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [itemDialogOpen, setItemDialogOpen] = useState(false);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const { toast } = useToast();
-  const [, navigate] = useLocation();
 
   const { data: items = [], isLoading: itemsLoading } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
@@ -90,6 +90,26 @@ export default function Items() {
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  const updateItem = useMutation({
+    mutationFn: async (data: z.infer<typeof itemFormSchema>) => {
+      if (!editingItem) return;
+      const res = await apiRequest("PATCH", `/api/items/${editingItem.id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      setEditDialogOpen(false);
+      setEditingItem(null);
+      toast({ title: "Item updated successfully" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const handleRowClick = (item: Item) => {
+    setEditingItem(item);
+    setEditDialogOpen(true);
+  };
 
   const filtered = items.filter((item) => {
     const matchSearch = item.name.toLowerCase().includes(search.toLowerCase()) || item.sku.toLowerCase().includes(search.toLowerCase());
@@ -220,7 +240,7 @@ export default function Items() {
               </SelectContent>
             </Select>
           </div>
-          <DataTable columns={columns} data={filtered} isLoading={itemsLoading} emptyMessage="No items found" onRowClick={(item) => navigate(`/items/${item.id}`)} />
+          <DataTable columns={columns} data={filtered} isLoading={itemsLoading} emptyMessage="No items found" onRowClick={handleRowClick} />
         </CardContent>
       </Card>
 
@@ -233,14 +253,51 @@ export default function Items() {
         apiEndpoint="/api/items/import"
         onSuccess={() => queryClient.invalidateQueries({ queryKey: ["/api/items"] })}
       />
+
+      <Dialog open={editDialogOpen} onOpenChange={(open) => { setEditDialogOpen(open); if (!open) setEditingItem(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Item</DialogTitle>
+          </DialogHeader>
+          {editingItem && (
+            <ItemForm
+              onSubmit={(d) => updateItem.mutate(d)}
+              isPending={updateItem.isPending}
+              categories={categories}
+              defaultValues={{
+                name: editingItem.name,
+                sku: editingItem.sku,
+                barcode: editingItem.barcode || "",
+                description: editingItem.description || "",
+                categoryId: editingItem.categoryId || "",
+                unitType: editingItem.unitType,
+                packSize: editingItem.packSize,
+                price1: editingItem.price1,
+                price2: editingItem.price2,
+                price3: editingItem.price3,
+                price4: editingItem.price4,
+                price5: editingItem.price5,
+                costPrice: editingItem.costPrice,
+                stockQuantity: editingItem.stockQuantity,
+                reorderLevel: editingItem.reorderLevel,
+                volume: editingItem.volume || "",
+                alcoholPercentage: editingItem.alcoholPercentage || "",
+                origin: editingItem.origin || "",
+                vintage: editingItem.vintage || "",
+                active: editingItem.active,
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function ItemForm({ onSubmit, isPending, categories }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[] }) {
+function ItemForm({ onSubmit, isPending, categories, defaultValues }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any }) {
   const form = useForm({
     resolver: zodResolver(itemFormSchema),
-    defaultValues: {
+    defaultValues: defaultValues || {
       name: "", sku: "", barcode: "", description: "", categoryId: "", unitType: "pc", packSize: 1,
       price1: "0", price2: "0", price3: "0", price4: "0", price5: "0", costPrice: "0",
       stockQuantity: 0, reorderLevel: 10, volume: "", alcoholPercentage: "", origin: "", vintage: "", active: true,

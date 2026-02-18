@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation } from "wouter";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
@@ -43,9 +42,10 @@ const customerFormSchema = insertCustomerSchema.extend({
 export default function Customers() {
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const { toast } = useToast();
-  const [, navigate] = useLocation();
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
 
@@ -61,6 +61,26 @@ export default function Customers() {
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  const updateCustomer = useMutation({
+    mutationFn: async (data: z.infer<typeof customerFormSchema>) => {
+      if (!editingCustomer) return;
+      const res = await apiRequest("PATCH", `/api/customers/${editingCustomer.id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+      setEditDialogOpen(false);
+      setEditingCustomer(null);
+      toast({ title: "Customer updated successfully" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const handleRowClick = (customer: Customer) => {
+    setEditingCustomer(customer);
+    setEditDialogOpen(true);
+  };
 
   const filtered = customers.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase()) || c.code.toLowerCase().includes(search.toLowerCase())
@@ -150,7 +170,7 @@ export default function Customers() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input placeholder="Search customers..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" data-testid="input-search-customers" />
           </div>
-          <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No customers found" onRowClick={(c) => navigate(`/customers/${c.id}`)} />
+          <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No customers found" onRowClick={handleRowClick} />
         </CardContent>
       </Card>
 
@@ -163,6 +183,35 @@ export default function Customers() {
         apiEndpoint="/api/customers/import"
         onSuccess={handleImportSuccess}
       />
+
+      <Dialog open={editDialogOpen} onOpenChange={(open) => { setEditDialogOpen(open); if (!open) setEditingCustomer(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Customer</DialogTitle>
+          </DialogHeader>
+          {editingCustomer && (
+            <CustomerForm
+              onSubmit={(d) => updateCustomer.mutate(d)}
+              isPending={updateCustomer.isPending}
+              defaultValues={{
+                name: editingCustomer.name,
+                code: editingCustomer.code,
+                email: editingCustomer.email || "",
+                phone: editingCustomer.phone || "",
+                address: editingCustomer.address || "",
+                city: editingCustomer.city || "",
+                taxId: editingCustomer.taxId || "",
+                paymentTerms: editingCustomer.paymentTerms,
+                creditLimit: editingCustomer.creditLimit || "0",
+                currentBalance: editingCustomer.currentBalance || "0",
+                priceLevel: editingCustomer.priceLevel,
+                notes: editingCustomer.notes || "",
+                active: editingCustomer.active,
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
