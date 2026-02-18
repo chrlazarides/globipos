@@ -397,16 +397,51 @@ function detectEntity(headers: string[]): { entity: EntityType; confidence: numb
   return { entity: entries[0][0], confidence };
 }
 
+const FIELD_SYNONYMS: Record<string, string[]> = {
+  name: ["name", "item", "product", "wine", "title", "label", "article", "προϊόν", "όνομα", "περιγραφή", "description", "desc", "item name", "product name", "wine name"],
+  sku: ["sku", "code", "item code", "product code", "article", "artno", "art no", "κωδικός", "ref", "reference", "itemno", "item no", "partno", "part no", "id"],
+  description: ["description", "desc", "details", "info", "notes", "περιγραφή", "name", "item", "product", "wine", "title", "label"],
+  barcode: ["barcode", "ean", "upc", "gtin", "bar code"],
+  category: ["category", "cat", "type", "group", "κατηγορία", "wine type"],
+  brand: ["brand", "producer", "winery", "maker", "supplier", "οινοποιείο", "παραγωγός", "house"],
+  unitType: ["unit", "unit type", "uom", "measure"],
+  packSize: ["pack", "pack size", "packing", "case", "case size", "btl", "bottles"],
+  price1: ["price", "price1", "retail", "sell", "selling", "τιμή", "final", "rrp", "sale price"],
+  price2: ["price2", "wholesale", "trade"],
+  price3: ["price3"],
+  price4: ["price4"],
+  price5: ["price5"],
+  costPrice: ["cost", "cost price", "buy", "buying", "purchase", "κόστος", "net", "buy price"],
+  stockQuantity: ["stock", "qty", "quantity", "on hand", "inventory", "απόθεμα"],
+  volume: ["volume", "ml", "cl", "lt", "liter", "litre", "size", "όγκος", "capacity"],
+  alcoholPercentage: ["alcohol", "abv", "alc", "%", "vol", "αλκοόλ"],
+  origin: ["origin", "country", "region", "χώρα", "provenance", "appellation"],
+  vintage: ["vintage", "year", "έτος", "harvest"],
+};
+
 function autoMapColumns(headers: string[], fields: FieldDef[]): Record<string, string> {
   const map: Record<string, string> = {};
+  const usedHeaders = new Set<string>();
+
   for (const field of fields) {
+    const synonyms = FIELD_SYNONYMS[field.key] || [];
     const match = headers.find((h) => {
-      const hNorm = h.toLowerCase().replace(/[\s_-]/g, "");
+      if (usedHeaders.has(h)) return false;
+      const hNorm = h.toLowerCase().replace(/[\s_\-./]/g, "");
       const fKeyNorm = field.key.toLowerCase().replace(/[\s_-]/g, "");
       const fLabelNorm = field.label.toLowerCase().replace(/[\s_-]/g, "");
-      return hNorm === fKeyNorm || hNorm === fLabelNorm || hNorm.includes(fKeyNorm) || fKeyNorm.includes(hNorm);
+      if (hNorm === fKeyNorm || hNorm === fLabelNorm) return true;
+      if (hNorm.includes(fKeyNorm) || fKeyNorm.includes(hNorm)) return true;
+      for (const syn of synonyms) {
+        const synNorm = syn.toLowerCase().replace(/[\s_-]/g, "");
+        if (hNorm === synNorm || hNorm.includes(synNorm) || synNorm.includes(hNorm)) return true;
+      }
+      return false;
     });
-    if (match) map[field.key] = match;
+    if (match) {
+      map[field.key] = match;
+      usedHeaders.add(match);
+    }
   }
   return map;
 }
