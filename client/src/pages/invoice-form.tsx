@@ -49,7 +49,7 @@ export default function InvoiceForm() {
   const [customerId, setCustomerId] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
   const [dueDate, setDueDate] = useState("");
-  const [taxRate, setTaxRate] = useState("0");
+  const [taxRate, setTaxRate] = useState("19");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState("draft");
   const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, unitPrice: "0", discount: "0", total: "0" }]);
@@ -365,7 +365,7 @@ export default function InvoiceForm() {
                           />
                         </TableCell>
                         <TableCell className="text-right font-medium text-sm">
-                          ${parseFloat(line.total).toFixed(2)}
+                          €{parseFloat(line.total).toFixed(2)}
                         </TableCell>
                         {!isViewMode && (
                           <TableCell>
@@ -393,7 +393,7 @@ export default function InvoiceForm() {
             <CardContent className="space-y-3">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Subtotal</span>
-                <span className="font-medium">${subtotal.toFixed(2)}</span>
+                <span className="font-medium">€{subtotal.toFixed(2)}</span>
               </div>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm text-muted-foreground">Tax (%)</span>
@@ -409,12 +409,12 @@ export default function InvoiceForm() {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Tax Amount</span>
-                <span>${taxAmount.toFixed(2)}</span>
+                <span>€{taxAmount.toFixed(2)}</span>
               </div>
               <Separator />
               <div className="flex justify-between text-lg font-bold">
                 <span>Total</span>
-                <span data-testid="text-invoice-total">${total.toFixed(2)}</span>
+                <span data-testid="text-invoice-total">€{total.toFixed(2)}</span>
               </div>
             </CardContent>
           </Card>

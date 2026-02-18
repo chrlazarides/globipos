@@ -85,7 +85,7 @@ export default function Customers() {
       header: "Balance",
       cell: (row) => (
         <span className={`text-sm font-medium ${parseFloat(row.currentBalance) > 0 ? "text-red-500" : ""}`}>
-          ${parseFloat(row.currentBalance).toFixed(2)}
+          €{parseFloat(row.currentBalance).toFixed(2)}
         </span>
       ),
     },

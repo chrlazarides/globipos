@@ -30,11 +30,11 @@ export async function seedDatabase() {
   const createdItems = await db.insert(items).values(seedItems).returning();
 
   const seedCustomers = [
-    { name: "The Grand Hotel & Bar", code: "CUST001", email: "orders@grandhotel.com", phone: "+1-555-0101", address: "123 Luxury Avenue", city: "New York", taxId: "US-12345678", paymentTerms: "credit_30", creditLimit: "50000", currentBalance: "0", priceLevel: 1 },
-    { name: "Metro Wine Bar", code: "CUST002", email: "buying@metrowinebar.com", phone: "+1-555-0102", address: "456 Downtown Street", city: "Chicago", taxId: "US-23456789", paymentTerms: "credit_14", creditLimit: "25000", currentBalance: "0", priceLevel: 2 },
-    { name: "Coastal Spirits Trading", code: "CUST003", email: "procurement@coastalspirits.com", phone: "+1-555-0103", address: "789 Harbor Blvd", city: "Miami", taxId: "US-34567890", paymentTerms: "cash", creditLimit: "0", currentBalance: "0", priceLevel: 3 },
-    { name: "Elite Dining Group", code: "CUST004", email: "wine@elitedining.com", phone: "+1-555-0104", address: "321 Restaurant Row", city: "Los Angeles", taxId: "US-45678901", paymentTerms: "credit_60", creditLimit: "100000", currentBalance: "0", priceLevel: 1 },
-    { name: "Vintage Cellars Retail", code: "CUST005", email: "orders@vintagecellars.com", phone: "+1-555-0105", address: "654 Wine Lane", city: "San Francisco", taxId: "US-56789012", paymentTerms: "credit_30", creditLimit: "35000", currentBalance: "0", priceLevel: 2 },
+    { name: "Limassol Wine House", code: "CUST001", email: "orders@limassolwinehouse.com.cy", phone: "+357-25-123456", address: "15 Makarios Avenue", city: "Limassol", taxId: "CY-123456789", paymentTerms: "credit_30", creditLimit: "50000", currentBalance: "0", priceLevel: 1, portalAccessCode: "WINE2026" },
+    { name: "Nicosia Grand Hotel", code: "CUST002", email: "purchasing@nicosiagrand.com.cy", phone: "+357-22-234567", address: "28 Ledra Street", city: "Nicosia", taxId: "CY-234567890", paymentTerms: "credit_14", creditLimit: "25000", currentBalance: "0", priceLevel: 2, portalAccessCode: "HOTEL2026" },
+    { name: "Paphos Beach Resort", code: "CUST003", email: "procurement@paphosbeach.com.cy", phone: "+357-26-345678", address: "42 Poseidonos Avenue", city: "Paphos", taxId: "CY-345678901", paymentTerms: "cash", creditLimit: "0", currentBalance: "0", priceLevel: 3, portalAccessCode: "RESORT26" },
+    { name: "Larnaca Spirits Trading", code: "CUST004", email: "wine@larnacaspirits.com.cy", phone: "+357-24-456789", address: "7 Athinon Avenue", city: "Larnaca", taxId: "CY-456789012", paymentTerms: "credit_60", creditLimit: "100000", currentBalance: "0", priceLevel: 1, portalAccessCode: "TRADE2026" },
+    { name: "Troodos Mountain Lodge", code: "CUST005", email: "orders@troodoslodge.com.cy", phone: "+357-25-567890", address: "3 Platres Hill Road", city: "Platres", taxId: "CY-567890123", paymentTerms: "credit_30", creditLimit: "35000", currentBalance: "0", priceLevel: 2, portalAccessCode: "LODGE2026" },
   ];
 
   const createdCustomers = await db.insert(customers).values(seedCustomers).returning();
@@ -45,11 +45,11 @@ export async function seedDatabase() {
     { description: "Cloudy Bay Sauvignon Blanc 12-pack", quantity: 2, unitPrice: "288.00", discount: "0", total: "576.00", itemId: createdItems[3].id },
   ];
   const inv1Subtotal = 1715.94;
-  const inv1Tax = inv1Subtotal * 0.08;
+  const inv1Tax = inv1Subtotal * 0.19;
   const [inv1] = await db.insert(invoices).values({
     invoiceNumber: "INV-00001", type: "invoice", customerId: createdCustomers[0].id,
     date: "2026-02-10", dueDate: "2026-03-12", subtotal: inv1Subtotal.toFixed(2),
-    taxRate: "8", taxAmount: inv1Tax.toFixed(2), discountAmount: "0", total: (inv1Subtotal + inv1Tax).toFixed(2), status: "sent",
+    taxRate: "19", taxAmount: inv1Tax.toFixed(2), discountAmount: "0", total: (inv1Subtotal + inv1Tax).toFixed(2), status: "sent",
   }).returning();
   await db.insert(invoiceItems).values(inv1Items.map(li => ({ ...li, invoiceId: inv1.id })));
 
@@ -58,11 +58,11 @@ export async function seedDatabase() {
     { description: "Macallan 18 Year", quantity: 6, unitPrice: "319.99", discount: "0", total: "1919.94", itemId: createdItems[7].id },
   ];
   const inv2Subtotal = 4749.82;
-  const inv2Tax = inv2Subtotal * 0.08;
+  const inv2Tax = inv2Subtotal * 0.19;
   const [inv2] = await db.insert(invoices).values({
     invoiceNumber: "INV-00002", type: "invoice", customerId: createdCustomers[3].id,
     date: "2026-02-15", dueDate: "2026-04-16", subtotal: inv2Subtotal.toFixed(2),
-    taxRate: "8", taxAmount: inv2Tax.toFixed(2), discountAmount: "50.00", total: (inv2Subtotal + inv2Tax).toFixed(2), status: "paid",
+    taxRate: "19", taxAmount: inv2Tax.toFixed(2), discountAmount: "50.00", total: (inv2Subtotal + inv2Tax).toFixed(2), status: "paid",
   }).returning();
   await db.insert(invoiceItems).values(inv2Items.map(li => ({ ...li, invoiceId: inv2.id })));
 
@@ -72,7 +72,7 @@ export async function seedDatabase() {
   const [inv3] = await db.insert(invoices).values({
     invoiceNumber: "INV-00003", type: "invoice", customerId: createdCustomers[1].id,
     date: "2026-01-20", dueDate: "2026-02-03", subtotal: "1368.00",
-    taxRate: "8", taxAmount: "109.44", discountAmount: "0", total: "1477.44", status: "overdue",
+    taxRate: "19", taxAmount: "259.92", discountAmount: "0", total: "1627.92", status: "overdue",
   }).returning();
   await db.insert(invoiceItems).values(inv3Items.map(li => ({ ...li, invoiceId: inv3.id })));
 

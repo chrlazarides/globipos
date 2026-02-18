@@ -69,7 +69,7 @@ export default function Pricing() {
       header: "Discount",
       cell: (row) => (
         <Badge variant="secondary">
-          {row.discountType === "percentage" ? `${row.discountValue}%` : `$${row.discountValue}`}
+          {row.discountType === "percentage" ? `${row.discountValue}%` : `€${row.discountValue}`}
         </Badge>
       ),
     },

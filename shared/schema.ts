@@ -56,7 +56,29 @@ export const customers = pgTable("customers", {
   currentBalance: numeric("current_balance", { precision: 12, scale: 2 }).notNull().default("0"),
   priceLevel: integer("price_level").notNull().default(1),
   notes: text("notes"),
+  portalAccessCode: text("portal_access_code"),
   active: boolean("active").default(true).notNull(),
+});
+
+export const portalOrders = pgTable("portal_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  status: text("status").notNull().default("pending"),
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
+  vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const portalOrderItems = pgTable("portal_order_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderId: varchar("order_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  quantity: integer("quantity").notNull(),
+  unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull(),
 });
 
 export const priceContracts = pgTable("price_contracts", {
@@ -148,6 +170,8 @@ export const insertSeasonalOfferItemSchema = createInsertSchema(seasonalOfferIte
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });
 export const insertInvoiceItemSchema = createInsertSchema(invoiceItems).omit({ id: true });
 export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true });
+export const insertPortalOrderSchema = createInsertSchema(portalOrders).omit({ id: true, createdAt: true });
+export const insertPortalOrderItemSchema = createInsertSchema(portalOrderItems).omit({ id: true });
 
 // Types
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -172,3 +196,7 @@ export type InsertInvoiceItem = z.infer<typeof insertInvoiceItemSchema>;
 export type InvoiceItem = typeof invoiceItems.$inferSelect;
 export type InsertPayment = z.infer<typeof insertPaymentSchema>;
 export type Payment = typeof payments.$inferSelect;
+export type InsertPortalOrder = z.infer<typeof insertPortalOrderSchema>;
+export type PortalOrder = typeof portalOrders.$inferSelect;
+export type InsertPortalOrderItem = z.infer<typeof insertPortalOrderItemSchema>;
+export type PortalOrderItem = typeof portalOrderItems.$inferSelect;

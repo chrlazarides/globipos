@@ -51,7 +51,7 @@ export default function Dashboard() {
         <StatCard title="Total Items" value={String(s.totalItems)} icon={Package} description="Active products" />
         <StatCard title="Customers" value={String(s.totalCustomers)} icon={Users} description="Active accounts" />
         <StatCard title="Invoices" value={String(s.totalInvoices)} icon={FileText} description={`${s.overdueInvoices} overdue`} />
-        <StatCard title="Revenue" value={`$${parseFloat(s.totalRevenue).toLocaleString("en-US", { minimumFractionDigits: 2 })}`} icon={DollarSign} />
+        <StatCard title="Revenue" value={`€${parseFloat(s.totalRevenue).toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={DollarSign} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -75,7 +75,7 @@ export default function Dashboard() {
                         <p className="text-xs text-muted-foreground">{inv.customerName}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-sm font-medium">${parseFloat(inv.total).toLocaleString("en-US", { minimumFractionDigits: 2 })}</p>
+                        <p className="text-sm font-medium">€{parseFloat(inv.total).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</p>
                         <StatusBadge status={inv.status} />
                       </div>
                     </div>

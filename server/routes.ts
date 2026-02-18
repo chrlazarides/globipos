@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema } from "@shared/schema";
 import { z } from "zod";
 
 export async function registerRoutes(
@@ -262,6 +262,120 @@ export async function registerRoutes(
     }
   });
 
+  // Portal API Routes
+  app.post("/api/portal/login", async (req, res) => {
+    try {
+      const { code, accessCode } = req.body;
+      if (!code || !accessCode) return res.status(400).json({ message: "Customer code and access code required" });
+      const customer = await storage.getCustomerByCode(code.toUpperCase());
+      if (!customer) return res.status(401).json({ message: "Invalid credentials" });
+      if (!customer.portalAccessCode || customer.portalAccessCode !== accessCode) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+      if (!customer.active) return res.status(403).json({ message: "Account is inactive" });
+      res.json({ customer });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/portal/customer/:id", async (req, res) => {
+    const customer = await storage.getCustomer(req.params.id);
+    if (!customer) return res.status(404).json({ message: "Not found" });
+    res.json(customer);
+  });
+
+  app.get("/api/portal/customer/:id/invoices", async (req, res) => {
+    try {
+      const invoices = await storage.getCustomerInvoices(req.params.id);
+      res.json(invoices);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/portal/customer/:id/orders", async (req, res) => {
+    try {
+      const orders = await storage.getPortalOrders(req.params.id);
+      res.json(orders);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/portal/customer/:id/statement", async (req, res) => {
+    try {
+      const statements = await storage.getCustomerStatements();
+      const st = statements.find(s => s.customerId === req.params.id);
+      res.json(st || { customerId: req.params.id, customerName: "", totalInvoiced: "0.00", totalPaid: "0.00", balance: "0.00", invoiceCount: 0 });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/portal/catalog", async (_req, res) => {
+    try {
+      const items = await storage.getAvailableItems();
+      const cats = await storage.getCategories();
+      res.json({ items, categories: cats });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/portal/orders", async (req, res) => {
+    try {
+      const { customerId, items: orderItems, notes } = req.body;
+      if (!customerId || !orderItems?.length) {
+        return res.status(400).json({ message: "Customer and items required" });
+      }
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const VAT_RATE = 0.19;
+      let subtotal = 0;
+      const processedItems: any[] = [];
+
+      for (const oi of orderItems) {
+        const item = await storage.getItem(oi.itemId);
+        if (!item) continue;
+        if (item.stockQuantity < oi.quantity) {
+          return res.status(400).json({ message: `Not enough stock for ${item.name}. Available: ${item.stockQuantity}` });
+        }
+        const priceKey = `price${customer.priceLevel}` as keyof typeof item;
+        const unitPrice = parseFloat(String(item[priceKey] || item.price1));
+        const lineTotal = unitPrice * oi.quantity;
+        subtotal += lineTotal;
+        processedItems.push({
+          itemId: item.id,
+          itemName: item.name,
+          quantity: oi.quantity,
+          unitPrice: unitPrice.toFixed(2),
+          total: lineTotal.toFixed(2),
+        });
+      }
+
+      const vatAmount = subtotal * VAT_RATE;
+      const total = subtotal + vatAmount;
+
+      const order = await storage.createPortalOrder(
+        { customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: notes || null, status: "pending" },
+        processedItems.map(pi => ({ ...pi, orderId: "TEMP" }))
+      );
+
+      for (const oi of orderItems) {
+        const item = await storage.getItem(oi.itemId);
+        if (item) {
+          await storage.updateItem(item.id, { stockQuantity: item.stockQuantity - oi.quantity });
+        }
+      }
+
+      res.json(order);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   return httpServer;
 }
 
@@ -270,9 +384,9 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string) {
     <tr>
       <td style="padding:8px;border-bottom:1px solid #eee;">${li.description}</td>
       <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${li.quantity}</td>
-      <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">$${parseFloat(li.unitPrice).toFixed(2)}</td>
-      <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">$${parseFloat(li.discount).toFixed(2)}</td>
-      <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-weight:600;">$${parseFloat(li.total).toFixed(2)}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">€${parseFloat(li.unitPrice).toFixed(2)}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">€${parseFloat(li.discount).toFixed(2)}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-weight:600;">€${parseFloat(li.total).toFixed(2)}</td>
     </tr>
   `).join("");
 
@@ -331,9 +445,9 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string) {
   </table>
   <div class="totals">
     <table class="totals-table">
-      <tr><td>Subtotal</td><td style="text-align:right;">$${parseFloat(inv.subtotal).toFixed(2)}</td></tr>
-      <tr><td>Tax (${inv.taxRate}%)</td><td style="text-align:right;">$${parseFloat(inv.taxAmount).toFixed(2)}</td></tr>
-      <tr class="grand-total"><td>Total</td><td style="text-align:right;">$${parseFloat(inv.total).toFixed(2)}</td></tr>
+      <tr><td>Subtotal</td><td style="text-align:right;">€${parseFloat(inv.subtotal).toFixed(2)}</td></tr>
+      <tr><td>Tax (${inv.taxRate}%)</td><td style="text-align:right;">€${parseFloat(inv.taxAmount).toFixed(2)}</td></tr>
+      <tr class="grand-total"><td>Total</td><td style="text-align:right;">€${parseFloat(inv.total).toFixed(2)}</td></tr>
     </table>
   </div>
   ${inv.notes ? `<div style="margin-top:30px;padding:16px;background:#f8f5f0;border-radius:6px;font-size:13px;"><strong>Notes:</strong> ${inv.notes}</div>` : ""}
@@ -380,15 +494,15 @@ function generateStatementHtml(customer: any, statement: any) {
   <div class="summary">
     <div class="summary-card">
       <h3>Total Invoiced</h3>
-      <div class="value">$${statement?.totalInvoiced || "0.00"}</div>
+      <div class="value">€${statement?.totalInvoiced || "0.00"}</div>
     </div>
     <div class="summary-card">
       <h3>Total Paid</h3>
-      <div class="value">$${statement?.totalPaid || "0.00"}</div>
+      <div class="value">€${statement?.totalPaid || "0.00"}</div>
     </div>
     <div class="summary-card">
       <h3>Balance Due</h3>
-      <div class="value" style="color:#8b2252;">$${statement?.balance || "0.00"}</div>
+      <div class="value" style="color:#8b2252;">€${statement?.balance || "0.00"}</div>
     </div>
   </div>
   <div class="footer">

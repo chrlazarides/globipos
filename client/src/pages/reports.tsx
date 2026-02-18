@@ -111,7 +111,7 @@ export default function Reports() {
                   <CardContent className="p-4">
                     <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Sales</p>
                     <p className="text-2xl font-bold mt-1" data-testid="stat-total-sales">
-                      ${parseFloat(salesReport.totalSales).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      €{parseFloat(salesReport.totalSales).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
                   </CardContent>
                 </Card>
@@ -119,7 +119,7 @@ export default function Reports() {
                   <CardContent className="p-4">
                     <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Tax</p>
                     <p className="text-2xl font-bold mt-1">
-                      ${parseFloat(salesReport.totalTax).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      €{parseFloat(salesReport.totalTax).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
                   </CardContent>
                 </Card>
@@ -159,7 +159,7 @@ export default function Reports() {
                                 {inv.status}
                               </Badge>
                             </TableCell>
-                            <TableCell className="text-right font-medium text-sm">${parseFloat(inv.total).toFixed(2)}</TableCell>
+                            <TableCell className="text-right font-medium text-sm">€{parseFloat(inv.total).toFixed(2)}</TableCell>
                           </TableRow>
                         ))
                       )}
@@ -195,10 +195,10 @@ export default function Reports() {
                       <TableRow key={st.customerId}>
                         <TableCell className="font-medium text-sm">{st.customerName}</TableCell>
                         <TableCell className="text-sm">{st.invoiceCount}</TableCell>
-                        <TableCell className="text-right text-sm">${parseFloat(st.totalInvoiced).toFixed(2)}</TableCell>
-                        <TableCell className="text-right text-sm">${parseFloat(st.totalPaid).toFixed(2)}</TableCell>
+                        <TableCell className="text-right text-sm">€{parseFloat(st.totalInvoiced).toFixed(2)}</TableCell>
+                        <TableCell className="text-right text-sm">€{parseFloat(st.totalPaid).toFixed(2)}</TableCell>
                         <TableCell className={`text-right font-medium text-sm ${parseFloat(st.balance) > 0 ? "text-red-500" : ""}`}>
-                          ${parseFloat(st.balance).toFixed(2)}
+                          €{parseFloat(st.balance).toFixed(2)}
                         </TableCell>
                         <TableCell>
                           <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} data-testid={`button-download-statement-${st.customerId}`}>

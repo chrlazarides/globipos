@@ -62,7 +62,7 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
     {
       key: "total",
       header: "Total",
-      cell: (row) => <span className="text-sm font-medium">${parseFloat(row.total).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>,
+      cell: (row) => <span className="text-sm font-medium">€{parseFloat(row.total).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</span>,
       className: "text-right",
     },
     { key: "status", header: "Status", cell: (row) => <StatusBadge status={row.status} /> },

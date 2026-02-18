@@ -3,6 +3,7 @@ import { eq, and, gte, lte, desc, sql, ilike, or } from "drizzle-orm";
 import {
   users, categories, items, customers, priceContracts, priceContractItems,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
+  portalOrders, portalOrderItems,
   type InsertUser, type User, type InsertCategory, type Category,
   type InsertItem, type Item, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
@@ -11,6 +12,8 @@ import {
   type InsertSeasonalOfferItem, type SeasonalOfferItem,
   type InsertInvoice, type Invoice, type InsertInvoiceItem, type InvoiceItem,
   type InsertPayment, type Payment,
+  type InsertPortalOrder, type PortalOrder,
+  type InsertPortalOrderItem, type PortalOrderItem,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -54,6 +57,12 @@ export interface IStorage {
   getDashboardStats(): Promise<any>;
   getSalesReport(from: string, to: string, customerId?: string): Promise<any>;
   getCustomerStatements(): Promise<any[]>;
+
+  getCustomerByCode(code: string): Promise<Customer | undefined>;
+  getCustomerInvoices(customerId: string): Promise<(Invoice & { items: InvoiceItem[] })[]>;
+  getPortalOrders(customerId: string): Promise<(PortalOrder & { items: PortalOrderItem[] })[]>;
+  createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]): Promise<PortalOrder>;
+  getAvailableItems(): Promise<Item[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -376,6 +385,49 @@ export class DatabaseStorage implements IStorage {
       });
     }
     return statements;
+  }
+
+  async getCustomerByCode(code: string) {
+    const [cust] = await db.select().from(customers).where(eq(customers.code, code));
+    return cust;
+  }
+
+  async getCustomerInvoices(customerId: string) {
+    const invs = await db.select().from(invoices)
+      .where(eq(invoices.customerId, customerId))
+      .orderBy(desc(invoices.createdAt));
+    const result = [];
+    for (const inv of invs) {
+      const lineItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
+      result.push({ ...inv, items: lineItems });
+    }
+    return result;
+  }
+
+  async getPortalOrders(customerId: string) {
+    const orders = await db.select().from(portalOrders)
+      .where(eq(portalOrders.customerId, customerId))
+      .orderBy(desc(portalOrders.createdAt));
+    const result = [];
+    for (const order of orders) {
+      const items = await db.select().from(portalOrderItems).where(eq(portalOrderItems.orderId, order.id));
+      result.push({ ...order, items });
+    }
+    return result;
+  }
+
+  async createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]) {
+    const [order] = await db.insert(portalOrders).values(data).returning();
+    if (lineItems.length > 0) {
+      await db.insert(portalOrderItems).values(lineItems.map(li => ({ ...li, orderId: order.id })));
+    }
+    return order;
+  }
+
+  async getAvailableItems() {
+    return db.select().from(items)
+      .where(and(eq(items.active, true), sql`${items.stockQuantity} > 0`))
+      .orderBy(items.name);
   }
 }
 
