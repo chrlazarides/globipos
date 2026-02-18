@@ -657,45 +657,80 @@ export default function ImportData() {
               </TabsList>
 
               <TabsContent value="mapping">
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm flex items-center gap-2">
-                      Map columns from "{currentSheet.sheetName}" to {getEntityLabel(currentSheet.detectedEntity)} fields
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      {ENTITY_CONFIG[currentSheet.detectedEntity as Exclude<EntityType, "skip">].fields.map((field) => (
-                        <div key={field.key} className="flex items-center gap-3">
-                          <div className="w-40 text-sm flex items-center gap-1 flex-shrink-0">
-                            {field.label}
-                            {field.required && <span className="text-destructive">*</span>}
+                <div className="space-y-4">
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        Map columns from "{currentSheet.sheetName}" to {getEntityLabel(currentSheet.detectedEntity)} fields
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {ENTITY_CONFIG[currentSheet.detectedEntity as Exclude<EntityType, "skip">].fields.map((field) => (
+                          <div key={field.key} className="flex items-center gap-3">
+                            <div className="w-40 text-sm flex items-center gap-1 flex-shrink-0">
+                              {field.label}
+                              {field.required && <span className="text-destructive">*</span>}
+                            </div>
+                            <ArrowRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                            <Select
+                              value={currentSheet.columnMap[field.key] || "skip"}
+                              onValueChange={(v) => updateColumnMap(currentSheet.sheetName, field.key, v)}
+                            >
+                              <SelectTrigger className="flex-1" data-testid={`select-map-${currentSheet.sheetName}-${field.key}`}>
+                                <SelectValue placeholder="Not mapped" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="skip">Not mapped (skip)</SelectItem>
+                                {currentSheet.headers.map((h) => (
+                                  <SelectItem key={h} value={h}>{h}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {currentSheet.columnMap[field.key] && currentSheet.columnMap[field.key] !== "skip" && (
+                              <Badge variant="outline" className="text-xs whitespace-nowrap flex-shrink-0">
+                                e.g. {String(currentSheet.rows[0]?.[currentSheet.columnMap[field.key]] ?? "").substring(0, 25)}
+                              </Badge>
+                            )}
                           </div>
-                          <ArrowRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                          <Select
-                            value={currentSheet.columnMap[field.key] || "skip"}
-                            onValueChange={(v) => updateColumnMap(currentSheet.sheetName, field.key, v)}
-                          >
-                            <SelectTrigger className="flex-1" data-testid={`select-map-${currentSheet.sheetName}-${field.key}`}>
-                              <SelectValue placeholder="Not mapped" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="skip">Not mapped (skip)</SelectItem>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm">
+                        Raw Data Reference - First {Math.min(currentSheet.rows.length, 5)} of {currentSheet.totalRows} rows
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-10">#</TableHead>
                               {currentSheet.headers.map((h) => (
-                                <SelectItem key={h} value={h}>{h}</SelectItem>
+                                <TableHead key={h} className="text-xs whitespace-nowrap">{h}</TableHead>
                               ))}
-                            </SelectContent>
-                          </Select>
-                          {currentSheet.columnMap[field.key] && currentSheet.columnMap[field.key] !== "skip" && (
-                            <Badge variant="outline" className="text-xs whitespace-nowrap flex-shrink-0">
-                              e.g. {String(currentSheet.rows[0]?.[currentSheet.columnMap[field.key]] ?? "").substring(0, 25)}
-                            </Badge>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {currentSheet.rows.slice(0, 5).map((row, i) => (
+                              <TableRow key={i}>
+                                <TableCell className="text-xs text-muted-foreground">{i + 1}</TableCell>
+                                {currentSheet.headers.map((h) => (
+                                  <TableCell key={h} className="text-xs max-w-[150px] truncate">
+                                    {String(row[h] ?? "")}
+                                  </TableCell>
+                                ))}
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
               </TabsContent>
 
               <TabsContent value="preview">
