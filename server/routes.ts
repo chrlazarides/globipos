@@ -427,7 +427,7 @@ export async function registerRoutes(
     }
   });
 
-  // PDF Generation
+  // Document view/print/download
   app.get("/api/invoices/:id/pdf", async (req, res) => {
     try {
       const inv = await storage.getInvoice(req.params.id);
@@ -435,11 +435,14 @@ export async function registerRoutes(
 
       const customer = await storage.getCustomer(inv.customerId);
       const typeLabel = inv.type === "credit_note" ? "CREDIT NOTE" : inv.type === "proforma" ? "PROFORMA INVOICE" : inv.type === "quotation" ? "QUOTATION" : "INVOICE";
+      const autoPrint = req.query.print === "1";
 
-      const html = generateInvoiceHtml(inv, customer, typeLabel);
+      const html = generateInvoiceHtml(inv, customer, typeLabel, autoPrint);
 
       res.setHeader("Content-Type", "text/html");
-      res.setHeader("Content-Disposition", `attachment; filename="${inv.invoiceNumber}.html"`);
+      if (req.query.download === "1") {
+        res.setHeader("Content-Disposition", `attachment; filename="${inv.invoiceNumber}.html"`);
+      }
       res.send(html);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -495,9 +498,12 @@ export async function registerRoutes(
       if (!customer) return res.status(404).json({ message: "Customer not found" });
       const statements = await storage.getCustomerStatements();
       const st = statements.find(s => s.customerId === req.params.customerId);
-      const html = generateStatementHtml(customer, st);
+      const autoPrint = req.query.print === "1";
+      const html = generateStatementHtml(customer, st, autoPrint);
       res.setHeader("Content-Type", "text/html");
-      res.setHeader("Content-Disposition", `attachment; filename="statement-${customer.code}.html"`);
+      if (req.query.download === "1") {
+        res.setHeader("Content-Disposition", `attachment; filename="statement-${customer.code}.html"`);
+      }
       res.send(html);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -786,135 +792,308 @@ export async function registerRoutes(
   return httpServer;
 }
 
-function generateInvoiceHtml(inv: any, customer: any, typeLabel: string) {
-  const itemRows = (inv.items || []).map((li: any) => `
-    <tr>
-      <td style="padding:8px;border-bottom:1px solid #eee;">${li.description}</td>
-      <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${li.quantity}</td>
-      <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">€${parseFloat(li.unitPrice).toFixed(2)}</td>
-      <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">€${parseFloat(li.discount).toFixed(2)}</td>
-      <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;font-weight:600;">€${parseFloat(li.total).toFixed(2)}</td>
-    </tr>
-  `).join("");
+function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPrint: boolean = false) {
+  const items = inv.items || [];
+  const hasDiscountPercent = items.some((li: any) => parseFloat(li.discountPercent || "0") > 0);
+  const hasDiscount = items.some((li: any) => parseFloat(li.discount || "0") > 0);
+
+  const itemRows = items.map((li: any, idx: number) => {
+    const qty = li.quantity || 0;
+    const unit = li.saleUnit || "pc";
+    const unitLabel = unit === "pc" ? "" : ` (${unit})`;
+    const discPercent = parseFloat(li.discountPercent || "0");
+    const discAmount = parseFloat(li.discount || "0");
+
+    return `
+    <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
+      <td class="cell">${li.description || ""}</td>
+      <td class="cell center">${qty}${unitLabel}</td>
+      <td class="cell right">\u20AC${parseFloat(li.unitPrice).toFixed(2)}</td>
+      ${hasDiscountPercent ? `<td class="cell right">${discPercent > 0 ? discPercent.toFixed(1) + "%" : "-"}</td>` : ""}
+      ${hasDiscount ? `<td class="cell right">${discAmount > 0 ? "\u20AC" + discAmount.toFixed(2) : "-"}</td>` : ""}
+      <td class="cell right bold">\u20AC${parseFloat(li.total).toFixed(2)}</td>
+    </tr>`;
+  }).join("");
+
+  const printScript = autoPrint ? `<script>window.onload = function() { window.print(); }</script>` : "";
 
   return `<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>${inv.invoiceNumber}</title>
+<head>
+<meta charset="utf-8">
+<title>${typeLabel} - ${inv.invoiceNumber}</title>
 <style>
-  body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 40px; color: #333; }
-  .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
-  .title { font-size: 28px; font-weight: 700; color: #8b2252; }
-  .doc-type { font-size: 14px; color: #666; text-transform: uppercase; letter-spacing: 2px; }
-  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
-  .info-box h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #999; margin: 0 0 8px; }
-  .info-box p { margin: 2px 0; font-size: 13px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-  th { background: #f8f5f0; padding: 10px 8px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #666; }
-  .totals { display: flex; justify-content: flex-end; }
-  .totals-table td { padding: 6px 16px; font-size: 14px; }
-  .totals-table .grand-total td { font-size: 18px; font-weight: 700; color: #8b2252; border-top: 2px solid #8b2252; }
-  .footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #eee; font-size: 11px; color: #999; text-align: center; }
-  @media print { body { padding: 20px; } }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; padding: 0; background: #f5f5f5; }
+  .page { max-width: 800px; margin: 0 auto; background: #fff; padding: 48px; min-height: 100vh; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #722f37; }
+  .brand { }
+  .brand-name { font-size: 26px; font-weight: 800; color: #722f37; letter-spacing: -0.5px; }
+  .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
+  .doc-info { text-align: right; }
+  .doc-type { font-size: 22px; font-weight: 700; color: #333; text-transform: uppercase; letter-spacing: 1px; }
+  .doc-number { font-size: 14px; color: #666; margin-top: 4px; }
+  .parties { display: flex; justify-content: space-between; gap: 40px; margin-bottom: 32px; }
+  .party { flex: 1; }
+  .party-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; font-weight: 600; margin-bottom: 8px; }
+  .party-name { font-size: 15px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; }
+  .party-detail { font-size: 12px; color: #555; line-height: 1.6; }
+  .meta-row { display: flex; gap: 24px; margin-bottom: 28px; padding: 14px 18px; background: #faf8f6; border-radius: 6px; border: 1px solid #f0ebe6; }
+  .meta-item { flex: 1; }
+  .meta-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; }
+  .meta-value { font-size: 13px; font-weight: 600; color: #333; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+  thead th { background: #722f37; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
+  thead th.center { text-align: center; }
+  thead th.right { text-align: right; }
+  .cell { padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #f0f0f0; }
+  .center { text-align: center; }
+  .right { text-align: right; }
+  .bold { font-weight: 600; }
+  .alt-row { background: #fdfcfb; }
+  .totals-section { display: flex; justify-content: flex-end; margin-bottom: 28px; }
+  .totals-box { width: 280px; }
+  .totals-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; }
+  .totals-row.subtotal { color: #555; }
+  .totals-row.tax { color: #555; }
+  .totals-row.grand { font-size: 18px; font-weight: 800; color: #722f37; padding-top: 12px; margin-top: 4px; border-top: 2px solid #722f37; }
+  .notes-box { padding: 16px 20px; background: #faf8f6; border-radius: 6px; border-left: 3px solid #722f37; margin-bottom: 32px; }
+  .notes-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; margin-bottom: 4px; }
+  .notes-text { font-size: 12px; color: #444; line-height: 1.6; }
+  .footer { text-align: center; padding-top: 24px; border-top: 1px solid #eee; }
+  .footer p { font-size: 11px; color: #aaa; line-height: 1.8; }
+  .no-print { text-align: center; margin-bottom: 16px; padding: 12px; }
+  .no-print button { padding: 10px 28px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; margin: 0 6px; }
+  .btn-print { background: #722f37; color: #fff; }
+  .btn-print:hover { background: #5a2530; }
+  .btn-close { background: #e5e5e5; color: #333; }
+  .btn-close:hover { background: #d5d5d5; }
+  @media print {
+    body { background: #fff; padding: 0; }
+    .page { padding: 24px; max-width: 100%; box-shadow: none; }
+    .no-print { display: none !important; }
+    .header { border-bottom-color: #722f37 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    thead th { background: #722f37 !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .totals-row.grand { color: #722f37 !important; border-top-color: #722f37 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .meta-row { background: #faf8f6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+  @page { margin: 15mm; size: A4; }
 </style>
 </head>
 <body>
-  <div class="header">
-    <div>
-      <div class="title">VinTrade</div>
-      <div class="doc-type">Wholesale Wine & Spirits</div>
-    </div>
-    <div style="text-align:right;">
-      <div style="font-size:20px;font-weight:700;">${typeLabel}</div>
-      <div style="font-size:14px;color:#666;">${inv.invoiceNumber}</div>
-    </div>
+  <div class="no-print">
+    <button class="btn-print" onclick="window.print()">Print Document</button>
+    <button class="btn-close" onclick="window.close()">Close</button>
   </div>
-  <div class="info-grid">
-    <div class="info-box">
-      <h3>Bill To</h3>
-      <p style="font-weight:600;">${customer?.name || "N/A"}</p>
-      <p>${customer?.address || ""}</p>
-      <p>${customer?.city || ""}</p>
-      ${customer?.taxId ? `<p>Tax ID: ${customer.taxId}</p>` : ""}
+  <div class="page">
+    <div class="header">
+      <div class="brand">
+        <div class="brand-name">VinTrade</div>
+        <div class="brand-sub">Wholesale Wine & Spirits</div>
+      </div>
+      <div class="doc-info">
+        <div class="doc-type">${typeLabel}</div>
+        <div class="doc-number">${inv.invoiceNumber}</div>
+      </div>
     </div>
-    <div class="info-box" style="text-align:right;">
-      <h3>Details</h3>
-      <p>Date: ${new Date(inv.date).toLocaleDateString()}</p>
-      ${inv.dueDate ? `<p>Due: ${new Date(inv.dueDate).toLocaleDateString()}</p>` : ""}
-      <p>Status: ${inv.status}</p>
-      <p>Terms: ${customer?.paymentTerms || "N/A"}</p>
+
+    <div class="parties">
+      <div class="party">
+        <div class="party-label">Bill To</div>
+        <div class="party-name">${customer?.name || "N/A"}</div>
+        <div class="party-detail">
+          ${customer?.address ? customer.address + "<br>" : ""}
+          ${customer?.city || ""}
+          ${customer?.taxId ? "<br>Tax ID: " + customer.taxId : ""}
+        </div>
+      </div>
+      <div class="party" style="text-align:right;">
+        <div class="party-label">Document Details</div>
+        <div class="party-detail">
+          <strong>Date:</strong> ${new Date(inv.date).toLocaleDateString("en-GB")}<br>
+          ${inv.dueDate ? "<strong>Due:</strong> " + new Date(inv.dueDate).toLocaleDateString("en-GB") + "<br>" : ""}
+          <strong>Status:</strong> ${inv.status}<br>
+          <strong>Terms:</strong> ${customer?.paymentTerms || "cash"}
+        </div>
+      </div>
     </div>
-  </div>
-  <table>
-    <thead><tr>
-      <th>Description</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Price</th><th style="text-align:right;">Discount</th><th style="text-align:right;">Total</th>
-    </tr></thead>
-    <tbody>${itemRows}</tbody>
-  </table>
-  <div class="totals">
-    <table class="totals-table">
-      <tr><td>Subtotal</td><td style="text-align:right;">€${parseFloat(inv.subtotal).toFixed(2)}</td></tr>
-      <tr><td>Tax (${inv.taxRate}%)</td><td style="text-align:right;">€${parseFloat(inv.taxAmount).toFixed(2)}</td></tr>
-      <tr class="grand-total"><td>Total</td><td style="text-align:right;">€${parseFloat(inv.total).toFixed(2)}</td></tr>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Description</th>
+          <th class="center">Qty</th>
+          <th class="right">Unit Price</th>
+          ${hasDiscountPercent ? '<th class="right">Disc %</th>' : ""}
+          ${hasDiscount ? '<th class="right">Discount</th>' : ""}
+          <th class="right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${itemRows}
+      </tbody>
     </table>
+
+    <div class="totals-section">
+      <div class="totals-box">
+        <div class="totals-row subtotal">
+          <span>Subtotal</span>
+          <span>\u20AC${parseFloat(inv.subtotal).toFixed(2)}</span>
+        </div>
+        <div class="totals-row tax">
+          <span>VAT (${inv.taxRate}%)</span>
+          <span>\u20AC${parseFloat(inv.taxAmount).toFixed(2)}</span>
+        </div>
+        <div class="totals-row grand">
+          <span>Total</span>
+          <span>\u20AC${parseFloat(inv.total).toFixed(2)}</span>
+        </div>
+      </div>
+    </div>
+
+    ${inv.notes ? `
+    <div class="notes-box">
+      <div class="notes-label">Notes</div>
+      <div class="notes-text">${inv.notes}</div>
+    </div>` : ""}
+
+    <div class="footer">
+      <p>VinTrade - Wholesale Wine & Spirits</p>
+      <p>Thank you for your business</p>
+    </div>
   </div>
-  ${inv.notes ? `<div style="margin-top:30px;padding:16px;background:#f8f5f0;border-radius:6px;font-size:13px;"><strong>Notes:</strong> ${inv.notes}</div>` : ""}
-  <div class="footer">
-    <p>VinTrade - Wholesale Wine & Spirits Management</p>
-    <p>Thank you for your business</p>
-  </div>
+  ${printScript}
 </body>
 </html>`;
 }
 
-function generateStatementHtml(customer: any, statement: any) {
+function generateStatementHtml(customer: any, statement: any, autoPrint: boolean = false) {
+  const invoices = statement?.invoices || [];
+  const invoiceRows = invoices.map((inv: any, idx: number) => `
+    <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
+      <td class="cell">${inv.invoiceNumber || ""}</td>
+      <td class="cell">${new Date(inv.date).toLocaleDateString("en-GB")}</td>
+      <td class="cell">${inv.type === "credit_note" ? "Credit Note" : "Invoice"}</td>
+      <td class="cell right">\u20AC${parseFloat(inv.total || "0").toFixed(2)}</td>
+      <td class="cell right">\u20AC${parseFloat(inv.paid || "0").toFixed(2)}</td>
+      <td class="cell right bold">\u20AC${parseFloat(inv.balance || "0").toFixed(2)}</td>
+    </tr>
+  `).join("");
+
+  const printScript = autoPrint ? `<script>window.onload = function() { window.print(); }</script>` : "";
+
   return `<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Statement - ${customer.name}</title>
+<head>
+<meta charset="utf-8">
+<title>Statement - ${customer.name}</title>
 <style>
-  body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 40px; color: #333; }
-  .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
-  .title { font-size: 28px; font-weight: 700; color: #8b2252; }
-  .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 30px; }
-  .summary-card { background: #f8f5f0; padding: 20px; border-radius: 8px; }
-  .summary-card h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #999; margin: 0 0 8px; }
-  .summary-card .value { font-size: 24px; font-weight: 700; }
-  .footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #eee; font-size: 11px; color: #999; text-align: center; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; padding: 0; background: #f5f5f5; }
+  .page { max-width: 800px; margin: 0 auto; background: #fff; padding: 48px; min-height: 100vh; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #722f37; }
+  .brand-name { font-size: 26px; font-weight: 800; color: #722f37; }
+  .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
+  .doc-type { font-size: 22px; font-weight: 700; color: #333; text-transform: uppercase; letter-spacing: 1px; }
+  .doc-date { font-size: 13px; color: #666; margin-top: 4px; }
+  .customer-info { margin-bottom: 28px; }
+  .customer-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .customer-detail { font-size: 12px; color: #555; line-height: 1.6; }
+  .summary { display: flex; gap: 16px; margin-bottom: 32px; }
+  .summary-card { flex: 1; background: #faf8f6; padding: 18px 20px; border-radius: 6px; border: 1px solid #f0ebe6; }
+  .summary-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; }
+  .summary-value { font-size: 22px; font-weight: 800; margin-top: 4px; }
+  .summary-value.due { color: #722f37; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+  thead th { background: #722f37; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
+  thead th.right { text-align: right; }
+  .cell { padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #f0f0f0; }
+  .right { text-align: right; }
+  .bold { font-weight: 600; }
+  .alt-row { background: #fdfcfb; }
+  .footer { text-align: center; padding-top: 24px; border-top: 1px solid #eee; margin-top: 40px; }
+  .footer p { font-size: 11px; color: #aaa; line-height: 1.8; }
+  .no-print { text-align: center; margin-bottom: 16px; padding: 12px; }
+  .no-print button { padding: 10px 28px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; margin: 0 6px; }
+  .btn-print { background: #722f37; color: #fff; }
+  .btn-print:hover { background: #5a2530; }
+  .btn-close { background: #e5e5e5; color: #333; }
+  .btn-close:hover { background: #d5d5d5; }
+  @media print {
+    body { background: #fff; padding: 0; }
+    .page { padding: 24px; max-width: 100%; }
+    .no-print { display: none !important; }
+    .header { border-bottom-color: #722f37 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    thead th { background: #722f37 !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .summary-card { background: #faf8f6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+  @page { margin: 15mm; size: A4; }
 </style>
 </head>
 <body>
-  <div class="header">
-    <div>
-      <div class="title">VinTrade</div>
-      <div style="font-size:14px;color:#666;">ACCOUNT STATEMENT</div>
+  <div class="no-print">
+    <button class="btn-print" onclick="window.print()">Print Statement</button>
+    <button class="btn-close" onclick="window.close()">Close</button>
+  </div>
+  <div class="page">
+    <div class="header">
+      <div>
+        <div class="brand-name">VinTrade</div>
+        <div class="brand-sub">Wholesale Wine & Spirits</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="doc-type">Account Statement</div>
+        <div class="doc-date">${new Date().toLocaleDateString("en-GB")}</div>
+      </div>
     </div>
-    <div style="text-align:right;">
-      <div style="font-size:16px;font-weight:600;">${customer.name}</div>
-      <div style="font-size:13px;color:#666;">${customer.code}</div>
-      <div style="font-size:13px;color:#666;">${new Date().toLocaleDateString()}</div>
+
+    <div class="customer-info">
+      <div class="customer-name">${customer.name} (${customer.code})</div>
+      <div class="customer-detail">
+        ${customer.address ? customer.address + "<br>" : ""}
+        ${customer.city || ""}
+        ${customer.taxId ? "<br>Tax ID: " + customer.taxId : ""}
+        <br>Payment Terms: ${customer.paymentTerms}
+      </div>
+    </div>
+
+    <div class="summary">
+      <div class="summary-card">
+        <div class="summary-label">Total Invoiced</div>
+        <div class="summary-value">\u20AC${parseFloat(statement?.totalInvoiced || "0").toFixed(2)}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Total Paid</div>
+        <div class="summary-value">\u20AC${parseFloat(statement?.totalPaid || "0").toFixed(2)}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Balance Due</div>
+        <div class="summary-value due">\u20AC${parseFloat(statement?.balance || "0").toFixed(2)}</div>
+      </div>
+    </div>
+
+    ${invoiceRows ? `
+    <table>
+      <thead>
+        <tr>
+          <th>Document</th>
+          <th>Date</th>
+          <th>Type</th>
+          <th class="right">Total</th>
+          <th class="right">Paid</th>
+          <th class="right">Balance</th>
+        </tr>
+      </thead>
+      <tbody>${invoiceRows}</tbody>
+    </table>` : ""}
+
+    <div class="footer">
+      <p>VinTrade - Wholesale Wine & Spirits</p>
     </div>
   </div>
-  <div style="margin-bottom:20px;">
-    <p>${customer.address || ""}</p>
-    <p>${customer.city || ""}</p>
-    <p>Terms: ${customer.paymentTerms}</p>
-  </div>
-  <div class="summary">
-    <div class="summary-card">
-      <h3>Total Invoiced</h3>
-      <div class="value">€${statement?.totalInvoiced || "0.00"}</div>
-    </div>
-    <div class="summary-card">
-      <h3>Total Paid</h3>
-      <div class="value">€${statement?.totalPaid || "0.00"}</div>
-    </div>
-    <div class="summary-card">
-      <h3>Balance Due</h3>
-      <div class="value" style="color:#8b2252;">€${statement?.balance || "0.00"}</div>
-    </div>
-  </div>
-  <div class="footer">
-    <p>VinTrade - Wholesale Wine & Spirits Management</p>
-  </div>
+  ${printScript}
 </body>
 </html>`;
 }

@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { useToast } from "@/hooks/use-toast";
@@ -413,15 +413,22 @@ export default function InvoiceForm() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  const downloadPdf = async () => {
+  const openDocument = (mode: "view" | "print") => {
+    const url = mode === "print"
+      ? `/api/invoices/${invoiceId}/pdf?print=1`
+      : `/api/invoices/${invoiceId}/pdf`;
+    window.open(url, "_blank");
+  };
+
+  const downloadDocument = async () => {
     try {
-      const res = await fetch(`/api/invoices/${invoiceId}/pdf`);
-      if (!res.ok) throw new Error("Failed to generate PDF");
+      const res = await fetch(`/api/invoices/${invoiceId}/pdf?download=1`);
+      if (!res.ok) throw new Error("Failed to generate document");
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${existingInvoice?.invoiceNumber || "invoice"}.pdf`;
+      a.download = `${existingInvoice?.invoiceNumber || "invoice"}.html`;
       a.click();
       window.URL.revokeObjectURL(url);
     } catch (e: any) {
@@ -448,8 +455,11 @@ export default function InvoiceForm() {
                     <FileOutput className="w-4 h-4 mr-1" /> Create Invoice
                   </Button>
                 )}
-                <Button variant="outline" onClick={downloadPdf} data-testid="button-download-pdf">
-                  <Download className="w-4 h-4 mr-1" /> PDF
+                <Button variant="outline" onClick={() => openDocument("print")} data-testid="button-print-invoice">
+                  <Printer className="w-4 h-4 mr-1" /> Print
+                </Button>
+                <Button variant="outline" onClick={downloadDocument} data-testid="button-download-pdf">
+                  <Download className="w-4 h-4 mr-1" /> Download
                 </Button>
                 <Button onClick={() => navigate(`/invoices/${invoiceId}/edit`)} data-testid="button-edit-invoice">Edit</Button>
               </>

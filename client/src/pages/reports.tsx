@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Download, FileText, Users } from "lucide-react";
+import { BarChart3, Download, FileText, Users, Printer } from "lucide-react";
 import type { Customer, Invoice } from "@shared/schema";
 
 export default function Reports() {
@@ -44,15 +44,19 @@ export default function Reports() {
     queryKey: ["/api/reports/statements"],
   });
 
+  const printStatement = (customerId: string) => {
+    window.open(`/api/reports/statement/${customerId}/pdf?print=1`, "_blank");
+  };
+
   const downloadStatement = async (customerId: string) => {
     try {
-      const res = await fetch(`/api/reports/statement/${customerId}/pdf`);
+      const res = await fetch(`/api/reports/statement/${customerId}/pdf?download=1`);
       if (!res.ok) throw new Error("Failed");
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `statement-${customerId}.pdf`;
+      a.download = `statement-${customerId}.html`;
       a.click();
       window.URL.revokeObjectURL(url);
     } catch (e) {}
@@ -201,9 +205,14 @@ export default function Reports() {
                           €{parseFloat(st.balance).toFixed(2)}
                         </TableCell>
                         <TableCell>
-                          <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} data-testid={`button-download-statement-${st.customerId}`}>
-                            <Download className="w-4 h-4" />
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} data-testid={`button-print-statement-${st.customerId}`}>
+                              <Printer className="w-4 h-4" />
+                            </Button>
+                            <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} data-testid={`button-download-statement-${st.customerId}`}>
+                              <Download className="w-4 h-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))
