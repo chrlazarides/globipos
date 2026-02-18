@@ -136,6 +136,86 @@ const WINE_CATEGORY_KEYWORDS = [
   "grappa", "ouzo", "raki", "zivania", "commandaria",
 ];
 
+function colLetter(c: number): string {
+  let s = "";
+  let n = c;
+  while (n >= 0) {
+    s = String.fromCharCode(65 + (n % 26)) + s;
+    n = Math.floor(n / 26) - 1;
+  }
+  return s;
+}
+
+function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } {
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+
+  const getCellVal = (r: number, c: number): string => {
+    const addr = XLSX.utils.encode_cell({ r, c });
+    const cell = ws[addr];
+    if (!cell) return "";
+    return String(cell.v ?? "").trim();
+  };
+
+  let headerRowIdx = 0;
+  let bestScore = 0;
+
+  for (let r = 0; r <= Math.min(10, range.e.r); r++) {
+    let nonEmpty = 0;
+    let hasText = 0;
+    for (let c = 0; c <= range.e.c; c++) {
+      const v = getCellVal(r, c);
+      if (v) {
+        nonEmpty++;
+        if (isNaN(Number(v))) hasText++;
+      }
+    }
+    const score = nonEmpty * 2 + hasText * 3;
+    if (score > bestScore && nonEmpty >= 2 && hasText >= 1) {
+      bestScore = score;
+      headerRowIdx = r;
+    }
+  }
+
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  for (let c = 0; c <= range.e.c; c++) {
+    let hdr = getCellVal(headerRowIdx, c);
+    if (!hdr) {
+      hdr = `Col ${colLetter(c)}`;
+    }
+    let unique = hdr;
+    let suffix = 1;
+    while (seen.has(unique.toLowerCase())) {
+      unique = `${hdr}_${suffix++}`;
+    }
+    seen.add(unique.toLowerCase());
+    headers.push(unique);
+  }
+
+  const nonEmptyCols = new Set<number>();
+  for (let r = headerRowIdx + 1; r <= range.e.r; r++) {
+    for (let c = 0; c <= range.e.c; c++) {
+      if (getCellVal(r, c)) nonEmptyCols.add(c);
+    }
+  }
+
+  const filteredHeaders = headers.filter((_, i) => nonEmptyCols.has(i));
+  const rows: any[] = [];
+  for (let r = headerRowIdx + 1; r <= range.e.r; r++) {
+    const row: Record<string, any> = {};
+    let hasData = false;
+    for (let c = 0; c <= range.e.c; c++) {
+      if (!nonEmptyCols.has(c)) continue;
+      const v = getCellVal(r, c);
+      row[headers[c]] = v;
+      if (v) hasData = true;
+    }
+    if (hasData) rows.push(row);
+  }
+
+  return { headers: filteredHeaders, rows };
+}
+
 function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; brand: string; origin: string; rows: any[]; headers: string[] } | null {
   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1");
   const totalRows = range.e.r + 1;
@@ -386,17 +466,16 @@ export default function ImportData() {
             };
           }
 
-          const json: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
-          const headers = json.length > 0 ? Object.keys(json[0]) : [];
-          const { entity, confidence } = detectEntity(headers);
+          const parsed = smartSheetParse(ws);
+          const { entity, confidence } = detectEntity(parsed.headers);
           const config = entity !== "skip" ? ENTITY_CONFIG[entity] : null;
-          const columnMap = config ? autoMapColumns(headers, config.fields) : {};
+          const columnMap = config ? autoMapColumns(parsed.headers, config.fields) : {};
 
           return {
             sheetName,
-            headers,
-            rows: json.slice(0, 10),
-            totalRows: json.length,
+            headers: parsed.headers,
+            rows: parsed.rows.slice(0, 10),
+            totalRows: parsed.rows.length,
             detectedEntity: entity,
             columnMap,
             confidence,
