@@ -836,7 +836,7 @@ export default function ImportData() {
                   <Card>
                     <CardHeader className="pb-3">
                       <CardTitle className="text-sm">
-                        Raw Data - Click column headers to assign fields
+                        Raw Data - Use dropdowns on each column to assign fields
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
@@ -846,57 +846,67 @@ export default function ImportData() {
                         for (const [fieldKey, headerCol] of Object.entries(currentSheet.columnMap)) {
                           if (headerCol && headerCol !== "skip") reverseMap[headerCol] = fieldKey;
                         }
+                        const usedFields = new Set(
+                          Object.entries(currentSheet.columnMap)
+                            .filter(([, v]) => v && v !== "skip")
+                            .map(([k]) => k)
+                        );
                         return (
                           <div className="overflow-x-auto">
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead className="w-10">#</TableHead>
-                                  {currentSheet.headers.map((h) => (
-                                    <TableHead key={h} className="p-1 min-w-[120px]">
-                                      <div className="space-y-1">
-                                        <p className="text-xs font-medium truncate" title={h}>{h}</p>
-                                        <Select
-                                          value={reverseMap[h] || "__unmapped__"}
-                                          onValueChange={(fieldKey) => {
-                                            if (reverseMap[h]) {
-                                              updateColumnMap(currentSheet.sheetName, reverseMap[h], "skip");
-                                            }
-                                            if (fieldKey !== "__unmapped__") {
-                                              updateColumnMap(currentSheet.sheetName, fieldKey, h);
-                                            }
-                                          }}
-                                        >
-                                          <SelectTrigger className="h-7 text-xs" data-testid={`select-raw-map-${h}`}>
-                                            <SelectValue />
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            <SelectItem value="__unmapped__">--</SelectItem>
-                                            {config.fields.map((f) => (
-                                              <SelectItem key={f.key} value={f.key} disabled={!!currentSheet.columnMap[f.key] && currentSheet.columnMap[f.key] === h ? false : !!currentSheet.columnMap[f.key] && currentSheet.columnMap[f.key] !== "skip"}>
-                                                {f.label}{f.required ? " *" : ""}
-                                              </SelectItem>
-                                            ))}
-                                          </SelectContent>
-                                        </Select>
-                                      </div>
-                                    </TableHead>
-                                  ))}
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {currentSheet.rows.slice(0, 5).map((row, i) => (
-                                  <TableRow key={i}>
-                                    <TableCell className="text-xs text-muted-foreground">{i + 1}</TableCell>
-                                    {currentSheet.headers.map((h) => (
-                                      <TableCell key={h} className={`text-xs max-w-[150px] truncate ${reverseMap[h] ? "font-medium" : "text-muted-foreground"}`}>
-                                        {String(row[h] ?? "")}
-                                      </TableCell>
-                                    ))}
-                                  </TableRow>
+                            <div className="inline-block min-w-full">
+                              <div className="flex gap-2 pb-2 border-b mb-2">
+                                <div className="w-8 flex-shrink-0 text-xs text-muted-foreground">#</div>
+                                {currentSheet.headers.map((h) => (
+                                  <div key={h} className="min-w-[140px] max-w-[200px] flex-shrink-0 space-y-1">
+                                    <p className="text-xs font-medium truncate" title={h}>{h}</p>
+                                    <Select
+                                      value={reverseMap[h] || "__unmapped__"}
+                                      onValueChange={(fieldKey) => {
+                                        if (reverseMap[h]) {
+                                          updateColumnMap(currentSheet.sheetName, reverseMap[h], "skip");
+                                        }
+                                        if (fieldKey !== "__unmapped__") {
+                                          updateColumnMap(currentSheet.sheetName, fieldKey, h);
+                                        }
+                                      }}
+                                    >
+                                      <SelectTrigger
+                                        className={`text-xs ${reverseMap[h] ? "border-primary" : ""}`}
+                                        data-testid={`select-raw-map-${h}`}
+                                      >
+                                        <SelectValue placeholder="-- Not mapped --" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="__unmapped__">-- Not mapped --</SelectItem>
+                                        {config.fields.map((f) => (
+                                          <SelectItem
+                                            key={f.key}
+                                            value={f.key}
+                                            disabled={usedFields.has(f.key) && reverseMap[h] !== f.key}
+                                          >
+                                            {f.label}{f.required ? " *" : ""}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
                                 ))}
-                              </TableBody>
-                            </Table>
+                              </div>
+                              {currentSheet.rows.slice(0, 5).map((row, i) => (
+                                <div key={i} className="flex gap-2 py-1 border-b border-border/50">
+                                  <div className="w-8 flex-shrink-0 text-xs text-muted-foreground">{i + 1}</div>
+                                  {currentSheet.headers.map((h) => (
+                                    <div
+                                      key={h}
+                                      className={`min-w-[140px] max-w-[200px] flex-shrink-0 text-xs truncate ${reverseMap[h] ? "font-medium" : "text-muted-foreground"}`}
+                                      title={String(row[h] ?? "")}
+                                    >
+                                      {String(row[h] ?? "")}
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         );
                       })()}
