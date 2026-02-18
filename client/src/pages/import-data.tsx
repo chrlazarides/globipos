@@ -277,7 +277,7 @@ export default function ImportData() {
     setSheets((prev) =>
       prev.map((s) => {
         if (s.sheetName !== sheetName) return s;
-        return { ...s, columnMap: { ...s.columnMap, [fieldKey]: headerCol === "__none__" ? "" : headerCol } };
+        return { ...s, columnMap: { ...s.columnMap, [fieldKey]: headerCol === "skip" ? "" : headerCol } };
       })
     );
   };
@@ -299,7 +299,7 @@ export default function ImportData() {
 
         const cleanedMap: Record<string, string> = {};
         for (const [key, val] of Object.entries(sheet.columnMap)) {
-          if (val && val !== "__none__") cleanedMap[key] = val;
+          if (val && val !== "skip") cleanedMap[key] = val;
         }
 
         const formData = new FormData();
@@ -504,20 +504,20 @@ export default function ImportData() {
                           </div>
                           <ArrowRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                           <Select
-                            value={currentSheet.columnMap[field.key] || "__none__"}
+                            value={currentSheet.columnMap[field.key] || "skip"}
                             onValueChange={(v) => updateColumnMap(currentSheet.sheetName, field.key, v)}
                           >
                             <SelectTrigger className="flex-1" data-testid={`select-map-${currentSheet.sheetName}-${field.key}`}>
-                              <SelectValue placeholder="Select column" />
+                              <SelectValue placeholder="Not mapped" />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="__none__">-- Skip --</SelectItem>
+                              <SelectItem value="skip">Not mapped (skip)</SelectItem>
                               {currentSheet.headers.map((h) => (
                                 <SelectItem key={h} value={h}>{h}</SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
-                          {currentSheet.columnMap[field.key] && currentSheet.columnMap[field.key] !== "__none__" && (
+                          {currentSheet.columnMap[field.key] && currentSheet.columnMap[field.key] !== "skip" && (
                             <Badge variant="outline" className="text-xs whitespace-nowrap flex-shrink-0">
                               e.g. {String(currentSheet.rows[0]?.[currentSheet.columnMap[field.key]] ?? "").substring(0, 25)}
                             </Badge>
