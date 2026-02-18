@@ -41,6 +41,7 @@ export const items = pgTable("items", {
   price4: numeric("price_4", { precision: 10, scale: 2 }).notNull().default("0"),
   price5: numeric("price_5", { precision: 10, scale: 2 }).notNull().default("0"),
   costPrice: numeric("cost_price", { precision: 10, scale: 2 }).notNull().default("0"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("19"),
   stockQuantity: integer("stock_quantity").notNull().default(0),
   reorderLevel: integer("reorder_level").notNull().default(10),
   volume: text("volume"),
