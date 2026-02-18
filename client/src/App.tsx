@@ -33,6 +33,7 @@ function AdminRouter() {
       <Route path="/invoices" component={() => <Invoices docType="invoice" />} />
       <Route path="/credit-notes" component={() => <Invoices docType="credit_note" />} />
       <Route path="/proforma" component={() => <Invoices docType="proforma" />} />
+      <Route path="/quotations" component={() => <Invoices docType="quotation" />} />
       <Route path="/invoices/new" component={InvoiceForm} />
       <Route path="/invoices/:id/edit" component={InvoiceForm} />
       <Route path="/invoices/:id" component={InvoiceForm} />

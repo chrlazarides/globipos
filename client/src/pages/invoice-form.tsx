@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { useToast } from "@/hooks/use-toast";
@@ -66,6 +66,12 @@ export default function InvoiceForm() {
 
   const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const docType = searchParams.get("type") || "invoice";
+  const fromId = searchParams.get("from");
+
+  const { data: sourceInvoice } = useQuery<Invoice & { items: InvoiceItem[] }>({
+    queryKey: ["/api/invoices", fromId],
+    enabled: !!fromId && isNew,
+  });
 
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
@@ -106,6 +112,26 @@ export default function InvoiceForm() {
       }
     }
   }, [existingInvoice]);
+
+  useEffect(() => {
+    if (sourceInvoice && isNew) {
+      setCustomerId(sourceInvoice.customerId);
+      setTaxRate(sourceInvoice.taxRate);
+      setNotes(sourceInvoice.notes ? `From ${sourceInvoice.type === "proforma" ? "Proforma" : "Quotation"} ${sourceInvoice.invoiceNumber}\n${sourceInvoice.notes}` : `From ${sourceInvoice.type === "proforma" ? "Proforma" : "Quotation"} ${sourceInvoice.invoiceNumber}`);
+      if (sourceInvoice.items?.length) {
+        setLines(sourceInvoice.items.map((li) => ({
+          itemId: li.itemId || "",
+          description: li.description,
+          quantity: li.quantity,
+          saleUnit: (li as any).saleUnit || "pc",
+          unitPrice: li.unitPrice,
+          discountPercent: (li as any).discountPercent || "0",
+          discount: li.discount,
+          total: li.total,
+        })));
+      }
+    }
+  }, [sourceInvoice, isNew]);
 
   const getActiveContracts = useCallback((custId: string) => {
     const today = new Date().toISOString().split("T")[0];
@@ -346,7 +372,7 @@ export default function InvoiceForm() {
     }
   };
 
-  const typeLabel = docType === "credit_note" ? "Credit Note" : docType === "proforma" ? "Proforma" : "Invoice";
+  const typeLabel = docType === "credit_note" ? "Credit Note" : docType === "proforma" ? "Proforma" : docType === "quotation" ? "Quotation" : "Invoice";
 
   const selectedCustomer = customers.find(c => c.id === customerId);
   const activeContracts = customerId ? getActiveContracts(customerId) : [];
@@ -360,6 +386,11 @@ export default function InvoiceForm() {
           <div className="flex items-center gap-2">
             {isViewMode && (
               <>
+                {(existingInvoice?.type === "proforma" || existingInvoice?.type === "quotation") && (
+                  <Button variant="outline" onClick={() => navigate(`/invoices/new?type=invoice&from=${invoiceId}`)} data-testid="button-create-invoice">
+                    <FileOutput className="w-4 h-4 mr-1" /> Create Invoice
+                  </Button>
+                )}
                 <Button variant="outline" onClick={downloadPdf} data-testid="button-download-pdf">
                   <Download className="w-4 h-4 mr-1" /> PDF
                 </Button>

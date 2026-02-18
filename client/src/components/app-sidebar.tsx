@@ -23,6 +23,7 @@ const salesNav = [
   { title: "Invoices", url: "/invoices", icon: FileText },
   { title: "Credit Notes", url: "/credit-notes", icon: FileText },
   { title: "Proforma", url: "/proforma", icon: FileText },
+  { title: "Quotations", url: "/quotations", icon: FileText },
 ];
 
 const purchasingNav = [

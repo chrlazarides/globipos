@@ -52,6 +52,10 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - `/api/reports/statements` - Customer statements
 
 ## Recent Changes
+- 2026-02-18: Added Quotation document type alongside Invoice, Credit Note, Proforma
+- 2026-02-18: Proforma and Quotation views have "Create Invoice" button to convert to invoice
+- 2026-02-18: Added dual discount system (percentage + amount) on invoice lines with contract auto-apply
+- 2026-02-18: Supplier country field added for international suppliers
 - 2026-02-18: Added supplier management, purchase invoices with stock impact, supplier payments register
 - 2026-02-18: Stock now tracked per bottle with pack equivalent display
 - 2026-02-18: Sales invoices/credit notes now affect stock levels per bottle

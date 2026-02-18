@@ -259,12 +259,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getNextInvoiceNumber(type: string) {
-    const prefix = type === "credit_note" ? "CN" : type === "proforma" ? "PF" : "INV";
+    const prefix = type === "credit_note" ? "CN" : type === "proforma" ? "PF" : type === "quotation" ? "QT" : "INV";
     const [result] = await db
-      .select({ count: sql<number>`count(*)` })
+      .select({ maxNum: sql<string>`MAX(CAST(NULLIF(SUBSTRING(invoice_number FROM '[0-9]+$'), '') AS INTEGER))` })
       .from(invoices)
       .where(eq(invoices.type, type));
-    const num = (result?.count || 0) + 1;
+    const num = (parseInt(result?.maxNum || "0") || 0) + 1;
     return `${prefix}-${String(num).padStart(5, "0")}`;
   }
 

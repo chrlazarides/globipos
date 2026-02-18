@@ -29,6 +29,7 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
     invoice: "Invoices",
     credit_note: "Credit Notes",
     proforma: "Proforma Invoices",
+    quotation: "Quotations",
   };
 
   const filtered = invoices.filter((inv) => {
@@ -76,7 +77,7 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
         action={
           <Link href={`/invoices/new?type=${docType}`}>
             <Button data-testid="button-new-invoice">
-              <Plus className="w-4 h-4 mr-1" /> New {docType === "credit_note" ? "Credit Note" : docType === "proforma" ? "Proforma" : "Invoice"}
+              <Plus className="w-4 h-4 mr-1" /> New {docType === "credit_note" ? "Credit Note" : docType === "proforma" ? "Proforma" : docType === "quotation" ? "Quotation" : "Invoice"}
             </Button>
           </Link>
         }

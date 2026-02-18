@@ -388,7 +388,7 @@ export async function registerRoutes(
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
 
       const customer = await storage.getCustomer(inv.customerId);
-      const typeLabel = inv.type === "credit_note" ? "CREDIT NOTE" : inv.type === "proforma" ? "PROFORMA INVOICE" : "INVOICE";
+      const typeLabel = inv.type === "credit_note" ? "CREDIT NOTE" : inv.type === "proforma" ? "PROFORMA INVOICE" : inv.type === "quotation" ? "QUOTATION" : "INVOICE";
 
       const html = generateInvoiceHtml(inv, customer, typeLabel);
 
