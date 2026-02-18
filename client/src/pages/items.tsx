@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
@@ -301,6 +301,7 @@ export default function Items() {
 }
 
 function ItemForm({ onSubmit, isPending, categories, defaultValues }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any }) {
+  const isEditing = !!defaultValues;
   const form = useForm({
     resolver: zodResolver(itemFormSchema),
     defaultValues: defaultValues || {
@@ -309,6 +310,28 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues }: { onSubmit
       stockQuantity: 0, reorderLevel: 10, volume: "", alcoholPercentage: "", origin: "", vintage: "", active: true,
     },
   });
+
+  const categoryId = form.watch("categoryId");
+  const currentSku = form.watch("sku");
+
+  const suggestSku = useCallback(async (catId: string) => {
+    if (!catId || isEditing) return;
+    try {
+      const resp = await fetch(`/api/items/suggest-sku/${catId}`);
+      if (resp.ok) {
+        const { sku } = await resp.json();
+        if (!currentSku || currentSku === "" || currentSku.match(/^[A-Z]{1,3}-\d{3}$/)) {
+          form.setValue("sku", sku);
+        }
+      }
+    } catch {}
+  }, [form, isEditing, currentSku]);
+
+  useEffect(() => {
+    if (categoryId && !isEditing) {
+      suggestSku(categoryId);
+    }
+  }, [categoryId, isEditing, suggestSku]);
 
   return (
     <Form {...form}>

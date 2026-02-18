@@ -58,6 +58,24 @@ export async function registerRoutes(
     res.json(item);
   });
 
+  app.get("/api/items/suggest-sku/:categoryId", async (req, res) => {
+    try {
+      const allItems = await storage.getItems();
+      const categories = await storage.getCategories();
+      const category = categories.find(c => c.id === req.params.categoryId);
+      const prefix = category
+        ? category.name.split(/\s+/).map(w => w[0]?.toUpperCase()).join("").substring(0, 3)
+        : "ITM";
+      const existing = allItems
+        .filter(i => i.sku.startsWith(prefix + "-"))
+        .map(i => parseInt(i.sku.replace(prefix + "-", "")) || 0);
+      const next = (existing.length > 0 ? Math.max(...existing) : 0) + 1;
+      res.json({ sku: `${prefix}-${String(next).padStart(3, "0")}` });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/items", async (req, res) => {
     try {
       const data = insertItemSchema.parse(req.body);
