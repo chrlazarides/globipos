@@ -46,6 +46,7 @@ export const items = pgTable("items", {
   reorderLevel: integer("reorder_level").notNull().default(10),
   volume: text("volume"),
   alcoholPercentage: numeric("alcohol_percentage", { precision: 4, scale: 1 }),
+  brand: text("brand"),
   origin: text("origin"),
   vintage: text("vintage"),
   active: boolean("active").default(true).notNull(),
@@ -98,6 +99,8 @@ export const priceContracts = pgTable("price_contracts", {
   endDate: date("end_date").notNull(),
   discountType: text("discount_type").notNull().default("percentage"),
   discountValue: numeric("discount_value", { precision: 10, scale: 2 }).notNull().default("0"),
+  categoryId: varchar("category_id"),
+  brand: text("brand"),
   minQuantity: integer("min_quantity").default(0),
   active: boolean("active").default(true).notNull(),
 });
