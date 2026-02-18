@@ -181,6 +181,7 @@ export const suppliers = pgTable("suppliers", {
   phone: text("phone"),
   address: text("address"),
   city: text("city"),
+  country: text("country").default("Cyprus"),
   taxId: text("tax_id"),
   paymentTerms: text("payment_terms").notNull().default("cash"),
   currentBalance: numeric("current_balance", { precision: 12, scale: 2 }).notNull().default("0"),

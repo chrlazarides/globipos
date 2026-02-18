@@ -96,6 +96,11 @@ export default function Suppliers() {
       ),
     },
     {
+      key: "country",
+      header: "Country",
+      cell: (row) => <span className="text-sm">{row.country || "Cyprus"}</span>,
+    },
+    {
       key: "paymentTerms",
       header: "Payment Terms",
       cell: (row) => <Badge variant="secondary">{row.paymentTerms.replace("_", " ")}</Badge>,
@@ -174,6 +179,7 @@ export default function Suppliers() {
                 phone: editingSupplier.phone || "",
                 address: editingSupplier.address || "",
                 city: editingSupplier.city || "",
+                country: editingSupplier.country || "Cyprus",
                 taxId: editingSupplier.taxId || "",
                 paymentTerms: editingSupplier.paymentTerms,
                 notes: editingSupplier.notes || "",
@@ -191,7 +197,7 @@ function SupplierForm({ onSubmit, isPending, defaultValues }: { onSubmit: (d: an
   const form = useForm({
     resolver: zodResolver(supplierFormSchema),
     defaultValues: defaultValues || {
-      name: "", code: "", contactPerson: "", email: "", phone: "", address: "", city: "",
+      name: "", code: "", contactPerson: "", email: "", phone: "", address: "", city: "", country: "Cyprus",
       taxId: "", paymentTerms: "cash", currentBalance: "0", notes: "", active: true,
     },
   });
@@ -238,18 +244,25 @@ function SupplierForm({ onSubmit, isPending, defaultValues }: { onSubmit: (d: an
             </FormItem>
           )} />
         </div>
+        <FormField control={form.control} name="address" render={({ field }) => (
+          <FormItem>
+            <FormLabel>Address</FormLabel>
+            <FormControl><Input {...field} value={field.value || ""} data-testid="input-supplier-address" /></FormControl>
+            <FormMessage />
+          </FormItem>
+        )} />
         <div className="grid grid-cols-2 gap-4">
-          <FormField control={form.control} name="address" render={({ field }) => (
-            <FormItem>
-              <FormLabel>Address</FormLabel>
-              <FormControl><Input {...field} value={field.value || ""} data-testid="input-supplier-address" /></FormControl>
-              <FormMessage />
-            </FormItem>
-          )} />
           <FormField control={form.control} name="city" render={({ field }) => (
             <FormItem>
               <FormLabel>City</FormLabel>
               <FormControl><Input {...field} value={field.value || ""} data-testid="input-supplier-city" /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )} />
+          <FormField control={form.control} name="country" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Country</FormLabel>
+              <FormControl><Input {...field} value={field.value || ""} placeholder="e.g. Cyprus" data-testid="input-supplier-country" /></FormControl>
               <FormMessage />
             </FormItem>
           )} />
