@@ -442,24 +442,24 @@ export default function InvoiceForm() {
   const activeContracts = customerId ? getActiveContracts(customerId) : [];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
       <PageHeader
         title={isNew ? `New ${typeLabel}` : `${typeLabel} ${existingInvoice?.invoiceNumber || ""}`}
         description={isViewMode ? "View document details" : "Fill in the document details"}
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {isViewMode && (
               <>
                 {(existingInvoice?.type === "proforma" || existingInvoice?.type === "quotation") && (
                   <Button variant="outline" onClick={() => navigate(`/invoices/new?type=invoice&from=${invoiceId}`)} data-testid="button-create-invoice">
-                    <FileOutput className="w-4 h-4 mr-1" /> Create Invoice
+                    <FileOutput className="w-4 h-4 mr-1" /> <span className="hidden sm:inline">Create</span> Invoice
                   </Button>
                 )}
                 <Button variant="outline" onClick={() => openDocument("print")} data-testid="button-print-invoice">
-                  <Printer className="w-4 h-4 mr-1" /> Print
+                  <Printer className="w-4 h-4 sm:mr-1" /> <span className="hidden sm:inline">Print</span>
                 </Button>
                 <Button variant="outline" onClick={downloadDocument} data-testid="button-download-pdf">
-                  <Download className="w-4 h-4 mr-1" /> Download
+                  <Download className="w-4 h-4 sm:mr-1" /> <span className="hidden sm:inline">Download</span>
                 </Button>
                 <Button onClick={() => navigate(`/invoices/${invoiceId}/edit`)} data-testid="button-edit-invoice">Edit</Button>
               </>
@@ -475,7 +475,7 @@ export default function InvoiceForm() {
               <CardTitle className="text-base">Document Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label>Customer</Label>
                   <Select value={customerId} onValueChange={setCustomerId} disabled={isViewMode}>
@@ -505,7 +505,7 @@ export default function InvoiceForm() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label>Date</Label>
                   <Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} disabled={isViewMode} data-testid="input-invoice-date" />
@@ -560,13 +560,14 @@ export default function InvoiceForm() {
             </CardHeader>
             <BarcodeScanner open={scannerOpen} onOpenChange={setScannerOpen} onScan={handleBarcodeScan} />
             <CardContent className="p-0">
-              <div className="overflow-x-auto">
+              {/* Desktop table view */}
+              <div className="hidden md:block overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="min-w-[200px]">Item</TableHead>
-                      <TableHead className="w-[90px]">Qty</TableHead>
-                      <TableHead className="w-[90px]">Unit</TableHead>
+                      <TableHead className="w-[80px]">Qty</TableHead>
+                      <TableHead className="w-[110px]">Unit</TableHead>
                       <TableHead className="w-[90px]">Price</TableHead>
                       <TableHead className="w-[140px]">Discount</TableHead>
                       <TableHead className="w-[90px] text-right">Total</TableHead>
@@ -652,7 +653,7 @@ export default function InvoiceForm() {
                               {parseFloat(line.discount) > 0 ? (
                                 <>
                                   <p>{parseFloat(line.discountPercent || "0").toFixed(1)}%</p>
-                                  <p className="text-muted-foreground">€{parseFloat(line.discount).toFixed(2)}</p>
+                                  <p className="text-muted-foreground">{"\u20AC"}{parseFloat(line.discount).toFixed(2)}</p>
                                 </>
                               ) : (
                                 <span className="text-muted-foreground">-</span>
@@ -682,13 +683,13 @@ export default function InvoiceForm() {
                                   className="pr-6 h-8 text-sm"
                                   data-testid={`input-line-disc-amt-${idx}`}
                                 />
-                                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">€</span>
+                                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">{"\u20AC"}</span>
                               </div>
                             </div>
                           )}
                         </TableCell>
                         <TableCell className="text-right font-medium text-sm">
-                          €{parseFloat(line.total).toFixed(2)}
+                          {"\u20AC"}{parseFloat(line.total).toFixed(2)}
                         </TableCell>
                         {!isViewMode && (
                           <TableCell>
@@ -703,6 +704,128 @@ export default function InvoiceForm() {
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+
+              {/* Mobile card view */}
+              <div className="md:hidden divide-y">
+                {lines.map((line, idx) => (
+                  <div key={idx} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        {isViewMode ? (
+                          <span className="text-sm font-medium">{line.description}</span>
+                        ) : (
+                          <div className="space-y-1">
+                            <Select value={line.itemId || "custom"} onValueChange={(v) => updateLine(idx, "itemId", v === "custom" ? "" : v)}>
+                              <SelectTrigger data-testid={`select-line-item-mobile-${idx}`}>
+                                <SelectValue placeholder="Select item" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="custom">Custom entry</SelectItem>
+                                {items.map((item) => {
+                                  const unitLabel = item.unitType === "pack" ? `${item.packSize}-pack` : item.unitType !== "pc" ? item.unitType : "";
+                                  return (
+                                    <SelectItem key={item.id} value={item.id}>
+                                      {item.name} ({item.sku}){unitLabel ? ` - ${unitLabel}` : ""}
+                                    </SelectItem>
+                                  );
+                                })}
+                              </SelectContent>
+                            </Select>
+                            {!line.itemId && (
+                              <Input
+                                placeholder="Description"
+                                value={line.description}
+                                onChange={(e) => updateLine(idx, "description", e.target.value)}
+                              />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {!isViewMode && lines.length > 1 && (
+                        <Button size="icon" variant="ghost" onClick={() => removeLine(idx)}>
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <Label className="text-xs text-muted-foreground">Qty</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={line.quantity}
+                          onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) ? 1 : Math.max(1, v)); }}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs text-muted-foreground">Unit</Label>
+                        {isViewMode ? (
+                          <div className="flex items-center h-9 text-sm">{saleUnitLabel(line.saleUnit)}</div>
+                        ) : (
+                          <Select value={line.saleUnit} onValueChange={(v) => updateLine(idx, "saleUnit", v)}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="pc">Piece</SelectItem>
+                              <SelectItem value="bottle">Bottle</SelectItem>
+                              <SelectItem value="pack">Pack</SelectItem>
+                              <SelectItem value="6-pack">6-Pack</SelectItem>
+                              <SelectItem value="12-pack">12-Pack</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+                      <div>
+                        <Label className="text-xs text-muted-foreground">Price</Label>
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          value={line.unitPrice}
+                          onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                    </div>
+
+                    {!isViewMode && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Disc %</Label>
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="0"
+                            value={line.discountPercent === "0" || line.discountPercent === "0.00" ? "" : line.discountPercent}
+                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discountPercent", v || "0"); }}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Disc {"\u20AC"}</Label>
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="0.00"
+                            value={line.discount === "0" || line.discount === "0.00" ? "" : line.discount}
+                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discount", v || "0"); }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between pt-1">
+                      {isViewMode && parseFloat(line.discount) > 0 && (
+                        <span className="text-xs text-muted-foreground">Disc: {parseFloat(line.discountPercent || "0").toFixed(1)}% ({"\u20AC"}{parseFloat(line.discount).toFixed(2)})</span>
+                      )}
+                      {isViewMode && parseFloat(line.discount) <= 0 && <span />}
+                      {!isViewMode && <span />}
+                      <span className="text-sm font-semibold">{"\u20AC"}{parseFloat(line.total).toFixed(2)}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>
