@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import * as XLSX from "xlsx";
@@ -324,7 +324,45 @@ export async function registerRoutes(
       const { items: lineItems, ...invoiceData } = req.body;
       const data = insertInvoiceSchema.parse({ ...invoiceData, invoiceNumber: "TEMP" });
       const parsedItems = (lineItems || []).map((li: any) => insertInvoiceItemSchema.parse({ ...li, invoiceId: "TEMP" }));
+
+      if (data.type === "invoice" && data.status !== "draft") {
+        for (const li of parsedItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const bottlesToSubtract = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              if (item.stockQuantity < bottlesToSubtract) {
+                return res.status(400).json({ message: `Not enough stock for ${item.itemName || item.name || 'item'}. Available: ${item.stockQuantity} bottles, needed: ${bottlesToSubtract}` });
+              }
+            }
+          }
+        }
+      }
+
       const inv = await storage.createInvoice(data, parsedItems);
+
+      if (data.type === "invoice" && data.status !== "draft") {
+        for (const li of parsedItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const bottlesToSubtract = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              await storage.updateItem(item.id, { stockQuantity: item.stockQuantity - bottlesToSubtract });
+            }
+          }
+        }
+      } else if (data.type === "credit_note") {
+        for (const li of parsedItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const bottlesToAdd = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
+            }
+          }
+        }
+      }
+
       res.json(inv);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -486,6 +524,103 @@ export async function registerRoutes(
     }
   });
 
+  // Suppliers
+  app.get("/api/suppliers", async (_req, res) => {
+    const sups = await storage.getSuppliers();
+    res.json(sups);
+  });
+
+  app.get("/api/suppliers/:id", async (req, res) => {
+    const sup = await storage.getSupplier(req.params.id);
+    if (!sup) return res.status(404).json({ message: "Supplier not found" });
+    res.json(sup);
+  });
+
+  app.post("/api/suppliers", async (req, res) => {
+    try {
+      const data = insertSupplierSchema.parse(req.body);
+      const sup = await storage.createSupplier(data);
+      res.json(sup);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/suppliers/:id", async (req, res) => {
+    try {
+      const sup = await storage.updateSupplier(req.params.id, req.body);
+      if (!sup) return res.status(404).json({ message: "Supplier not found" });
+      res.json(sup);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Purchase Invoices
+  app.get("/api/purchase-invoices", async (_req, res) => {
+    const invs = await storage.getPurchaseInvoices();
+    res.json(invs);
+  });
+
+  app.get("/api/purchase-invoices/:id", async (req, res) => {
+    const inv = await storage.getPurchaseInvoice(req.params.id);
+    if (!inv) return res.status(404).json({ message: "Purchase invoice not found" });
+    res.json(inv);
+  });
+
+  app.post("/api/purchase-invoices", async (req, res) => {
+    try {
+      const { items: lineItems, ...invoiceData } = req.body;
+      const data = insertPurchaseInvoiceSchema.parse(invoiceData);
+
+      if (!lineItems?.length) {
+        return res.status(400).json({ message: "At least one line item is required" });
+      }
+
+      const parsedItems = lineItems.map((li: any) => insertPurchaseInvoiceItemSchema.parse(li));
+      const inv = await storage.createPurchaseInvoice(data, parsedItems);
+
+      for (const li of parsedItems) {
+        const item = await storage.getItem(li.itemId);
+        if (item) {
+          const bottlesToAdd = li.purchaseUnit === "pack" ? li.quantity * item.packSize : li.quantity;
+          await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
+        }
+      }
+
+      const supplier = await storage.getSupplier(data.supplierId);
+      if (supplier) {
+        const newBalance = parseFloat(supplier.currentBalance) + parseFloat(String(data.total));
+        await storage.updateSupplier(data.supplierId, { currentBalance: newBalance.toFixed(2) });
+      }
+
+      res.json(inv);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Supplier Payments
+  app.get("/api/supplier-payments", async (req, res) => {
+    const supplierId = req.query.supplierId as string | undefined;
+    const payments = await storage.getSupplierPayments(supplierId);
+    res.json(payments);
+  });
+
+  app.post("/api/supplier-payments", async (req, res) => {
+    try {
+      const data = insertSupplierPaymentSchema.parse(req.body);
+      const supplier = await storage.getSupplier(data.supplierId);
+      if (!supplier) return res.status(404).json({ message: "Supplier not found" });
+      const payment = await storage.createSupplierPayment(data);
+      const newBalance = parseFloat(supplier.currentBalance) - parseFloat(String(data.amount));
+      await storage.updateSupplier(data.supplierId, { currentBalance: Math.max(0, newBalance).toFixed(2) });
+      res.json(payment);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Portal API Routes
   app.post("/api/portal/login", async (req, res) => {
     try {
@@ -563,8 +698,9 @@ export async function registerRoutes(
       for (const oi of orderItems) {
         const item = await storage.getItem(oi.itemId);
         if (!item) continue;
-        if (item.stockQuantity < oi.quantity) {
-          return res.status(400).json({ message: `Not enough stock for ${item.name}. Available: ${item.stockQuantity}` });
+        const bottlesNeeded = (oi.saleUnit === "pack" && item.packSize > 1) ? oi.quantity * item.packSize : oi.quantity;
+        if (item.stockQuantity < bottlesNeeded) {
+          return res.status(400).json({ message: `Not enough stock for ${item.name}. Available: ${item.stockQuantity} bottles` });
         }
         const priceKey = `price${customer.priceLevel}` as keyof typeof item;
         const unitPrice = parseFloat(String(item[priceKey] || item.price1));
@@ -590,7 +726,8 @@ export async function registerRoutes(
       for (const oi of orderItems) {
         const item = await storage.getItem(oi.itemId);
         if (item) {
-          await storage.updateItem(item.id, { stockQuantity: item.stockQuantity - oi.quantity });
+          const bottlesToSubtract = (oi.saleUnit === "pack" && item.packSize > 1) ? oi.quantity * item.packSize : oi.quantity;
+          await storage.updateItem(item.id, { stockQuantity: item.stockQuantity - bottlesToSubtract });
         }
       }
 

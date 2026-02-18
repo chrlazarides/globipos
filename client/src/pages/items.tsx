@@ -166,11 +166,24 @@ export default function Items() {
     {
       key: "stock",
       header: "Stock",
-      cell: (row) => (
-        <Badge variant={row.stockQuantity <= row.reorderLevel ? "destructive" : "secondary"}>
-          {row.stockQuantity}
-        </Badge>
-      ),
+      cell: (row) => {
+        const bottles = row.stockQuantity;
+        const packSize = row.packSize || 1;
+        const packs = packSize > 1 ? Math.floor(bottles / packSize) : null;
+        const loose = packSize > 1 ? bottles % packSize : null;
+        return (
+          <div className="flex flex-col">
+            <Badge variant={bottles <= row.reorderLevel ? "destructive" : "secondary"}>
+              {bottles} btl{bottles !== 1 ? "s" : ""}
+            </Badge>
+            {packs !== null && (
+              <span className="text-xs text-muted-foreground mt-0.5">
+                {packs} pack{packs !== 1 ? "s" : ""}{loose ? ` + ${loose}` : ""}
+              </span>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: "status",
@@ -482,7 +495,7 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
             <div className="grid grid-cols-2 gap-4">
               <FormField control={form.control} name="stockQuantity" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Stock Quantity</FormLabel>
+                  <FormLabel>Stock Quantity (bottles)</FormLabel>
                   <FormControl><Input type="number" {...field} onChange={(e) => field.onChange(parseInt(e.target.value) || 0)} data-testid="input-stock" /></FormControl>
                   <FormMessage />
                 </FormItem>

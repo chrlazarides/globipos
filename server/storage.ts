@@ -4,6 +4,7 @@ import {
   users, categories, items, customers, priceContracts, priceContractItems,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings,
+  suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
   type InsertUser, type User, type InsertCategory, type Category,
   type InsertItem, type Item, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
@@ -15,6 +16,10 @@ import {
   type InsertPortalOrder, type PortalOrder,
   type InsertPortalOrderItem, type PortalOrderItem,
   type SystemSetting,
+  type InsertSupplier, type Supplier,
+  type InsertPurchaseInvoice, type PurchaseInvoice,
+  type InsertPurchaseInvoiceItem, type PurchaseInvoiceItem,
+  type InsertSupplierPayment, type SupplierPayment,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -68,6 +73,19 @@ export interface IStorage {
   getPortalOrders(customerId: string): Promise<(PortalOrder & { items: PortalOrderItem[] })[]>;
   createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]): Promise<PortalOrder>;
   getAvailableItems(): Promise<Item[]>;
+
+  getSuppliers(): Promise<Supplier[]>;
+  getSupplier(id: string): Promise<Supplier | undefined>;
+  createSupplier(data: InsertSupplier): Promise<Supplier>;
+  updateSupplier(id: string, data: Partial<InsertSupplier>): Promise<Supplier | undefined>;
+
+  getPurchaseInvoices(): Promise<(PurchaseInvoice & { supplierName: string })[]>;
+  getPurchaseInvoice(id: string): Promise<(PurchaseInvoice & { items: PurchaseInvoiceItem[]; supplierName: string }) | undefined>;
+  createPurchaseInvoice(data: InsertPurchaseInvoice, lineItems: InsertPurchaseInvoiceItem[]): Promise<PurchaseInvoice>;
+  getNextPurchaseInvoiceNumber(): Promise<string>;
+
+  getSupplierPayments(supplierId?: string): Promise<(SupplierPayment & { supplierName?: string })[]>;
+  createSupplierPayment(data: InsertSupplierPayment): Promise<SupplierPayment>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -454,6 +472,124 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(items)
       .where(and(eq(items.active, true), sql`${items.stockQuantity} > 0`))
       .orderBy(items.name);
+  }
+
+  async getSuppliers() {
+    return db.select().from(suppliers).orderBy(suppliers.name);
+  }
+  async getSupplier(id: string) {
+    const [sup] = await db.select().from(suppliers).where(eq(suppliers.id, id));
+    return sup;
+  }
+  async createSupplier(data: InsertSupplier) {
+    const [sup] = await db.insert(suppliers).values(data).returning();
+    return sup;
+  }
+  async updateSupplier(id: string, data: Partial<InsertSupplier>) {
+    const [sup] = await db.update(suppliers).set(data).where(eq(suppliers.id, id)).returning();
+    return sup;
+  }
+
+  async getPurchaseInvoices() {
+    const result = await db
+      .select({
+        id: purchaseInvoices.id,
+        invoiceNumber: purchaseInvoices.invoiceNumber,
+        supplierInvoiceRef: purchaseInvoices.supplierInvoiceRef,
+        supplierId: purchaseInvoices.supplierId,
+        date: purchaseInvoices.date,
+        dueDate: purchaseInvoices.dueDate,
+        subtotal: purchaseInvoices.subtotal,
+        vatAmount: purchaseInvoices.vatAmount,
+        total: purchaseInvoices.total,
+        status: purchaseInvoices.status,
+        notes: purchaseInvoices.notes,
+        createdAt: purchaseInvoices.createdAt,
+        supplierName: suppliers.name,
+      })
+      .from(purchaseInvoices)
+      .leftJoin(suppliers, eq(purchaseInvoices.supplierId, suppliers.id))
+      .orderBy(desc(purchaseInvoices.createdAt));
+    return result.map(r => ({ ...r, supplierName: r.supplierName || "Unknown" }));
+  }
+
+  async getPurchaseInvoice(id: string) {
+    const [inv] = await db
+      .select({
+        id: purchaseInvoices.id,
+        invoiceNumber: purchaseInvoices.invoiceNumber,
+        supplierInvoiceRef: purchaseInvoices.supplierInvoiceRef,
+        supplierId: purchaseInvoices.supplierId,
+        date: purchaseInvoices.date,
+        dueDate: purchaseInvoices.dueDate,
+        subtotal: purchaseInvoices.subtotal,
+        vatAmount: purchaseInvoices.vatAmount,
+        total: purchaseInvoices.total,
+        status: purchaseInvoices.status,
+        notes: purchaseInvoices.notes,
+        createdAt: purchaseInvoices.createdAt,
+        supplierName: suppliers.name,
+      })
+      .from(purchaseInvoices)
+      .leftJoin(suppliers, eq(purchaseInvoices.supplierId, suppliers.id))
+      .where(eq(purchaseInvoices.id, id));
+    if (!inv) return undefined;
+    const lineItems = await db.select().from(purchaseInvoiceItems).where(eq(purchaseInvoiceItems.purchaseInvoiceId, id));
+    return { ...inv, supplierName: inv.supplierName || "Unknown", items: lineItems };
+  }
+
+  async getNextPurchaseInvoiceNumber() {
+    const [result] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(purchaseInvoices);
+    const num = (result?.count || 0) + 1;
+    return `PI-${String(num).padStart(5, "0")}`;
+  }
+
+  async createPurchaseInvoice(data: InsertPurchaseInvoice, lineItems: InsertPurchaseInvoiceItem[]) {
+    const invoiceNumber = await this.getNextPurchaseInvoiceNumber();
+    const [inv] = await db.insert(purchaseInvoices).values({ ...data, invoiceNumber }).returning();
+    if (lineItems.length > 0) {
+      await db.insert(purchaseInvoiceItems).values(lineItems.map(li => ({ ...li, purchaseInvoiceId: inv.id })));
+    }
+    return inv;
+  }
+
+  async getSupplierPayments(supplierId?: string) {
+    let query = db
+      .select({
+        id: supplierPayments.id,
+        supplierId: supplierPayments.supplierId,
+        purchaseInvoiceId: supplierPayments.purchaseInvoiceId,
+        amount: supplierPayments.amount,
+        paymentDate: supplierPayments.paymentDate,
+        paymentMethod: supplierPayments.paymentMethod,
+        reference: supplierPayments.reference,
+        createdAt: supplierPayments.createdAt,
+        supplierName: suppliers.name,
+      })
+      .from(supplierPayments)
+      .leftJoin(suppliers, eq(supplierPayments.supplierId, suppliers.id))
+      .orderBy(desc(supplierPayments.createdAt));
+
+    if (supplierId) {
+      query = query.where(eq(supplierPayments.supplierId, supplierId)) as any;
+    }
+
+    const result = await query;
+    return result.map(r => ({ ...r, supplierName: r.supplierName || undefined }));
+  }
+
+  async createSupplierPayment(data: InsertSupplierPayment) {
+    const [payment] = await db.insert(supplierPayments).values(data).returning();
+    if (data.supplierId) {
+      const supplier = await this.getSupplier(data.supplierId);
+      if (supplier) {
+        const newBalance = parseFloat(supplier.currentBalance) - parseFloat(String(data.amount));
+        await this.updateSupplier(data.supplierId, { currentBalance: newBalance.toFixed(2) });
+      }
+    }
+    return payment;
   }
 }
 

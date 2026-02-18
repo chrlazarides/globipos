@@ -28,6 +28,14 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - `client/src/pages/` - All page components (dashboard, items, customers, invoices, pricing, offers, reports)
 - `client/src/components/` - Shared components (sidebar, data-table, stat-card, barcode-scanner, etc.)
 
+## Stock Management
+- stockQuantity always stored as individual bottles/pieces
+- When purchasing in packs: bottles added = quantity * packSize
+- When selling in packs: bottles subtracted = quantity * packSize
+- Items display shows both bottle count and pack equivalent (e.g. "48 btls (8 packs)")
+- Sales invoices subtract stock on creation (non-draft); credit notes restore stock
+- Purchase invoices add stock on creation
+
 ## API Routes
 - `/api/dashboard/stats` - Dashboard statistics
 - `/api/categories` - CRUD for categories
@@ -37,8 +45,14 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - `/api/invoices/type/:type` - Filter by document type
 - `/api/price-contracts` - Pricing contracts
 - `/api/seasonal-offers` - Seasonal offers
-- `/api/reports/sales/:from/:to/:customerId` - Sales report
+- `/api/suppliers` - CRUD for suppliers
+- `/api/purchase-invoices` - Purchase invoices from suppliers (affects stock)
+- `/api/supplier-payments` - Supplier payment register
+- `/api/reports/sales` - Sales report
 - `/api/reports/statements` - Customer statements
 
 ## Recent Changes
+- 2026-02-18: Added supplier management, purchase invoices with stock impact, supplier payments register
+- 2026-02-18: Stock now tracked per bottle with pack equivalent display
+- 2026-02-18: Sales invoices/credit notes now affect stock levels per bottle
 - 2026-02-18: Initial MVP build with full schema, frontend, and backend

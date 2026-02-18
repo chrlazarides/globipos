@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -23,6 +23,12 @@ const salesNav = [
   { title: "Invoices", url: "/invoices", icon: FileText },
   { title: "Credit Notes", url: "/credit-notes", icon: FileText },
   { title: "Proforma", url: "/proforma", icon: FileText },
+];
+
+const purchasingNav = [
+  { title: "Suppliers", url: "/suppliers", icon: Truck },
+  { title: "Purchase Invoices", url: "/purchase-invoices", icon: ShoppingCart },
+  { title: "Supplier Payments", url: "/supplier-payments", icon: CreditCard },
 ];
 
 const pricingNav = [
@@ -81,6 +87,7 @@ export function AppSidebar() {
       <SidebarContent>
         <NavSection label="Overview" items={mainNav} />
         <NavSection label="Sales" items={salesNav} />
+        <NavSection label="Purchasing" items={purchasingNav} />
         <NavSection label="Pricing" items={pricingNav} />
         <NavSection label="Analytics" items={reportNav} />
         <NavSection label="System" items={systemNav} />
