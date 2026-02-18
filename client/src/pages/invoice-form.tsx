@@ -543,10 +543,10 @@ export default function InvoiceForm() {
                         </TableCell>
                         <TableCell>
                           <Input
-                            type="number"
-                            min="1"
+                            type="text"
+                            inputMode="numeric"
                             value={line.quantity}
-                            onChange={(e) => updateLine(idx, "quantity", parseInt(e.target.value) || 1)}
+                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", parseInt(v) || 1); }}
                             disabled={isViewMode}
                             data-testid={`input-line-qty-${idx}`}
                           />
@@ -571,10 +571,10 @@ export default function InvoiceForm() {
                         </TableCell>
                         <TableCell>
                           <Input
-                            type="number"
-                            step="0.01"
+                            type="text"
+                            inputMode="decimal"
                             value={line.unitPrice}
-                            onChange={(e) => updateLine(idx, "unitPrice", e.target.value)}
+                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
                             disabled={isViewMode}
                             data-testid={`input-line-price-${idx}`}
                           />
@@ -650,10 +650,10 @@ export default function InvoiceForm() {
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm text-muted-foreground">Tax (%)</span>
                 <Input
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
                   value={taxRate}
-                  onChange={(e) => setTaxRate(e.target.value)}
+                  onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) setTaxRate(v); }}
                   className="w-20 text-right"
                   disabled={isViewMode}
                   data-testid="input-tax-rate"
