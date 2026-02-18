@@ -181,6 +181,9 @@ export default function Suppliers() {
                 city: editingSupplier.city || "",
                 country: editingSupplier.country || "Cyprus",
                 taxId: editingSupplier.taxId || "",
+                iban: editingSupplier.iban || "",
+                swift: editingSupplier.swift || "",
+                bankName: editingSupplier.bankName || "",
                 paymentTerms: editingSupplier.paymentTerms,
                 notes: editingSupplier.notes || "",
                 active: editingSupplier.active,
@@ -198,7 +201,7 @@ function SupplierForm({ onSubmit, isPending, defaultValues }: { onSubmit: (d: an
     resolver: zodResolver(supplierFormSchema),
     defaultValues: defaultValues || {
       name: "", code: "", contactPerson: "", email: "", phone: "", address: "", city: "", country: "Cyprus",
-      taxId: "", paymentTerms: "cash", currentBalance: "0", notes: "", active: true,
+      taxId: "", iban: "", swift: "", bankName: "", paymentTerms: "cash", currentBalance: "0", notes: "", active: true,
     },
   });
 
@@ -293,6 +296,29 @@ function SupplierForm({ onSubmit, isPending, defaultValues }: { onSubmit: (d: an
                   <SelectItem value="credit_90">90 Days</SelectItem>
                 </SelectContent>
               </Select>
+              <FormMessage />
+            </FormItem>
+          )} />
+        </div>
+        <FormField control={form.control} name="bankName" render={({ field }) => (
+          <FormItem>
+            <FormLabel>Bank Name</FormLabel>
+            <FormControl><Input {...field} value={field.value || ""} data-testid="input-supplier-bank-name" /></FormControl>
+            <FormMessage />
+          </FormItem>
+        )} />
+        <div className="grid grid-cols-2 gap-4">
+          <FormField control={form.control} name="iban" render={({ field }) => (
+            <FormItem>
+              <FormLabel>IBAN</FormLabel>
+              <FormControl><Input {...field} value={field.value || ""} data-testid="input-supplier-iban" /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )} />
+          <FormField control={form.control} name="swift" render={({ field }) => (
+            <FormItem>
+              <FormLabel>SWIFT/BIC</FormLabel>
+              <FormControl><Input {...field} value={field.value || ""} data-testid="input-supplier-swift" /></FormControl>
               <FormMessage />
             </FormItem>
           )} />
