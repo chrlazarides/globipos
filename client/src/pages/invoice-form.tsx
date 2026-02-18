@@ -11,12 +11,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { useToast } from "@/hooks/use-toast";
 import { BarcodeScanner } from "@/components/barcode-scanner";
-import type { Customer, Item, Invoice, InvoiceItem } from "@shared/schema";
+import type { Customer, Item, Invoice, InvoiceItem, PriceContract } from "@shared/schema";
 
 interface LineItem {
   itemId: string;
@@ -24,6 +24,7 @@ interface LineItem {
   quantity: number;
   saleUnit: string;
   unitPrice: string;
+  discountPercent: string;
   discount: string;
   total: string;
 }
@@ -33,6 +34,7 @@ function saleUnitLabel(unit: string): string {
     case "bottle": return "Bottle";
     case "6-pack": return "6-Pack";
     case "12-pack": return "12-Pack";
+    case "pack": return "Pack";
     default: return "Piece";
   }
 }
@@ -44,6 +46,12 @@ function itemToSaleUnit(item: Item): string {
   if (item.unitType === "6-pack") return "6-pack";
   if (item.unitType === "12-pack") return "12-pack";
   return item.unitType === "bottle" ? "bottle" : "pc";
+}
+
+function getPaymentDays(terms: string): number {
+  if (terms === "cash") return 0;
+  const match = terms.match(/(\d+)/);
+  return match ? parseInt(match[1]) : 0;
 }
 
 export default function InvoiceForm() {
@@ -61,6 +69,7 @@ export default function InvoiceForm() {
 
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
+  const { data: contracts = [] } = useQuery<PriceContract[]>({ queryKey: ["/api/price-contracts"] });
   const priceLevelNames = usePriceLevels();
   const { data: existingInvoice } = useQuery<Invoice & { items: InvoiceItem[] }>({
     queryKey: ["/api/invoices", invoiceId],
@@ -73,7 +82,7 @@ export default function InvoiceForm() {
   const [taxRate, setTaxRate] = useState("19");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState("draft");
-  const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discount: "0", total: "0" }]);
+  const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discountPercent: "0", discount: "0", total: "0" }]);
 
   useEffect(() => {
     if (existingInvoice) {
@@ -90,6 +99,7 @@ export default function InvoiceForm() {
           quantity: li.quantity,
           saleUnit: (li as any).saleUnit || "pc",
           unitPrice: li.unitPrice,
+          discountPercent: (li as any).discountPercent || "0",
           discount: li.discount,
           total: li.total,
         })));
@@ -97,23 +107,92 @@ export default function InvoiceForm() {
     }
   }, [existingInvoice]);
 
+  const getActiveContracts = useCallback((custId: string) => {
+    const today = new Date().toISOString().split("T")[0];
+    return contracts.filter(c =>
+      c.customerId === custId &&
+      c.active &&
+      c.startDate <= today &&
+      c.endDate >= today
+    );
+  }, [contracts]);
+
+  const findContractDiscount = useCallback((custId: string, item: Item) => {
+    const activeContracts = getActiveContracts(custId);
+    for (const contract of activeContracts) {
+      if (contract.categoryId && contract.categoryId !== item.categoryId) continue;
+      if (contract.brand && contract.brand !== item.brand) continue;
+      return {
+        type: contract.discountType,
+        value: parseFloat(String(contract.discountValue)) || 0,
+        name: contract.name,
+      };
+    }
+    return null;
+  }, [getActiveContracts]);
+
   useEffect(() => {
     if (customerId) {
       const customer = customers.find((c) => c.id === customerId);
-      if (customer && customer.paymentTerms !== "cash") {
-        const days = parseInt(customer.paymentTerms.replace("credit_", "")) || 30;
-        const due = new Date(invoiceDate);
-        due.setDate(due.getDate() + days);
-        setDueDate(due.toISOString().split("T")[0]);
+      if (customer) {
+        const days = getPaymentDays(customer.paymentTerms);
+        if (days > 0) {
+          const due = new Date(invoiceDate);
+          due.setDate(due.getDate() + days);
+          setDueDate(due.toISOString().split("T")[0]);
+        } else if (isNew) {
+          setDueDate(invoiceDate);
+        }
       }
     }
-  }, [customerId, invoiceDate, customers]);
+  }, [customerId, invoiceDate, customers, isNew]);
+
+  useEffect(() => {
+    if (!customerId) return;
+    const customer = customers.find(c => c.id === customerId);
+    if (!customer) return;
+    setLines((prev) => {
+      let changed = false;
+      const updated = prev.map((line) => {
+        if (!line.itemId) return line;
+        const item = items.find((i) => i.id === line.itemId);
+        if (!item) return line;
+        changed = true;
+        const newLine = { ...line };
+        const priceKey = `price${customer.priceLevel}` as keyof Item;
+        newLine.unitPrice = String(item[priceKey] || item.price1);
+        const contractDisc = findContractDiscount(customerId, item);
+        if (contractDisc) {
+          if (contractDisc.type === "percentage") {
+            newLine.discountPercent = String(contractDisc.value);
+          } else {
+            newLine.discount = String(contractDisc.value);
+          }
+        } else {
+          newLine.discountPercent = "0";
+          newLine.discount = "0";
+        }
+        const qty = newLine.quantity || 0;
+        const price = parseFloat(newLine.unitPrice) || 0;
+        const lineGross = qty * price;
+        const pctDisc = parseFloat(newLine.discountPercent) || 0;
+        const amtDisc = parseFloat(newLine.discount) || 0;
+        const pctAmount = lineGross * (pctDisc / 100);
+        newLine.total = Math.max(0, lineGross - pctAmount - amtDisc).toFixed(2);
+        return newLine;
+      });
+      return changed ? updated : prev;
+    });
+  }, [customerId, contracts, items, customers, findContractDiscount]);
 
   const calcLineTotal = useCallback((line: LineItem) => {
     const qty = line.quantity || 0;
     const price = parseFloat(line.unitPrice) || 0;
-    const disc = parseFloat(line.discount) || 0;
-    return ((qty * price) - disc).toFixed(2);
+    const lineGross = qty * price;
+    const pctDisc = parseFloat(line.discountPercent) || 0;
+    const amtDisc = parseFloat(line.discount) || 0;
+    const pctAmount = lineGross * (pctDisc / 100);
+    return Math.max(0, lineGross - pctAmount - amtDisc).toFixed(2);
   }, []);
 
   const updateLine = (index: number, field: keyof LineItem, value: any) => {
@@ -129,6 +208,22 @@ export default function InvoiceForm() {
           updated[index].description = item.name;
           updated[index].unitPrice = String(item[priceKey] || item.price1);
           updated[index].saleUnit = itemToSaleUnit(item);
+
+          if (customerId) {
+            const contractDisc = findContractDiscount(customerId, item);
+            if (contractDisc) {
+              if (contractDisc.type === "percentage") {
+                updated[index].discountPercent = String(contractDisc.value);
+                updated[index].discount = "0";
+              } else {
+                updated[index].discount = String(contractDisc.value);
+                updated[index].discountPercent = "0";
+              }
+            } else {
+              updated[index].discountPercent = "0";
+              updated[index].discount = "0";
+            }
+          }
         }
       }
       updated[index].total = calcLineTotal(updated[index]);
@@ -149,14 +244,35 @@ export default function InvoiceForm() {
       const customer = customers.find((c) => c.id === customerId);
       const level = customer?.priceLevel || 1;
       const priceKey = `price${level}` as keyof typeof item;
+
+      let discountPercent = "0";
+      let discount = "0";
+      if (customerId) {
+        const contractDisc = findContractDiscount(customerId, item);
+        if (contractDisc) {
+          if (contractDisc.type === "percentage") {
+            discountPercent = String(contractDisc.value);
+          } else {
+            discount = String(contractDisc.value);
+          }
+        }
+      }
+
+      const unitPrice = String(item[priceKey] || item.price1);
+      const price = parseFloat(unitPrice) || 0;
+      const pctDisc = parseFloat(discountPercent) || 0;
+      const amtDisc = parseFloat(discount) || 0;
+      const lineTotal = Math.max(0, price - (price * pctDisc / 100) - amtDisc).toFixed(2);
+
       const newLine: LineItem = {
         itemId: item.id,
         description: item.name,
         quantity: 1,
         saleUnit: itemToSaleUnit(item),
-        unitPrice: String(item[priceKey] || item.price1),
-        discount: "0",
-        total: String(item[priceKey] || item.price1),
+        unitPrice,
+        discountPercent,
+        discount,
+        total: lineTotal,
       };
       setLines((prev) => [...prev.filter(l => l.description), newLine]);
     } catch {
@@ -164,7 +280,7 @@ export default function InvoiceForm() {
     }
   };
 
-  const addLine = () => setLines((prev) => [...prev, { itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discount: "0", total: "0" }]);
+  const addLine = () => setLines((prev) => [...prev, { itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discountPercent: "0", discount: "0", total: "0" }]);
   const removeLine = (index: number) => setLines((prev) => prev.filter((_, i) => i !== index));
 
   const subtotal = lines.reduce((sum, l) => sum + (parseFloat(l.total) || 0), 0);
@@ -191,6 +307,7 @@ export default function InvoiceForm() {
           quantity: l.quantity,
           saleUnit: l.saleUnit,
           unitPrice: l.unitPrice,
+          discountPercent: l.discountPercent || "0",
           discount: l.discount,
           total: l.total,
         })),
@@ -206,6 +323,7 @@ export default function InvoiceForm() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
       toast({ title: "Invoice saved successfully" });
       navigate(`/invoices/${data.id}`);
     },
@@ -229,6 +347,9 @@ export default function InvoiceForm() {
   };
 
   const typeLabel = docType === "credit_note" ? "Credit Note" : docType === "proforma" ? "Proforma" : "Invoice";
+
+  const selectedCustomer = customers.find(c => c.id === customerId);
+  const activeContracts = customerId ? getActiveContracts(customerId) : [];
 
   return (
     <div className="p-6 space-y-6">
@@ -292,10 +413,36 @@ export default function InvoiceForm() {
                   <Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} disabled={isViewMode} data-testid="input-invoice-date" />
                 </div>
                 <div>
-                  <Label>Due Date</Label>
+                  <Label>Due Date {selectedCustomer && selectedCustomer.paymentTerms !== "cash" && (
+                    <span className="text-xs text-muted-foreground ml-1">
+                      (auto: {selectedCustomer.paymentTerms.replace("credit_", "")} days)
+                    </span>
+                  )}</Label>
                   <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} disabled={isViewMode} data-testid="input-due-date" />
                 </div>
               </div>
+
+              {selectedCustomer && !isViewMode && (
+                <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50">
+                  <Info className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    <p>
+                      <span className="font-medium">{selectedCustomer.name}</span> &mdash;
+                      Terms: <span className="font-medium">{selectedCustomer.paymentTerms === "cash" ? "Cash" : selectedCustomer.paymentTerms.replace("credit_", "") + " days credit"}</span>,
+                      Price Level: <span className="font-medium">{priceLevelNames[selectedCustomer.priceLevel - 1] || `Level ${selectedCustomer.priceLevel}`}</span>
+                    </p>
+                    {activeContracts.length > 0 && (
+                      <p>
+                        Active contracts: {activeContracts.map(c => (
+                          <Badge key={c.id} variant="secondary" className="mr-1 text-xs">
+                            {c.name} ({c.discountType === "percentage" ? `${c.discountValue}%` : `€${c.discountValue}`}{c.categoryId ? " cat." : ""}{c.brand ? ` ${c.brand}` : ""})
+                          </Badge>
+                        ))}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -320,11 +467,11 @@ export default function InvoiceForm() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="min-w-[200px]">Item</TableHead>
-                      <TableHead className="w-[80px]">Qty</TableHead>
-                      <TableHead className="w-[100px]">Unit</TableHead>
-                      <TableHead className="w-[100px]">Price</TableHead>
-                      <TableHead className="w-[100px]">Disc.</TableHead>
-                      <TableHead className="w-[100px] text-right">Total</TableHead>
+                      <TableHead className="w-[70px]">Qty</TableHead>
+                      <TableHead className="w-[90px]">Unit</TableHead>
+                      <TableHead className="w-[90px]">Price</TableHead>
+                      <TableHead className="w-[160px]">Discount</TableHead>
+                      <TableHead className="w-[90px] text-right">Total</TableHead>
                       {!isViewMode && <TableHead className="w-[50px]" />}
                     </TableRow>
                   </TableHeader>
@@ -384,6 +531,7 @@ export default function InvoiceForm() {
                               <SelectContent>
                                 <SelectItem value="pc">Piece</SelectItem>
                                 <SelectItem value="bottle">Bottle</SelectItem>
+                                <SelectItem value="pack">Pack</SelectItem>
                                 <SelectItem value="6-pack">6-Pack</SelectItem>
                                 <SelectItem value="12-pack">12-Pack</SelectItem>
                               </SelectContent>
@@ -401,14 +549,44 @@ export default function InvoiceForm() {
                           />
                         </TableCell>
                         <TableCell>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={line.discount}
-                            onChange={(e) => updateLine(idx, "discount", e.target.value)}
-                            disabled={isViewMode}
-                            data-testid={`input-line-discount-${idx}`}
-                          />
+                          {isViewMode ? (
+                            <div className="text-sm">
+                              {parseFloat(line.discountPercent) > 0 && <span>{line.discountPercent}%</span>}
+                              {parseFloat(line.discountPercent) > 0 && parseFloat(line.discount) > 0 && <span> + </span>}
+                              {parseFloat(line.discount) > 0 && <span>€{parseFloat(line.discount).toFixed(2)}</span>}
+                              {parseFloat(line.discountPercent) === 0 && parseFloat(line.discount) === 0 && <span className="text-muted-foreground">-</span>}
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <div className="relative flex-1">
+                                <Input
+                                  type="number"
+                                  step="0.1"
+                                  min="0"
+                                  max="100"
+                                  placeholder="%"
+                                  value={line.discountPercent === "0" ? "" : line.discountPercent}
+                                  onChange={(e) => updateLine(idx, "discountPercent", e.target.value || "0")}
+                                  className="pr-6"
+                                  data-testid={`input-line-disc-pct-${idx}`}
+                                />
+                                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">%</span>
+                              </div>
+                              <div className="relative flex-1">
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  placeholder="€"
+                                  value={line.discount === "0" ? "" : line.discount}
+                                  onChange={(e) => updateLine(idx, "discount", e.target.value || "0")}
+                                  className="pr-6"
+                                  data-testid={`input-line-disc-amt-${idx}`}
+                                />
+                                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">€</span>
+                              </div>
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="text-right font-medium text-sm">
                           €{parseFloat(line.total).toFixed(2)}
@@ -505,7 +683,7 @@ export default function InvoiceForm() {
                       <p className="text-xs text-muted-foreground">{customer.code}</p>
                       {customer.address && <p className="text-xs text-muted-foreground">{customer.address}</p>}
                       <div className="flex gap-2 flex-wrap">
-                        <Badge variant="secondary">{customer.paymentTerms}</Badge>
+                        <Badge variant="secondary">{customer.paymentTerms === "cash" ? "Cash" : customer.paymentTerms.replace("credit_", "") + " days"}</Badge>
                         <Badge variant="outline">{priceLevelNames[customer.priceLevel - 1] || `Level ${customer.priceLevel}`}</Badge>
                       </div>
                     </>
