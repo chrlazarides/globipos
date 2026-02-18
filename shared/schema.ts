@@ -101,6 +101,8 @@ export const priceContracts = pgTable("price_contracts", {
   discountValue: numeric("discount_value", { precision: 10, scale: 2 }).notNull().default("0"),
   categoryId: varchar("category_id"),
   brand: text("brand"),
+  categoryIds: text("category_ids").array().default([]),
+  brands: text("brands").array().default([]),
   minQuantity: integer("min_quantity").default(0),
   active: boolean("active").default(true).notNull(),
 });
