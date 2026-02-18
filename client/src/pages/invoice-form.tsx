@@ -21,9 +21,28 @@ interface LineItem {
   itemId: string;
   description: string;
   quantity: number;
+  saleUnit: string;
   unitPrice: string;
   discount: string;
   total: string;
+}
+
+function saleUnitLabel(unit: string): string {
+  switch (unit) {
+    case "bottle": return "Bottle";
+    case "6-pack": return "6-Pack";
+    case "12-pack": return "12-Pack";
+    default: return "Piece";
+  }
+}
+
+function itemToSaleUnit(item: Item): string {
+  if (item.unitType === "bottle") return "bottle";
+  if (item.unitType === "pack" && item.packSize === 6) return "6-pack";
+  if (item.unitType === "pack" && item.packSize === 12) return "12-pack";
+  if (item.unitType === "6-pack") return "6-pack";
+  if (item.unitType === "12-pack") return "12-pack";
+  return item.unitType === "bottle" ? "bottle" : "pc";
 }
 
 export default function InvoiceForm() {
@@ -52,7 +71,7 @@ export default function InvoiceForm() {
   const [taxRate, setTaxRate] = useState("19");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState("draft");
-  const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, unitPrice: "0", discount: "0", total: "0" }]);
+  const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discount: "0", total: "0" }]);
 
   useEffect(() => {
     if (existingInvoice) {
@@ -67,6 +86,7 @@ export default function InvoiceForm() {
           itemId: li.itemId || "",
           description: li.description,
           quantity: li.quantity,
+          saleUnit: (li as any).saleUnit || "pc",
           unitPrice: li.unitPrice,
           discount: li.discount,
           total: li.total,
@@ -106,6 +126,7 @@ export default function InvoiceForm() {
           const priceKey = `price${level}` as keyof Item;
           updated[index].description = item.name;
           updated[index].unitPrice = String(item[priceKey] || item.price1);
+          updated[index].saleUnit = itemToSaleUnit(item);
         }
       }
       updated[index].total = calcLineTotal(updated[index]);
@@ -130,6 +151,7 @@ export default function InvoiceForm() {
         itemId: item.id,
         description: item.name,
         quantity: 1,
+        saleUnit: itemToSaleUnit(item),
         unitPrice: String(item[priceKey] || item.price1),
         discount: "0",
         total: String(item[priceKey] || item.price1),
@@ -140,7 +162,7 @@ export default function InvoiceForm() {
     }
   };
 
-  const addLine = () => setLines((prev) => [...prev, { itemId: "", description: "", quantity: 1, unitPrice: "0", discount: "0", total: "0" }]);
+  const addLine = () => setLines((prev) => [...prev, { itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discount: "0", total: "0" }]);
   const removeLine = (index: number) => setLines((prev) => prev.filter((_, i) => i !== index));
 
   const subtotal = lines.reduce((sum, l) => sum + (parseFloat(l.total) || 0), 0);
@@ -165,6 +187,7 @@ export default function InvoiceForm() {
           itemId: l.itemId || null,
           description: l.description,
           quantity: l.quantity,
+          saleUnit: l.saleUnit,
           unitPrice: l.unitPrice,
           discount: l.discount,
           total: l.total,
@@ -296,6 +319,7 @@ export default function InvoiceForm() {
                     <TableRow>
                       <TableHead className="min-w-[200px]">Item</TableHead>
                       <TableHead className="w-[80px]">Qty</TableHead>
+                      <TableHead className="w-[100px]">Unit</TableHead>
                       <TableHead className="w-[100px]">Price</TableHead>
                       <TableHead className="w-[100px]">Disc.</TableHead>
                       <TableHead className="w-[100px] text-right">Total</TableHead>
@@ -316,11 +340,14 @@ export default function InvoiceForm() {
                                 </SelectTrigger>
                                 <SelectContent>
                                   <SelectItem value="custom">Custom entry</SelectItem>
-                                  {items.map((item) => (
-                                    <SelectItem key={item.id} value={item.id}>
-                                      {item.name} ({item.sku})
-                                    </SelectItem>
-                                  ))}
+                                  {items.map((item) => {
+                                    const unitLabel = item.unitType === "pack" ? `${item.packSize}-pack` : item.unitType !== "pc" ? item.unitType : "";
+                                    return (
+                                      <SelectItem key={item.id} value={item.id}>
+                                        {item.name} ({item.sku}){unitLabel ? ` - ${unitLabel}` : ""}
+                                      </SelectItem>
+                                    );
+                                  })}
                                 </SelectContent>
                               </Select>
                               {!line.itemId && (
@@ -343,6 +370,23 @@ export default function InvoiceForm() {
                             disabled={isViewMode}
                             data-testid={`input-line-qty-${idx}`}
                           />
+                        </TableCell>
+                        <TableCell>
+                          {isViewMode ? (
+                            <span className="text-sm">{saleUnitLabel(line.saleUnit)}</span>
+                          ) : (
+                            <Select value={line.saleUnit} onValueChange={(v) => updateLine(idx, "saleUnit", v)}>
+                              <SelectTrigger data-testid={`select-line-unit-${idx}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="pc">Piece</SelectItem>
+                                <SelectItem value="bottle">Bottle</SelectItem>
+                                <SelectItem value="6-pack">6-Pack</SelectItem>
+                                <SelectItem value="12-pack">12-Pack</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          )}
                         </TableCell>
                         <TableCell>
                           <Input
