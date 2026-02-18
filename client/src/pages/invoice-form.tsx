@@ -591,13 +591,11 @@ export default function InvoiceForm() {
                             <div className="flex items-center gap-1">
                               <div className="relative flex-1">
                                 <Input
-                                  type="number"
-                                  step="0.1"
-                                  min="0"
-                                  max="100"
+                                  type="text"
+                                  inputMode="decimal"
                                   placeholder="%"
                                   value={line.discountPercent === "0" ? "" : line.discountPercent}
-                                  onChange={(e) => updateLine(idx, "discountPercent", e.target.value || "0")}
+                                  onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discountPercent", v || "0"); }}
                                   className="pr-6"
                                   data-testid={`input-line-disc-pct-${idx}`}
                                 />
@@ -605,12 +603,11 @@ export default function InvoiceForm() {
                               </div>
                               <div className="relative flex-1">
                                 <Input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
+                                  type="text"
+                                  inputMode="decimal"
                                   placeholder="€"
                                   value={line.discount === "0" ? "" : line.discount}
-                                  onChange={(e) => updateLine(idx, "discount", e.target.value || "0")}
+                                  onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discount", v || "0"); }}
                                   className="pr-6"
                                   data-testid={`input-line-disc-amt-${idx}`}
                                 />
