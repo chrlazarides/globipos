@@ -117,6 +117,8 @@ type SheetAnalysis = {
   detectedEntity: EntityType;
   columnMap: Record<string, string>;
   confidence: number;
+  _preParsedRows?: any[];
+  _preParsedInfo?: string;
 };
 
 type SheetResult = {
@@ -125,6 +127,144 @@ type SheetResult = {
   success: number;
   errors: { row: number; message: string }[];
 };
+
+const WINE_CATEGORY_KEYWORDS = [
+  "white", "red", "rose", "rosé", "sparkling", "dessert", "fortified",
+  "champagne", "prosecco", "cava", "sweet", "dry", "semi-dry", "semi-sweet",
+  "blush", "orange", "natural", "organic", "bio", "spirits", "beer",
+  "brandy", "whisky", "whiskey", "vodka", "gin", "rum", "tequila", "liqueur",
+  "grappa", "ouzo", "raki", "zivania", "commandaria",
+];
+
+function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; brand: string; origin: string; rows: any[]; headers: string[] } | null {
+  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1");
+  const totalRows = range.e.r + 1;
+  const totalCols = range.e.c + 1;
+
+  if (totalRows < 3 || totalCols < 2) return null;
+
+  const getCellVal = (r: number, c: number): string => {
+    const addr = XLSX.utils.encode_cell({ r, c });
+    const cell = sheet[addr];
+    if (!cell) return "";
+    return String(cell.v ?? "").trim();
+  };
+
+  const firstCell = getCellVal(0, 0);
+  if (!firstCell || firstCell.length < 3) return null;
+
+  let brand = firstCell;
+  let origin = "";
+  const parenMatch = firstCell.match(/^(.+?)\s*\((.+)\)\s*$/);
+  if (parenMatch) {
+    brand = parenMatch[1].trim();
+    const locationParts = parenMatch[2].trim();
+    const dashParts = locationParts.split(/\s*[-–]\s*/);
+    if (dashParts.length >= 2) {
+      origin = dashParts[dashParts.length - 1].trim();
+    } else {
+      origin = locationParts;
+    }
+  }
+
+  let costColIdx = -1;
+  let retailColIdx = -1;
+
+  for (let r = 0; r <= Math.min(5, range.e.r); r++) {
+    for (let c = 0; c <= range.e.c; c++) {
+      const val = getCellVal(r, c).toLowerCase().replace(/[\s_-]/g, "");
+      if (val.includes("cost") || val.includes("κοστ")) costColIdx = c;
+      if (val.includes("final") || val.includes("retail") || val.includes("sell") || val.includes("τιμή") || val.includes("price")) {
+        if (costColIdx !== c) retailColIdx = c;
+      }
+    }
+  }
+
+  if (costColIdx < 0 && retailColIdx < 0) {
+    for (let c = 1; c <= range.e.c; c++) {
+      for (let r = 2; r <= Math.min(8, range.e.r); r++) {
+        const val = getCellVal(r, c);
+        const numVal = val.replace(/[€$£,\s]/g, "");
+        if (numVal && !isNaN(Number(numVal)) && Number(numVal) > 0) {
+          if (costColIdx < 0) {
+            costColIdx = c;
+          } else if (c > costColIdx && retailColIdx < 0) {
+            retailColIdx = c;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  if (retailColIdx < 0 && costColIdx >= 0) {
+    for (let c = costColIdx + 1; c <= range.e.c; c++) {
+      for (let r = 2; r <= Math.min(8, range.e.r); r++) {
+        const val = getCellVal(r, c).replace(/[€$£,\s]/g, "");
+        if (val && !isNaN(Number(val)) && Number(val) > 0) {
+          retailColIdx = c;
+          break;
+        }
+      }
+      if (retailColIdx >= 0) break;
+    }
+  }
+
+  const flatRows: any[] = [];
+  let currentCategory = "";
+
+  for (let r = 1; r <= range.e.r; r++) {
+    const nameVal = getCellVal(r, 0);
+    if (!nameVal) continue;
+
+    const nameUpper = nameVal.toUpperCase().trim();
+    const nameLower = nameVal.toLowerCase().trim();
+
+    const isCategoryRow = WINE_CATEGORY_KEYWORDS.some((kw) => nameLower === kw) ||
+      (nameUpper === nameVal && nameVal.length < 30 && !getCellVal(r, Math.max(costColIdx, 1)));
+
+    if (isCategoryRow) {
+      currentCategory = nameVal.charAt(0).toUpperCase() + nameVal.slice(1).toLowerCase();
+      continue;
+    }
+
+    const costRaw = costColIdx >= 0 ? getCellVal(r, costColIdx).replace(/[€$£,\s]/g, "") : "";
+    const retailRaw = retailColIdx >= 0 ? getCellVal(r, retailColIdx).replace(/[€$£,\s]/g, "") : "";
+
+    const costVal = costRaw && !isNaN(Number(costRaw)) ? Number(costRaw) : 0;
+    const retailVal = retailRaw && !isNaN(Number(retailRaw)) ? Number(retailRaw) : 0;
+
+    if (costVal === 0 && retailVal === 0 && !currentCategory) continue;
+    if (costVal === 0 && retailVal === 0) continue;
+
+    let itemName = nameVal;
+    let vintage = "";
+    const vintageMatch = nameVal.match(/\b(19|20)\d{2}\b/);
+    if (vintageMatch) {
+      vintage = vintageMatch[0];
+    }
+
+    const skuBase = brand.substring(0, 3).toUpperCase() + "-" + itemName.replace(/[^a-zA-Z0-9]/g, "").substring(0, 8).toUpperCase();
+    const skuSuffix = String(flatRows.length + 1).padStart(3, "0");
+
+    flatRows.push({
+      name: itemName,
+      sku: skuBase + "-" + skuSuffix,
+      brand: brand,
+      origin: origin,
+      category: currentCategory,
+      costPrice: costVal.toFixed(2),
+      price1: retailVal > 0 ? retailVal.toFixed(2) : "0",
+      vintage: vintage,
+    });
+  }
+
+  if (flatRows.length < 1) return null;
+
+  const headers = ["name", "sku", "brand", "origin", "category", "costPrice", "price1", "vintage"];
+
+  return { detected: true, brand, origin, rows: flatRows, headers };
+}
 
 function detectEntity(headers: string[]): { entity: EntityType; confidence: number } {
   const lowerHeaders = headers.map((h) => h.toLowerCase().replace(/[\s_-]/g, ""));
@@ -227,8 +367,26 @@ export default function ImportData() {
         const workbook = XLSX.read(data, { type: "array" });
 
         const analyzed: SheetAnalysis[] = workbook.SheetNames.map((sheetName) => {
-          const sheet = workbook.Sheets[sheetName];
-          const json: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+          const ws = workbook.Sheets[sheetName];
+
+          const wineParsed = tryParseWinePriceList(ws);
+          if (wineParsed && wineParsed.rows.length > 0) {
+            const fields = ENTITY_CONFIG.items.fields;
+            const columnMap = autoMapColumns(wineParsed.headers, fields);
+            return {
+              sheetName,
+              headers: wineParsed.headers,
+              rows: wineParsed.rows.slice(0, 10),
+              totalRows: wineParsed.rows.length,
+              detectedEntity: "items" as EntityType,
+              columnMap,
+              confidence: 90,
+              _preParsedRows: wineParsed.rows,
+              _preParsedInfo: `Detected wine price list: ${wineParsed.brand} (${wineParsed.origin})`,
+            };
+          }
+
+          const json: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
           const headers = json.length > 0 ? Object.keys(json[0]) : [];
           const { entity, confidence } = detectEntity(headers);
           const config = entity !== "skip" ? ENTITY_CONFIG[entity] : null;
@@ -294,20 +452,28 @@ export default function ImportData() {
       const config = ENTITY_CONFIG[sheet.detectedEntity as Exclude<EntityType, "skip">];
 
       try {
-        const workbookData = await fileInputRef.current?.files?.[0]?.arrayBuffer();
-        if (!workbookData) throw new Error("File not available");
-
         const cleanedMap: Record<string, string> = {};
         for (const [key, val] of Object.entries(sheet.columnMap)) {
           if (val && val !== "skip") cleanedMap[key] = val;
         }
 
-        const formData = new FormData();
-        formData.append("file", fileInputRef.current!.files![0]);
-        formData.append("columnMap", JSON.stringify(cleanedMap));
-        formData.append("sheetName", sheet.sheetName);
+        let res: Response;
 
-        const res = await fetch(config.endpoint, { method: "POST", body: formData });
+        if (sheet._preParsedRows) {
+          res = await fetch(config.endpoint + "/json", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rows: sheet._preParsedRows }),
+          });
+        } else {
+          if (!fileInputRef.current?.files?.[0]) throw new Error("File not available");
+          const formData = new FormData();
+          formData.append("file", fileInputRef.current.files[0]);
+          formData.append("columnMap", JSON.stringify(cleanedMap));
+          formData.append("sheetName", sheet.sheetName);
+          res = await fetch(config.endpoint, { method: "POST", body: formData });
+        }
+
         const data = await res.json();
 
         results.push({
@@ -443,6 +609,9 @@ export default function ImportData() {
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate" title={s.sheetName}>{s.sheetName}</p>
                         <p className="text-xs text-muted-foreground">{s.totalRows} rows</p>
+                        {s._preParsedInfo && (
+                          <p className="text-xs text-muted-foreground mt-0.5 truncate" title={s._preParsedInfo}>{s._preParsedInfo}</p>
+                        )}
                       </div>
                       <EntityIcon className="w-4 h-4 flex-shrink-0 text-muted-foreground" />
                     </div>

@@ -184,6 +184,80 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/items/import/json", async (req, res) => {
+    try {
+      const { rows } = req.body;
+      if (!rows || !Array.isArray(rows) || rows.length === 0) {
+        return res.status(400).json({ message: "No data rows provided" });
+      }
+      if (rows.length > 10000) {
+        return res.status(400).json({ message: "Too many rows (max 10000)" });
+      }
+
+      const categories = await storage.getCategories();
+      const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
+      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          if (typeof row !== "object" || row === null) {
+            results.errors.push({ row: i + 1, message: "Invalid row data" });
+            continue;
+          }
+          const name = String(row.name || "").trim();
+          const sku = String(row.sku || "").trim();
+          if (!name || !sku) {
+            results.errors.push({ row: i + 1, message: "Name and SKU are required" });
+            continue;
+          }
+
+          const categoryName = String(row.category || "").trim();
+          let categoryId: string | null = null;
+          if (categoryName) {
+            categoryId = catMap.get(categoryName.toLowerCase()) || null;
+            if (!categoryId) {
+              const newCat = await storage.createCategory({ name: categoryName, description: null, parentId: null, active: true });
+              categoryId = newCat.id;
+              catMap.set(categoryName.toLowerCase(), newCat.id);
+            }
+          }
+
+          await storage.createItem({
+            name,
+            sku,
+            barcode: row.barcode || null,
+            description: row.description || null,
+            categoryId,
+            unitType: row.unitType || "pc",
+            packSize: parseInt(row.packSize) || 1,
+            price1: row.price1 || "0",
+            price2: row.price2 || "0",
+            price3: row.price3 || "0",
+            price4: row.price4 || "0",
+            price5: row.price5 || "0",
+            costPrice: row.costPrice || "0",
+            stockQuantity: parseInt(row.stockQuantity) || 0,
+            reorderLevel: parseInt(row.reorderLevel) || 10,
+            volume: row.volume || null,
+            alcoholPercentage: row.alcoholPercentage || null,
+            brand: row.brand || null,
+            origin: row.origin || null,
+            vintage: row.vintage || null,
+            active: true,
+          });
+          results.success++;
+        } catch (e: any) {
+          results.errors.push({ row: i + 1, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Customers
   app.get("/api/customers", async (_req, res) => {
     const custs = await storage.getCustomers();
