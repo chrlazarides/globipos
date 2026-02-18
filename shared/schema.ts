@@ -171,6 +171,60 @@ export const payments = pgTable("payments", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const suppliers = pgTable("suppliers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  contactPerson: text("contact_person"),
+  email: text("email"),
+  phone: text("phone"),
+  address: text("address"),
+  city: text("city"),
+  taxId: text("tax_id"),
+  paymentTerms: text("payment_terms").notNull().default("cash"),
+  currentBalance: numeric("current_balance", { precision: 12, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+  active: boolean("active").default(true).notNull(),
+});
+
+export const purchaseInvoices = pgTable("purchase_invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceNumber: text("invoice_number").notNull(),
+  supplierInvoiceRef: text("supplier_invoice_ref"),
+  supplierId: varchar("supplier_id").notNull(),
+  date: date("date").notNull(),
+  dueDate: date("due_date"),
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
+  vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+  status: text("status").notNull().default("draft"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const purchaseInvoiceItems = pgTable("purchase_invoice_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  purchaseInvoiceId: varchar("purchase_invoice_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  description: text("description").notNull(),
+  quantity: integer("quantity").notNull(),
+  purchaseUnit: text("purchase_unit").notNull().default("pc"),
+  unitCost: numeric("unit_cost", { precision: 10, scale: 2 }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("19"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+});
+
+export const supplierPayments = pgTable("supplier_payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  supplierId: varchar("supplier_id").notNull(),
+  purchaseInvoiceId: varchar("purchase_invoice_id"),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  paymentDate: date("payment_date").notNull(),
+  paymentMethod: text("payment_method").notNull().default("bank_transfer"),
+  reference: text("reference"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).pick({ username: true, password: true });
 export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
@@ -186,6 +240,10 @@ export const insertInvoiceItemSchema = createInsertSchema(invoiceItems).omit({ i
 export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true });
 export const insertPortalOrderSchema = createInsertSchema(portalOrders).omit({ id: true, createdAt: true });
 export const insertPortalOrderItemSchema = createInsertSchema(portalOrderItems).omit({ id: true });
+export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true });
+export const insertPurchaseInvoiceSchema = createInsertSchema(purchaseInvoices).omit({ id: true, createdAt: true });
+export const insertPurchaseInvoiceItemSchema = createInsertSchema(purchaseInvoiceItems).omit({ id: true });
+export const insertSupplierPaymentSchema = createInsertSchema(supplierPayments).omit({ id: true, createdAt: true });
 
 // Types
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -216,3 +274,11 @@ export type InsertPortalOrder = z.infer<typeof insertPortalOrderSchema>;
 export type PortalOrder = typeof portalOrders.$inferSelect;
 export type InsertPortalOrderItem = z.infer<typeof insertPortalOrderItemSchema>;
 export type PortalOrderItem = typeof portalOrderItems.$inferSelect;
+export type InsertSupplier = z.infer<typeof insertSupplierSchema>;
+export type Supplier = typeof suppliers.$inferSelect;
+export type InsertPurchaseInvoice = z.infer<typeof insertPurchaseInvoiceSchema>;
+export type PurchaseInvoice = typeof purchaseInvoices.$inferSelect;
+export type InsertPurchaseInvoiceItem = z.infer<typeof insertPurchaseInvoiceItemSchema>;
+export type PurchaseInvoiceItem = typeof purchaseInvoiceItems.$inferSelect;
+export type InsertSupplierPayment = z.infer<typeof insertSupplierPaymentSchema>;
+export type SupplierPayment = typeof supplierPayments.$inferSelect;
