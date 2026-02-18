@@ -296,6 +296,7 @@ function ContractDetail({ contract, categories, allBrands, allItems, customers, 
   const [editingHeader, setEditingHeader] = useState(false);
   const [headerForm, setHeaderForm] = useState({
     name: contract.name,
+    customerId: contract.customerId,
     startDate: contract.startDate,
     endDate: contract.endDate,
     purchaseGoal: String(contract.purchaseGoal || "0"),
@@ -385,110 +386,137 @@ function ContractDetail({ contract, categories, allBrands, allItems, customers, 
           <ArrowLeft className="w-4 h-4" />
         </Button>
         <div className="flex-1">
-          <h1 className="text-xl font-semibold">{contract.name}</h1>
+          {editingHeader ? (
+            <Input
+              value={headerForm.name}
+              onChange={e => setHeaderForm(p => ({ ...p, name: e.target.value }))}
+              className="text-xl font-semibold h-auto py-1"
+              data-testid="input-edit-name"
+            />
+          ) : (
+            <h1 className="text-xl font-semibold">{contract.name}</h1>
+          )}
           <p className="text-sm text-muted-foreground">{contract.customerName}</p>
         </div>
-        <Badge variant={statusVariant as any}>{statusLabel}</Badge>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Customer</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1">
-            <p className="text-lg font-semibold">{contract.customerName}</p>
-            <p className="text-sm text-muted-foreground">Price Level: <span className="font-medium text-foreground">{priceLevel}</span></p>
-            <p className="text-sm text-muted-foreground">Terms: {customer?.paymentTerms || "cash"}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
-            <CardTitle className="text-sm font-medium">Contract Period</CardTitle>
+        {editingHeader ? (
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={headerForm.active}
+                onChange={e => setHeaderForm(p => ({ ...p, active: e.target.checked }))}
+                className="rounded"
+                data-testid="checkbox-contract-active"
+              />
+              Active
+            </label>
+            <Button size="sm" variant="ghost" onClick={() => setEditingHeader(false)} data-testid="button-cancel-edit">Cancel</Button>
+            <Button size="sm" onClick={() => updateContract.mutate(headerForm)} disabled={updateContract.isPending} data-testid="button-save-header">
+              {updateContract.isPending ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Badge variant={statusVariant as any}>{statusLabel}</Badge>
             <Button size="icon" variant="ghost" onClick={() => setEditingHeader(true)} data-testid="button-edit-contract-header">
               <Pencil className="w-3.5 h-3.5" />
             </Button>
-          </CardHeader>
-          <CardContent className="space-y-1">
-            {editingHeader ? (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label className="text-xs">Start</Label>
-                    <Input type="date" value={headerForm.startDate} onChange={e => setHeaderForm(p => ({ ...p, startDate: e.target.value }))} data-testid="input-edit-start" />
-                  </div>
-                  <div>
-                    <Label className="text-xs">End</Label>
-                    <Input type="date" value={headerForm.endDate} onChange={e => setHeaderForm(p => ({ ...p, endDate: e.target.value }))} data-testid="input-edit-end" />
-                  </div>
-                </div>
-                <div className="flex gap-2 justify-end">
-                  <Button size="sm" variant="ghost" onClick={() => setEditingHeader(false)}>Cancel</Button>
-                  <Button size="sm" onClick={() => updateContract.mutate(headerForm)} disabled={updateContract.isPending} data-testid="button-save-header">Save</Button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <p className="text-sm">{new Date(contract.startDate).toLocaleDateString()} - {new Date(contract.endDate).toLocaleDateString()}</p>
-                <p className="text-sm text-muted-foreground">{contract.name}</p>
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-1.5">
-              <Gift className="w-3.5 h-3.5" /> Purchase Goal & Voucher
-            </CardTitle>
-            {!editingHeader && (
-              <Button size="icon" variant="ghost" onClick={() => setEditingHeader(true)} data-testid="button-edit-goal">
-                <Pencil className="w-3.5 h-3.5" />
-              </Button>
-            )}
-          </CardHeader>
-          <CardContent className="space-y-1">
-            {editingHeader ? (
-              <div className="space-y-2">
-                <div>
-                  <Label className="text-xs">Purchase Goal ({"\u20AC"})</Label>
-                  <Input inputMode="decimal" value={headerForm.purchaseGoal} onChange={e => setHeaderForm(p => ({ ...p, purchaseGoal: e.target.value }))} data-testid="input-purchase-goal" />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label className="text-xs">Voucher Type</Label>
-                    <Select value={headerForm.voucherType} onValueChange={v => setHeaderForm(p => ({ ...p, voucherType: v }))}>
-                      <SelectTrigger data-testid="select-voucher-type"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="percentage">Percentage</SelectItem>
-                        <SelectItem value="fixed">Fixed Amount</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="text-xs">Voucher Value</Label>
-                    <Input inputMode="decimal" value={headerForm.voucherValue} onChange={e => setHeaderForm(p => ({ ...p, voucherValue: e.target.value }))} data-testid="input-voucher-value" />
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <>
-                {parseFloat(String(contract.purchaseGoal)) > 0 ? (
-                  <>
-                    <p className="text-sm">Goal: <span className="font-medium">{"\u20AC"}{parseFloat(String(contract.purchaseGoal)).toLocaleString()}</span></p>
-                    <p className="text-sm">Voucher: <span className="font-medium">
-                      {contract.voucherType === "percentage" ? `${contract.voucherValue}%` : `\u20AC${contract.voucherValue}`}
-                    </span> money-back</p>
-                  </>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No purchase goal set</p>
-                )}
-              </>
-            )}
-          </CardContent>
-        </Card>
+          </div>
+        )}
       </div>
+
+      {editingHeader && (
+        <Card>
+          <CardContent className="p-4 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div>
+                <Label className="text-xs">Customer</Label>
+                <Select value={headerForm.customerId} onValueChange={v => setHeaderForm(p => ({ ...p, customerId: v }))}>
+                  <SelectTrigger data-testid="select-edit-customer"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {customers.map(c => (
+                      <SelectItem key={c.id} value={c.id}>{c.name} (Level {c.priceLevel})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Start Date</Label>
+                <Input type="date" value={headerForm.startDate} onChange={e => setHeaderForm(p => ({ ...p, startDate: e.target.value }))} data-testid="input-edit-start" />
+              </div>
+              <div>
+                <Label className="text-xs">End Date</Label>
+                <Input type="date" value={headerForm.endDate} onChange={e => setHeaderForm(p => ({ ...p, endDate: e.target.value }))} data-testid="input-edit-end" />
+              </div>
+              <div>
+                <Label className="text-xs">Purchase Goal ({"\u20AC"})</Label>
+                <Input inputMode="decimal" value={headerForm.purchaseGoal} onChange={e => setHeaderForm(p => ({ ...p, purchaseGoal: e.target.value }))} data-testid="input-purchase-goal" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-xs">Voucher Type</Label>
+                <Select value={headerForm.voucherType} onValueChange={v => setHeaderForm(p => ({ ...p, voucherType: v }))}>
+                  <SelectTrigger data-testid="select-voucher-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="percentage">Percentage</SelectItem>
+                    <SelectItem value="fixed">Fixed Amount</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Voucher Value</Label>
+                <Input inputMode="decimal" value={headerForm.voucherValue} onChange={e => setHeaderForm(p => ({ ...p, voucherValue: e.target.value }))} data-testid="input-voucher-value" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {!editingHeader && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Customer</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <p className="text-lg font-semibold">{contract.customerName}</p>
+              <p className="text-sm text-muted-foreground">Price Level: <span className="font-medium text-foreground">{priceLevel}</span></p>
+              <p className="text-sm text-muted-foreground">Terms: {customer?.paymentTerms || "cash"}</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Contract Period</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <p className="text-sm">{new Date(contract.startDate).toLocaleDateString()} - {new Date(contract.endDate).toLocaleDateString()}</p>
+              <p className="text-sm text-muted-foreground">{contract.name}</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-1.5">
+                <Gift className="w-3.5 h-3.5" /> Purchase Goal & Voucher
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              {parseFloat(String(contract.purchaseGoal)) > 0 ? (
+                <>
+                  <p className="text-sm">Goal: <span className="font-medium">{"\u20AC"}{parseFloat(String(contract.purchaseGoal)).toLocaleString()}</span></p>
+                  <p className="text-sm">Voucher: <span className="font-medium">
+                    {contract.voucherType === "percentage" ? `${contract.voucherValue}%` : `\u20AC${contract.voucherValue}`}
+                  </span> money-back</p>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">No purchase goal set</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-2">
