@@ -104,7 +104,20 @@ export const priceContracts = pgTable("price_contracts", {
   categoryIds: text("category_ids").array().default([]),
   brands: text("brands").array().default([]),
   minQuantity: integer("min_quantity").default(0),
+  purchaseGoal: numeric("purchase_goal", { precision: 12, scale: 2 }).default("0"),
+  voucherType: text("voucher_type").default("percentage"),
+  voucherValue: numeric("voucher_value", { precision: 10, scale: 2 }).default("0"),
   active: boolean("active").default(true).notNull(),
+});
+
+export const priceContractRules = pgTable("price_contract_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").notNull(),
+  categoryIds: text("rule_category_ids").array().default([]),
+  brands: text("rule_brands").array().default([]),
+  minQuantity: integer("rule_min_quantity").default(0),
+  discountType: text("rule_discount_type").notNull().default("percentage"),
+  discountValue: numeric("rule_discount_value", { precision: 10, scale: 2 }).notNull().default("0"),
 });
 
 export const priceContractItems = pgTable("price_contract_items", {
@@ -236,6 +249,7 @@ export const insertCategorySchema = createInsertSchema(categories).omit({ id: tr
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true });
 export const insertPriceContractSchema = createInsertSchema(priceContracts).omit({ id: true });
+export const insertPriceContractRuleSchema = createInsertSchema(priceContractRules).omit({ id: true });
 export const insertPriceContractItemSchema = createInsertSchema(priceContractItems).omit({ id: true });
 export const insertSeasonalOfferSchema = createInsertSchema(seasonalOffers).omit({ id: true });
 export const insertSeasonalOfferItemSchema = createInsertSchema(seasonalOfferItems).omit({ id: true });
@@ -262,6 +276,8 @@ export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
 export type Customer = typeof customers.$inferSelect;
 export type InsertPriceContract = z.infer<typeof insertPriceContractSchema>;
 export type PriceContract = typeof priceContracts.$inferSelect;
+export type InsertPriceContractRule = z.infer<typeof insertPriceContractRuleSchema>;
+export type PriceContractRule = typeof priceContractRules.$inferSelect;
 export type InsertPriceContractItem = z.infer<typeof insertPriceContractItemSchema>;
 export type PriceContractItem = typeof priceContractItems.$inferSelect;
 export type InsertSeasonalOffer = z.infer<typeof insertSeasonalOfferSchema>;
