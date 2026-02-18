@@ -11,7 +11,7 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Tag } from "lucide-react";
+import { Plus, Tag, Pencil } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertPriceContractSchema, type PriceContract, type Customer, type Category } from "@shared/schema";
@@ -30,6 +30,8 @@ interface PriceContractWithCustomer extends PriceContract {
 
 export default function Pricing() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingContract, setEditingContract] = useState<PriceContractWithCustomer | null>(null);
   const { toast } = useToast();
 
   const { data: contracts = [], isLoading } = useQuery<PriceContractWithCustomer[]>({ queryKey: ["/api/price-contracts"] });
@@ -48,6 +50,25 @@ export default function Pricing() {
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  const updateContract = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("PATCH", `/api/price-contracts/${editingContract?.id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/price-contracts"] });
+      setEditDialogOpen(false);
+      setEditingContract(null);
+      toast({ title: "Price contract updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const handleEdit = (contract: PriceContractWithCustomer) => {
+    setEditingContract(contract);
+    setEditDialogOpen(true);
+  };
 
   const columns: Column<PriceContractWithCustomer>[] = [
     {
@@ -113,6 +134,15 @@ export default function Pricing() {
         );
       },
     },
+    {
+      key: "actions",
+      header: "",
+      cell: (row) => (
+        <Button size="icon" variant="ghost" onClick={() => handleEdit(row)} data-testid={`button-edit-contract-${row.id}`}>
+          <Pencil className="w-4 h-4" />
+        </Button>
+      ),
+    },
   ];
 
   return (
@@ -138,14 +168,40 @@ export default function Pricing() {
           <DataTable columns={columns} data={contracts} isLoading={isLoading} emptyMessage="No price contracts found" />
         </CardContent>
       </Card>
+
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Edit Price Contract</DialogTitle></DialogHeader>
+          {editingContract && (
+            <ContractForm
+              onSubmit={(d) => updateContract.mutate(d)}
+              isPending={updateContract.isPending}
+              customers={customers}
+              categories={categories}
+              defaultValues={{
+                name: editingContract.name,
+                customerId: editingContract.customerId,
+                startDate: editingContract.startDate,
+                endDate: editingContract.endDate,
+                discountType: editingContract.discountType,
+                discountValue: editingContract.discountValue,
+                minQuantity: editingContract.minQuantity || 0,
+                categoryId: editingContract.categoryId || "",
+                brand: editingContract.brand || "",
+                active: editingContract.active,
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function ContractForm({ onSubmit, isPending, customers, categories }: { onSubmit: (d: any) => void; isPending: boolean; customers: Customer[]; categories: Category[] }) {
+function ContractForm({ onSubmit, isPending, customers, categories, defaultValues }: { onSubmit: (d: any) => void; isPending: boolean; customers: Customer[]; categories: Category[]; defaultValues?: any }) {
   const form = useForm({
     resolver: zodResolver(contractFormSchema),
-    defaultValues: {
+    defaultValues: defaultValues || {
       name: "", customerId: "", startDate: new Date().toISOString().split("T")[0],
       endDate: "", discountType: "percentage", discountValue: "0", minQuantity: 0,
       categoryId: "", brand: "", active: true,

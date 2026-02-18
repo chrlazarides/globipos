@@ -281,6 +281,16 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/price-contracts/:id", async (req, res) => {
+    try {
+      const contract = await storage.updatePriceContract(req.params.id, req.body);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      res.json(contract);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Seasonal Offers
   app.get("/api/seasonal-offers", async (_req, res) => {
     const offers = await storage.getSeasonalOffers();

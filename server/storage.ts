@@ -46,6 +46,7 @@ export interface IStorage {
   getPriceContracts(): Promise<(PriceContract & { customerName?: string })[]>;
   getPriceContract(id: string): Promise<PriceContract | undefined>;
   createPriceContract(data: InsertPriceContract): Promise<PriceContract>;
+  updatePriceContract(id: string, data: Partial<InsertPriceContract>): Promise<PriceContract | undefined>;
 
   getSeasonalOffers(): Promise<SeasonalOffer[]>;
   getSeasonalOffer(id: string): Promise<SeasonalOffer | undefined>;
@@ -181,6 +182,10 @@ export class DatabaseStorage implements IStorage {
   }
   async createPriceContract(data: InsertPriceContract) {
     const [contract] = await db.insert(priceContracts).values(data).returning();
+    return contract;
+  }
+  async updatePriceContract(id: string, data: Partial<InsertPriceContract>) {
+    const [contract] = await db.update(priceContracts).set(data).where(eq(priceContracts.id, id)).returning();
     return contract;
   }
 
