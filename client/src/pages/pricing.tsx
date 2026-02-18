@@ -217,31 +217,22 @@ export default function Pricing() {
   );
 }
 
-function MultiSelect({ options, selected, onChange, label, renderOption }: {
+function MultiSelect({ options, selected, onChange, label }: {
   options: { value: string; label: string }[];
   selected: string[];
   onChange: (vals: string[]) => void;
   label: string;
-  renderOption?: (opt: { value: string; label: string }) => string;
 }) {
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-
-  const toggle = (val: string) => {
-    if (selected.includes(val)) {
-      onChange(selected.filter(v => v !== val));
-    } else {
-      onChange([...selected, val]);
-    }
-  };
-
   const remove = (val: string) => {
     onChange(selected.filter(v => v !== val));
   };
 
   const getLabel = (val: string) => {
     const opt = options.find(o => o.value === val);
-    return opt ? (renderOption ? renderOption(opt) : opt.label) : val;
+    return opt ? opt.label : val;
   };
+
+  const available = options.filter(o => !selected.includes(o.value));
 
   return (
     <div className="space-y-2">
@@ -249,22 +240,22 @@ function MultiSelect({ options, selected, onChange, label, renderOption }: {
         {selected.map(val => (
           <Badge key={val} variant="secondary" className="gap-1">
             {getLabel(val)}
-            <button type="button" onClick={() => remove(val)} className="ml-0.5 hover:text-destructive">
+            <button type="button" onClick={() => remove(val)} className="ml-0.5 hover:text-destructive" data-testid={`button-remove-${label.toLowerCase()}-${val}`}>
               <X className="w-3 h-3" />
             </button>
           </Badge>
         ))}
         {selected.length === 0 && <span className="text-sm text-muted-foreground py-1">All {label}</span>}
       </div>
-      <Select value="__trigger__" onValueChange={(val) => { if (val !== "__trigger__") toggle(val); }}>
+      <Select value="" onValueChange={(val) => { if (val) onChange([...selected, val]); }}>
         <SelectTrigger data-testid={`select-multi-${label.toLowerCase().replace(/\s/g, "-")}`}>
           <SelectValue placeholder={`Add ${label}...`} />
         </SelectTrigger>
         <SelectContent>
-          {options.filter(o => !selected.includes(o.value)).map(opt => (
+          {available.map(opt => (
             <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
           ))}
-          {options.filter(o => !selected.includes(o.value)).length === 0 && (
+          {available.length === 0 && (
             <div className="px-2 py-1.5 text-sm text-muted-foreground">No more options</div>
           )}
         </SelectContent>
@@ -381,7 +372,7 @@ function ContractForm({ onSubmit, isPending, customers, categories, allBrands, d
           <FormField control={form.control} name="discountValue" render={({ field }) => (
             <FormItem>
               <FormLabel>Discount Value</FormLabel>
-              <FormControl><Input type="number" step="0.01" {...field} data-testid="input-discount-value" /></FormControl>
+              <FormControl><Input inputMode="decimal" {...field} data-testid="input-discount-value" /></FormControl>
               <FormMessage />
             </FormItem>
           )} />
@@ -389,7 +380,7 @@ function ContractForm({ onSubmit, isPending, customers, categories, allBrands, d
         <FormField control={form.control} name="minQuantity" render={({ field }) => (
           <FormItem>
             <FormLabel>Minimum Quantity</FormLabel>
-            <FormControl><Input type="number" {...field} onChange={(e) => field.onChange(parseInt(e.target.value) || 0)} data-testid="input-min-qty" /></FormControl>
+            <FormControl><Input inputMode="numeric" {...field} onChange={(e) => field.onChange(parseInt(e.target.value) || 0)} data-testid="input-min-qty" /></FormControl>
             <FormMessage />
           </FormItem>
         )} />

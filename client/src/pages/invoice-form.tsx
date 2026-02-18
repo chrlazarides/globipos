@@ -146,8 +146,10 @@ export default function InvoiceForm() {
   const findContractDiscount = useCallback((custId: string, item: Item) => {
     const activeContracts = getActiveContracts(custId);
     for (const contract of activeContracts) {
-      if (contract.categoryId && contract.categoryId !== item.categoryId) continue;
-      if (contract.brand && contract.brand !== item.brand) continue;
+      const catIds = contract.categoryIds?.length ? contract.categoryIds : (contract.categoryId ? [contract.categoryId] : []);
+      const brandList = contract.brands?.length ? contract.brands : (contract.brand ? [contract.brand] : []);
+      if (catIds.length > 0 && (!item.categoryId || !catIds.includes(item.categoryId))) continue;
+      if (brandList.length > 0 && (!item.brand || !brandList.includes(item.brand))) continue;
       return {
         type: contract.discountType,
         value: parseFloat(String(contract.discountValue)) || 0,

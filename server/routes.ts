@@ -48,7 +48,9 @@ export async function registerRoutes(
 
   app.get("/api/items/brands", async (_req, res) => {
     const allItems = await storage.getItems();
-    const brands = [...new Set(allItems.map(i => i.brand).filter(Boolean))].sort();
+    const brandSet = new Set<string>();
+    allItems.forEach(i => { if (i.brand) brandSet.add(i.brand); });
+    const brands = Array.from(brandSet).sort();
     res.json(brands);
   });
 
