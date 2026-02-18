@@ -562,7 +562,16 @@ export default function ImportData() {
     setSheets((prev) =>
       prev.map((s) => {
         if (s.sheetName !== sheetName) return s;
-        return { ...s, columnMap: { ...s.columnMap, [fieldKey]: headerCol === "skip" ? "" : headerCol } };
+        const newMap = { ...s.columnMap };
+        if (headerCol !== "skip" && headerCol !== "") {
+          for (const [k, v] of Object.entries(newMap)) {
+            if (v === headerCol && k !== fieldKey) {
+              newMap[k] = "";
+            }
+          }
+        }
+        newMap[fieldKey] = headerCol === "skip" ? "" : headerCol;
+        return { ...s, columnMap: newMap };
       })
     );
   };
@@ -827,34 +836,70 @@ export default function ImportData() {
                   <Card>
                     <CardHeader className="pb-3">
                       <CardTitle className="text-sm">
-                        Raw Data Reference - First {Math.min(currentSheet.rows.length, 5)} of {currentSheet.totalRows} rows
+                        Raw Data - Click column headers to assign fields
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="overflow-x-auto">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead className="w-10">#</TableHead>
-                              {currentSheet.headers.map((h) => (
-                                <TableHead key={h} className="text-xs whitespace-nowrap">{h}</TableHead>
-                              ))}
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {currentSheet.rows.slice(0, 5).map((row, i) => (
-                              <TableRow key={i}>
-                                <TableCell className="text-xs text-muted-foreground">{i + 1}</TableCell>
-                                {currentSheet.headers.map((h) => (
-                                  <TableCell key={h} className="text-xs max-w-[150px] truncate">
-                                    {String(row[h] ?? "")}
-                                  </TableCell>
+                      {(() => {
+                        const config = ENTITY_CONFIG[currentSheet.detectedEntity as Exclude<EntityType, "skip">];
+                        const reverseMap: Record<string, string> = {};
+                        for (const [fieldKey, headerCol] of Object.entries(currentSheet.columnMap)) {
+                          if (headerCol && headerCol !== "skip") reverseMap[headerCol] = fieldKey;
+                        }
+                        return (
+                          <div className="overflow-x-auto">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead className="w-10">#</TableHead>
+                                  {currentSheet.headers.map((h) => (
+                                    <TableHead key={h} className="p-1 min-w-[120px]">
+                                      <div className="space-y-1">
+                                        <p className="text-xs font-medium truncate" title={h}>{h}</p>
+                                        <Select
+                                          value={reverseMap[h] || "__unmapped__"}
+                                          onValueChange={(fieldKey) => {
+                                            if (reverseMap[h]) {
+                                              updateColumnMap(currentSheet.sheetName, reverseMap[h], "skip");
+                                            }
+                                            if (fieldKey !== "__unmapped__") {
+                                              updateColumnMap(currentSheet.sheetName, fieldKey, h);
+                                            }
+                                          }}
+                                        >
+                                          <SelectTrigger className="h-7 text-xs" data-testid={`select-raw-map-${h}`}>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="__unmapped__">--</SelectItem>
+                                            {config.fields.map((f) => (
+                                              <SelectItem key={f.key} value={f.key} disabled={!!currentSheet.columnMap[f.key] && currentSheet.columnMap[f.key] === h ? false : !!currentSheet.columnMap[f.key] && currentSheet.columnMap[f.key] !== "skip"}>
+                                                {f.label}{f.required ? " *" : ""}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                    </TableHead>
+                                  ))}
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {currentSheet.rows.slice(0, 5).map((row, i) => (
+                                  <TableRow key={i}>
+                                    <TableCell className="text-xs text-muted-foreground">{i + 1}</TableCell>
+                                    {currentSheet.headers.map((h) => (
+                                      <TableCell key={h} className={`text-xs max-w-[150px] truncate ${reverseMap[h] ? "font-medium" : "text-muted-foreground"}`}>
+                                        {String(row[h] ?? "")}
+                                      </TableCell>
+                                    ))}
+                                  </TableRow>
                                 ))}
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
+                              </TableBody>
+                            </Table>
+                          </div>
+                        );
+                      })()}
                     </CardContent>
                   </Card>
                 </div>
