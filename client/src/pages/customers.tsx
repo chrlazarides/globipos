@@ -13,11 +13,27 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Users } from "lucide-react";
+import { Plus, Search, Users, Upload } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertCustomerSchema, type Customer } from "@shared/schema";
+import { ImportDialog } from "@/components/import-dialog";
 import { z } from "zod";
+
+const customerImportFields = [
+  { key: "name", label: "Business Name", required: true },
+  { key: "code", label: "Customer Code", required: true },
+  { key: "email", label: "Email" },
+  { key: "phone", label: "Phone" },
+  { key: "address", label: "Address" },
+  { key: "city", label: "City" },
+  { key: "taxId", label: "Tax ID" },
+  { key: "paymentTerms", label: "Payment Terms" },
+  { key: "creditLimit", label: "Credit Limit" },
+  { key: "priceLevel", label: "Price Level" },
+  { key: "notes", label: "Notes" },
+  { key: "portalAccessCode", label: "Portal Access Code" },
+];
 
 const customerFormSchema = insertCustomerSchema.extend({
   name: z.string().min(1, "Name is required"),
@@ -27,6 +43,7 @@ const customerFormSchema = insertCustomerSchema.extend({
 export default function Customers() {
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
@@ -96,21 +113,34 @@ export default function Customers() {
     },
   ];
 
+  const handleImportSuccess = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+  };
+
   return (
     <div className="p-6 space-y-6">
       <PageHeader
         title="Customers"
         description="Manage wholesale customer accounts"
         action={
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-new-customer"><Plus className="w-4 h-4 mr-1" /> New Customer</Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader><DialogTitle>New Customer</DialogTitle></DialogHeader>
-              <CustomerForm onSubmit={(d) => createCustomer.mutate(d)} isPending={createCustomer.isPending} />
-            </DialogContent>
-          </Dialog>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="outline" onClick={() => setImportDialogOpen(true)} data-testid="button-import-customers">
+              <Upload className="w-4 h-4 mr-1" /> Import
+            </Button>
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-new-customer">
+                  <Plus className="w-4 h-4 mr-1" /> New Customer
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>New Customer</DialogTitle>
+                </DialogHeader>
+                <CustomerForm onSubmit={(d) => createCustomer.mutate(d)} isPending={createCustomer.isPending} />
+              </DialogContent>
+            </Dialog>
+          </div>
         }
       />
 
@@ -123,6 +153,16 @@ export default function Customers() {
           <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No customers found" onRowClick={(c) => navigate(`/customers/${c.id}`)} />
         </CardContent>
       </Card>
+
+      <ImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        title="Import Customers from Excel"
+        description="Upload an Excel or CSV file to bulk import customer accounts"
+        fields={customerImportFields}
+        apiEndpoint="/api/customers/import"
+        onSuccess={handleImportSuccess}
+      />
     </div>
   );
 }

@@ -3,6 +3,10 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema } from "@shared/schema";
 import { z } from "zod";
+import multer from "multer";
+import * as XLSX from "xlsx";
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 export async function registerRoutes(
   httpServer: Server,
@@ -75,6 +79,82 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/items/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0];
+      const rows: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const categories = await storage.getCategories();
+      const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
+
+      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            return row[col] !== undefined ? String(row[col]).trim() : "";
+          };
+
+          const name = getValue("name");
+          const sku = getValue("sku");
+          if (!name || !sku) {
+            results.errors.push({ row: i + 2, message: "Name and SKU are required" });
+            continue;
+          }
+
+          const categoryName = getValue("category");
+          let categoryId: string | null = null;
+          if (categoryName) {
+            categoryId = catMap.get(categoryName.toLowerCase()) || null;
+            if (!categoryId) {
+              const newCat = await storage.createCategory({ name: categoryName, description: null, parentId: null, active: true });
+              categoryId = newCat.id;
+              catMap.set(categoryName.toLowerCase(), newCat.id);
+            }
+          }
+
+          const itemData = {
+            name,
+            sku,
+            barcode: getValue("barcode") || null,
+            description: getValue("description") || null,
+            categoryId,
+            unitType: getValue("unitType") || "pc",
+            packSize: parseInt(getValue("packSize")) || 1,
+            price1: getValue("price1") || "0",
+            price2: getValue("price2") || "0",
+            price3: getValue("price3") || "0",
+            price4: getValue("price4") || "0",
+            price5: getValue("price5") || "0",
+            costPrice: getValue("costPrice") || "0",
+            stockQuantity: parseInt(getValue("stockQuantity")) || 0,
+            reorderLevel: parseInt(getValue("reorderLevel")) || 10,
+            volume: getValue("volume") || null,
+            alcoholPercentage: getValue("alcoholPercentage") || null,
+            origin: getValue("origin") || null,
+            vintage: getValue("vintage") || null,
+            active: true,
+          };
+
+          await storage.createItem(itemData);
+          results.success++;
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Customers
   app.get("/api/customers", async (_req, res) => {
     const custs = await storage.getCustomers();
@@ -102,6 +182,66 @@ export async function registerRoutes(
       const cust = await storage.updateCustomer(req.params.id, req.body);
       if (!cust) return res.status(404).json({ message: "Customer not found" });
       res.json(cust);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/customers/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0];
+      const rows: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+
+      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            return row[col] !== undefined ? String(row[col]).trim() : "";
+          };
+
+          const name = getValue("name");
+          const code = getValue("code");
+          if (!name || !code) {
+            results.errors.push({ row: i + 2, message: "Name and Code are required" });
+            continue;
+          }
+
+          const paymentTerms = getValue("paymentTerms") || "cash";
+          const validTerms = ["cash", "credit_7", "credit_14", "credit_30", "credit_60", "credit_90"];
+          
+          const custData = {
+            name,
+            code: code.toUpperCase(),
+            email: getValue("email") || null,
+            phone: getValue("phone") || null,
+            address: getValue("address") || null,
+            city: getValue("city") || null,
+            taxId: getValue("taxId") || null,
+            paymentTerms: validTerms.includes(paymentTerms) ? paymentTerms : "cash",
+            creditLimit: getValue("creditLimit") || "0",
+            currentBalance: "0",
+            priceLevel: parseInt(getValue("priceLevel")) || 1,
+            notes: getValue("notes") || null,
+            portalAccessCode: getValue("portalAccessCode") || null,
+            active: true,
+          };
+
+          await storage.createCustomer(custData);
+          results.success++;
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }

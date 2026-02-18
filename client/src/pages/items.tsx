@@ -14,11 +14,34 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Package } from "lucide-react";
+import { Plus, Search, Package, Upload } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertItemSchema, insertCategorySchema, type Item, type Category } from "@shared/schema";
+import { ImportDialog } from "@/components/import-dialog";
 import { z } from "zod";
+
+const itemImportFields = [
+  { key: "name", label: "Name", required: true },
+  { key: "sku", label: "SKU", required: true },
+  { key: "barcode", label: "Barcode" },
+  { key: "description", label: "Description" },
+  { key: "category", label: "Category" },
+  { key: "unitType", label: "Unit Type" },
+  { key: "packSize", label: "Pack Size" },
+  { key: "price1", label: "Price Level 1" },
+  { key: "price2", label: "Price Level 2" },
+  { key: "price3", label: "Price Level 3" },
+  { key: "price4", label: "Price Level 4" },
+  { key: "price5", label: "Price Level 5" },
+  { key: "costPrice", label: "Cost Price" },
+  { key: "stockQuantity", label: "Stock Quantity" },
+  { key: "reorderLevel", label: "Reorder Level" },
+  { key: "volume", label: "Volume" },
+  { key: "alcoholPercentage", label: "Alcohol %" },
+  { key: "origin", label: "Origin" },
+  { key: "vintage", label: "Vintage" },
+];
 
 const itemFormSchema = insertItemSchema.extend({
   name: z.string().min(1, "Name is required"),
@@ -35,6 +58,7 @@ export default function Items() {
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [itemDialogOpen, setItemDialogOpen] = useState(false);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
@@ -138,6 +162,9 @@ export default function Items() {
         description="Manage your wines, spirits, and products"
         action={
           <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setImportDialogOpen(true)} data-testid="button-import-items">
+              <Upload className="w-4 h-4 mr-1" /> Import
+            </Button>
             <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline" data-testid="button-new-category">
@@ -196,6 +223,16 @@ export default function Items() {
           <DataTable columns={columns} data={filtered} isLoading={itemsLoading} emptyMessage="No items found" onRowClick={(item) => navigate(`/items/${item.id}`)} />
         </CardContent>
       </Card>
+
+      <ImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        title="Import Items from Excel"
+        description="Upload an Excel or CSV file to bulk import products into your catalog"
+        fields={itemImportFields}
+        apiEndpoint="/api/items/import"
+        onSuccess={() => queryClient.invalidateQueries({ queryKey: ["/api/items"] })}
+      />
     </div>
   );
 }
