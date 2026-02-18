@@ -276,13 +276,23 @@ export async function registerRoutes(
   // Price Contracts
   app.get("/api/price-contracts", async (_req, res) => {
     const contracts = await storage.getPriceContracts();
-    res.json(contracts);
+    const contractsWithRules = await Promise.all(
+      contracts.map(async (c) => {
+        const rules = await storage.getContractRules(c.id);
+        return { ...c, rules };
+      })
+    );
+    res.json(contractsWithRules);
   });
 
   app.post("/api/price-contracts", async (req, res) => {
     try {
-      const data = insertPriceContractSchema.parse(req.body);
+      const { rules, ...contractData } = req.body;
+      const data = insertPriceContractSchema.parse(contractData);
       const contract = await storage.createPriceContract(data);
+      if (rules && Array.isArray(rules) && rules.length > 0) {
+        await storage.setContractRules(contract.id, rules);
+      }
       res.json(contract);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -291,9 +301,27 @@ export async function registerRoutes(
 
   app.patch("/api/price-contracts/:id", async (req, res) => {
     try {
-      const contract = await storage.updatePriceContract(req.params.id, req.body);
+      const { rules, ...contractData } = req.body;
+      const contract = await storage.updatePriceContract(req.params.id, contractData);
       if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (rules && Array.isArray(rules)) {
+        await storage.setContractRules(req.params.id, rules);
+      }
       res.json(contract);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/price-contracts/:id/rules", async (req, res) => {
+    const rules = await storage.getContractRules(req.params.id);
+    res.json(rules);
+  });
+
+  app.put("/api/price-contracts/:id/rules", async (req, res) => {
+    try {
+      const rules = await storage.setContractRules(req.params.id, req.body.rules || []);
+      res.json(rules);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }

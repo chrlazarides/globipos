@@ -16,7 +16,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { useToast } from "@/hooks/use-toast";
 import { BarcodeScanner } from "@/components/barcode-scanner";
-import type { Customer, Item, Invoice, InvoiceItem, PriceContract } from "@shared/schema";
+import type { Customer, Item, Invoice, InvoiceItem, PriceContract, PriceContractRule } from "@shared/schema";
 
 interface LineItem {
   itemId: string;
@@ -75,7 +75,7 @@ export default function InvoiceForm() {
 
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
-  const { data: contracts = [] } = useQuery<PriceContract[]>({ queryKey: ["/api/price-contracts"] });
+  const { data: contracts = [] } = useQuery<(PriceContract & { rules?: PriceContractRule[]; priceLevel?: number })[]>({ queryKey: ["/api/price-contracts"] });
   const priceLevelNames = usePriceLevels();
   const { data: existingInvoice } = useQuery<Invoice & { items: InvoiceItem[] }>({
     queryKey: ["/api/invoices", invoiceId],
@@ -143,21 +143,59 @@ export default function InvoiceForm() {
     );
   }, [contracts]);
 
-  const findContractDiscount = useCallback((custId: string, item: Item) => {
+  const findContractDiscount = useCallback((custId: string, item: Item, quantity: number = 1) => {
     const activeContracts = getActiveContracts(custId);
+    const customer = customers.find(c => c.id === custId);
+    const priceLevel = customer?.priceLevel || 1;
+    const levelPriceKey = `price${priceLevel}` as keyof Item;
+    const levelPrice = parseFloat(String(item[levelPriceKey])) || 0;
+    const retailPrice = parseFloat(item.price1) || 0;
+
+    let bestDiscount: { type: string; value: number; name: string } | null = null;
+    let bestDiscountedPrice = levelPrice;
+
     for (const contract of activeContracts) {
-      const catIds = contract.categoryIds?.length ? contract.categoryIds : (contract.categoryId ? [contract.categoryId] : []);
-      const brandList = contract.brands?.length ? contract.brands : (contract.brand ? [contract.brand] : []);
-      if (catIds.length > 0 && (!item.categoryId || !catIds.includes(item.categoryId))) continue;
-      if (brandList.length > 0 && (!item.brand || !brandList.includes(item.brand))) continue;
-      return {
-        type: contract.discountType,
-        value: parseFloat(String(contract.discountValue)) || 0,
-        name: contract.name,
-      };
+      const rules = (contract as any).rules || [];
+      if (rules.length === 0) {
+        const catIds = contract.categoryIds?.length ? contract.categoryIds : (contract.categoryId ? [contract.categoryId] : []);
+        const brandList = contract.brands?.length ? contract.brands : (contract.brand ? [contract.brand] : []);
+        if (catIds.length > 0 && (!item.categoryId || !catIds.includes(item.categoryId))) continue;
+        if (brandList.length > 0 && (!item.brand || !brandList.includes(item.brand))) continue;
+        const contractMinQty = contract.minQuantity || 0;
+        if (quantity < contractMinQty) continue;
+        const discVal = parseFloat(String(contract.discountValue)) || 0;
+        if (discVal <= 0) continue;
+        const discountedPrice = contract.discountType === "percentage"
+          ? retailPrice * (1 - discVal / 100)
+          : retailPrice - discVal;
+        if (discountedPrice < bestDiscountedPrice) {
+          bestDiscountedPrice = discountedPrice;
+          bestDiscount = { type: contract.discountType, value: discVal, name: contract.name };
+        }
+        continue;
+      }
+
+      for (const rule of rules) {
+        const ruleCats = rule.categoryIds || [];
+        const ruleBrands = rule.brands || [];
+        if (ruleCats.length > 0 && (!item.categoryId || !ruleCats.includes(item.categoryId))) continue;
+        if (ruleBrands.length > 0 && (!item.brand || !ruleBrands.includes(item.brand))) continue;
+        const ruleMinQty = rule.minQuantity || 0;
+        if (quantity < ruleMinQty) continue;
+
+        const discVal = parseFloat(String(rule.discountValue)) || 0;
+        if (discVal <= 0) continue;
+        const discountedPrice = rule.discountType === "percentage"
+          ? retailPrice * (1 - discVal / 100)
+          : retailPrice - discVal;
+        if (discountedPrice < bestDiscountedPrice) {
+          bestDiscountedPrice = discountedPrice;
+          bestDiscount = { type: rule.discountType, value: discVal, name: contract.name };
+        }
+      }
     }
-    return null;
-  }, [getActiveContracts]);
+    return bestDiscount;
+  }, [getActiveContracts, customers]);
 
   useEffect(() => {
     if (customerId) {
@@ -192,7 +230,7 @@ export default function InvoiceForm() {
         const qty = newLine.quantity || 0;
         const price = parseFloat(newLine.unitPrice) || 0;
         const lineGross = qty * price;
-        const contractDisc = findContractDiscount(customerId, item);
+        const contractDisc = findContractDiscount(customerId, item, qty);
         if (contractDisc) {
           if (contractDisc.type === "percentage") {
             newLine.discountPercent = String(contractDisc.value);
@@ -236,7 +274,8 @@ export default function InvoiceForm() {
           updated[index].saleUnit = itemToSaleUnit(item);
 
           if (customerId) {
-            const contractDisc = findContractDiscount(customerId, item);
+            const lineQty = updated[index].quantity || 0;
+            const contractDisc = findContractDiscount(customerId, item, lineQty);
             if (contractDisc) {
               if (contractDisc.type === "percentage") {
                 updated[index].discountPercent = String(contractDisc.value);
@@ -290,8 +329,9 @@ export default function InvoiceForm() {
 
       let discountPercent = "0";
       let discount = "0";
+      const newQty = 1;
       if (customerId) {
-        const contractDisc = findContractDiscount(customerId, item);
+        const contractDisc = findContractDiscount(customerId, item, newQty);
         if (contractDisc) {
           if (contractDisc.type === "percentage") {
             discountPercent = String(contractDisc.value);

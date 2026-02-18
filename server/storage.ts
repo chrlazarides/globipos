@@ -1,13 +1,14 @@
 import { db } from "./db";
 import { eq, and, gte, lte, desc, sql, ilike, or } from "drizzle-orm";
 import {
-  users, categories, items, customers, priceContracts, priceContractItems,
+  users, categories, items, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
   type InsertUser, type User, type InsertCategory, type Category,
   type InsertItem, type Item, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
+  type InsertPriceContractRule, type PriceContractRule,
   type InsertPriceContractItem, type PriceContractItem,
   type InsertSeasonalOffer, type SeasonalOffer,
   type InsertSeasonalOfferItem, type SeasonalOfferItem,
@@ -43,10 +44,12 @@ export interface IStorage {
   createCustomer(data: InsertCustomer): Promise<Customer>;
   updateCustomer(id: string, data: Partial<InsertCustomer>): Promise<Customer | undefined>;
 
-  getPriceContracts(): Promise<(PriceContract & { customerName?: string })[]>;
+  getPriceContracts(): Promise<(PriceContract & { customerName?: string; priceLevel?: number })[]>;
   getPriceContract(id: string): Promise<PriceContract | undefined>;
   createPriceContract(data: InsertPriceContract): Promise<PriceContract>;
   updatePriceContract(id: string, data: Partial<InsertPriceContract>): Promise<PriceContract | undefined>;
+  getContractRules(contractId: string): Promise<PriceContractRule[]>;
+  setContractRules(contractId: string, rules: InsertPriceContractRule[]): Promise<PriceContractRule[]>;
 
   getSeasonalOffers(): Promise<SeasonalOffer[]>;
   getSeasonalOffer(id: string): Promise<SeasonalOffer | undefined>;
@@ -167,14 +170,20 @@ export class DatabaseStorage implements IStorage {
         discountValue: priceContracts.discountValue,
         categoryId: priceContracts.categoryId,
         brand: priceContracts.brand,
+        categoryIds: priceContracts.categoryIds,
+        brands: priceContracts.brands,
         minQuantity: priceContracts.minQuantity,
+        purchaseGoal: priceContracts.purchaseGoal,
+        voucherType: priceContracts.voucherType,
+        voucherValue: priceContracts.voucherValue,
         active: priceContracts.active,
         customerName: customers.name,
+        priceLevel: customers.priceLevel,
       })
       .from(priceContracts)
       .leftJoin(customers, eq(priceContracts.customerId, customers.id))
       .orderBy(desc(priceContracts.startDate));
-    return result.map(r => ({ ...r, customerName: r.customerName || undefined }));
+    return result.map(r => ({ ...r, customerName: r.customerName || undefined, priceLevel: r.priceLevel || 1 }));
   }
   async getPriceContract(id: string) {
     const [contract] = await db.select().from(priceContracts).where(eq(priceContracts.id, id));
@@ -187,6 +196,15 @@ export class DatabaseStorage implements IStorage {
   async updatePriceContract(id: string, data: Partial<InsertPriceContract>) {
     const [contract] = await db.update(priceContracts).set(data).where(eq(priceContracts.id, id)).returning();
     return contract;
+  }
+  async getContractRules(contractId: string) {
+    return db.select().from(priceContractRules).where(eq(priceContractRules.contractId, contractId));
+  }
+  async setContractRules(contractId: string, rules: InsertPriceContractRule[]) {
+    await db.delete(priceContractRules).where(eq(priceContractRules.contractId, contractId));
+    if (rules.length === 0) return [];
+    const inserted = await db.insert(priceContractRules).values(rules.map(r => ({ ...r, contractId }))).returning();
+    return inserted;
   }
 
   async getSeasonalOffers() {

@@ -51,7 +51,19 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - `/api/reports/sales` - Sales report
 - `/api/reports/statements` - Customer statements
 
+## Price Contract System
+- Contracts have a header (customer, period, purchase goal, voucher reward) and multiple discount rules
+- Each rule specifies: categoryIds, brands, minQuantity, discountType (percentage/fixed), discountValue
+- Rules stored in `price_contract_rules` table linked to `price_contracts`
+- Invoice discount matching: iterates all rules across active contracts; discount is calculated off retail price (price1); only applies if resulting price is lower than the customer's assigned price level price (price floor check)
+- Purchase goals: if customer meets spending target during contract period, they earn a voucher (% or fixed amount)
+- API: GET /api/price-contracts returns contracts with rules inline; PUT /api/price-contracts/:id/rules to set rules
+
 ## Recent Changes
+- 2026-02-18: Price contracts redesigned with multi-rule discount system (price_contract_rules table)
+- 2026-02-18: Contract rules enforce minQuantity and price-level floor check before applying discounts
+- 2026-02-18: Added purchase goal and voucher reward fields to contracts (purchaseGoal, voucherType, voucherValue)
+- 2026-02-18: Pricing UI completely redesigned with detail view, rules editor, and price comparison preview
 - 2026-02-18: Price contracts now support multiple categories and brands (array fields categoryIds, brands)
 - 2026-02-18: Brand/Producer field is now a dropdown populated from existing item brands
 - 2026-02-18: Added /api/items/brands endpoint for distinct brand list
