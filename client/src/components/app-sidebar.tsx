@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard, Upload } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -42,6 +42,7 @@ const reportNav = [
 ];
 
 const systemNav = [
+  { title: "Import Data", url: "/import", icon: Upload },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 

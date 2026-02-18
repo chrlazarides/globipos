@@ -67,6 +67,9 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-02-18: Price contracts now support multiple categories and brands (array fields categoryIds, brands)
 - 2026-02-18: Brand/Producer field is now a dropdown populated from existing item brands
 - 2026-02-18: Added /api/items/brands endpoint for distinct brand list
+- 2026-02-18: Smart Excel import page (/import) with multi-sheet analysis, auto-detection, column mapping, live preview, verification
+- 2026-02-18: Import endpoints for all entity types: /api/items/import, /api/customers/import, /api/suppliers/import, /api/categories/import
+- 2026-02-18: Import supports sheetName parameter for multi-sheet Excel files
 - 2026-02-18: Added Quotation document type alongside Invoice, Credit Note, Proforma
 - 2026-02-18: Proforma and Quotation views have "Create Invoice" button to convert to invoice
 - 2026-02-18: Added dual discount system (percentage + amount) on invoice lines with contract auto-apply

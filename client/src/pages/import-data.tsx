@@ -1,0 +1,710 @@
+import { useState, useRef, useCallback } from "react";
+import { PageHeader } from "@/components/page-header";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Upload,
+  FileSpreadsheet,
+  CheckCircle2,
+  AlertTriangle,
+  Loader2,
+  Package,
+  Users,
+  Truck,
+  FolderTree,
+  ArrowRight,
+  X,
+  RefreshCw,
+  Check,
+} from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { queryClient } from "@/lib/queryClient";
+import * as XLSX from "xlsx";
+
+type EntityType = "items" | "customers" | "suppliers" | "categories" | "skip";
+
+type FieldDef = {
+  key: string;
+  label: string;
+  required?: boolean;
+};
+
+const ENTITY_CONFIG: Record<Exclude<EntityType, "skip">, { label: string; icon: typeof Package; fields: FieldDef[]; endpoint: string }> = {
+  items: {
+    label: "Items",
+    icon: Package,
+    fields: [
+      { key: "name", label: "Name", required: true },
+      { key: "sku", label: "SKU", required: true },
+      { key: "barcode", label: "Barcode" },
+      { key: "description", label: "Description" },
+      { key: "category", label: "Category" },
+      { key: "brand", label: "Brand / Producer" },
+      { key: "unitType", label: "Unit Type" },
+      { key: "packSize", label: "Pack Size" },
+      { key: "price1", label: "Price Level 1" },
+      { key: "price2", label: "Price Level 2" },
+      { key: "price3", label: "Price Level 3" },
+      { key: "price4", label: "Price Level 4" },
+      { key: "price5", label: "Price Level 5" },
+      { key: "costPrice", label: "Cost Price" },
+      { key: "stockQuantity", label: "Stock Qty" },
+      { key: "reorderLevel", label: "Reorder Level" },
+      { key: "volume", label: "Volume" },
+      { key: "alcoholPercentage", label: "Alcohol %" },
+      { key: "origin", label: "Origin / Country" },
+      { key: "vintage", label: "Vintage" },
+    ],
+    endpoint: "/api/items/import",
+  },
+  customers: {
+    label: "Customers",
+    icon: Users,
+    fields: [
+      { key: "name", label: "Name", required: true },
+      { key: "code", label: "Code", required: true },
+      { key: "email", label: "Email" },
+      { key: "phone", label: "Phone" },
+      { key: "address", label: "Address" },
+      { key: "city", label: "City" },
+      { key: "taxId", label: "Tax ID" },
+      { key: "paymentTerms", label: "Payment Terms" },
+      { key: "creditLimit", label: "Credit Limit" },
+      { key: "priceLevel", label: "Price Level" },
+      { key: "notes", label: "Notes" },
+    ],
+    endpoint: "/api/customers/import",
+  },
+  suppliers: {
+    label: "Suppliers",
+    icon: Truck,
+    fields: [
+      { key: "name", label: "Name", required: true },
+      { key: "code", label: "Code", required: true },
+      { key: "contactPerson", label: "Contact Person" },
+      { key: "email", label: "Email" },
+      { key: "phone", label: "Phone" },
+      { key: "address", label: "Address" },
+      { key: "city", label: "City" },
+      { key: "country", label: "Country" },
+      { key: "taxId", label: "Tax ID" },
+      { key: "paymentTerms", label: "Payment Terms" },
+      { key: "notes", label: "Notes" },
+    ],
+    endpoint: "/api/suppliers/import",
+  },
+  categories: {
+    label: "Categories",
+    icon: FolderTree,
+    fields: [
+      { key: "name", label: "Name", required: true },
+      { key: "description", label: "Description" },
+    ],
+    endpoint: "/api/categories/import",
+  },
+};
+
+type SheetAnalysis = {
+  sheetName: string;
+  headers: string[];
+  rows: any[];
+  totalRows: number;
+  detectedEntity: EntityType;
+  columnMap: Record<string, string>;
+  confidence: number;
+};
+
+type SheetResult = {
+  sheetName: string;
+  entity: string;
+  success: number;
+  errors: { row: number; message: string }[];
+};
+
+function detectEntity(headers: string[]): { entity: EntityType; confidence: number } {
+  const lowerHeaders = headers.map((h) => h.toLowerCase().replace(/[\s_-]/g, ""));
+
+  const scores: Record<Exclude<EntityType, "skip">, number> = { items: 0, customers: 0, suppliers: 0, categories: 0 };
+
+  const itemKeywords = ["sku", "barcode", "price", "price1", "price2", "costprice", "stockquantity", "stock", "packsize", "unittype", "volume", "alcohol", "vintage", "origin", "brand", "reorderlevel"];
+  const customerKeywords = ["customer", "creditlimit", "pricelevel", "paymentterms", "taxid", "portalaccess"];
+  const supplierKeywords = ["supplier", "contactperson", "country"];
+  const categoryKeywords = ["category", "parentid"];
+
+  for (const h of lowerHeaders) {
+    for (const kw of itemKeywords) if (h.includes(kw)) scores.items += 2;
+    for (const kw of customerKeywords) if (h.includes(kw)) scores.customers += 2;
+    for (const kw of supplierKeywords) if (h.includes(kw)) scores.suppliers += 2;
+    for (const kw of categoryKeywords) if (h.includes(kw)) scores.categories += 2;
+  }
+
+  if (lowerHeaders.includes("sku") || lowerHeaders.includes("barcode")) scores.items += 5;
+  if (lowerHeaders.includes("pricelevel") || lowerHeaders.includes("creditlimit")) scores.customers += 5;
+  if (lowerHeaders.includes("contactperson") || lowerHeaders.includes("supplier")) scores.suppliers += 5;
+
+  const entries = Object.entries(scores) as [Exclude<EntityType, "skip">, number][];
+  entries.sort((a, b) => b[1] - a[1]);
+
+  if (entries[0][1] === 0) {
+    if (lowerHeaders.includes("name") && lowerHeaders.length <= 3) {
+      return { entity: "categories", confidence: 40 };
+    }
+    return { entity: "items", confidence: 10 };
+  }
+
+  const maxScore = entries[0][1];
+  const totalPossible = Math.max(maxScore * 2, 20);
+  const confidence = Math.min(Math.round((maxScore / totalPossible) * 100), 95);
+
+  return { entity: entries[0][0], confidence };
+}
+
+function autoMapColumns(headers: string[], fields: FieldDef[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const field of fields) {
+    const match = headers.find((h) => {
+      const hNorm = h.toLowerCase().replace(/[\s_-]/g, "");
+      const fKeyNorm = field.key.toLowerCase().replace(/[\s_-]/g, "");
+      const fLabelNorm = field.label.toLowerCase().replace(/[\s_-]/g, "");
+      return hNorm === fKeyNorm || hNorm === fLabelNorm || hNorm.includes(fKeyNorm) || fKeyNorm.includes(hNorm);
+    });
+    if (match) map[field.key] = match;
+  }
+  return map;
+}
+
+function getEntityIcon(entity: EntityType) {
+  if (entity === "skip") return X;
+  return ENTITY_CONFIG[entity].icon;
+}
+
+function getEntityLabel(entity: EntityType) {
+  if (entity === "skip") return "Skip";
+  return ENTITY_CONFIG[entity].label;
+}
+
+export default function ImportData() {
+  const [step, setStep] = useState<"upload" | "analyze" | "verify" | "importing" | "results">("upload");
+  const [fileName, setFileName] = useState("");
+  const [sheets, setSheets] = useState<SheetAnalysis[]>([]);
+  const [activeSheet, setActiveSheet] = useState("");
+  const [importResults, setImportResults] = useState<SheetResult[]>([]);
+  const [importProgress, setImportProgress] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  const reset = () => {
+    setStep("upload");
+    setFileName("");
+    setSheets([]);
+    setActiveSheet("");
+    setImportResults([]);
+    setImportProgress(0);
+  };
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+
+    const ext = selectedFile.name.split(".").pop()?.toLowerCase();
+    if (!["xlsx", "xls", "csv"].includes(ext || "")) {
+      toast({ title: "Invalid file", description: "Please upload an Excel (.xlsx, .xls) or CSV file", variant: "destructive" });
+      return;
+    }
+
+    setFileName(selectedFile.name);
+    setStep("analyze");
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = new Uint8Array(ev.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: "array" });
+
+        const analyzed: SheetAnalysis[] = workbook.SheetNames.map((sheetName) => {
+          const sheet = workbook.Sheets[sheetName];
+          const json: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+          const headers = json.length > 0 ? Object.keys(json[0]) : [];
+          const { entity, confidence } = detectEntity(headers);
+          const config = entity !== "skip" ? ENTITY_CONFIG[entity] : null;
+          const columnMap = config ? autoMapColumns(headers, config.fields) : {};
+
+          return {
+            sheetName,
+            headers,
+            rows: json.slice(0, 10),
+            totalRows: json.length,
+            detectedEntity: entity,
+            columnMap,
+            confidence,
+          };
+        }).filter((s) => s.totalRows > 0);
+
+        if (!analyzed.length) {
+          toast({ title: "No data", description: "The Excel file contains no data rows in any sheet", variant: "destructive" });
+          setStep("upload");
+          return;
+        }
+
+        setSheets(analyzed);
+        setActiveSheet(analyzed[0].sheetName);
+        setStep("verify");
+      } catch {
+        toast({ title: "Error reading file", description: "Could not parse the Excel file", variant: "destructive" });
+        setStep("upload");
+      }
+    };
+    reader.readAsArrayBuffer(selectedFile);
+  }, [toast]);
+
+  const updateSheetEntity = (sheetName: string, entity: EntityType) => {
+    setSheets((prev) =>
+      prev.map((s) => {
+        if (s.sheetName !== sheetName) return s;
+        const config = entity !== "skip" ? ENTITY_CONFIG[entity] : null;
+        const columnMap = config ? autoMapColumns(s.headers, config.fields) : {};
+        return { ...s, detectedEntity: entity, columnMap, confidence: entity === "skip" ? 0 : 100 };
+      })
+    );
+  };
+
+  const updateColumnMap = (sheetName: string, fieldKey: string, headerCol: string) => {
+    setSheets((prev) =>
+      prev.map((s) => {
+        if (s.sheetName !== sheetName) return s;
+        return { ...s, columnMap: { ...s.columnMap, [fieldKey]: headerCol === "__none__" ? "" : headerCol } };
+      })
+    );
+  };
+
+  const sheetsToImport = sheets.filter((s) => s.detectedEntity !== "skip");
+
+  const handleImport = async () => {
+    setStep("importing");
+    setImportProgress(0);
+    const results: SheetResult[] = [];
+
+    for (let i = 0; i < sheetsToImport.length; i++) {
+      const sheet = sheetsToImport[i];
+      const config = ENTITY_CONFIG[sheet.detectedEntity as Exclude<EntityType, "skip">];
+
+      try {
+        const workbookData = await fileInputRef.current?.files?.[0]?.arrayBuffer();
+        if (!workbookData) throw new Error("File not available");
+
+        const cleanedMap: Record<string, string> = {};
+        for (const [key, val] of Object.entries(sheet.columnMap)) {
+          if (val && val !== "__none__") cleanedMap[key] = val;
+        }
+
+        const formData = new FormData();
+        formData.append("file", fileInputRef.current!.files![0]);
+        formData.append("columnMap", JSON.stringify(cleanedMap));
+        formData.append("sheetName", sheet.sheetName);
+
+        const res = await fetch(config.endpoint, { method: "POST", body: formData });
+        const data = await res.json();
+
+        results.push({
+          sheetName: sheet.sheetName,
+          entity: config.label,
+          success: data.success || 0,
+          errors: data.errors || [],
+        });
+      } catch (err: any) {
+        results.push({
+          sheetName: sheet.sheetName,
+          entity: config.label,
+          success: 0,
+          errors: [{ row: 0, message: err.message || "Import failed" }],
+        });
+      }
+      setImportProgress(Math.round(((i + 1) / sheetsToImport.length) * 100));
+    }
+
+    setImportResults(results);
+    setStep("results");
+
+    queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/categories"] });
+  };
+
+  const totalSuccess = importResults.reduce((sum, r) => sum + r.success, 0);
+  const totalErrors = importResults.reduce((sum, r) => sum + r.errors.length, 0);
+
+  const currentSheet = sheets.find((s) => s.sheetName === activeSheet);
+
+  return (
+    <div className="p-6 space-y-6">
+      <PageHeader title="Import Data" description="Upload an Excel file to bulk import items, customers, suppliers, and categories" />
+
+      {step === "upload" && (
+        <Card>
+          <CardContent className="p-8">
+            <div
+              className="border-2 border-dashed rounded-md p-12 text-center cursor-pointer hover-elevate"
+              onClick={() => fileInputRef.current?.click()}
+              data-testid="dropzone-smart-import"
+            >
+              <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+              <p className="text-lg font-medium">Drop your Excel file here or click to browse</p>
+              <p className="text-sm text-muted-foreground mt-2">
+                Supports .xlsx, .xls, and .csv files with multiple sheets
+              </p>
+              <p className="text-xs text-muted-foreground mt-4">
+                Each sheet will be automatically detected as Items, Customers, Suppliers, or Categories
+              </p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={handleFileSelect}
+                className="hidden"
+                data-testid="input-smart-import-file"
+              />
+            </div>
+
+            <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3">
+              {(Object.entries(ENTITY_CONFIG) as [Exclude<EntityType, "skip">, typeof ENTITY_CONFIG["items"]][]).map(([key, config]) => (
+                <div key={key} className="flex items-center gap-2 p-3 rounded-md border text-sm">
+                  <config.icon className="w-4 h-4 text-muted-foreground" />
+                  <div>
+                    <p className="font-medium">{config.label}</p>
+                    <p className="text-xs text-muted-foreground">{config.fields.filter((f) => f.required).map((f) => f.label).join(", ")} required</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {step === "analyze" && (
+        <Card>
+          <CardContent className="flex flex-col items-center gap-4 py-12">
+            <Loader2 className="w-10 h-10 animate-spin text-primary" />
+            <p className="text-sm text-muted-foreground">Analyzing Excel file...</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {step === "verify" && currentSheet && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <FileSpreadsheet className="w-5 h-5 text-primary" />
+                  <div>
+                    <CardTitle className="text-base">{fileName}</CardTitle>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {sheets.length} sheet{sheets.length !== 1 ? "s" : ""} detected with data
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" onClick={reset} data-testid="button-import-change-file">
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Change File
+                  </Button>
+                  <Button
+                    onClick={handleImport}
+                    disabled={sheetsToImport.length === 0}
+                    data-testid="button-confirm-import"
+                  >
+                    <Check className="w-4 h-4 mr-2" />
+                    Confirm & Import {sheetsToImport.length} Sheet{sheetsToImport.length !== 1 ? "s" : ""}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+          </Card>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {sheets.map((s) => {
+              const EntityIcon = getEntityIcon(s.detectedEntity);
+              const isActive = s.sheetName === activeSheet;
+              return (
+                <Card
+                  key={s.sheetName}
+                  className={`cursor-pointer transition-colors ${isActive ? "ring-2 ring-primary" : ""} ${s.detectedEntity === "skip" ? "opacity-50" : ""}`}
+                  onClick={() => setActiveSheet(s.sheetName)}
+                  data-testid={`card-sheet-${s.sheetName}`}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate" title={s.sheetName}>{s.sheetName}</p>
+                        <p className="text-xs text-muted-foreground">{s.totalRows} rows</p>
+                      </div>
+                      <EntityIcon className="w-4 h-4 flex-shrink-0 text-muted-foreground" />
+                    </div>
+                    <div className="mt-2">
+                      <Select
+                        value={s.detectedEntity}
+                        onValueChange={(v) => updateSheetEntity(s.sheetName, v as EntityType)}
+                      >
+                        <SelectTrigger className="h-8 text-xs" data-testid={`select-entity-${s.sheetName}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="items">Items</SelectItem>
+                          <SelectItem value="customers">Customers</SelectItem>
+                          <SelectItem value="suppliers">Suppliers</SelectItem>
+                          <SelectItem value="categories">Categories</SelectItem>
+                          <SelectItem value="skip">Skip this sheet</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {s.detectedEntity !== "skip" && (
+                      <div className="mt-2 flex items-center gap-1">
+                        <Badge variant={s.confidence >= 60 ? "default" : "secondary"} className="text-xs">
+                          {s.confidence}% match
+                        </Badge>
+                        <Badge variant="outline" className="text-xs">
+                          {Object.keys(s.columnMap).filter((k) => s.columnMap[k]).length} mapped
+                        </Badge>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+
+          {currentSheet.detectedEntity !== "skip" && (
+            <Tabs defaultValue="mapping" className="space-y-4">
+              <TabsList>
+                <TabsTrigger value="mapping" data-testid="tab-mapping">Column Mapping</TabsTrigger>
+                <TabsTrigger value="preview" data-testid="tab-preview">Data Preview</TabsTrigger>
+                <TabsTrigger value="raw" data-testid="tab-raw">Raw Data</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="mapping">
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      Map columns from "{currentSheet.sheetName}" to {getEntityLabel(currentSheet.detectedEntity)} fields
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2">
+                      {ENTITY_CONFIG[currentSheet.detectedEntity as Exclude<EntityType, "skip">].fields.map((field) => (
+                        <div key={field.key} className="flex items-center gap-3">
+                          <div className="w-40 text-sm flex items-center gap-1 flex-shrink-0">
+                            {field.label}
+                            {field.required && <span className="text-destructive">*</span>}
+                          </div>
+                          <ArrowRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                          <Select
+                            value={currentSheet.columnMap[field.key] || "__none__"}
+                            onValueChange={(v) => updateColumnMap(currentSheet.sheetName, field.key, v)}
+                          >
+                            <SelectTrigger className="flex-1" data-testid={`select-map-${currentSheet.sheetName}-${field.key}`}>
+                              <SelectValue placeholder="Select column" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">-- Skip --</SelectItem>
+                              {currentSheet.headers.map((h) => (
+                                <SelectItem key={h} value={h}>{h}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {currentSheet.columnMap[field.key] && currentSheet.columnMap[field.key] !== "__none__" && (
+                            <Badge variant="outline" className="text-xs whitespace-nowrap flex-shrink-0">
+                              e.g. {String(currentSheet.rows[0]?.[currentSheet.columnMap[field.key]] ?? "").substring(0, 25)}
+                            </Badge>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="preview">
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm">
+                      Mapped Preview - First {Math.min(currentSheet.rows.length, 5)} of {currentSheet.totalRows} rows
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {(() => {
+                      const config = ENTITY_CONFIG[currentSheet.detectedEntity as Exclude<EntityType, "skip">];
+                      const mappedFields = config.fields.filter((f) => currentSheet.columnMap[f.key]);
+                      if (!mappedFields.length) {
+                        return <p className="text-sm text-muted-foreground text-center py-4">No columns mapped yet. Go to Column Mapping to set up mappings.</p>;
+                      }
+                      return (
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="w-10">#</TableHead>
+                                {mappedFields.map((f) => (
+                                  <TableHead key={f.key} className="text-xs whitespace-nowrap">{f.label}</TableHead>
+                                ))}
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {currentSheet.rows.slice(0, 5).map((row, i) => (
+                                <TableRow key={i}>
+                                  <TableCell className="text-xs text-muted-foreground">{i + 1}</TableCell>
+                                  {mappedFields.map((f) => (
+                                    <TableCell key={f.key} className="text-xs max-w-[200px] truncate">
+                                      {String(row[currentSheet.columnMap[f.key]] ?? "")}
+                                    </TableCell>
+                                  ))}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      );
+                    })()}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="raw">
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm">
+                      Raw Excel Data - "{currentSheet.sheetName}" ({currentSheet.headers.length} columns, {currentSheet.totalRows} rows)
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-10">#</TableHead>
+                            {currentSheet.headers.map((h) => (
+                              <TableHead key={h} className="text-xs whitespace-nowrap">{h}</TableHead>
+                            ))}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {currentSheet.rows.slice(0, 10).map((row, i) => (
+                            <TableRow key={i}>
+                              <TableCell className="text-xs text-muted-foreground">{i + 1}</TableCell>
+                              {currentSheet.headers.map((h) => (
+                                <TableCell key={h} className="text-xs max-w-[150px] truncate">
+                                  {String(row[h] ?? "")}
+                                </TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+          )}
+
+          {currentSheet.detectedEntity === "skip" && (
+            <Card>
+              <CardContent className="flex flex-col items-center gap-2 py-8">
+                <X className="w-8 h-8 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">This sheet will be skipped during import</p>
+                <p className="text-xs text-muted-foreground">Change the entity type above to include it</p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {step === "importing" && (
+        <Card>
+          <CardContent className="flex flex-col items-center gap-4 py-12">
+            <Loader2 className="w-10 h-10 animate-spin text-primary" />
+            <p className="text-sm font-medium">Importing data...</p>
+            <div className="w-64 h-2 bg-muted rounded-full overflow-hidden">
+              <div
+                className="h-full bg-primary transition-all duration-300"
+                style={{ width: `${importProgress}%` }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {importProgress}% complete - processing {sheetsToImport.length} sheet{sheetsToImport.length !== 1 ? "s" : ""}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {step === "results" && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Import Complete</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-6 flex-wrap">
+                {totalSuccess > 0 && (
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-green-500" />
+                    <span className="text-sm font-medium">{totalSuccess} records imported successfully</span>
+                  </div>
+                )}
+                {totalErrors > 0 && (
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 text-yellow-500" />
+                    <span className="text-sm font-medium">{totalErrors} errors</span>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {importResults.map((result) => (
+            <Card key={result.sheetName}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <FileSpreadsheet className="w-4 h-4" />
+                    {result.sheetName}
+                    <Badge variant="secondary">{result.entity}</Badge>
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    {result.success > 0 && <Badge>{result.success} imported</Badge>}
+                    {result.errors.length > 0 && (
+                      <Badge variant="destructive">{result.errors.length} error{result.errors.length !== 1 ? "s" : ""}</Badge>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              {result.errors.length > 0 && (
+                <CardContent className="pt-0">
+                  <div className="max-h-40 overflow-y-auto space-y-1 text-xs">
+                    {result.errors.map((err, i) => (
+                      <p key={i}>
+                        <span className="font-medium">Row {err.row}:</span>{" "}
+                        <span className="text-muted-foreground">{err.message}</span>
+                      </p>
+                    ))}
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+          ))}
+
+          <div className="flex justify-end">
+            <Button onClick={reset} data-testid="button-import-again">
+              Import Another File
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

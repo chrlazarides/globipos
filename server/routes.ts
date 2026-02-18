@@ -109,8 +109,10 @@ export async function registerRoutes(
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      const sheetName = workbook.SheetNames[0];
-      const rows: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+      const sheetName = req.body.sheetName || workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
@@ -163,6 +165,7 @@ export async function registerRoutes(
             reorderLevel: parseInt(getValue("reorderLevel")) || 10,
             volume: getValue("volume") || null,
             alcoholPercentage: getValue("alcoholPercentage") || null,
+            brand: getValue("brand") || null,
             origin: getValue("origin") || null,
             vintage: getValue("vintage") || null,
             active: true,
@@ -217,8 +220,10 @@ export async function registerRoutes(
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      const sheetName = workbook.SheetNames[0];
-      const rows: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+      const sheetName = req.body.sheetName || workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
@@ -603,6 +608,111 @@ export async function registerRoutes(
       const sup = await storage.updateSupplier(req.params.id, req.body);
       if (!sup) return res.status(404).json({ message: "Supplier not found" });
       res.json(sup);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/suppliers/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheetName = req.body.sheetName || workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            return row[col] !== undefined ? String(row[col]).trim() : "";
+          };
+
+          const name = getValue("name");
+          const code = getValue("code");
+          if (!name || !code) {
+            results.errors.push({ row: i + 2, message: "Name and Code are required" });
+            continue;
+          }
+
+          const paymentTerms = getValue("paymentTerms") || "cash";
+          const validTerms = ["cash", "credit_7", "credit_14", "credit_30", "credit_60", "credit_90"];
+
+          const supData = {
+            name,
+            code: code.toUpperCase(),
+            contactPerson: getValue("contactPerson") || null,
+            email: getValue("email") || null,
+            phone: getValue("phone") || null,
+            address: getValue("address") || null,
+            city: getValue("city") || null,
+            country: getValue("country") || "Cyprus",
+            taxId: getValue("taxId") || null,
+            paymentTerms: validTerms.includes(paymentTerms) ? paymentTerms : "cash",
+            currentBalance: "0",
+            notes: getValue("notes") || null,
+            active: true,
+          };
+
+          await storage.createSupplier(supData);
+          results.success++;
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/categories/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheetName = req.body.sheetName || workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            return row[col] !== undefined ? String(row[col]).trim() : "";
+          };
+
+          const name = getValue("name");
+          if (!name) {
+            results.errors.push({ row: i + 2, message: "Name is required" });
+            continue;
+          }
+
+          await storage.createCategory({
+            name,
+            description: getValue("description") || null,
+            parentId: null,
+            active: true,
+          });
+          results.success++;
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }
