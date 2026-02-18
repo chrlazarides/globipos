@@ -14,7 +14,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Tag } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { insertPriceContractSchema, type PriceContract, type Customer } from "@shared/schema";
+import { insertPriceContractSchema, type PriceContract, type Customer, type Category } from "@shared/schema";
 import { z } from "zod";
 
 const contractFormSchema = insertPriceContractSchema.extend({
@@ -34,6 +34,7 @@ export default function Pricing() {
 
   const { data: contracts = [], isLoading } = useQuery<PriceContractWithCustomer[]>({ queryKey: ["/api/price-contracts"] });
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+  const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
 
   const createContract = useMutation({
     mutationFn: async (data: z.infer<typeof contractFormSchema>) => {
@@ -63,6 +64,17 @@ export default function Pricing() {
           </div>
         </div>
       ),
+    },
+    {
+      key: "scope",
+      header: "Applies To",
+      cell: (row) => {
+        const cat = categories.find((c) => c.id === row.categoryId);
+        const parts: string[] = [];
+        if (cat) parts.push(cat.name);
+        if (row.brand) parts.push(row.brand);
+        return <span className="text-sm">{parts.length > 0 ? parts.join(" / ") : "All Items"}</span>;
+      },
     },
     {
       key: "discount",
@@ -115,7 +127,7 @@ export default function Pricing() {
             </DialogTrigger>
             <DialogContent>
               <DialogHeader><DialogTitle>New Price Contract</DialogTitle></DialogHeader>
-              <ContractForm onSubmit={(d) => createContract.mutate(d)} isPending={createContract.isPending} customers={customers} />
+              <ContractForm onSubmit={(d) => createContract.mutate(d)} isPending={createContract.isPending} customers={customers} categories={categories} />
             </DialogContent>
           </Dialog>
         }
@@ -130,12 +142,13 @@ export default function Pricing() {
   );
 }
 
-function ContractForm({ onSubmit, isPending, customers }: { onSubmit: (d: any) => void; isPending: boolean; customers: Customer[] }) {
+function ContractForm({ onSubmit, isPending, customers, categories }: { onSubmit: (d: any) => void; isPending: boolean; customers: Customer[]; categories: Category[] }) {
   const form = useForm({
     resolver: zodResolver(contractFormSchema),
     defaultValues: {
       name: "", customerId: "", startDate: new Date().toISOString().split("T")[0],
-      endDate: "", discountType: "percentage", discountValue: "0", minQuantity: 0, active: true,
+      endDate: "", discountType: "percentage", discountValue: "0", minQuantity: 0,
+      categoryId: "", brand: "", active: true,
     },
   });
 
@@ -167,6 +180,34 @@ function ContractForm({ onSubmit, isPending, customers }: { onSubmit: (d: any) =
             <FormMessage />
           </FormItem>
         )} />
+        <div className="grid grid-cols-2 gap-4">
+          <FormField control={form.control} name="categoryId" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Category (optional)</FormLabel>
+              <Select value={field.value || "__all__"} onValueChange={(v) => field.onChange(v === "__all__" ? "" : v)}>
+                <FormControl>
+                  <SelectTrigger data-testid="select-contract-category">
+                    <SelectValue placeholder="All categories" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="__all__">All Categories</SelectItem>
+                  {categories.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )} />
+          <FormField control={form.control} name="brand" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Brand / Producer (optional)</FormLabel>
+              <FormControl><Input {...field} value={field.value || ""} placeholder="e.g. Macallan" data-testid="input-contract-brand" /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )} />
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <FormField control={form.control} name="startDate" render={({ field }) => (
             <FormItem>

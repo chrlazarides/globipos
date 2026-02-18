@@ -146,6 +146,8 @@ export class DatabaseStorage implements IStorage {
         endDate: priceContracts.endDate,
         discountType: priceContracts.discountType,
         discountValue: priceContracts.discountValue,
+        categoryId: priceContracts.categoryId,
+        brand: priceContracts.brand,
         minQuantity: priceContracts.minQuantity,
         active: priceContracts.active,
         customerName: customers.name,

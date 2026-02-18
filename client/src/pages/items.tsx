@@ -39,6 +39,7 @@ const itemImportFields = [
   { key: "reorderLevel", label: "Reorder Level" },
   { key: "volume", label: "Volume" },
   { key: "alcoholPercentage", label: "Alcohol %" },
+  { key: "brand", label: "Brand / Producer" },
   { key: "origin", label: "Origin" },
   { key: "vintage", label: "Vintage" },
 ];
@@ -114,7 +115,7 @@ export default function Items() {
   };
 
   const filtered = items.filter((item) => {
-    const matchSearch = item.name.toLowerCase().includes(search.toLowerCase()) || item.sku.toLowerCase().includes(search.toLowerCase());
+    const matchSearch = item.name.toLowerCase().includes(search.toLowerCase()) || item.sku.toLowerCase().includes(search.toLowerCase()) || (item.brand || "").toLowerCase().includes(search.toLowerCase());
     const matchCategory = categoryFilter === "all" || item.categoryId === categoryFilter;
     return matchSearch && matchCategory;
   });
@@ -291,6 +292,7 @@ export default function Items() {
                 reorderLevel: editingItem.reorderLevel,
                 volume: editingItem.volume || "",
                 alcoholPercentage: editingItem.alcoholPercentage || "",
+                brand: editingItem.brand || "",
                 origin: editingItem.origin || "",
                 vintage: editingItem.vintage || "",
                 active: editingItem.active,
@@ -310,7 +312,7 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
     defaultValues: defaultValues || {
       name: "", sku: "", barcode: "", description: "", categoryId: "", unitType: "pc", packSize: 1,
       price1: "0", price2: "0", price3: "0", price4: "0", price5: "0", costPrice: "0", vatRate: "19",
-      stockQuantity: 0, reorderLevel: 10, volume: "", alcoholPercentage: "", origin: "", vintage: "", active: true,
+      stockQuantity: 0, reorderLevel: 10, volume: "", alcoholPercentage: "", brand: "", origin: "", vintage: "", active: true,
     },
   });
 
@@ -495,6 +497,13 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
             </div>
           </TabsContent>
           <TabsContent value="details" className="space-y-4 mt-4">
+            <FormField control={form.control} name="brand" render={({ field }) => (
+              <FormItem>
+                <FormLabel>Brand / Producer</FormLabel>
+                <FormControl><Input {...field} value={field.value || ""} placeholder="e.g. Château Margaux, Macallan" data-testid="input-brand" /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )} />
             <div className="grid grid-cols-2 gap-4">
               <FormField control={form.control} name="volume" render={({ field }) => (
                 <FormItem>
