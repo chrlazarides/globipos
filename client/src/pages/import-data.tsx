@@ -147,6 +147,26 @@ function colLetter(c: number): string {
 }
 
 function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } {
+  const defaultJson: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
+  if (defaultJson.length === 0) return { headers: [], rows: [] };
+
+  const defaultHeaders = Object.keys(defaultJson[0]);
+  const emptyCount = defaultHeaders.filter((h) => h.startsWith("__EMPTY")).length;
+
+  if (emptyCount <= 1 && defaultHeaders.length >= 2) {
+    const cleanHeaders = defaultHeaders.map((h, i) =>
+      h.startsWith("__EMPTY") ? `Col ${colLetter(i)}` : h
+    );
+    const rows = defaultJson.map((row) => {
+      const cleaned: Record<string, any> = {};
+      defaultHeaders.forEach((origH, i) => {
+        cleaned[cleanHeaders[i]] = row[origH] ?? "";
+      });
+      return cleaned;
+    });
+    return { headers: cleanHeaders, rows };
+  }
+
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
 
   const getCellVal = (r: number, c: number): string => {
@@ -156,7 +176,7 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
     return String(cell.v ?? "").trim();
   };
 
-  let headerRowIdx = 0;
+  let headerRowIdx = -1;
   let bestScore = 0;
 
   for (let r = 0; r <= Math.min(10, range.e.r); r++) {
@@ -176,6 +196,8 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
     }
   }
 
+  if (headerRowIdx < 0) headerRowIdx = 0;
+
   const headers: string[] = [];
   const seen = new Set<string>();
   for (let c = 0; c <= range.e.c; c++) {
@@ -192,28 +214,11 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
     headers.push(unique);
   }
 
-  const keepCols = new Set<number>();
-  for (let c = 0; c <= range.e.c; c++) {
-    const hdrVal = getCellVal(headerRowIdx, c);
-    if (hdrVal) {
-      keepCols.add(c);
-      continue;
-    }
-    for (let r = headerRowIdx + 1; r <= Math.min(headerRowIdx + 20, range.e.r); r++) {
-      if (getCellVal(r, c)) {
-        keepCols.add(c);
-        break;
-      }
-    }
-  }
-
-  const filteredHeaders = headers.filter((_, i) => keepCols.has(i));
   const rows: any[] = [];
   for (let r = headerRowIdx + 1; r <= range.e.r; r++) {
     const row: Record<string, any> = {};
     let hasData = false;
     for (let c = 0; c <= range.e.c; c++) {
-      if (!keepCols.has(c)) continue;
       const v = getCellVal(r, c);
       row[headers[c]] = v;
       if (v) hasData = true;
@@ -221,7 +226,7 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
     if (hasData) rows.push(row);
   }
 
-  return { headers: filteredHeaders, rows };
+  return { headers, rows };
 }
 
 function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; brand: string; origin: string; rows: any[]; headers: string[] } | null {
