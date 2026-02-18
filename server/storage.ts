@@ -3,7 +3,7 @@ import { eq, and, gte, lte, desc, sql, ilike, or } from "drizzle-orm";
 import {
   users, categories, items, customers, priceContracts, priceContractItems,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
-  portalOrders, portalOrderItems,
+  portalOrders, portalOrderItems, systemSettings,
   type InsertUser, type User, type InsertCategory, type Category,
   type InsertItem, type Item, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
@@ -14,6 +14,7 @@ import {
   type InsertPayment, type Payment,
   type InsertPortalOrder, type PortalOrder,
   type InsertPortalOrderItem, type PortalOrderItem,
+  type SystemSetting,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -57,6 +58,10 @@ export interface IStorage {
   getDashboardStats(): Promise<any>;
   getSalesReport(from: string, to: string, customerId?: string): Promise<any>;
   getCustomerStatements(): Promise<any[]>;
+
+  getSettings(): Promise<SystemSetting[]>;
+  getSetting(key: string): Promise<SystemSetting | undefined>;
+  upsertSetting(key: string, value: string, label: string, group: string): Promise<SystemSetting>;
 
   getCustomerByCode(code: string): Promise<Customer | undefined>;
   getCustomerInvoices(customerId: string): Promise<(Invoice & { items: InvoiceItem[] })[]>;
@@ -385,6 +390,25 @@ export class DatabaseStorage implements IStorage {
       });
     }
     return statements;
+  }
+
+  async getSettings() {
+    return db.select().from(systemSettings).orderBy(systemSettings.group, systemSettings.key);
+  }
+
+  async getSetting(key: string) {
+    const [setting] = await db.select().from(systemSettings).where(eq(systemSettings.key, key));
+    return setting;
+  }
+
+  async upsertSetting(key: string, value: string, label: string, group: string) {
+    const existing = await this.getSetting(key);
+    if (existing) {
+      const [updated] = await db.update(systemSettings).set({ value, label, group }).where(eq(systemSettings.key, key)).returning();
+      return updated;
+    }
+    const [created] = await db.insert(systemSettings).values({ key, value, label, group }).returning();
+    return created;
   }
 
   async getCustomerByCode(code: string) {

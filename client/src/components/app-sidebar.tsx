@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -32,6 +32,10 @@ const pricingNav = [
 
 const reportNav = [
   { title: "Reports", url: "/reports", icon: BarChart3 },
+];
+
+const systemNav = [
+  { title: "Settings", url: "/settings", icon: Settings },
 ];
 
 function NavSection({ label, items }: { label: string; items: typeof mainNav }) {
@@ -79,6 +83,7 @@ export function AppSidebar() {
         <NavSection label="Sales" items={salesNav} />
         <NavSection label="Pricing" items={pricingNav} />
         <NavSection label="Analytics" items={reportNav} />
+        <NavSection label="System" items={systemNav} />
       </SidebarContent>
       <SidebarFooter className="p-4">
         <div className="flex items-center gap-2 text-xs text-sidebar-foreground/50">

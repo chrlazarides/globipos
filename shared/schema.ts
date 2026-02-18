@@ -10,6 +10,14 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
 });
 
+export const systemSettings = pgTable("system_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  key: text("key").notNull().unique(),
+  value: text("value").notNull(),
+  label: text("label").notNull(),
+  group: text("group").notNull().default("general"),
+});
+
 export const categories = pgTable("categories", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -160,6 +168,7 @@ export const payments = pgTable("payments", {
 
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).pick({ username: true, password: true });
+export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
 export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true });
@@ -176,6 +185,8 @@ export const insertPortalOrderItemSchema = createInsertSchema(portalOrderItems).
 // Types
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+export type InsertSystemSetting = z.infer<typeof insertSystemSettingSchema>;
+export type SystemSetting = typeof systemSettings.$inferSelect;
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
 export type Category = typeof categories.$inferSelect;
 export type InsertItem = z.infer<typeof insertItemSchema>;

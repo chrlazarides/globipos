@@ -262,6 +262,67 @@ export async function registerRoutes(
     }
   });
 
+  // System Settings
+  app.get("/api/settings", async (_req, res) => {
+    try {
+      const settings = await storage.getSettings();
+      res.json(settings);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.put("/api/settings", async (req, res) => {
+    try {
+      const { settings } = req.body;
+      if (!Array.isArray(settings)) return res.status(400).json({ message: "Settings array required" });
+      const results = [];
+      for (const s of settings) {
+        const result = await storage.upsertSetting(s.key, s.value, s.label, s.group);
+        results.push(result);
+      }
+      res.json(results);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/settings/seed-defaults", async (_req, res) => {
+    try {
+      const defaults = [
+        { key: "company_name", value: "VinTrade", label: "Company Name", group: "company" },
+        { key: "company_address", value: "Limassol, Cyprus", label: "Company Address", group: "company" },
+        { key: "company_phone", value: "+357-25-000000", label: "Company Phone", group: "company" },
+        { key: "company_email", value: "info@vintrade.cy", label: "Company Email", group: "company" },
+        { key: "company_tax_id", value: "CY-00000000A", label: "Company Tax ID (TIN)", group: "company" },
+        { key: "vat_rate", value: "19", label: "Default VAT Rate (%)", group: "tax" },
+        { key: "currency", value: "EUR", label: "Currency", group: "tax" },
+        { key: "currency_symbol", value: "€", label: "Currency Symbol", group: "tax" },
+        { key: "invoice_prefix", value: "INV", label: "Invoice Number Prefix", group: "invoicing" },
+        { key: "credit_note_prefix", value: "CN", label: "Credit Note Number Prefix", group: "invoicing" },
+        { key: "proforma_prefix", value: "PF", label: "Proforma Number Prefix", group: "invoicing" },
+        { key: "invoice_footer", value: "Thank you for your business", label: "Invoice Footer Message", group: "invoicing" },
+        { key: "payment_terms_default", value: "cash", label: "Default Payment Terms", group: "invoicing" },
+        { key: "low_stock_threshold", value: "10", label: "Low Stock Alert Threshold", group: "inventory" },
+        { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
+        { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
+      ];
+      const results = [];
+      for (const d of defaults) {
+        const existing = await storage.getSetting(d.key);
+        if (!existing) {
+          const created = await storage.upsertSetting(d.key, d.value, d.label, d.group);
+          results.push(created);
+        } else {
+          results.push(existing);
+        }
+      }
+      res.json(results);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   // Portal API Routes
   app.post("/api/portal/login", async (req, res) => {
     try {
