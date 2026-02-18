@@ -60,6 +60,10 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - API: GET /api/price-contracts returns contracts with rules inline; PUT /api/price-contracts/:id/rules to set rules
 
 ## Recent Changes
+- 2026-02-18: Company settings now include IBAN, SWIFT/BIC, Bank Name, Registration No. fields
+- 2026-02-18: Invoice/statement HTML documents use dynamic company settings from DB (no hardcoded values)
+- 2026-02-18: Invoice documents show bank details section when IBAN/SWIFT configured
+- 2026-02-18: Currency symbol in documents pulled from settings (defaults to EUR)
 - 2026-02-18: Price contracts redesigned with multi-rule discount system (price_contract_rules table)
 - 2026-02-18: Contract rules enforce minQuantity and price-level floor check before applying discounts
 - 2026-02-18: Added purchase goal and voucher reward fields to contracts (purchaseGoal, voucherType, voucherValue)

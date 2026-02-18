@@ -516,7 +516,11 @@ export async function registerRoutes(
       const typeLabel = inv.type === "credit_note" ? "CREDIT NOTE" : inv.type === "proforma" ? "PROFORMA INVOICE" : inv.type === "quotation" ? "QUOTATION" : "INVOICE";
       const autoPrint = req.query.print === "1";
 
-      const html = generateInvoiceHtml(inv, customer, typeLabel, autoPrint);
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const html = generateInvoiceHtml(inv, customer, typeLabel, autoPrint, settingsMap);
 
       res.setHeader("Content-Type", "text/html");
       if (req.query.download === "1") {
@@ -578,7 +582,12 @@ export async function registerRoutes(
       const statements = await storage.getCustomerStatements();
       const st = statements.find(s => s.customerId === req.params.customerId);
       const autoPrint = req.query.print === "1";
-      const html = generateStatementHtml(customer, st, autoPrint);
+
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const html = generateStatementHtml(customer, st, autoPrint, settingsMap);
       res.setHeader("Content-Type", "text/html");
       if (req.query.download === "1") {
         res.setHeader("Content-Disposition", `attachment; filename="statement-${customer.code}.html"`);
@@ -622,6 +631,10 @@ export async function registerRoutes(
         { key: "company_phone", value: "+357-25-000000", label: "Company Phone", group: "company" },
         { key: "company_email", value: "info@vintrade.cy", label: "Company Email", group: "company" },
         { key: "company_tax_id", value: "CY-00000000A", label: "Company Tax ID (TIN)", group: "company" },
+        { key: "company_reg_no", value: "", label: "Company Registration No.", group: "company" },
+        { key: "company_iban", value: "", label: "Bank IBAN", group: "company" },
+        { key: "company_swift", value: "", label: "Bank SWIFT/BIC", group: "company" },
+        { key: "company_bank_name", value: "", label: "Bank Name", group: "company" },
         { key: "vat_rate", value: "19", label: "Default VAT Rate (%)", group: "tax" },
         { key: "currency", value: "EUR", label: "Currency", group: "tax" },
         { key: "currency_symbol", value: "€", label: "Currency Symbol", group: "tax" },
@@ -976,10 +989,22 @@ export async function registerRoutes(
   return httpServer;
 }
 
-function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPrint: boolean = false) {
+function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPrint: boolean = false, settings: Record<string, string> = {}) {
   const items = inv.items || [];
   const hasDiscountPercent = items.some((li: any) => parseFloat(li.discountPercent || "0") > 0);
   const hasDiscount = items.some((li: any) => parseFloat(li.discount || "0") > 0);
+
+  const companyName = settings.company_name || "VinTrade";
+  const companyAddress = settings.company_address || "";
+  const companyPhone = settings.company_phone || "";
+  const companyEmail = settings.company_email || "";
+  const companyTaxId = settings.company_tax_id || "";
+  const companyRegNo = settings.company_reg_no || "";
+  const companyIban = settings.company_iban || "";
+  const companySwift = settings.company_swift || "";
+  const companyBankName = settings.company_bank_name || "";
+  const currencySymbol = settings.currency_symbol || "\u20AC";
+  const invoiceFooter = settings.invoice_footer || "Thank you for your business";
 
   const itemRows = items.map((li: any, idx: number) => {
     const qty = li.quantity || 0;
@@ -992,12 +1017,14 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
       <td class="cell">${li.description || ""}</td>
       <td class="cell center">${qty}${unitLabel}</td>
-      <td class="cell right">\u20AC${parseFloat(li.unitPrice).toFixed(2)}</td>
+      <td class="cell right">${currencySymbol}${parseFloat(li.unitPrice).toFixed(2)}</td>
       ${hasDiscountPercent ? `<td class="cell right">${discPercent > 0 ? discPercent.toFixed(1) + "%" : "-"}</td>` : ""}
-      ${hasDiscount ? `<td class="cell right">${discAmount > 0 ? "\u20AC" + discAmount.toFixed(2) : "-"}</td>` : ""}
-      <td class="cell right bold">\u20AC${parseFloat(li.total).toFixed(2)}</td>
+      ${hasDiscount ? `<td class="cell right">${discAmount > 0 ? currencySymbol + discAmount.toFixed(2) : "-"}</td>` : ""}
+      <td class="cell right bold">${currencySymbol}${parseFloat(li.total).toFixed(2)}</td>
     </tr>`;
   }).join("");
+
+  const hasBankDetails = companyIban || companySwift || companyBankName;
 
   const printScript = autoPrint ? `<script>window.onload = function() { window.print(); }</script>` : "";
 
@@ -1014,6 +1041,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .brand { }
   .brand-name { font-size: 26px; font-weight: 800; color: #722f37; letter-spacing: -0.5px; }
   .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
+  .brand-detail { font-size: 11px; color: #666; line-height: 1.6; margin-top: 6px; }
   .doc-info { text-align: right; }
   .doc-type { font-size: 22px; font-weight: 700; color: #333; text-transform: uppercase; letter-spacing: 1px; }
   .doc-number { font-size: 14px; color: #666; margin-top: 4px; }
@@ -1044,6 +1072,9 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .notes-box { padding: 16px 20px; background: #faf8f6; border-radius: 6px; border-left: 3px solid #722f37; margin-bottom: 32px; }
   .notes-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; margin-bottom: 4px; }
   .notes-text { font-size: 12px; color: #444; line-height: 1.6; }
+  .bank-details { padding: 16px 20px; background: #f8f9fa; border-radius: 6px; border: 1px solid #e9ecef; margin-bottom: 32px; }
+  .bank-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; font-weight: 600; margin-bottom: 6px; }
+  .bank-text { font-size: 12px; color: #444; line-height: 1.8; }
   .footer { text-align: center; padding-top: 24px; border-top: 1px solid #eee; }
   .footer p { font-size: 11px; color: #aaa; line-height: 1.8; }
   .no-print { text-align: center; margin-bottom: 16px; padding: 12px; }
@@ -1073,8 +1104,13 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   <div class="page">
     <div class="header">
       <div class="brand">
-        <div class="brand-name">VinTrade</div>
+        <div class="brand-name">${companyName}</div>
         <div class="brand-sub">Wholesale Wine & Spirits</div>
+        <div class="brand-detail">
+          ${companyAddress ? companyAddress + "<br>" : ""}
+          ${companyPhone ? "Tel: " + companyPhone : ""}${companyEmail ? " | " + companyEmail : ""}
+          ${companyTaxId ? "<br>TIN: " + companyTaxId : ""}${companyRegNo ? " | Reg: " + companyRegNo : ""}
+        </div>
       </div>
       <div class="doc-info">
         <div class="doc-type">${typeLabel}</div>
@@ -1123,15 +1159,15 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
       <div class="totals-box">
         <div class="totals-row subtotal">
           <span>Subtotal</span>
-          <span>\u20AC${parseFloat(inv.subtotal).toFixed(2)}</span>
+          <span>${currencySymbol}${parseFloat(inv.subtotal).toFixed(2)}</span>
         </div>
         <div class="totals-row tax">
           <span>VAT (${inv.taxRate}%)</span>
-          <span>\u20AC${parseFloat(inv.taxAmount).toFixed(2)}</span>
+          <span>${currencySymbol}${parseFloat(inv.taxAmount).toFixed(2)}</span>
         </div>
         <div class="totals-row grand">
           <span>Total</span>
-          <span>\u20AC${parseFloat(inv.total).toFixed(2)}</span>
+          <span>${currencySymbol}${parseFloat(inv.total).toFixed(2)}</span>
         </div>
       </div>
     </div>
@@ -1142,9 +1178,19 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
       <div class="notes-text">${inv.notes}</div>
     </div>` : ""}
 
+    ${hasBankDetails ? `
+    <div class="bank-details">
+      <div class="bank-label">Bank Details</div>
+      <div class="bank-text">
+        ${companyBankName ? "<strong>Bank:</strong> " + companyBankName + "<br>" : ""}
+        ${companyIban ? "<strong>IBAN:</strong> " + companyIban + "<br>" : ""}
+        ${companySwift ? "<strong>SWIFT/BIC:</strong> " + companySwift : ""}
+      </div>
+    </div>` : ""}
+
     <div class="footer">
-      <p>VinTrade - Wholesale Wine & Spirits</p>
-      <p>Thank you for your business</p>
+      <p>${companyName} - Wholesale Wine & Spirits</p>
+      <p>${invoiceFooter}</p>
     </div>
   </div>
   ${printScript}
@@ -1152,16 +1198,23 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
 </html>`;
 }
 
-function generateStatementHtml(customer: any, statement: any, autoPrint: boolean = false) {
+function generateStatementHtml(customer: any, statement: any, autoPrint: boolean = false, settings: Record<string, string> = {}) {
+  const companyName = settings.company_name || "VinTrade";
+  const companyAddress = settings.company_address || "";
+  const companyPhone = settings.company_phone || "";
+  const companyEmail = settings.company_email || "";
+  const companyTaxId = settings.company_tax_id || "";
+  const currencySymbol = settings.currency_symbol || "\u20AC";
+
   const invoices = statement?.invoices || [];
   const invoiceRows = invoices.map((inv: any, idx: number) => `
     <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
       <td class="cell">${inv.invoiceNumber || ""}</td>
       <td class="cell">${new Date(inv.date).toLocaleDateString("en-GB")}</td>
       <td class="cell">${inv.type === "credit_note" ? "Credit Note" : "Invoice"}</td>
-      <td class="cell right">\u20AC${parseFloat(inv.total || "0").toFixed(2)}</td>
-      <td class="cell right">\u20AC${parseFloat(inv.paid || "0").toFixed(2)}</td>
-      <td class="cell right bold">\u20AC${parseFloat(inv.balance || "0").toFixed(2)}</td>
+      <td class="cell right">${currencySymbol}${parseFloat(inv.total || "0").toFixed(2)}</td>
+      <td class="cell right">${currencySymbol}${parseFloat(inv.paid || "0").toFixed(2)}</td>
+      <td class="cell right bold">${currencySymbol}${parseFloat(inv.balance || "0").toFixed(2)}</td>
     </tr>
   `).join("");
 
@@ -1179,6 +1232,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #722f37; }
   .brand-name { font-size: 26px; font-weight: 800; color: #722f37; }
   .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
+  .brand-detail { font-size: 11px; color: #666; line-height: 1.6; margin-top: 6px; }
   .doc-type { font-size: 22px; font-weight: 700; color: #333; text-transform: uppercase; letter-spacing: 1px; }
   .doc-date { font-size: 13px; color: #666; margin-top: 4px; }
   .customer-info { margin-bottom: 28px; }
@@ -1224,8 +1278,12 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   <div class="page">
     <div class="header">
       <div>
-        <div class="brand-name">VinTrade</div>
+        <div class="brand-name">${companyName}</div>
         <div class="brand-sub">Wholesale Wine & Spirits</div>
+        <div class="brand-detail">
+          ${companyAddress ? companyAddress : ""}
+          ${companyPhone ? " | Tel: " + companyPhone : ""}
+        </div>
       </div>
       <div style="text-align:right;">
         <div class="doc-type">Account Statement</div>
@@ -1246,15 +1304,15 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
     <div class="summary">
       <div class="summary-card">
         <div class="summary-label">Total Invoiced</div>
-        <div class="summary-value">\u20AC${parseFloat(statement?.totalInvoiced || "0").toFixed(2)}</div>
+        <div class="summary-value">${currencySymbol}${parseFloat(statement?.totalInvoiced || "0").toFixed(2)}</div>
       </div>
       <div class="summary-card">
         <div class="summary-label">Total Paid</div>
-        <div class="summary-value">\u20AC${parseFloat(statement?.totalPaid || "0").toFixed(2)}</div>
+        <div class="summary-value">${currencySymbol}${parseFloat(statement?.totalPaid || "0").toFixed(2)}</div>
       </div>
       <div class="summary-card">
         <div class="summary-label">Balance Due</div>
-        <div class="summary-value due">\u20AC${parseFloat(statement?.balance || "0").toFixed(2)}</div>
+        <div class="summary-value due">${currencySymbol}${parseFloat(statement?.balance || "0").toFixed(2)}</div>
       </div>
     </div>
 
@@ -1274,7 +1332,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
     </table>` : ""}
 
     <div class="footer">
-      <p>VinTrade - Wholesale Wine & Spirits</p>
+      <p>${companyName} - Wholesale Wine & Spirits</p>
     </div>
   </div>
   ${printScript}
