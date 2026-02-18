@@ -192,20 +192,28 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
     headers.push(unique);
   }
 
-  const nonEmptyCols = new Set<number>();
-  for (let r = headerRowIdx + 1; r <= range.e.r; r++) {
-    for (let c = 0; c <= range.e.c; c++) {
-      if (getCellVal(r, c)) nonEmptyCols.add(c);
+  const keepCols = new Set<number>();
+  for (let c = 0; c <= range.e.c; c++) {
+    const hdrVal = getCellVal(headerRowIdx, c);
+    if (hdrVal) {
+      keepCols.add(c);
+      continue;
+    }
+    for (let r = headerRowIdx + 1; r <= Math.min(headerRowIdx + 20, range.e.r); r++) {
+      if (getCellVal(r, c)) {
+        keepCols.add(c);
+        break;
+      }
     }
   }
 
-  const filteredHeaders = headers.filter((_, i) => nonEmptyCols.has(i));
+  const filteredHeaders = headers.filter((_, i) => keepCols.has(i));
   const rows: any[] = [];
   for (let r = headerRowIdx + 1; r <= range.e.r; r++) {
     const row: Record<string, any> = {};
     let hasData = false;
     for (let c = 0; c <= range.e.c; c++) {
-      if (!nonEmptyCols.has(c)) continue;
+      if (!keepCols.has(c)) continue;
       const v = getCellVal(r, c);
       row[headers[c]] = v;
       if (v) hasData = true;
