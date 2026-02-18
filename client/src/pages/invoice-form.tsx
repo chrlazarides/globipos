@@ -610,10 +610,10 @@ export default function InvoiceForm() {
                         </TableCell>
                         <TableCell>
                           <Input
-                            type="text"
-                            inputMode="numeric"
+                            type="number"
+                            min={1}
                             value={line.quantity}
-                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", parseInt(v) || 1); }}
+                            onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) ? 1 : Math.max(1, v)); }}
                             disabled={isViewMode}
                             data-testid={`input-line-qty-${idx}`}
                           />
