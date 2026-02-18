@@ -187,24 +187,24 @@ export default function InvoiceForm() {
         const newLine = { ...line };
         const priceKey = `price${customer.priceLevel}` as keyof Item;
         newLine.unitPrice = String(item[priceKey] || item.price1);
+        const qty = newLine.quantity || 0;
+        const price = parseFloat(newLine.unitPrice) || 0;
+        const lineGross = qty * price;
         const contractDisc = findContractDiscount(customerId, item);
         if (contractDisc) {
           if (contractDisc.type === "percentage") {
             newLine.discountPercent = String(contractDisc.value);
+            newLine.discount = (lineGross * contractDisc.value / 100).toFixed(2);
           } else {
             newLine.discount = String(contractDisc.value);
+            newLine.discountPercent = lineGross > 0 ? (contractDisc.value / lineGross * 100).toFixed(2) : "0";
           }
         } else {
           newLine.discountPercent = "0";
           newLine.discount = "0";
         }
-        const qty = newLine.quantity || 0;
-        const price = parseFloat(newLine.unitPrice) || 0;
-        const lineGross = qty * price;
-        const pctDisc = parseFloat(newLine.discountPercent) || 0;
         const amtDisc = parseFloat(newLine.discount) || 0;
-        const pctAmount = lineGross * (pctDisc / 100);
-        newLine.total = Math.max(0, lineGross - pctAmount - amtDisc).toFixed(2);
+        newLine.total = Math.max(0, lineGross - amtDisc).toFixed(2);
         return newLine;
       });
       return changed ? updated : prev;
@@ -215,10 +215,8 @@ export default function InvoiceForm() {
     const qty = line.quantity || 0;
     const price = parseFloat(line.unitPrice) || 0;
     const lineGross = qty * price;
-    const pctDisc = parseFloat(line.discountPercent) || 0;
     const amtDisc = parseFloat(line.discount) || 0;
-    const pctAmount = lineGross * (pctDisc / 100);
-    return Math.max(0, lineGross - pctAmount - amtDisc).toFixed(2);
+    return Math.max(0, lineGross - amtDisc).toFixed(2);
   }, []);
 
   const updateLine = (index: number, field: keyof LineItem, value: any) => {
@@ -240,10 +238,12 @@ export default function InvoiceForm() {
             if (contractDisc) {
               if (contractDisc.type === "percentage") {
                 updated[index].discountPercent = String(contractDisc.value);
-                updated[index].discount = "0";
+                const gross = (updated[index].quantity || 0) * (parseFloat(updated[index].unitPrice) || 0);
+                updated[index].discount = (gross * contractDisc.value / 100).toFixed(2);
               } else {
                 updated[index].discount = String(contractDisc.value);
-                updated[index].discountPercent = "0";
+                const gross = (updated[index].quantity || 0) * (parseFloat(updated[index].unitPrice) || 0);
+                updated[index].discountPercent = gross > 0 ? (contractDisc.value / gross * 100).toFixed(2) : "0";
               }
             } else {
               updated[index].discountPercent = "0";
@@ -251,6 +251,21 @@ export default function InvoiceForm() {
             }
           }
         }
+      }
+      if (field === "discountPercent") {
+        const gross = (updated[index].quantity || 0) * (parseFloat(updated[index].unitPrice) || 0);
+        const pct = parseFloat(value) || 0;
+        updated[index].discount = (gross * pct / 100).toFixed(2);
+      }
+      if (field === "discount") {
+        const gross = (updated[index].quantity || 0) * (parseFloat(updated[index].unitPrice) || 0);
+        const amt = parseFloat(value) || 0;
+        updated[index].discountPercent = gross > 0 ? (amt / gross * 100).toFixed(2) : "0";
+      }
+      if (field === "quantity" || field === "unitPrice") {
+        const gross = (updated[index].quantity || 0) * (parseFloat(updated[index].unitPrice) || 0);
+        const pct = parseFloat(updated[index].discountPercent) || 0;
+        updated[index].discount = (gross * pct / 100).toFixed(2);
       }
       updated[index].total = calcLineTotal(updated[index]);
       return updated;
@@ -501,7 +516,7 @@ export default function InvoiceForm() {
                       <TableHead className="w-[70px]">Qty</TableHead>
                       <TableHead className="w-[90px]">Unit</TableHead>
                       <TableHead className="w-[90px]">Price</TableHead>
-                      <TableHead className="w-[160px]">Discount</TableHead>
+                      <TableHead className="w-[140px]">Discount</TableHead>
                       <TableHead className="w-[90px] text-right">Total</TableHead>
                       {!isViewMode && <TableHead className="w-[50px]" />}
                     </TableRow>
@@ -581,34 +596,38 @@ export default function InvoiceForm() {
                         </TableCell>
                         <TableCell>
                           {isViewMode ? (
-                            <div className="text-sm">
-                              {parseFloat(line.discountPercent) > 0 && <span>{line.discountPercent}%</span>}
-                              {parseFloat(line.discountPercent) > 0 && parseFloat(line.discount) > 0 && <span> + </span>}
-                              {parseFloat(line.discount) > 0 && <span>€{parseFloat(line.discount).toFixed(2)}</span>}
-                              {parseFloat(line.discountPercent) === 0 && parseFloat(line.discount) === 0 && <span className="text-muted-foreground">-</span>}
+                            <div className="text-sm space-y-0.5">
+                              {parseFloat(line.discount) > 0 ? (
+                                <>
+                                  <p>{parseFloat(line.discountPercent || "0").toFixed(1)}%</p>
+                                  <p className="text-muted-foreground">€{parseFloat(line.discount).toFixed(2)}</p>
+                                </>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
+                              )}
                             </div>
                           ) : (
-                            <div className="flex items-center gap-1">
-                              <div className="relative flex-1">
+                            <div className="space-y-1.5">
+                              <div className="relative">
                                 <Input
                                   type="text"
                                   inputMode="decimal"
-                                  placeholder="%"
-                                  value={line.discountPercent === "0" ? "" : line.discountPercent}
+                                  placeholder="0"
+                                  value={line.discountPercent === "0" || line.discountPercent === "0.00" ? "" : line.discountPercent}
                                   onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discountPercent", v || "0"); }}
-                                  className="pr-6"
+                                  className="pr-6 h-8 text-sm"
                                   data-testid={`input-line-disc-pct-${idx}`}
                                 />
                                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">%</span>
                               </div>
-                              <div className="relative flex-1">
+                              <div className="relative">
                                 <Input
                                   type="text"
                                   inputMode="decimal"
-                                  placeholder="€"
-                                  value={line.discount === "0" ? "" : line.discount}
+                                  placeholder="0.00"
+                                  value={line.discount === "0" || line.discount === "0.00" ? "" : line.discount}
                                   onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discount", v || "0"); }}
-                                  className="pr-6"
+                                  className="pr-6 h-8 text-sm"
                                   data-testid={`input-line-disc-amt-${idx}`}
                                 />
                                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">€</span>
