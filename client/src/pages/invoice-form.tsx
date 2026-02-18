@@ -611,10 +611,11 @@ export default function InvoiceForm() {
                         </TableCell>
                         <TableCell>
                           <Input
-                            type="number"
-                            min={1}
-                            value={line.quantity}
-                            onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) ? 1 : Math.max(1, v)); }}
+                            type="text"
+                            inputMode="numeric"
+                            value={line.quantity === 0 ? "" : line.quantity}
+                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
+                            onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                             disabled={isViewMode}
                             data-testid={`input-line-qty-${idx}`}
                           />
@@ -753,10 +754,11 @@ export default function InvoiceForm() {
                       <div>
                         <Label className="text-xs text-muted-foreground">Qty</Label>
                         <Input
-                          type="number"
-                          min={1}
-                          value={line.quantity}
-                          onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) ? 1 : Math.max(1, v)); }}
+                          type="text"
+                          inputMode="numeric"
+                          value={line.quantity === 0 ? "" : line.quantity}
+                          onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
+                          onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                           disabled={isViewMode}
                         />
                       </div>
