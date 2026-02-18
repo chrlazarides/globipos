@@ -9,13 +9,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { PageHeader } from "@/components/page-header";
-import { Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2 } from "lucide-react";
+import { Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags } from "lucide-react";
 import type { SystemSetting } from "@shared/schema";
 
 const groupIcons: Record<string, any> = {
   company: Building2,
   tax: Globe,
   invoicing: Receipt,
+  pricing: Tags,
   inventory: Package,
   portal: Settings2,
 };
@@ -24,9 +25,12 @@ const groupLabels: Record<string, string> = {
   company: "Company Information",
   tax: "Tax & Currency",
   invoicing: "Invoicing",
+  pricing: "Price Level Names",
   inventory: "Inventory",
   portal: "Customer Portal",
 };
+
+const groupOrder = ["company", "tax", "invoicing", "pricing", "inventory", "portal"];
 
 export default function SettingsPage() {
   const [values, setValues] = useState<Record<string, string>>({});
@@ -195,7 +199,8 @@ export default function SettingsPage() {
         </Card>
       ) : (
         <div className="space-y-6">
-          {Object.entries(grouped).map(([group, groupSettings]) => {
+          {groupOrder.filter(g => grouped[g]).concat(Object.keys(grouped).filter(g => !groupOrder.includes(g))).map((group) => {
+            const groupSettings = grouped[group];
             const Icon = groupIcons[group] || Settings2;
             return (
               <Card key={group}>

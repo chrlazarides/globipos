@@ -18,6 +18,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertItemSchema, insertCategorySchema, type Item, type Category } from "@shared/schema";
 import { ImportDialog } from "@/components/import-dialog";
+import { usePriceLevels } from "@/hooks/use-price-levels";
 import { z } from "zod";
 
 const itemImportFields = [
@@ -64,6 +65,7 @@ export default function Items() {
 
   const { data: items = [], isLoading: itemsLoading } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
+  const priceLevelNames = usePriceLevels();
 
   const createItem = useMutation({
     mutationFn: async (data: z.infer<typeof itemFormSchema>) => {
@@ -157,7 +159,7 @@ export default function Items() {
     },
     {
       key: "price",
-      header: "Price L1",
+      header: priceLevelNames[0],
       cell: (row) => <span className="text-sm font-medium">€{parseFloat(row.price1).toFixed(2)}</span>,
     },
     {
@@ -213,7 +215,7 @@ export default function Items() {
                 <DialogHeader>
                   <DialogTitle>New Item</DialogTitle>
                 </DialogHeader>
-                <ItemForm onSubmit={(d) => createItem.mutate(d)} isPending={createItem.isPending} categories={categories} />
+                <ItemForm onSubmit={(d) => createItem.mutate(d)} isPending={createItem.isPending} categories={categories} priceLevelNames={priceLevelNames} />
               </DialogContent>
             </Dialog>
           </div>
@@ -269,6 +271,7 @@ export default function Items() {
               onSubmit={(d) => updateItem.mutate(d)}
               isPending={updateItem.isPending}
               categories={categories}
+              priceLevelNames={priceLevelNames}
               defaultValues={{
                 name: editingItem.name,
                 sku: editingItem.sku,
@@ -300,7 +303,7 @@ export default function Items() {
   );
 }
 
-function ItemForm({ onSubmit, isPending, categories, defaultValues }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any }) {
+function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNames }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any; priceLevelNames: string[] }) {
   const isEditing = !!defaultValues;
   const form = useForm({
     resolver: zodResolver(itemFormSchema),
@@ -441,7 +444,7 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues }: { onSubmit
               {[1, 2, 3, 4, 5].map((level) => (
                 <FormField key={level} control={form.control} name={`price${level}` as any} render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Price Level {level}</FormLabel>
+                    <FormLabel>{priceLevelNames[level - 1] || `Price Level ${level}`}</FormLabel>
                     <FormControl><Input type="number" step="0.01" {...field} data-testid={`input-price-${level}`} /></FormControl>
                     <FormMessage />
                   </FormItem>

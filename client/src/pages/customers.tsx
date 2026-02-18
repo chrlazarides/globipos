@@ -17,6 +17,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertCustomerSchema, type Customer } from "@shared/schema";
 import { ImportDialog } from "@/components/import-dialog";
+import { usePriceLevels } from "@/hooks/use-price-levels";
 import { z } from "zod";
 
 const customerImportFields = [
@@ -48,6 +49,7 @@ export default function Customers() {
   const { toast } = useToast();
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+  const priceLevelNames = usePriceLevels();
 
   const createCustomer = useMutation({
     mutationFn: async (data: z.infer<typeof customerFormSchema>) => {
@@ -115,7 +117,7 @@ export default function Customers() {
     {
       key: "priceLevel",
       header: "Price Level",
-      cell: (row) => <Badge variant="outline">Level {row.priceLevel}</Badge>,
+      cell: (row) => <Badge variant="outline">{priceLevelNames[row.priceLevel - 1] || `Level ${row.priceLevel}`}</Badge>,
     },
     {
       key: "balance",
@@ -157,7 +159,7 @@ export default function Customers() {
                 <DialogHeader>
                   <DialogTitle>New Customer</DialogTitle>
                 </DialogHeader>
-                <CustomerForm onSubmit={(d) => createCustomer.mutate(d)} isPending={createCustomer.isPending} />
+                <CustomerForm onSubmit={(d) => createCustomer.mutate(d)} isPending={createCustomer.isPending} priceLevelNames={priceLevelNames} />
               </DialogContent>
             </Dialog>
           </div>
@@ -193,6 +195,7 @@ export default function Customers() {
             <CustomerForm
               onSubmit={(d) => updateCustomer.mutate(d)}
               isPending={updateCustomer.isPending}
+              priceLevelNames={priceLevelNames}
               defaultValues={{
                 name: editingCustomer.name,
                 code: editingCustomer.code,
@@ -216,7 +219,7 @@ export default function Customers() {
   );
 }
 
-function CustomerForm({ onSubmit, isPending, defaultValues }: { onSubmit: (d: any) => void; isPending: boolean; defaultValues?: any }) {
+function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: { onSubmit: (d: any) => void; isPending: boolean; defaultValues?: any; priceLevelNames: string[] }) {
   const form = useForm({
     resolver: zodResolver(customerFormSchema),
     defaultValues: defaultValues || {
@@ -323,7 +326,7 @@ function CustomerForm({ onSubmit, isPending, defaultValues }: { onSubmit: (d: an
                 </FormControl>
                 <SelectContent>
                   {[1, 2, 3, 4, 5].map((l) => (
-                    <SelectItem key={l} value={String(l)}>Level {l}</SelectItem>
+                    <SelectItem key={l} value={String(l)}>{priceLevelNames[l - 1] || `Level ${l}`}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

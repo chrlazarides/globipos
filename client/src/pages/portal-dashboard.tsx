@@ -4,6 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CreditCard, FileText, Receipt, TrendingUp } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
+import { usePriceLevels } from "@/hooks/use-price-levels";
 import type { Customer } from "@shared/schema";
 
 interface PortalDashboardProps {
@@ -11,6 +12,7 @@ interface PortalDashboardProps {
 }
 
 export default function PortalDashboard({ customer }: PortalDashboardProps) {
+  const priceLevelNames = usePriceLevels();
   const { data: statement, isLoading: loadingStatement } = useQuery<any>({
     queryKey: ["/api/portal/customer", customer.id, "statement"],
   });
@@ -112,7 +114,7 @@ export default function PortalDashboard({ customer }: PortalDashboardProps) {
             </div>
             <div className="flex justify-between gap-2 text-sm">
               <span className="text-muted-foreground">Price Level</span>
-              <span className="font-medium">Level {customer.priceLevel}</span>
+              <span className="font-medium">{priceLevelNames[customer.priceLevel - 1] || `Level ${customer.priceLevel}`}</span>
             </div>
             {customer.email && (
               <div className="flex justify-between gap-2 text-sm">

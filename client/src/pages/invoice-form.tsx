@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Plus, Trash2, ScanBarcode, Download } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { usePriceLevels } from "@/hooks/use-price-levels";
 import { useToast } from "@/hooks/use-toast";
 import { BarcodeScanner } from "@/components/barcode-scanner";
 import type { Customer, Item, Invoice, InvoiceItem } from "@shared/schema";
@@ -60,6 +61,7 @@ export default function InvoiceForm() {
 
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
+  const priceLevelNames = usePriceLevels();
   const { data: existingInvoice } = useQuery<Invoice & { items: InvoiceItem[] }>({
     queryKey: ["/api/invoices", invoiceId],
     enabled: !!invoiceId,
@@ -504,7 +506,7 @@ export default function InvoiceForm() {
                       {customer.address && <p className="text-xs text-muted-foreground">{customer.address}</p>}
                       <div className="flex gap-2 flex-wrap">
                         <Badge variant="secondary">{customer.paymentTerms}</Badge>
-                        <Badge variant="outline">Level {customer.priceLevel}</Badge>
+                        <Badge variant="outline">{priceLevelNames[customer.priceLevel - 1] || `Level ${customer.priceLevel}`}</Badge>
                       </div>
                     </>
                   );
