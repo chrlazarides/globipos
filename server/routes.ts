@@ -46,6 +46,12 @@ export async function registerRoutes(
     res.json(allItems);
   });
 
+  app.get("/api/items/brands", async (_req, res) => {
+    const allItems = await storage.getItems();
+    const brands = [...new Set(allItems.map(i => i.brand).filter(Boolean))].sort();
+    res.json(brands);
+  });
+
   app.get("/api/items/:id", async (req, res) => {
     const item = await storage.getItem(req.params.id);
     if (!item) return res.status(404).json({ message: "Item not found" });

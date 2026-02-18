@@ -11,17 +11,23 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Tag, Pencil } from "lucide-react";
+import { Plus, Tag, Pencil, X } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { insertPriceContractSchema, type PriceContract, type Customer, type Category } from "@shared/schema";
+import { type PriceContract, type Customer, type Category } from "@shared/schema";
 import { z } from "zod";
 
-const contractFormSchema = insertPriceContractSchema.extend({
+const contractFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
   customerId: z.string().min(1, "Customer is required"),
   startDate: z.string().min(1, "Start date required"),
   endDate: z.string().min(1, "End date required"),
+  discountType: z.string().default("percentage"),
+  discountValue: z.string().default("0"),
+  categoryIds: z.array(z.string()).default([]),
+  brands: z.array(z.string()).default([]),
+  minQuantity: z.number().default(0),
+  active: z.boolean().default(true),
 });
 
 interface PriceContractWithCustomer extends PriceContract {
@@ -37,6 +43,7 @@ export default function Pricing() {
   const { data: contracts = [], isLoading } = useQuery<PriceContractWithCustomer[]>({ queryKey: ["/api/price-contracts"] });
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
+  const { data: allBrands = [] } = useQuery<string[]>({ queryKey: ["/api/items/brands"] });
 
   const createContract = useMutation({
     mutationFn: async (data: z.infer<typeof contractFormSchema>) => {
@@ -90,11 +97,21 @@ export default function Pricing() {
       key: "scope",
       header: "Applies To",
       cell: (row) => {
-        const cat = categories.find((c) => c.id === row.categoryId);
-        const parts: string[] = [];
-        if (cat) parts.push(cat.name);
-        if (row.brand) parts.push(row.brand);
-        return <span className="text-sm">{parts.length > 0 ? parts.join(" / ") : "All Items"}</span>;
+        const catIds = row.categoryIds?.length ? row.categoryIds : (row.categoryId ? [row.categoryId] : []);
+        const brandList = row.brands?.length ? row.brands : (row.brand ? [row.brand] : []);
+        const catNames = catIds.map(id => categories.find(c => c.id === id)?.name).filter(Boolean);
+        const parts: string[] = [...catNames as string[], ...brandList];
+        if (parts.length === 0) return <span className="text-sm text-muted-foreground">All Items</span>;
+        return (
+          <div className="flex flex-wrap gap-1">
+            {catNames.map((name, i) => (
+              <Badge key={`cat-${i}`} variant="secondary">{name}</Badge>
+            ))}
+            {brandList.map((b, i) => (
+              <Badge key={`brand-${i}`} variant="outline">{b}</Badge>
+            ))}
+          </div>
+        );
       },
     },
     {
@@ -157,7 +174,7 @@ export default function Pricing() {
             </DialogTrigger>
             <DialogContent>
               <DialogHeader><DialogTitle>New Price Contract</DialogTitle></DialogHeader>
-              <ContractForm onSubmit={(d) => createContract.mutate(d)} isPending={createContract.isPending} customers={customers} categories={categories} />
+              <ContractForm onSubmit={(d) => createContract.mutate(d)} isPending={createContract.isPending} customers={customers} categories={categories} allBrands={allBrands} />
             </DialogContent>
           </Dialog>
         }
@@ -174,10 +191,12 @@ export default function Pricing() {
           <DialogHeader><DialogTitle>Edit Price Contract</DialogTitle></DialogHeader>
           {editingContract && (
             <ContractForm
+              key={editingContract.id}
               onSubmit={(d) => updateContract.mutate(d)}
               isPending={updateContract.isPending}
               customers={customers}
               categories={categories}
+              allBrands={allBrands}
               defaultValues={{
                 name: editingContract.name,
                 customerId: editingContract.customerId,
@@ -186,8 +205,8 @@ export default function Pricing() {
                 discountType: editingContract.discountType,
                 discountValue: editingContract.discountValue,
                 minQuantity: editingContract.minQuantity || 0,
-                categoryId: editingContract.categoryId || "",
-                brand: editingContract.brand || "",
+                categoryIds: editingContract.categoryIds?.length ? editingContract.categoryIds : (editingContract.categoryId ? [editingContract.categoryId] : []),
+                brands: editingContract.brands?.length ? editingContract.brands : (editingContract.brand ? [editingContract.brand] : []),
                 active: editingContract.active,
               }}
             />
@@ -198,13 +217,76 @@ export default function Pricing() {
   );
 }
 
-function ContractForm({ onSubmit, isPending, customers, categories, defaultValues }: { onSubmit: (d: any) => void; isPending: boolean; customers: Customer[]; categories: Category[]; defaultValues?: any }) {
+function MultiSelect({ options, selected, onChange, label, renderOption }: {
+  options: { value: string; label: string }[];
+  selected: string[];
+  onChange: (vals: string[]) => void;
+  label: string;
+  renderOption?: (opt: { value: string; label: string }) => string;
+}) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  const toggle = (val: string) => {
+    if (selected.includes(val)) {
+      onChange(selected.filter(v => v !== val));
+    } else {
+      onChange([...selected, val]);
+    }
+  };
+
+  const remove = (val: string) => {
+    onChange(selected.filter(v => v !== val));
+  };
+
+  const getLabel = (val: string) => {
+    const opt = options.find(o => o.value === val);
+    return opt ? (renderOption ? renderOption(opt) : opt.label) : val;
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1 min-h-[2rem]">
+        {selected.map(val => (
+          <Badge key={val} variant="secondary" className="gap-1">
+            {getLabel(val)}
+            <button type="button" onClick={() => remove(val)} className="ml-0.5 hover:text-destructive">
+              <X className="w-3 h-3" />
+            </button>
+          </Badge>
+        ))}
+        {selected.length === 0 && <span className="text-sm text-muted-foreground py-1">All {label}</span>}
+      </div>
+      <Select value="__trigger__" onValueChange={(val) => { if (val !== "__trigger__") toggle(val); }}>
+        <SelectTrigger data-testid={`select-multi-${label.toLowerCase().replace(/\s/g, "-")}`}>
+          <SelectValue placeholder={`Add ${label}...`} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.filter(o => !selected.includes(o.value)).map(opt => (
+            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+          ))}
+          {options.filter(o => !selected.includes(o.value)).length === 0 && (
+            <div className="px-2 py-1.5 text-sm text-muted-foreground">No more options</div>
+          )}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function ContractForm({ onSubmit, isPending, customers, categories, allBrands, defaultValues }: {
+  onSubmit: (d: any) => void;
+  isPending: boolean;
+  customers: Customer[];
+  categories: Category[];
+  allBrands: string[];
+  defaultValues?: any;
+}) {
   const form = useForm({
     resolver: zodResolver(contractFormSchema),
     defaultValues: defaultValues || {
       name: "", customerId: "", startDate: new Date().toISOString().split("T")[0],
       endDate: "", discountType: "percentage", discountValue: "0", minQuantity: 0,
-      categoryId: "", brand: "", active: true,
+      categoryIds: [] as string[], brands: [] as string[], active: true,
     },
   });
 
@@ -237,29 +319,27 @@ function ContractForm({ onSubmit, isPending, customers, categories, defaultValue
           </FormItem>
         )} />
         <div className="grid grid-cols-2 gap-4">
-          <FormField control={form.control} name="categoryId" render={({ field }) => (
+          <FormField control={form.control} name="categoryIds" render={({ field }) => (
             <FormItem>
-              <FormLabel>Category (optional)</FormLabel>
-              <Select value={field.value || "__all__"} onValueChange={(v) => field.onChange(v === "__all__" ? "" : v)}>
-                <FormControl>
-                  <SelectTrigger data-testid="select-contract-category">
-                    <SelectValue placeholder="All categories" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectItem value="__all__">All Categories</SelectItem>
-                  {categories.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <FormLabel>Categories (optional)</FormLabel>
+              <MultiSelect
+                options={categories.map(c => ({ value: c.id, label: c.name }))}
+                selected={field.value || []}
+                onChange={field.onChange}
+                label="Categories"
+              />
               <FormMessage />
             </FormItem>
           )} />
-          <FormField control={form.control} name="brand" render={({ field }) => (
+          <FormField control={form.control} name="brands" render={({ field }) => (
             <FormItem>
-              <FormLabel>Brand / Producer (optional)</FormLabel>
-              <FormControl><Input {...field} value={field.value || ""} placeholder="e.g. Macallan" data-testid="input-contract-brand" /></FormControl>
+              <FormLabel>Brands / Producers (optional)</FormLabel>
+              <MultiSelect
+                options={allBrands.map(b => ({ value: b, label: b }))}
+                selected={field.value || []}
+                onChange={field.onChange}
+                label="Brands"
+              />
               <FormMessage />
             </FormItem>
           )} />
