@@ -1,4 +1,5 @@
-import sgMail from '@sendgrid/mail';
+// Resend integration for sending emails
+import { Resend } from 'resend';
 
 let connectionSettings: any;
 
@@ -15,7 +16,7 @@ async function getCredentials() {
   }
 
   connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=sendgrid',
+    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=resend',
     {
       headers: {
         'Accept': 'application/json',
@@ -24,27 +25,26 @@ async function getCredentials() {
     }
   ).then(res => res.json()).then(data => data.items?.[0]);
 
-  if (!connectionSettings || (!connectionSettings.settings.api_key || !connectionSettings.settings.from_email)) {
-    throw new Error('SendGrid not connected');
+  if (!connectionSettings || !connectionSettings.settings.api_key) {
+    throw new Error('Resend not connected');
   }
-  return { apiKey: connectionSettings.settings.api_key, email: connectionSettings.settings.from_email };
+  return { apiKey: connectionSettings.settings.api_key, fromEmail: connectionSettings.settings.from_email };
 }
 
-// SendGrid integration - always get fresh client
-export async function getUncachableSendGridClient() {
-  const { apiKey, email } = await getCredentials();
-  sgMail.setApiKey(apiKey);
+// WARNING: Never cache this client - always get fresh credentials
+async function getUncachableResendClient() {
+  const { apiKey, fromEmail } = await getCredentials();
   return {
-    client: sgMail,
-    fromEmail: email
+    client: new Resend(apiKey),
+    fromEmail: fromEmail || 'onboarding@resend.dev'
   };
 }
 
 export async function sendInvoiceEmail(toEmail: string, subject: string, htmlContent: string): Promise<{ success: boolean; fromEmail: string; error?: string }> {
   try {
-    const { client, fromEmail } = await getUncachableSendGridClient();
+    const { client, fromEmail } = await getUncachableResendClient();
 
-    await client.send({
+    await client.emails.send({
       to: toEmail,
       from: fromEmail,
       subject: subject,
@@ -53,7 +53,7 @@ export async function sendInvoiceEmail(toEmail: string, subject: string, htmlCon
 
     return { success: true, fromEmail };
   } catch (error: any) {
-    console.error('SendGrid error:', error?.response?.body || error.message);
-    return { success: false, fromEmail: '', error: error?.response?.body?.errors?.[0]?.message || error.message };
+    console.error('Resend error:', error?.message || error);
+    return { success: false, fromEmail: '', error: error?.message || 'Failed to send email' };
   }
 }
