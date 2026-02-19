@@ -82,3 +82,8 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-02-18: Stock now tracked per bottle with pack equivalent display
 - 2026-02-18: Sales invoices/credit notes now affect stock levels per bottle
 - 2026-02-18: Initial MVP build with full schema, frontend, and backend
+- 2026-02-19: Email sending via SendGrid integration for invoice documents
+- 2026-02-19: Email log table and page (/email-logs) tracking all sent emails
+- 2026-02-19: "Send" button on invoice view mode to email document to customer
+- 2026-02-19: Email column added to customers list table
+- 2026-02-19: API routes: POST /api/invoices/:id/send-email, GET /api/email-logs, GET /api/email-logs/customer/:customerId

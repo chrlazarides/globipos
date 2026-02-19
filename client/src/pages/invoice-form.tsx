@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { useToast } from "@/hooks/use-toast";
@@ -413,6 +413,18 @@ export default function InvoiceForm() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const sendEmail = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/invoices/${invoiceId}/send-email`, {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Email Sent", description: data.message });
+      queryClient.invalidateQueries({ queryKey: ["/api/email-logs"] });
+    },
+    onError: (e: Error) => toast({ title: "Email Failed", description: e.message, variant: "destructive" }),
+  });
+
   const openDocument = (mode: "view" | "print") => {
     const url = mode === "print"
       ? `/api/invoices/${invoiceId}/pdf?print=1`
@@ -460,6 +472,15 @@ export default function InvoiceForm() {
                 </Button>
                 <Button variant="outline" onClick={downloadDocument} data-testid="button-download-pdf">
                   <Download className="w-4 h-4 sm:mr-1" /> <span className="hidden sm:inline">Download</span>
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => sendEmail.mutate()}
+                  disabled={sendEmail.isPending || !selectedCustomer?.email || !invoiceId}
+                  data-testid="button-send-email"
+                >
+                  {sendEmail.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Send className="w-4 h-4 sm:mr-1" />}
+                  <span className="hidden sm:inline">{sendEmail.isPending ? "Sending..." : "Send"}</span>
                 </Button>
                 <Button onClick={() => navigate(`/invoices/${invoiceId}/edit`)} data-testid="button-edit-invoice">Edit</Button>
               </>

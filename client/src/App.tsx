@@ -21,6 +21,7 @@ import Suppliers from "@/pages/suppliers";
 import PurchaseInvoices from "@/pages/purchase-invoices";
 import SupplierPaymentsPage from "@/pages/supplier-payments";
 import ImportData from "@/pages/import-data";
+import EmailLogs from "@/pages/email-logs";
 import PortalLogin from "@/pages/portal-login";
 import PortalLayout from "@/pages/portal-layout";
 import type { Customer } from "@shared/schema";
@@ -44,6 +45,7 @@ function AdminRouter() {
       <Route path="/pricing" component={Pricing} />
       <Route path="/offers" component={Offers} />
       <Route path="/reports" component={Reports} />
+      <Route path="/email-logs" component={EmailLogs} />
       <Route path="/import" component={ImportData} />
       <Route path="/settings" component={SettingsPage} />
       <Route component={NotFound} />

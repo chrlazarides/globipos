@@ -5,6 +5,7 @@ import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPri
 import { z } from "zod";
 import multer from "multer";
 import * as XLSX from "xlsx";
+import { sendInvoiceEmail } from "./email";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -527,6 +528,72 @@ export async function registerRoutes(
         res.setHeader("Content-Disposition", `attachment; filename="${inv.invoiceNumber}.html"`);
       }
       res.send(html);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Send invoice by email
+  const sendEmailBodySchema = z.object({ email: z.string().email().optional() }).optional();
+  app.post("/api/invoices/:id/send-email", async (req, res) => {
+    try {
+      const body = sendEmailBodySchema.parse(req.body);
+      const inv = await storage.getInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+
+      const customer = await storage.getCustomer(inv.customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const toEmail = body?.email || customer.email;
+      if (!toEmail) return res.status(400).json({ message: "Customer has no email address" });
+
+      const typeLabel = inv.type === "credit_note" ? "CREDIT NOTE" : inv.type === "proforma" ? "PROFORMA INVOICE" : inv.type === "quotation" ? "QUOTATION" : "INVOICE";
+
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const companyName = settingsMap.company_name || "VinTrade";
+      const subject = `${typeLabel} ${inv.invoiceNumber} from ${companyName}`;
+      const html = generateInvoiceHtml(inv, customer, typeLabel, false, settingsMap);
+
+      const result = await sendInvoiceEmail(toEmail, subject, html);
+
+      await storage.createEmailLog({
+        invoiceId: inv.id,
+        customerId: customer.id,
+        customerName: customer.name,
+        toEmail: toEmail,
+        fromEmail: result.fromEmail || null,
+        subject: subject,
+        status: result.success ? "sent" : "failed",
+        errorMessage: result.error || null,
+      });
+
+      if (result.success) {
+        res.json({ message: `Email sent successfully to ${toEmail}` });
+      } else {
+        res.status(500).json({ message: `Failed to send email: ${result.error}` });
+      }
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Email logs
+  app.get("/api/email-logs", async (_req, res) => {
+    try {
+      const logs = await storage.getEmailLogs();
+      res.json(logs);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/email-logs/customer/:customerId", async (req, res) => {
+    try {
+      const logs = await storage.getEmailLogsByCustomer(req.params.customerId);
+      res.json(logs);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

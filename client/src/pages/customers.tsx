@@ -108,6 +108,7 @@ export default function Customers() {
         </div>
       ),
     },
+    { key: "email", header: "Email", cell: (row) => <span className="text-sm text-muted-foreground">{row.email || "-"}</span> },
     { key: "city", header: "City", cell: (row) => <span className="text-sm">{row.city || "-"}</span> },
     {
       key: "terms",

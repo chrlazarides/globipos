@@ -245,6 +245,19 @@ export const supplierPayments = pgTable("supplier_payments", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const emailLogs = pgTable("email_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id"),
+  customerId: varchar("customer_id"),
+  customerName: text("customer_name"),
+  toEmail: text("to_email").notNull(),
+  fromEmail: text("from_email"),
+  subject: text("subject").notNull(),
+  status: text("status").notNull().default("sent"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).pick({ username: true, password: true });
 export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
@@ -265,6 +278,7 @@ export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: tru
 export const insertPurchaseInvoiceSchema = createInsertSchema(purchaseInvoices).omit({ id: true, createdAt: true });
 export const insertPurchaseInvoiceItemSchema = createInsertSchema(purchaseInvoiceItems).omit({ id: true });
 export const insertSupplierPaymentSchema = createInsertSchema(supplierPayments).omit({ id: true, createdAt: true });
+export const insertEmailLogSchema = createInsertSchema(emailLogs).omit({ id: true, createdAt: true });
 
 // Types
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -305,3 +319,5 @@ export type InsertPurchaseInvoiceItem = z.infer<typeof insertPurchaseInvoiceItem
 export type PurchaseInvoiceItem = typeof purchaseInvoiceItems.$inferSelect;
 export type InsertSupplierPayment = z.infer<typeof insertSupplierPaymentSchema>;
 export type SupplierPayment = typeof supplierPayments.$inferSelect;
+export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
+export type EmailLog = typeof emailLogs.$inferSelect;

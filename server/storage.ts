@@ -5,6 +5,7 @@ import {
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
+  emailLogs,
   type InsertUser, type User, type InsertCategory, type Category,
   type InsertItem, type Item, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
@@ -21,6 +22,7 @@ import {
   type InsertPurchaseInvoice, type PurchaseInvoice,
   type InsertPurchaseInvoiceItem, type PurchaseInvoiceItem,
   type InsertSupplierPayment, type SupplierPayment,
+  type InsertEmailLog, type EmailLog,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -90,6 +92,10 @@ export interface IStorage {
 
   getSupplierPayments(supplierId?: string): Promise<(SupplierPayment & { supplierName?: string })[]>;
   createSupplierPayment(data: InsertSupplierPayment): Promise<SupplierPayment>;
+
+  getEmailLogs(): Promise<EmailLog[]>;
+  getEmailLogsByCustomer(customerId: string): Promise<EmailLog[]>;
+  createEmailLog(data: InsertEmailLog): Promise<EmailLog>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -613,6 +619,19 @@ export class DatabaseStorage implements IStorage {
       }
     }
     return payment;
+  }
+
+  async getEmailLogs() {
+    return db.select().from(emailLogs).orderBy(desc(emailLogs.createdAt));
+  }
+
+  async getEmailLogsByCustomer(customerId: string) {
+    return db.select().from(emailLogs).where(eq(emailLogs.customerId, customerId)).orderBy(desc(emailLogs.createdAt));
+  }
+
+  async createEmailLog(data: InsertEmailLog) {
+    const [log] = await db.insert(emailLogs).values(data).returning();
+    return log;
   }
 }
 
