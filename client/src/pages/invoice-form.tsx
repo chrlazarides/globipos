@@ -588,8 +588,8 @@ export default function InvoiceForm() {
                     <TableRow>
                       <TableHead className="min-w-[200px]">Item</TableHead>
                       <TableHead className="w-[80px]">Qty</TableHead>
-                      <TableHead className="w-[110px]">Unit</TableHead>
-                      <TableHead className="w-[90px]">Price</TableHead>
+                      <TableHead className="w-[150px]">Unit</TableHead>
+                      <TableHead className="w-[130px]">Price</TableHead>
                       <TableHead className="w-[140px]">Discount</TableHead>
                       <TableHead className="w-[90px] text-right">Total</TableHead>
                       {!isViewMode && <TableHead className="w-[50px]" />}
