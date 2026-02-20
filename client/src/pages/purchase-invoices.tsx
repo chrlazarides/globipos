@@ -28,6 +28,8 @@ interface LineItem {
   quantity: number;
   purchaseUnit: string;
   unitCost: string;
+  discountPercent: string;
+  discount: string;
   vatRate: string;
   total: string;
 }
@@ -119,7 +121,7 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
 
   const addLine = () => {
-    setLineItems([...lineItems, { itemId: "", description: "", quantity: 1, purchaseUnit: "pc", unitCost: "0", vatRate: "19", total: "0" }]);
+    setLineItems([...lineItems, { itemId: "", description: "", quantity: 1, purchaseUnit: "pc", unitCost: "0", discountPercent: "0", discount: "0", vatRate: "19", total: "0" }]);
   };
 
   const updateLine = (index: number, field: keyof LineItem, value: any) => {
@@ -136,10 +138,29 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
       }
     }
 
-    if (["quantity", "unitCost"].includes(field)) {
+    if (field === "discountPercent") {
       const qty = parseFloat(String(updated[index].quantity)) || 0;
       const cost = parseFloat(updated[index].unitCost) || 0;
-      updated[index].total = (qty * cost).toFixed(2);
+      const gross = qty * cost;
+      const pct = parseFloat(value) || 0;
+      const discAmt = (gross * pct / 100);
+      updated[index].discount = discAmt.toFixed(2);
+      updated[index].total = (gross - discAmt).toFixed(2);
+    } else if (field === "discount") {
+      const qty = parseFloat(String(updated[index].quantity)) || 0;
+      const cost = parseFloat(updated[index].unitCost) || 0;
+      const gross = qty * cost;
+      const discAmt = parseFloat(value) || 0;
+      updated[index].discountPercent = gross > 0 ? ((discAmt / gross) * 100).toFixed(2) : "0";
+      updated[index].total = (gross - discAmt).toFixed(2);
+    } else if (["quantity", "unitCost"].includes(field)) {
+      const qty = parseFloat(String(updated[index].quantity)) || 0;
+      const cost = parseFloat(updated[index].unitCost) || 0;
+      const gross = qty * cost;
+      const pct = parseFloat(updated[index].discountPercent) || 0;
+      const discAmt = (gross * pct / 100);
+      updated[index].discount = discAmt.toFixed(2);
+      updated[index].total = (gross - discAmt).toFixed(2);
     }
 
     setLineItems(updated);
@@ -182,6 +203,8 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
           quantity: li.quantity,
           purchaseUnit: li.purchaseUnit,
           unitCost: li.unitCost,
+          discountPercent: li.discountPercent,
+          discount: li.discount,
           vatRate: li.vatRate,
           total: li.total,
           purchaseInvoiceId: "TEMP",
@@ -269,7 +292,7 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
                       </Button>
                     </div>
                     {stockInfo && <p className="text-xs text-muted-foreground">{stockInfo}</p>}
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-6 gap-2">
                       <div>
                         <label className="text-xs text-muted-foreground">Qty</label>
                         <Input type="number" min="1" value={li.quantity} onChange={e => updateLine(idx, "quantity", parseInt(e.target.value) || 0)} data-testid={`input-purchase-qty-${idx}`} />
@@ -289,6 +312,14 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
                       <div>
                         <label className="text-xs text-muted-foreground">Unit Cost</label>
                         <Input type="number" step="0.01" value={li.unitCost} onChange={e => updateLine(idx, "unitCost", e.target.value)} data-testid={`input-purchase-cost-${idx}`} />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Disc %</label>
+                        <Input type="number" step="0.01" value={li.discountPercent} onChange={e => updateLine(idx, "discountPercent", e.target.value)} data-testid={`input-purchase-disc-pct-${idx}`} />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Disc Amt</label>
+                        <Input type="number" step="0.01" value={li.discount} onChange={e => updateLine(idx, "discount", e.target.value)} data-testid={`input-purchase-disc-amt-${idx}`} />
                       </div>
                       <div>
                         <label className="text-xs text-muted-foreground">VAT %</label>
