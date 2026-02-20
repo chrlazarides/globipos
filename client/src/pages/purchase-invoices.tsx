@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
@@ -8,17 +8,18 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, ShoppingCart, Trash2, PackagePlus } from "lucide-react";
+import { Plus, ShoppingCart, Trash2, PackagePlus, Pencil } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Supplier, Item, PurchaseInvoice } from "@shared/schema";
-import { z } from "zod";
+import type { Supplier, Item, PurchaseInvoice, PurchaseInvoiceItem } from "@shared/schema";
 
 interface PurchaseInvoiceWithSupplier extends PurchaseInvoice {
+  supplierName: string;
+}
+
+interface PurchaseInvoiceDetail extends PurchaseInvoice {
+  items: PurchaseInvoiceItem[];
   supplierName: string;
 }
 
@@ -36,9 +37,20 @@ interface LineItem {
 
 export default function PurchaseInvoices() {
   const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const { toast } = useToast();
 
   const { data: invoices = [], isLoading } = useQuery<PurchaseInvoiceWithSupplier[]>({ queryKey: ["/api/purchase-invoices"] });
+
+  const handleEdit = (row: PurchaseInvoiceWithSupplier) => {
+    setEditingId(row.id);
+    setFormOpen(true);
+  };
+
+  const handleClose = () => {
+    setFormOpen(false);
+    setEditingId(null);
+  };
 
   const columns: Column<PurchaseInvoiceWithSupplier>[] = [
     {
@@ -80,6 +92,15 @@ export default function PurchaseInvoices() {
         </Badge>
       ),
     },
+    {
+      key: "actions",
+      header: "",
+      cell: (row) => (
+        <Button size="sm" variant="ghost" onClick={() => handleEdit(row)} data-testid={`button-edit-purchase-${row.id}`}>
+          <Pencil className="w-4 h-4" />
+        </Button>
+      ),
+    },
   ];
 
   return (
@@ -88,17 +109,26 @@ export default function PurchaseInvoices() {
         title="Purchase Invoices"
         description="Record purchases from suppliers to update stock"
         action={
-          <Dialog open={formOpen} onOpenChange={setFormOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-new-purchase"><Plus className="w-4 h-4 mr-1" /> New Purchase</Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader><DialogTitle>New Purchase Invoice</DialogTitle></DialogHeader>
-              <PurchaseInvoiceForm onSuccess={() => { setFormOpen(false); toast({ title: "Purchase invoice created, stock updated" }); }} />
-            </DialogContent>
-          </Dialog>
+          <Button onClick={() => { setEditingId(null); setFormOpen(true); }} data-testid="button-new-purchase">
+            <Plus className="w-4 h-4 mr-1" /> New Purchase
+          </Button>
         }
       />
+
+      <Dialog open={formOpen} onOpenChange={(open) => { if (!open) handleClose(); else setFormOpen(true); }}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingId ? "Edit Purchase Invoice" : "New Purchase Invoice"}</DialogTitle>
+          </DialogHeader>
+          <PurchaseInvoiceForm
+            editingId={editingId}
+            onSuccess={() => {
+              handleClose();
+              toast({ title: editingId ? "Purchase invoice updated" : "Purchase invoice created, stock updated" });
+            }}
+          />
+        </DialogContent>
+      </Dialog>
 
       <Card>
         <CardContent className="p-4">
@@ -109,16 +139,44 @@ export default function PurchaseInvoices() {
   );
 }
 
-function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
+function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | null; onSuccess: () => void }) {
   const { toast } = useToast();
   const { data: suppliers = [] } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
   const { data: allItems = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
+  const { data: existingInvoice } = useQuery<PurchaseInvoiceDetail>({
+    queryKey: ["/api/purchase-invoices", editingId],
+    enabled: !!editingId,
+  });
+
   const [supplierId, setSupplierId] = useState("");
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState("");
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (editingId && existingInvoice && !loaded) {
+      setSupplierId(existingInvoice.supplierId);
+      setSupplierInvoiceRef(existingInvoice.supplierInvoiceRef || "");
+      setDate(existingInvoice.date);
+      setDueDate(existingInvoice.dueDate || "");
+      setNotes(existingInvoice.notes || "");
+      setLineItems(existingInvoice.items.map(li => ({
+        itemId: li.itemId,
+        description: li.description,
+        quantity: li.quantity,
+        purchaseUnit: li.purchaseUnit,
+        unitCost: li.unitCost,
+        discountPercent: li.discountPercent || "0",
+        discount: li.discount || "0",
+        vatRate: li.vatRate,
+        total: li.total,
+      })));
+      setLoaded(true);
+    }
+  }, [editingId, existingInvoice, loaded]);
 
   const addLine = () => {
     setLineItems([...lineItems, { itemId: "", description: "", quantity: 1, purchaseUnit: "pc", unitCost: "0", discountPercent: "0", discount: "0", vatRate: "19", total: "0" }]);
@@ -178,7 +236,7 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
   }, 0);
   const total = subtotal + vatAmount;
 
-  const createMutation = useMutation({
+  const saveMutation = useMutation({
     mutationFn: async () => {
       if (!supplierId) throw new Error("Select a supplier");
       if (lineItems.length === 0) throw new Error("Add at least one item");
@@ -186,7 +244,7 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
         if (!li.itemId) throw new Error("Select an item for each line");
       }
 
-      const res = await apiRequest("POST", "/api/purchase-invoices", {
+      const payload = {
         supplierId,
         supplierInvoiceRef: supplierInvoiceRef || null,
         date,
@@ -196,7 +254,7 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
         total: total.toFixed(2),
         status: "confirmed",
         notes: notes || null,
-        invoiceNumber: "TEMP",
+        invoiceNumber: editingId ? existingInvoice?.invoiceNumber || "TEMP" : "TEMP",
         items: lineItems.map(li => ({
           itemId: li.itemId,
           description: li.description,
@@ -207,10 +265,17 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
           discount: li.discount,
           vatRate: li.vatRate,
           total: li.total,
-          purchaseInvoiceId: "TEMP",
+          purchaseInvoiceId: editingId || "TEMP",
         })),
-      });
-      return res.json();
+      };
+
+      if (editingId) {
+        const res = await apiRequest("PUT", `/api/purchase-invoices/${editingId}`, payload);
+        return res.json();
+      } else {
+        const res = await apiRequest("POST", "/api/purchase-invoices", payload);
+        return res.json();
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/purchase-invoices"] });
@@ -221,6 +286,10 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  if (editingId && !existingInvoice) {
+    return <div className="text-center py-8 text-muted-foreground">Loading...</div>;
+  }
 
   return (
     <div className="space-y-4">
@@ -361,8 +430,8 @@ function PurchaseInvoiceForm({ onSuccess }: { onSuccess: () => void }) {
       </Card>
 
       <div className="flex justify-end">
-        <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending} data-testid="button-save-purchase">
-          {createMutation.isPending ? "Saving..." : "Save & Update Stock"}
+        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-purchase">
+          {saveMutation.isPending ? "Saving..." : editingId ? "Update Invoice" : "Save & Update Stock"}
         </Button>
       </div>
     </div>

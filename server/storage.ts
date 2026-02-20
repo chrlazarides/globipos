@@ -88,6 +88,9 @@ export interface IStorage {
   getPurchaseInvoices(): Promise<(PurchaseInvoice & { supplierName: string })[]>;
   getPurchaseInvoice(id: string): Promise<(PurchaseInvoice & { items: PurchaseInvoiceItem[]; supplierName: string }) | undefined>;
   createPurchaseInvoice(data: InsertPurchaseInvoice, lineItems: InsertPurchaseInvoiceItem[]): Promise<PurchaseInvoice>;
+  updatePurchaseInvoice(id: string, data: Partial<InsertPurchaseInvoice>): Promise<PurchaseInvoice | undefined>;
+  deletePurchaseInvoiceItems(purchaseInvoiceId: string): Promise<void>;
+  createPurchaseInvoiceItems(lineItems: InsertPurchaseInvoiceItem[]): Promise<void>;
   getNextPurchaseInvoiceNumber(): Promise<string>;
 
   getSupplierPayments(supplierId?: string): Promise<(SupplierPayment & { supplierName?: string })[]>;
@@ -582,6 +585,21 @@ export class DatabaseStorage implements IStorage {
       await db.insert(purchaseInvoiceItems).values(lineItems.map(li => ({ ...li, purchaseInvoiceId: inv.id })));
     }
     return inv;
+  }
+
+  async updatePurchaseInvoice(id: string, data: Partial<InsertPurchaseInvoice>) {
+    const [inv] = await db.update(purchaseInvoices).set(data).where(eq(purchaseInvoices.id, id)).returning();
+    return inv;
+  }
+
+  async deletePurchaseInvoiceItems(purchaseInvoiceId: string) {
+    await db.delete(purchaseInvoiceItems).where(eq(purchaseInvoiceItems.purchaseInvoiceId, purchaseInvoiceId));
+  }
+
+  async createPurchaseInvoiceItems(lineItems: InsertPurchaseInvoiceItem[]) {
+    if (lineItems.length > 0) {
+      await db.insert(purchaseInvoiceItems).values(lineItems);
+    }
   }
 
   async getSupplierPayments(supplierId?: string) {

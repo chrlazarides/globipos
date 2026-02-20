@@ -916,6 +916,64 @@ export async function registerRoutes(
     }
   });
 
+  app.put("/api/purchase-invoices/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const existing = await storage.getPurchaseInvoice(id);
+      if (!existing) return res.status(404).json({ message: "Purchase invoice not found" });
+
+      const { items: lineItems, ...invoiceData } = req.body;
+
+      // Reverse old stock impact
+      for (const oldItem of existing.items) {
+        const item = await storage.getItem(oldItem.itemId);
+        if (item) {
+          const bottlesToRemove = oldItem.purchaseUnit === "pack" ? oldItem.quantity * item.packSize : oldItem.quantity;
+          await storage.updateItem(item.id, { stockQuantity: Math.max(0, item.stockQuantity - bottlesToRemove) });
+        }
+      }
+
+      // Reverse old supplier balance impact
+      const oldSupplier = await storage.getSupplier(existing.supplierId);
+      if (oldSupplier) {
+        const oldBalance = parseFloat(oldSupplier.currentBalance) - parseFloat(existing.total);
+        await storage.updateSupplier(existing.supplierId, { currentBalance: Math.max(0, oldBalance).toFixed(2) });
+      }
+
+      // Update invoice header
+      const { invoiceNumber, ...updateData } = invoiceData;
+      await storage.updatePurchaseInvoice(id, updateData);
+
+      // Replace line items
+      await storage.deletePurchaseInvoiceItems(id);
+      if (lineItems?.length) {
+        const parsedItems = lineItems.map((li: any) => insertPurchaseInvoiceItemSchema.parse(li));
+        await storage.createPurchaseInvoiceItems(parsedItems.map((li: any) => ({ ...li, purchaseInvoiceId: id })));
+
+        // Apply new stock impact
+        for (const li of parsedItems) {
+          const item = await storage.getItem(li.itemId);
+          if (item) {
+            const bottlesToAdd = li.purchaseUnit === "pack" ? li.quantity * item.packSize : li.quantity;
+            await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
+          }
+        }
+      }
+
+      // Apply new supplier balance impact
+      const newSupplier = await storage.getSupplier(invoiceData.supplierId);
+      if (newSupplier) {
+        const newBalance = parseFloat(newSupplier.currentBalance) + parseFloat(String(invoiceData.total));
+        await storage.updateSupplier(invoiceData.supplierId, { currentBalance: newBalance.toFixed(2) });
+      }
+
+      const updated = await storage.getPurchaseInvoice(id);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Supplier Payments
   app.get("/api/supplier-payments", async (req, res) => {
     const supplierId = req.query.supplierId as string | undefined;
