@@ -92,6 +92,7 @@ export interface IStorage {
   deletePurchaseInvoiceItems(purchaseInvoiceId: string): Promise<void>;
   createPurchaseInvoiceItems(lineItems: InsertPurchaseInvoiceItem[]): Promise<void>;
   getNextPurchaseInvoiceNumber(): Promise<string>;
+  getLastPurchaseCosts(): Promise<Record<string, { unitCost: string; date: string }>>;
 
   getSupplierPayments(supplierId?: string): Promise<(SupplierPayment & { supplierName?: string })[]>;
   createSupplierPayment(data: InsertSupplierPayment): Promise<SupplierPayment>;
@@ -585,6 +586,24 @@ export class DatabaseStorage implements IStorage {
       await db.insert(purchaseInvoiceItems).values(lineItems.map(li => ({ ...li, purchaseInvoiceId: inv.id })));
     }
     return inv;
+  }
+
+  async getLastPurchaseCosts(): Promise<Record<string, { unitCost: string; date: string }>> {
+    const rows = await db.execute(sql`
+      SELECT DISTINCT ON (pii.item_id)
+        pii.item_id,
+        pii.unit_cost,
+        pi.date
+      FROM purchase_invoice_items pii
+      JOIN purchase_invoices pi ON pi.id = pii.purchase_invoice_id
+      ORDER BY pii.item_id, pi.date DESC, pi.created_at DESC
+    `);
+    const result: Record<string, { unitCost: string; date: string }> = {};
+    for (const row of rows.rows) {
+      const r = row as any;
+      result[r.item_id] = { unitCost: r.unit_cost, date: r.date };
+    }
+    return result;
   }
 
   async updatePurchaseInvoice(id: string, data: Partial<InsertPurchaseInvoice>) {

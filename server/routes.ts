@@ -878,6 +878,11 @@ export async function registerRoutes(
     res.json(invs);
   });
 
+  app.get("/api/purchase-invoices/last-costs", async (_req, res) => {
+    const costs = await storage.getLastPurchaseCosts();
+    res.json(costs);
+  });
+
   app.get("/api/purchase-invoices/:id", async (req, res) => {
     const inv = await storage.getPurchaseInvoice(req.params.id);
     if (!inv) return res.status(404).json({ message: "Purchase invoice not found" });

@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, ShoppingCart, Trash2, PackagePlus, Pencil } from "lucide-react";
+import { Plus, ShoppingCart, Trash2, PackagePlus, Pencil, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Supplier, Item, PurchaseInvoice, PurchaseInvoiceItem } from "@shared/schema";
@@ -147,6 +147,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
   const { toast } = useToast();
   const { data: suppliers = [] } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
   const { data: allItems = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
+  const { data: lastCosts = {} } = useQuery<Record<string, { unitCost: string; date: string }>>({ queryKey: ["/api/purchase-invoices/last-costs"] });
   const { data: existingInvoice } = useQuery<PurchaseInvoiceDetail>({
     queryKey: ["/api/purchase-invoices", editingId],
     enabled: !!editingId,
@@ -399,16 +400,37 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                         <Input type="number" step="0.01" value={li.vatRate} onChange={e => updateLine(idx, "vatRate", e.target.value)} data-testid={`input-purchase-vat-${idx}`} />
                       </div>
                     </div>
-                    {selectedItem && li.purchaseUnit === "pack" && li.quantity > 0 && (
-                      <p className="text-xs text-muted-foreground">
-                        +{li.quantity * selectedItem.packSize} btls ({li.quantity} x {selectedItem.packSize})
-                      </p>
-                    )}
-                    {selectedItem && li.purchaseUnit === "pc" && li.quantity > 0 && (
-                      <p className="text-xs text-muted-foreground">
-                        +{li.quantity} btl{li.quantity > 1 ? "s" : ""}
-                      </p>
-                    )}
+                    {selectedItem && li.quantity > 0 && (() => {
+                      const btls = li.purchaseUnit === "pack" ? li.quantity * selectedItem.packSize : li.quantity;
+                      const packInfo = li.purchaseUnit === "pack" ? ` (${li.quantity} x ${selectedItem.packSize})` : "";
+                      const lastCost = lastCosts[li.itemId];
+                      const currentCost = parseFloat(li.unitCost) || 0;
+                      const prevCost = lastCost ? parseFloat(lastCost.unitCost) : null;
+                      const variation = prevCost !== null && prevCost > 0 ? ((currentCost - prevCost) / prevCost) * 100 : null;
+
+                      return (
+                        <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
+                          <span className="text-muted-foreground">
+                            +{btls} btl{btls > 1 ? "s" : ""}{packInfo}
+                          </span>
+                          {lastCost && prevCost !== null && (
+                            <span className="flex items-center gap-1">
+                              <span className="text-muted-foreground">Last: {"\u20AC"}{prevCost.toFixed(2)}</span>
+                              {variation !== null && variation !== 0 ? (
+                                <span className={`flex items-center gap-0.5 font-medium ${variation > 0 ? "text-red-500" : "text-green-500"}`}>
+                                  {variation > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                                  {variation > 0 ? "+" : ""}{variation.toFixed(1)}%
+                                </span>
+                              ) : variation === 0 ? (
+                                <span className="flex items-center gap-0.5 text-muted-foreground">
+                                  <Minus className="w-3 h-3" /> 0%
+                                </span>
+                              ) : null}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="text-right text-sm font-medium">{"\u20AC"}{li.total}</div>
                   </div>
                 );
