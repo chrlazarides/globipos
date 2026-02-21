@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, ShoppingCart, Trash2, PackagePlus, Pencil } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -57,12 +57,13 @@ export default function PurchaseInvoices() {
       key: "invoiceNumber",
       header: "Invoice",
       cell: (row) => (
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="hidden sm:flex items-center justify-center w-8 h-8 rounded-md bg-primary/10">
             <ShoppingCart className="w-4 h-4 text-primary" />
           </div>
           <div>
             <p className="font-medium text-sm">{row.invoiceNumber}</p>
+            <p className="text-xs text-muted-foreground sm:hidden">{row.supplierName}</p>
             {row.supplierInvoiceRef && <p className="text-xs text-muted-foreground">Ref: {row.supplierInvoiceRef}</p>}
           </div>
         </div>
@@ -71,12 +72,14 @@ export default function PurchaseInvoices() {
     {
       key: "supplier",
       header: "Supplier",
-      cell: (row) => <span className="text-sm">{row.supplierName}</span>,
+      cell: (row) => <span className="text-sm hidden sm:inline">{row.supplierName}</span>,
+      className: "hidden sm:table-cell",
     },
     {
       key: "date",
       header: "Date",
       cell: (row) => <span className="text-sm">{new Date(row.date).toLocaleDateString()}</span>,
+      className: "hidden md:table-cell",
     },
     {
       key: "total",
@@ -91,6 +94,7 @@ export default function PurchaseInvoices() {
           {row.status}
         </Badge>
       ),
+      className: "hidden sm:table-cell",
     },
     {
       key: "actions",
@@ -104,19 +108,19 @@ export default function PurchaseInvoices() {
   ];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-6 space-y-4 sm:space-y-6">
       <PageHeader
         title="Purchase Invoices"
         description="Record purchases from suppliers to update stock"
         action={
           <Button onClick={() => { setEditingId(null); setFormOpen(true); }} data-testid="button-new-purchase">
-            <Plus className="w-4 h-4 mr-1" /> New Purchase
+            <Plus className="w-4 h-4 mr-1" /> <span className="hidden sm:inline">New Purchase</span><span className="sm:hidden">New</span>
           </Button>
         }
       />
 
       <Dialog open={formOpen} onOpenChange={(open) => { if (!open) handleClose(); else setFormOpen(true); }}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit Purchase Invoice" : "New Purchase Invoice"}</DialogTitle>
           </DialogHeader>
@@ -131,7 +135,7 @@ export default function PurchaseInvoices() {
       </Dialog>
 
       <Card>
-        <CardContent className="p-4">
+        <CardContent className="p-2 sm:p-4">
           <DataTable columns={columns} data={invoices} isLoading={isLoading} emptyMessage="No purchase invoices found" />
         </CardContent>
       </Card>
@@ -293,7 +297,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
         <div>
           <label className="text-sm font-medium">Supplier</label>
           <Select value={supplierId} onValueChange={setSupplierId}>
@@ -312,7 +316,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
           <Input value={supplierInvoiceRef} onChange={e => setSupplierInvoiceRef(e.target.value)} placeholder="Supplier's ref number" data-testid="input-supplier-ref" />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4">
         <div>
           <label className="text-sm font-medium">Date</label>
           <Input type="date" value={date} onChange={e => setDate(e.target.value)} data-testid="input-purchase-date" />
@@ -330,7 +334,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
             <PackagePlus className="w-4 h-4 mr-1" /> Add Item
           </Button>
         </CardHeader>
-        <CardContent className="p-3 pt-0">
+        <CardContent className="p-2 sm:p-3 pt-0">
           {lineItems.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-4">Click "Add Item" to add purchase lines</p>
           ) : (
@@ -342,9 +346,9 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                   : "";
 
                 return (
-                  <div key={idx} className="border rounded-md p-3 space-y-2">
+                  <div key={idx} className="border rounded-md p-2 sm:p-3 space-y-2">
                     <div className="flex items-center gap-2">
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         <Select value={li.itemId} onValueChange={(v) => updateLine(idx, "itemId", v)}>
                           <SelectTrigger data-testid={`select-purchase-item-${idx}`}>
                             <SelectValue placeholder="Select item" />
@@ -356,12 +360,12 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                           </SelectContent>
                         </Select>
                       </div>
-                      <Button size="icon" variant="ghost" onClick={() => removeLine(idx)} data-testid={`button-remove-line-${idx}`}>
+                      <Button size="icon" variant="ghost" className="shrink-0" onClick={() => removeLine(idx)} data-testid={`button-remove-line-${idx}`}>
                         <Trash2 className="w-4 h-4" />
                       </Button>
                     </div>
                     {stockInfo && <p className="text-xs text-muted-foreground">{stockInfo}</p>}
-                    <div className="grid grid-cols-6 gap-2">
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                       <div>
                         <label className="text-xs text-muted-foreground">Qty</label>
                         <Input type="number" min="1" value={li.quantity} onChange={e => updateLine(idx, "quantity", parseInt(e.target.value) || 0)} data-testid={`input-purchase-qty-${idx}`} />
@@ -373,13 +377,13 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="pc">Per Bottle</SelectItem>
-                            <SelectItem value="pack">Per Pack{selectedItem ? ` (${selectedItem.packSize})` : ""}</SelectItem>
+                            <SelectItem value="pc">Bottle</SelectItem>
+                            <SelectItem value="pack">Pack{selectedItem ? ` (${selectedItem.packSize})` : ""}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                       <div>
-                        <label className="text-xs text-muted-foreground">Unit Cost</label>
+                        <label className="text-xs text-muted-foreground">Cost</label>
                         <Input type="number" step="0.01" value={li.unitCost} onChange={e => updateLine(idx, "unitCost", e.target.value)} data-testid={`input-purchase-cost-${idx}`} />
                       </div>
                       <div>
@@ -397,12 +401,12 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                     </div>
                     {selectedItem && li.purchaseUnit === "pack" && li.quantity > 0 && (
                       <p className="text-xs text-muted-foreground">
-                        Will add {li.quantity * selectedItem.packSize} bottles to stock ({li.quantity} packs x {selectedItem.packSize} per pack)
+                        +{li.quantity * selectedItem.packSize} btls ({li.quantity} x {selectedItem.packSize})
                       </p>
                     )}
                     {selectedItem && li.purchaseUnit === "pc" && li.quantity > 0 && (
                       <p className="text-xs text-muted-foreground">
-                        Will add {li.quantity} bottle{li.quantity > 1 ? "s" : ""} to stock
+                        +{li.quantity} btl{li.quantity > 1 ? "s" : ""}
                       </p>
                     )}
                     <div className="text-right text-sm font-medium">{"\u20AC"}{li.total}</div>
@@ -420,17 +424,17 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
       </div>
 
       <Card>
-        <CardContent className="p-4">
+        <CardContent className="p-3 sm:p-4">
           <div className="flex flex-col gap-1 items-end text-sm">
-            <div className="flex gap-8"><span className="text-muted-foreground">Subtotal:</span><span>{"\u20AC"}{subtotal.toFixed(2)}</span></div>
-            <div className="flex gap-8"><span className="text-muted-foreground">VAT:</span><span>{"\u20AC"}{vatAmount.toFixed(2)}</span></div>
-            <div className="flex gap-8 font-bold text-base"><span>Total:</span><span>{"\u20AC"}{total.toFixed(2)}</span></div>
+            <div className="flex gap-4 sm:gap-8"><span className="text-muted-foreground">Subtotal:</span><span>{"\u20AC"}{subtotal.toFixed(2)}</span></div>
+            <div className="flex gap-4 sm:gap-8"><span className="text-muted-foreground">VAT:</span><span>{"\u20AC"}{vatAmount.toFixed(2)}</span></div>
+            <div className="flex gap-4 sm:gap-8 font-bold text-base"><span>Total:</span><span>{"\u20AC"}{total.toFixed(2)}</span></div>
           </div>
         </CardContent>
       </Card>
 
       <div className="flex justify-end">
-        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-purchase">
+        <Button className="w-full sm:w-auto" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="button-save-purchase">
           {saveMutation.isPending ? "Saving..." : editingId ? "Update Invoice" : "Save & Update Stock"}
         </Button>
       </div>
