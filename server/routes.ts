@@ -458,7 +458,7 @@ export async function registerRoutes(
             if (item) {
               const bottlesToSubtract = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
               if (item.stockQuantity < bottlesToSubtract) {
-                return res.status(400).json({ message: `Not enough stock for ${item.itemName || item.name || 'item'}. Available: ${item.stockQuantity} bottles, needed: ${bottlesToSubtract}` });
+                return res.status(400).json({ message: `Not enough stock for ${item.name || 'item'}. Available: ${item.stockQuantity} bottles, needed: ${bottlesToSubtract}` });
               }
             }
           }

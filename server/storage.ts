@@ -302,7 +302,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[]) {
-    const invoiceNumber = await this.getNextInvoiceNumber(data.type);
+    const invoiceNumber = await this.getNextInvoiceNumber(data.type as string);
     const [inv] = await db.insert(invoices).values({ ...data, invoiceNumber }).returning();
     if (lineItems.length > 0) {
       await db.insert(invoiceItems).values(lineItems.map((li) => ({ ...li, invoiceId: inv.id })));

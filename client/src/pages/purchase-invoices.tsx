@@ -161,6 +161,31 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [loaded, setLoaded] = useState(false);
 
+  const calcDueDate = (invoiceDate: string, terms: string) => {
+    const d = new Date(invoiceDate);
+    const match = terms.match(/credit_(\d+)/);
+    if (match) {
+      d.setDate(d.getDate() + parseInt(match[1]));
+    }
+    return d.toISOString().split("T")[0];
+  };
+
+  const handleSupplierChange = (id: string) => {
+    setSupplierId(id);
+    const supplier = suppliers.find(s => s.id === id);
+    if (supplier && supplier.paymentTerms !== "cash") {
+      setDueDate(calcDueDate(date, supplier.paymentTerms));
+    }
+  };
+
+  const handleDateChange = (newDate: string) => {
+    setDate(newDate);
+    const supplier = suppliers.find(s => s.id === supplierId);
+    if (supplier && supplier.paymentTerms !== "cash" && dueDate) {
+      setDueDate(calcDueDate(newDate, supplier.paymentTerms));
+    }
+  };
+
   useEffect(() => {
     if (editingId && existingInvoice && !loaded) {
       setSupplierId(existingInvoice.supplierId);
@@ -301,7 +326,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
         <div>
           <label className="text-sm font-medium">Supplier</label>
-          <Select value={supplierId} onValueChange={setSupplierId}>
+          <Select value={supplierId} onValueChange={handleSupplierChange}>
             <SelectTrigger data-testid="select-purchase-supplier">
               <SelectValue placeholder="Select supplier" />
             </SelectTrigger>
@@ -311,6 +336,12 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
               ))}
             </SelectContent>
           </Select>
+          {supplierId && (() => {
+            const s = suppliers.find(sup => sup.id === supplierId);
+            if (!s) return null;
+            const termsLabel = s.paymentTerms === "cash" ? "Cash" : s.paymentTerms.replace("credit_", "Credit ") + " days";
+            return <p className="text-xs text-muted-foreground mt-1">Terms: {termsLabel}</p>;
+          })()}
         </div>
         <div>
           <label className="text-sm font-medium">Supplier Invoice Ref</label>
@@ -320,7 +351,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
       <div className="grid grid-cols-2 gap-3 sm:gap-4">
         <div>
           <label className="text-sm font-medium">Date</label>
-          <Input type="date" value={date} onChange={e => setDate(e.target.value)} data-testid="input-purchase-date" />
+          <Input type="date" value={date} onChange={e => handleDateChange(e.target.value)} data-testid="input-purchase-date" />
         </div>
         <div>
           <label className="text-sm font-medium">Due Date</label>
