@@ -79,6 +79,11 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-02-18: Added dual discount system (percentage + amount) on invoice lines with contract auto-apply
 - 2026-02-18: Supplier country field added for international suppliers
 - 2026-02-18: Added supplier management, purchase invoices with stock impact, supplier payments register
+- 2026-02-21: Offline invoicing capability with IndexedDB caching (items, customers) and local invoice queue
+- 2026-02-21: Offline indicator in sidebar header (amber "Offline Mode" badge) and invoice form (amber banner)
+- 2026-02-21: Pending offline invoices shown on Invoices list with sync/discard options
+- 2026-02-21: Auto-sync when internet returns with toast notifications for success/failure
+- 2026-02-21: Files: client/src/lib/offline-store.ts (IndexedDB), client/src/hooks/use-online-status.ts (hook)
 - 2026-02-18: Stock now tracked per bottle with pack equivalent display
 - 2026-02-18: Sales invoices/credit notes now affect stock levels per bottle
 - 2026-02-18: Initial MVP build with full schema, frontend, and backend

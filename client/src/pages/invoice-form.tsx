@@ -11,10 +11,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2 } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { useToast } from "@/hooks/use-toast";
+import { useOnlineStatus } from "@/hooks/use-online-status";
+import { offlineStore } from "@/lib/offline-store";
 import { BarcodeScanner } from "@/components/barcode-scanner";
 import type { Customer, Item, Invoice, InvoiceItem, PriceContract, PriceContractRule } from "@shared/schema";
 
@@ -63,6 +65,7 @@ export default function InvoiceForm() {
   const invoiceId = matchNew ? undefined : (paramsEdit?.id || paramsView?.id);
   const isViewMode = matchView && !matchEdit && !matchNew;
   const { toast } = useToast();
+  const { isOnline, pendingCount, syncing, syncPending, refreshPendingCount } = useOnlineStatus();
 
   const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const docType = searchParams.get("type") || "invoice";
@@ -73,14 +76,34 @@ export default function InvoiceForm() {
     enabled: !!fromId && isNew,
   });
 
-  const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
-  const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
+  const { data: onlineCustomers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+  const { data: onlineItems = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   const { data: contracts = [] } = useQuery<(PriceContract & { rules?: PriceContractRule[]; priceLevel?: number })[]>({ queryKey: ["/api/price-contracts"] });
   const priceLevelNames = usePriceLevels();
   const { data: existingInvoice } = useQuery<Invoice & { items: InvoiceItem[] }>({
     queryKey: ["/api/invoices", invoiceId],
     enabled: !!invoiceId,
   });
+
+  const [cachedCustomers, setCachedCustomers] = useState<Customer[]>([]);
+  const [cachedItems, setCachedItems] = useState<Item[]>([]);
+
+  useEffect(() => {
+    if (onlineCustomers.length > 0) {
+      offlineStore.cacheCustomers(onlineCustomers);
+    }
+    if (onlineItems.length > 0) {
+      offlineStore.cacheItems(onlineItems);
+    }
+  }, [onlineCustomers, onlineItems]);
+
+  useEffect(() => {
+    offlineStore.getCachedCustomers().then(c => setCachedCustomers(c as Customer[])).catch(() => {});
+    offlineStore.getCachedItems().then(i => setCachedItems(i as Item[])).catch(() => {});
+  }, []);
+
+  const customers = onlineCustomers.length > 0 ? onlineCustomers : cachedCustomers;
+  const items = onlineItems.length > 0 ? onlineItems : cachedItems;
 
   const [customerId, setCustomerId] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
@@ -317,12 +340,21 @@ export default function InvoiceForm() {
 
   const handleBarcodeScan = async (barcode: string) => {
     try {
-      const res = await fetch(`/api/items/barcode/${barcode}`);
-      if (!res.ok) {
-        toast({ title: "Item not found", description: `No item with barcode ${barcode}`, variant: "destructive" });
-        return;
+      let item: any;
+      if (navigator.onLine) {
+        const res = await fetch(`/api/items/barcode/${barcode}`);
+        if (!res.ok) {
+          toast({ title: "Item not found", description: `No item with barcode ${barcode}`, variant: "destructive" });
+          return;
+        }
+        item = await res.json();
+      } else {
+        item = items.find((i: any) => i.barcode === barcode);
+        if (!item) {
+          toast({ title: "Item not found", description: `No item with barcode ${barcode} in cached data`, variant: "destructive" });
+          return;
+        }
       }
-      const item = await res.json();
       const customer = customers.find((c) => c.id === customerId);
       const level = customer?.priceLevel || 1;
       const priceKey = `price${level}` as keyof typeof item;
@@ -395,6 +427,20 @@ export default function InvoiceForm() {
           total: l.total,
         })),
       };
+
+      if (!navigator.onLine) {
+        const customer = customers.find(c => c.id === customerId);
+        const offlineInvoice = {
+          offlineId: `offline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          payload,
+          customerName: customer?.name || "Unknown",
+          createdAt: new Date().toISOString(),
+        };
+        await offlineStore.savePendingInvoice(offlineInvoice);
+        await refreshPendingCount();
+        return { id: offlineInvoice.offlineId, offline: true };
+      }
+
       if (invoiceId && matchEdit) {
         const res = await apiRequest("PATCH", `/api/invoices/${invoiceId}`, payload);
         return res.json();
@@ -404,6 +450,11 @@ export default function InvoiceForm() {
       }
     },
     onSuccess: (data) => {
+      if (data.offline) {
+        toast({ title: "Saved offline", description: "Invoice queued for sync when internet returns" });
+        navigate("/invoices");
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/items"] });
@@ -455,6 +506,32 @@ export default function InvoiceForm() {
 
   return (
     <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+      {!isOnline && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800" data-testid="offline-banner">
+          <WifiOff className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          <span className="text-sm text-amber-700 dark:text-amber-300 font-medium">You are offline.</span>
+          <span className="text-xs text-amber-600 dark:text-amber-400">Invoices will be saved locally and synced when connection returns.</span>
+        </div>
+      )}
+      {isOnline && pendingCount > 0 && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800" data-testid="pending-sync-banner">
+          <Wifi className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+          <span className="text-sm text-blue-700 dark:text-blue-300">
+            {pendingCount} offline invoice{pendingCount > 1 ? "s" : ""} pending sync.
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto h-7 text-xs"
+            onClick={syncPending}
+            disabled={syncing}
+            data-testid="button-sync-invoices"
+          >
+            {syncing ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
+            {syncing ? "Syncing..." : "Sync Now"}
+          </Button>
+        </div>
+      )}
       <PageHeader
         title={isNew ? `New ${typeLabel}` : `${typeLabel} ${existingInvoice?.invoiceNumber || ""}`}
         description={isViewMode ? "View document details" : "Fill in the document details"}

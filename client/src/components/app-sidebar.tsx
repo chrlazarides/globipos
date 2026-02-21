@@ -1,5 +1,6 @@
+import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -12,6 +13,7 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
+import { offlineStore } from "@/lib/offline-store";
 
 const mainNav = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -74,6 +76,26 @@ function NavSection({ label, items }: { label: string; items: typeof mainNav }) 
 }
 
 export function AppSidebar() {
+  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    const goOnline = () => setIsOnline(true);
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    const checkPending = () => {
+      offlineStore.getPendingInvoices().then(p => setPendingCount(p.length)).catch(() => {});
+    };
+    checkPending();
+    const interval = setInterval(checkPending, 5000);
+    return () => {
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+      clearInterval(interval);
+    };
+  }, []);
+
   return (
     <Sidebar>
       <SidebarHeader className="p-4">
@@ -86,6 +108,17 @@ export function AppSidebar() {
             <span className="text-xs text-sidebar-foreground/60">Wholesale Management</span>
           </div>
         </div>
+        {!isOnline && (
+          <div className="flex items-center gap-1.5 mt-2 px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/50" data-testid="sidebar-offline-badge">
+            <WifiOff className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+            <span className="text-xs font-medium text-amber-700 dark:text-amber-300">Offline Mode</span>
+          </div>
+        )}
+        {pendingCount > 0 && (
+          <div className="flex items-center gap-1.5 mt-1 px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/50" data-testid="sidebar-pending-badge">
+            <span className="text-xs text-blue-700 dark:text-blue-300">{pendingCount} pending sync</span>
+          </div>
+        )}
       </SidebarHeader>
       <SidebarContent>
         <NavSection label="Overview" items={mainNav} />
