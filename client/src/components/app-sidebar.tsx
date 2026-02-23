@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone } from "lucide-react";
+import { usePwaInstall } from "@/hooks/use-pwa-install";
 import {
   Sidebar,
   SidebarContent,
@@ -78,6 +79,7 @@ function NavSection({ label, items }: { label: string; items: typeof mainNav }) 
 export function AppSidebar() {
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const [pendingCount, setPendingCount] = useState(0);
+  const { isInstallable, isInstalled, install } = usePwaInstall();
 
   useEffect(() => {
     const goOnline = () => setIsOnline(true);
@@ -128,7 +130,23 @@ export function AppSidebar() {
         <NavSection label="Analytics" items={reportNav} />
         <NavSection label="System" items={systemNav} />
       </SidebarContent>
-      <SidebarFooter className="p-4">
+      <SidebarFooter className="p-4 space-y-2">
+        {isInstallable && !isInstalled && (
+          <button
+            onClick={install}
+            className="flex items-center gap-2 w-full px-3 py-2 rounded-md text-xs font-medium bg-sidebar-primary text-sidebar-primary-foreground hover:opacity-90 transition-opacity"
+            data-testid="button-install-app"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Install App</span>
+          </button>
+        )}
+        {isInstalled && (
+          <div className="flex items-center gap-2 px-2 py-1 rounded bg-green-100 dark:bg-green-900/50" data-testid="badge-app-installed">
+            <Smartphone className="w-3 h-3 text-green-600 dark:text-green-400" />
+            <span className="text-xs text-green-700 dark:text-green-300">App Installed</span>
+          </div>
+        )}
         <div className="flex items-center gap-2 text-xs text-sidebar-foreground/50">
           <Wine className="w-3 h-3" />
           <span>VinTrade v1.0</span>

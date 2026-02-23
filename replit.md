@@ -92,3 +92,10 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-02-19: "Send" button on invoice view mode to email document to customer
 - 2026-02-19: Email column added to customers list table
 - 2026-02-19: API routes: POST /api/invoices/:id/send-email, GET /api/email-logs, GET /api/email-logs/customer/:customerId
+- 2026-02-23: PWA (Progressive Web App) support - installable on Android and iPhone
+- 2026-02-23: Web app manifest (client/public/manifest.json) with app name, icons, shortcuts, theme color
+- 2026-02-23: Service worker (client/public/sw.js) for offline caching of static assets and API data
+- 2026-02-23: PWA install hook (client/src/hooks/use-pwa-install.ts) with install prompt handling
+- 2026-02-23: Install App button in sidebar footer when browser supports PWA installation
+- 2026-02-23: Apple-specific meta tags for iOS home screen support (apple-mobile-web-app-capable)
+- 2026-02-23: SVG app icons in client/public/icons/ (sizes: 72-512px) with burgundy VT branding
