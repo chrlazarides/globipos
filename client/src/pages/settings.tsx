@@ -9,7 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { PageHeader } from "@/components/page-header";
-import { Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags } from "lucide-react";
+import { Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags, Database, Trash2, AlertTriangle } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { SystemSetting } from "@shared/schema";
 
 const groupIcons: Record<string, any> = {
@@ -36,6 +37,9 @@ export default function SettingsPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [seedingDemo, setSeedingDemo] = useState(false);
+  const [clearingDemo, setClearingDemo] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const { toast } = useToast();
 
   const { data: settings, isLoading } = useQuery<SystemSetting[]>({
@@ -49,6 +53,34 @@ export default function SettingsPage() {
       setValues(map);
     }
   }, [settings]);
+
+  const handleSeedDemo = async () => {
+    setSeedingDemo(true);
+    try {
+      const res = await apiRequest("POST", "/api/demo/seed");
+      const data = await res.json();
+      queryClient.invalidateQueries();
+      toast({ title: "Demo data loaded", description: `Created ${data.counts.items} items, ${data.counts.customers} customers, ${data.counts.invoices} documents, and more.` });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSeedingDemo(false);
+    }
+  };
+
+  const handleClearDemo = async () => {
+    setClearingDemo(true);
+    setShowClearConfirm(false);
+    try {
+      await apiRequest("POST", "/api/demo/clear");
+      queryClient.invalidateQueries();
+      toast({ title: "Data cleared", description: "All data has been removed from the database." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setClearingDemo(false);
+    }
+  };
 
   const handleSeedDefaults = async () => {
     setSeeding(true);
@@ -227,6 +259,67 @@ export default function SettingsPage() {
           })}
         </div>
       )}
+
+      <Card className="mt-6 border-amber-200 dark:border-amber-800">
+        <CardHeader className="flex flex-row items-center gap-2 p-4 pb-2">
+          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-amber-100 dark:bg-amber-900/50">
+            <Database className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">Demo Data Management</h3>
+            <p className="text-xs text-muted-foreground">Populate or clear sample data for testing</p>
+          </div>
+        </CardHeader>
+        <CardContent className="p-4 pt-0">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Button
+              variant="outline"
+              onClick={handleSeedDemo}
+              disabled={seedingDemo || clearingDemo}
+              data-testid="button-seed-demo"
+            >
+              <Database className={`w-4 h-4 mr-2 ${seedingDemo ? "animate-spin" : ""}`} />
+              {seedingDemo ? "Loading Demo Data..." : "Load Demo Data"}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => setShowClearConfirm(true)}
+              disabled={seedingDemo || clearingDemo}
+              data-testid="button-clear-demo"
+            >
+              <Trash2 className={`w-4 h-4 mr-2 ${clearingDemo ? "animate-spin" : ""}`} />
+              {clearingDemo ? "Clearing..." : "Remove All Data"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-3">
+            "Load Demo Data" creates sample categories, items, customers, suppliers, invoices, contracts, and offers.
+            "Remove All Data" permanently deletes all transactional and master data (settings are preserved).
+          </p>
+        </CardContent>
+      </Card>
+
+      <Dialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              Remove All Data
+            </DialogTitle>
+            <DialogDescription>
+              This will permanently delete all categories, items, customers, suppliers, invoices, credit notes, proforma, quotations, price contracts, seasonal offers, payments, and email logs. System settings will be preserved. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowClearConfirm(false)} data-testid="button-cancel-clear">
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleClearDemo} data-testid="button-confirm-clear">
+              <Trash2 className="w-4 h-4 mr-2" />
+              Yes, Remove Everything
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

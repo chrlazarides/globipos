@@ -99,3 +99,7 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-02-23: Install App button in sidebar footer when browser supports PWA installation
 - 2026-02-23: Apple-specific meta tags for iOS home screen support (apple-mobile-web-app-capable)
 - 2026-02-23: SVG app icons in client/public/icons/ (sizes: 72-512px) with burgundy VT branding
+- 2026-02-28: Demo data seed/clear API endpoints (POST /api/demo/seed, POST /api/demo/clear)
+- 2026-02-28: Settings page has "Demo Data Management" section with Load Demo Data and Remove All Data buttons
+- 2026-02-28: Demo data includes 7 categories, 23 items (with brands), 10 Cyprus customers, 5 international suppliers, 8 documents (invoices/CN/PF/QT), 2 contracts, 3 offers
+- 2026-02-28: Remove All Data has confirmation dialog; preserves system settings while clearing all transactional data

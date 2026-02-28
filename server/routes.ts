@@ -1,11 +1,13 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import { sendInvoiceEmail } from "./email";
+import { db } from "./db";
+import { sql } from "drizzle-orm";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -1112,6 +1114,267 @@ export async function registerRoutes(
 
       res.json(order);
     } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/demo/seed", async (_req, res) => {
+    try {
+      const [existingCats] = await db.select({ count: sql<number>`count(*)` }).from(categories);
+      const [existingItems] = await db.select({ count: sql<number>`count(*)` }).from(items);
+      const [existingCustomers] = await db.select({ count: sql<number>`count(*)` }).from(customers);
+      if ((existingCats?.count || 0) > 0 || (existingItems?.count || 0) > 0 || (existingCustomers?.count || 0) > 0) {
+        return res.status(400).json({ message: "Database already contains data. Clear demo data first before seeding." });
+      }
+
+      const [redWine] = await db.insert(categories).values({ name: "Red Wine", description: "Premium red wines from top vineyards" }).returning();
+      const [whiteWine] = await db.insert(categories).values({ name: "White Wine", description: "Crisp and refreshing white wines" }).returning();
+      const [sparkling] = await db.insert(categories).values({ name: "Sparkling", description: "Champagnes and sparkling wines" }).returning();
+      const [spirits] = await db.insert(categories).values({ name: "Spirits", description: "Premium spirits and liquors" }).returning();
+      const [rose] = await db.insert(categories).values({ name: "Rosé", description: "Light and fruity rosé wines" }).returning();
+      const [beer] = await db.insert(categories).values({ name: "Beer & Cider", description: "Craft beers and artisan ciders" }).returning();
+      const [fortified] = await db.insert(categories).values({ name: "Fortified Wine", description: "Port, sherry and dessert wines" }).returning();
+
+      const seedItems = [
+        { name: "Château Margaux 2018", sku: "RW-001", barcode: "3401234567890", categoryId: redWine.id, unitType: "bottle", packSize: 1, price1: "189.99", price2: "179.99", price3: "169.99", price4: "159.99", price5: "149.99", costPrice: "120.00", stockQuantity: 48, reorderLevel: 12, volume: "750ml", alcoholPercentage: "13.5", brand: "Château Margaux", origin: "Bordeaux, France", vintage: "2018" },
+        { name: "Opus One 2019", sku: "RW-002", barcode: "3401234567891", categoryId: redWine.id, unitType: "bottle", packSize: 1, price1: "399.99", price2: "379.99", price3: "359.99", price4: "339.99", price5: "319.99", costPrice: "250.00", stockQuantity: 24, reorderLevel: 6, volume: "750ml", alcoholPercentage: "14.5", brand: "Opus One", origin: "Napa Valley, USA", vintage: "2019" },
+        { name: "Penfolds Grange 2017", sku: "RW-003", barcode: "3401234567892", categoryId: redWine.id, unitType: "pack", packSize: 6, price1: "2100.00", price2: "1999.00", price3: "1899.00", price4: "1799.00", price5: "1699.00", costPrice: "1400.00", stockQuantity: 48, reorderLevel: 24, volume: "750ml", alcoholPercentage: "14.1", brand: "Penfolds", origin: "South Australia", vintage: "2017" },
+        { name: "Barolo Riserva 2016", sku: "RW-004", barcode: "3401234567910", categoryId: redWine.id, unitType: "bottle", packSize: 1, price1: "85.00", price2: "79.00", price3: "74.00", price4: "69.00", price5: "65.00", costPrice: "48.00", stockQuantity: 36, reorderLevel: 10, volume: "750ml", alcoholPercentage: "14.0", brand: "Marchesi di Barolo", origin: "Piedmont, Italy", vintage: "2016" },
+        { name: "Rioja Gran Reserva 2015", sku: "RW-005", barcode: "3401234567911", categoryId: redWine.id, unitType: "pack", packSize: 12, price1: "540.00", price2: "504.00", price3: "468.00", price4: "432.00", price5: "396.00", costPrice: "300.00", stockQuantity: 120, reorderLevel: 24, volume: "750ml", alcoholPercentage: "13.5", brand: "Marqués de Riscal", origin: "Rioja, Spain", vintage: "2015" },
+        { name: "Cloudy Bay Sauvignon Blanc", sku: "WW-001", barcode: "3401234567893", categoryId: whiteWine.id, unitType: "pack", packSize: 12, price1: "288.00", price2: "276.00", price3: "264.00", price4: "252.00", price5: "240.00", costPrice: "180.00", stockQuantity: 120, reorderLevel: 24, volume: "750ml", alcoholPercentage: "13.0", brand: "Cloudy Bay", origin: "Marlborough, NZ", vintage: "2023" },
+        { name: "Chablis Premier Cru 2021", sku: "WW-002", barcode: "3401234567894", categoryId: whiteWine.id, unitType: "bottle", packSize: 1, price1: "45.99", price2: "42.99", price3: "39.99", price4: "37.99", price5: "35.99", costPrice: "28.00", stockQuantity: 72, reorderLevel: 18, volume: "750ml", alcoholPercentage: "12.5", brand: "William Fèvre", origin: "Burgundy, France", vintage: "2021" },
+        { name: "Pinot Grigio delle Venezie", sku: "WW-003", barcode: "3401234567912", categoryId: whiteWine.id, unitType: "pack", packSize: 6, price1: "72.00", price2: "66.00", price3: "60.00", price4: "54.00", price5: "48.00", costPrice: "36.00", stockQuantity: 96, reorderLevel: 24, volume: "750ml", alcoholPercentage: "12.0", brand: "Santa Margherita", origin: "Veneto, Italy", vintage: "2023" },
+        { name: "Riesling Spätlese 2022", sku: "WW-004", barcode: "3401234567913", categoryId: whiteWine.id, unitType: "bottle", packSize: 1, price1: "28.50", price2: "26.00", price3: "24.00", price4: "22.00", price5: "20.00", costPrice: "14.00", stockQuantity: 60, reorderLevel: 15, volume: "750ml", alcoholPercentage: "9.5", brand: "Dr. Loosen", origin: "Mosel, Germany", vintage: "2022" },
+        { name: "Dom Pérignon 2013", sku: "SP-001", barcode: "3401234567895", categoryId: sparkling.id, unitType: "bottle", packSize: 1, price1: "249.99", price2: "239.99", price3: "229.99", price4: "219.99", price5: "209.99", costPrice: "170.00", stockQuantity: 18, reorderLevel: 6, volume: "750ml", alcoholPercentage: "12.5", brand: "Dom Pérignon", origin: "Champagne, France", vintage: "2013" },
+        { name: "Veuve Clicquot Yellow Label", sku: "SP-002", barcode: "3401234567896", categoryId: sparkling.id, unitType: "pack", packSize: 6, price1: "360.00", price2: "342.00", price3: "324.00", price4: "306.00", price5: "288.00", costPrice: "240.00", stockQuantity: 36, reorderLevel: 12, volume: "750ml", alcoholPercentage: "12.0", brand: "Veuve Clicquot", origin: "Champagne, France", vintage: "NV" },
+        { name: "Prosecco Superiore DOCG", sku: "SP-003", barcode: "3401234567914", categoryId: sparkling.id, unitType: "pack", packSize: 12, price1: "180.00", price2: "168.00", price3: "156.00", price4: "144.00", price5: "132.00", costPrice: "96.00", stockQuantity: 144, reorderLevel: 36, volume: "750ml", alcoholPercentage: "11.0", brand: "Bisol", origin: "Veneto, Italy", vintage: "NV" },
+        { name: "Macallan 18 Year", sku: "ST-001", barcode: "3401234567897", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "329.99", price2: "319.99", price3: "309.99", price4: "299.99", price5: "289.99", costPrice: "220.00", stockQuantity: 15, reorderLevel: 5, volume: "700ml", alcoholPercentage: "43.0", brand: "Macallan", origin: "Scotland", vintage: "" },
+        { name: "Hennessy XO Cognac", sku: "ST-002", barcode: "3401234567898", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "199.99", price2: "189.99", price3: "179.99", price4: "169.99", price5: "159.99", costPrice: "130.00", stockQuantity: 5, reorderLevel: 8, volume: "700ml", alcoholPercentage: "40.0", brand: "Hennessy", origin: "Cognac, France", vintage: "" },
+        { name: "Grey Goose Vodka", sku: "ST-003", barcode: "3401234567915", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "42.00", price2: "39.00", price3: "36.00", price4: "33.00", price5: "30.00", costPrice: "22.00", stockQuantity: 60, reorderLevel: 15, volume: "700ml", alcoholPercentage: "40.0", brand: "Grey Goose", origin: "France", vintage: "" },
+        { name: "Hendrick's Gin", sku: "ST-004", barcode: "3401234567916", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "38.00", price2: "35.00", price3: "32.00", price4: "29.00", price5: "27.00", costPrice: "20.00", stockQuantity: 45, reorderLevel: 12, volume: "700ml", alcoholPercentage: "41.4", brand: "Hendrick's", origin: "Scotland", vintage: "" },
+        { name: "Patrón Silver Tequila", sku: "ST-005", barcode: "3401234567917", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "55.00", price2: "50.00", price3: "46.00", price4: "42.00", price5: "38.00", costPrice: "28.00", stockQuantity: 30, reorderLevel: 8, volume: "700ml", alcoholPercentage: "40.0", brand: "Patrón", origin: "Mexico", vintage: "" },
+        { name: "Whispering Angel Rosé 2023", sku: "RS-001", barcode: "3401234567899", categoryId: rose.id, unitType: "pack", packSize: 12, price1: "240.00", price2: "228.00", price3: "216.00", price4: "204.00", price5: "192.00", costPrice: "150.00", stockQuantity: 96, reorderLevel: 24, volume: "750ml", alcoholPercentage: "13.0", brand: "Château d'Esclans", origin: "Provence, France", vintage: "2023" },
+        { name: "Miraval Rosé 2023", sku: "RS-002", barcode: "3401234567918", categoryId: rose.id, unitType: "pack", packSize: 6, price1: "144.00", price2: "132.00", price3: "120.00", price4: "108.00", price5: "96.00", costPrice: "72.00", stockQuantity: 60, reorderLevel: 12, volume: "750ml", alcoholPercentage: "13.0", brand: "Miraval", origin: "Provence, France", vintage: "2023" },
+        { name: "Peroni Nastro Azzurro", sku: "BR-001", barcode: "3401234567919", categoryId: beer.id, unitType: "pack", packSize: 24, price1: "36.00", price2: "33.60", price3: "31.20", price4: "28.80", price5: "26.40", costPrice: "18.00", stockQuantity: 240, reorderLevel: 48, volume: "330ml", alcoholPercentage: "5.1", brand: "Peroni", origin: "Italy", vintage: "" },
+        { name: "KEO Beer", sku: "BR-002", barcode: "3401234567920", categoryId: beer.id, unitType: "pack", packSize: 24, price1: "28.80", price2: "26.40", price3: "24.00", price4: "21.60", price5: "19.20", costPrice: "14.00", stockQuantity: 480, reorderLevel: 96, volume: "330ml", alcoholPercentage: "4.5", brand: "KEO", origin: "Cyprus", vintage: "" },
+        { name: "Taylor's 20 Year Tawny Port", sku: "FW-001", barcode: "3401234567921", categoryId: fortified.id, unitType: "bottle", packSize: 1, price1: "65.00", price2: "60.00", price3: "55.00", price4: "50.00", price5: "46.00", costPrice: "35.00", stockQuantity: 24, reorderLevel: 6, volume: "750ml", alcoholPercentage: "20.0", brand: "Taylor's", origin: "Douro, Portugal", vintage: "" },
+        { name: "Commandaria St. John", sku: "FW-002", barcode: "3401234567922", categoryId: fortified.id, unitType: "bottle", packSize: 1, price1: "18.00", price2: "16.50", price3: "15.00", price4: "13.50", price5: "12.00", costPrice: "8.00", stockQuantity: 100, reorderLevel: 20, volume: "750ml", alcoholPercentage: "15.0", brand: "KEO", origin: "Cyprus", vintage: "" },
+      ];
+
+      const createdItems = await db.insert(items).values(seedItems).returning();
+
+      const seedCustomers = [
+        { name: "Limassol Wine House", code: "CUST001", email: "orders@limassolwinehouse.com.cy", phone: "+357-25-123456", address: "15 Makarios Avenue", city: "Limassol", taxId: "CY-12345678A", paymentTerms: "credit_30", creditLimit: "50000", currentBalance: "0", priceLevel: 1, portalAccessCode: "WINE2026" },
+        { name: "Nicosia Grand Hotel", code: "CUST002", email: "purchasing@nicosiagrand.com.cy", phone: "+357-22-234567", address: "28 Ledra Street", city: "Nicosia", taxId: "CY-23456789B", paymentTerms: "credit_14", creditLimit: "25000", currentBalance: "0", priceLevel: 2, portalAccessCode: "HOTEL2026" },
+        { name: "Paphos Beach Resort", code: "CUST003", email: "procurement@paphosbeach.com.cy", phone: "+357-26-345678", address: "42 Poseidonos Avenue", city: "Paphos", taxId: "CY-34567890C", paymentTerms: "cash", creditLimit: "0", currentBalance: "0", priceLevel: 3, portalAccessCode: "RESORT26" },
+        { name: "Larnaca Spirits Trading", code: "CUST004", email: "wine@larnacaspirits.com.cy", phone: "+357-24-456789", address: "7 Athinon Avenue", city: "Larnaca", taxId: "CY-45678901D", paymentTerms: "credit_60", creditLimit: "100000", currentBalance: "0", priceLevel: 1, portalAccessCode: "TRADE2026" },
+        { name: "Troodos Mountain Lodge", code: "CUST005", email: "orders@troodoslodge.com.cy", phone: "+357-25-567890", address: "3 Platres Hill Road", city: "Platres", taxId: "CY-56789012E", paymentTerms: "credit_30", creditLimit: "35000", currentBalance: "0", priceLevel: 2, portalAccessCode: "LODGE2026" },
+        { name: "Ayia Napa Beach Bar", code: "CUST006", email: "bar@ayianapabay.com.cy", phone: "+357-23-678901", address: "12 Nissi Avenue", city: "Ayia Napa", taxId: "CY-67890123F", paymentTerms: "credit_7", creditLimit: "15000", currentBalance: "0", priceLevel: 3, portalAccessCode: "BEACH26" },
+        { name: "Metro Wine Bar", code: "CUST007", email: "wines@metrobar.com.cy", phone: "+357-22-789012", address: "5 Stasikratous Street", city: "Nicosia", taxId: "CY-78901234G", paymentTerms: "credit_30", creditLimit: "40000", currentBalance: "0", priceLevel: 2, portalAccessCode: "METRO2026" },
+        { name: "Elite Dining Group", code: "CUST008", email: "procurement@elitedining.com.cy", phone: "+357-25-890123", address: "88 Amathountos Avenue", city: "Limassol", taxId: "CY-89012345H", paymentTerms: "credit_60", creditLimit: "80000", currentBalance: "0", priceLevel: 1, portalAccessCode: "ELITE2026" },
+        { name: "Protaras Sunset Lounge", code: "CUST009", email: "drinks@sunsetlounge.com.cy", phone: "+357-23-901234", address: "9 Protaras Avenue", city: "Protaras", taxId: "CY-90123456I", paymentTerms: "credit_14", creditLimit: "20000", currentBalance: "0", priceLevel: 3, portalAccessCode: "SUNSET26" },
+        { name: "Cyprus Wine Academy", code: "CUST010", email: "orders@cypruswineacademy.com", phone: "+357-22-012345", address: "22 Diagorou Street", city: "Nicosia", taxId: "CY-01234567J", paymentTerms: "credit_30", creditLimit: "30000", currentBalance: "0", priceLevel: 2, portalAccessCode: "ACADEMY26" },
+      ];
+
+      const createdCustomers = await db.insert(customers).values(seedCustomers).returning();
+
+      const seedSuppliers = [
+        { name: "Bordeaux Direct Imports", code: "SUP001", email: "export@bordeauxdirect.fr", phone: "+33-5-5678-1234", address: "10 Quai des Chartrons", city: "Bordeaux", country: "France", taxId: "FR-12345678901" },
+        { name: "Italian Wine Merchants", code: "SUP002", email: "vendite@italianwine.it", phone: "+39-011-5678-900", address: "Via Roma 45", city: "Torino", country: "Italy", taxId: "IT-98765432109" },
+        { name: "Spirits Global Ltd", code: "SUP003", email: "trade@spiritsglobal.co.uk", phone: "+44-20-7123-4567", address: "15 Regent Street", city: "London", country: "United Kingdom", taxId: "GB-123456789" },
+        { name: "KEO Plc", code: "SUP004", email: "wholesale@keo.com.cy", phone: "+357-25-888000", address: "1 Franklin Roosevelt Avenue", city: "Limassol", country: "Cyprus", taxId: "CY-11223344K" },
+        { name: "Champagne House Paris", code: "SUP005", email: "orders@champagnehouse.fr", phone: "+33-3-2634-5678", address: "8 Avenue de Champagne", city: "Épernay", country: "France", taxId: "FR-55667788901" },
+      ];
+
+      await db.insert(suppliers).values(seedSuppliers).returning();
+
+      const today = new Date();
+      const fmt = (d: Date) => d.toISOString().split("T")[0];
+      const addDays = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+
+      const inv1Items = [
+        { description: "Château Margaux 2018", quantity: 6, unitPrice: "189.99", discount: "0", discountPercent: "0", total: "1139.94", itemId: createdItems[0].id },
+        { description: "Cloudy Bay Sauvignon Blanc 12-pack", quantity: 2, unitPrice: "288.00", discount: "0", discountPercent: "0", total: "576.00", itemId: createdItems[5].id },
+      ];
+      const inv1Sub = 1715.94;
+      const inv1Tax = +(inv1Sub * 0.19).toFixed(2);
+      const [inv1] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00001", type: "invoice", customerId: createdCustomers[0].id,
+        date: fmt(addDays(today, -18)), dueDate: fmt(addDays(today, 12)),
+        subtotal: inv1Sub.toFixed(2), taxRate: "19", taxAmount: inv1Tax.toFixed(2),
+        discountAmount: "0", total: (inv1Sub + inv1Tax).toFixed(2), status: "sent",
+      }).returning();
+      await db.insert(invoiceItems).values(inv1Items.map(li => ({ ...li, invoiceId: inv1.id })));
+
+      const inv2Items = [
+        { description: "Dom Pérignon 2013", quantity: 12, unitPrice: "239.99", discount: "50.00", discountPercent: "0", total: "2829.88", itemId: createdItems[9].id },
+        { description: "Macallan 18 Year", quantity: 6, unitPrice: "319.99", discount: "0", discountPercent: "0", total: "1919.94", itemId: createdItems[12].id },
+      ];
+      const inv2Sub = 4749.82;
+      const inv2Tax = +(inv2Sub * 0.19).toFixed(2);
+      const [inv2] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00002", type: "invoice", customerId: createdCustomers[7].id,
+        date: fmt(addDays(today, -13)), dueDate: fmt(addDays(today, 47)),
+        subtotal: inv2Sub.toFixed(2), taxRate: "19", taxAmount: inv2Tax.toFixed(2),
+        discountAmount: "50.00", total: (inv2Sub + inv2Tax).toFixed(2), status: "paid",
+      }).returning();
+      await db.insert(invoiceItems).values(inv2Items.map(li => ({ ...li, invoiceId: inv2.id })));
+
+      await db.insert(payments).values({
+        invoiceId: inv2.id, amount: (inv2Sub + inv2Tax).toFixed(2),
+        paymentDate: fmt(addDays(today, -5)), paymentMethod: "bank_transfer", reference: "TRF-20260220-001",
+      });
+
+      const inv3Items = [
+        { description: "Veuve Clicquot Yellow Label 6-pack", quantity: 4, unitPrice: "342.00", discount: "0", discountPercent: "0", total: "1368.00", itemId: createdItems[10].id },
+      ];
+      const [inv3] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00003", type: "invoice", customerId: createdCustomers[1].id,
+        date: fmt(addDays(today, -39)), dueDate: fmt(addDays(today, -25)),
+        subtotal: "1368.00", taxRate: "19", taxAmount: "259.92",
+        discountAmount: "0", total: "1627.92", status: "overdue",
+      }).returning();
+      await db.insert(invoiceItems).values(inv3Items.map(li => ({ ...li, invoiceId: inv3.id })));
+
+      const inv4Items = [
+        { description: "Grey Goose Vodka", quantity: 24, unitPrice: "39.00", discount: "0", discountPercent: "5", total: "889.20", itemId: createdItems[14].id },
+        { description: "Hendrick's Gin", quantity: 12, unitPrice: "35.00", discount: "0", discountPercent: "0", total: "420.00", itemId: createdItems[15].id },
+        { description: "Prosecco Superiore DOCG 12-pack", quantity: 3, unitPrice: "168.00", discount: "0", discountPercent: "0", total: "504.00", itemId: createdItems[11].id },
+      ];
+      const inv4Sub = 1813.20;
+      const inv4Tax = +(inv4Sub * 0.19).toFixed(2);
+      const [inv4] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00004", type: "invoice", customerId: createdCustomers[5].id,
+        date: fmt(addDays(today, -7)), dueDate: fmt(addDays(today, 0)),
+        subtotal: inv4Sub.toFixed(2), taxRate: "19", taxAmount: inv4Tax.toFixed(2),
+        discountAmount: "0", total: (inv4Sub + inv4Tax).toFixed(2), status: "sent",
+      }).returning();
+      await db.insert(invoiceItems).values(inv4Items.map(li => ({ ...li, invoiceId: inv4.id })));
+
+      const inv5Items = [
+        { description: "Barolo Riserva 2016", quantity: 12, unitPrice: "79.00", discount: "0", discountPercent: "0", total: "948.00", itemId: createdItems[3].id },
+        { description: "Whispering Angel Rosé 2023 12-pack", quantity: 2, unitPrice: "228.00", discount: "0", discountPercent: "0", total: "456.00", itemId: createdItems[17].id },
+      ];
+      const inv5Sub = 1404.00;
+      const inv5Tax = +(inv5Sub * 0.19).toFixed(2);
+      const [inv5] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00005", type: "invoice", customerId: createdCustomers[6].id,
+        date: fmt(addDays(today, -3)), dueDate: fmt(addDays(today, 27)),
+        subtotal: inv5Sub.toFixed(2), taxRate: "19", taxAmount: inv5Tax.toFixed(2),
+        discountAmount: "0", total: (inv5Sub + inv5Tax).toFixed(2), status: "draft",
+      }).returning();
+      await db.insert(invoiceItems).values(inv5Items.map(li => ({ ...li, invoiceId: inv5.id })));
+
+      const cn1Items = [
+        { description: "Château Margaux 2018 (returned damaged)", quantity: 2, unitPrice: "189.99", discount: "0", discountPercent: "0", total: "379.98", itemId: createdItems[0].id },
+      ];
+      const cn1Sub = 379.98;
+      const cn1Tax = +(cn1Sub * 0.19).toFixed(2);
+      const [cn1] = await db.insert(invoices).values({
+        invoiceNumber: "CN-00001", type: "credit_note", customerId: createdCustomers[0].id,
+        date: fmt(addDays(today, -10)), dueDate: fmt(addDays(today, -10)),
+        subtotal: cn1Sub.toFixed(2), taxRate: "19", taxAmount: cn1Tax.toFixed(2),
+        discountAmount: "0", total: (cn1Sub + cn1Tax).toFixed(2), status: "sent", linkedInvoiceId: inv1.id,
+      }).returning();
+      await db.insert(invoiceItems).values(cn1Items.map(li => ({ ...li, invoiceId: cn1.id })));
+
+      const pf1Items = [
+        { description: "Penfolds Grange 2017 6-pack", quantity: 2, unitPrice: "1999.00", discount: "0", discountPercent: "0", total: "3998.00", itemId: createdItems[2].id },
+        { description: "Riesling Spätlese 2022", quantity: 24, unitPrice: "26.00", discount: "0", discountPercent: "0", total: "624.00", itemId: createdItems[8].id },
+      ];
+      const pf1Sub = 4622.00;
+      const pf1Tax = +(pf1Sub * 0.19).toFixed(2);
+      const [pf1] = await db.insert(invoices).values({
+        invoiceNumber: "PF-00001", type: "proforma", customerId: createdCustomers[3].id,
+        date: fmt(addDays(today, -2)), dueDate: fmt(addDays(today, 28)),
+        subtotal: pf1Sub.toFixed(2), taxRate: "19", taxAmount: pf1Tax.toFixed(2),
+        discountAmount: "0", total: (pf1Sub + pf1Tax).toFixed(2), status: "draft",
+      }).returning();
+      await db.insert(invoiceItems).values(pf1Items.map(li => ({ ...li, invoiceId: pf1.id })));
+
+      const qt1Items = [
+        { description: "Rioja Gran Reserva 2015 12-pack", quantity: 5, unitPrice: "504.00", discount: "0", discountPercent: "10", total: "2268.00", itemId: createdItems[4].id },
+        { description: "Miraval Rosé 2023 6-pack", quantity: 4, unitPrice: "132.00", discount: "0", discountPercent: "0", total: "528.00", itemId: createdItems[18].id },
+      ];
+      const qt1Sub = 2796.00;
+      const qt1Tax = +(qt1Sub * 0.19).toFixed(2);
+      await db.insert(invoices).values({
+        invoiceNumber: "QT-00001", type: "quotation", customerId: createdCustomers[9].id,
+        date: fmt(today), dueDate: fmt(addDays(today, 30)),
+        subtotal: qt1Sub.toFixed(2), taxRate: "19", taxAmount: qt1Tax.toFixed(2),
+        discountAmount: "0", total: (qt1Sub + qt1Tax).toFixed(2), status: "draft",
+      }).returning().then(([qt1]) => db.insert(invoiceItems).values(qt1Items.map(li => ({ ...li, invoiceId: qt1.id }))));
+
+      const [contract1] = await db.insert(priceContracts).values({
+        customerId: createdCustomers[0].id, name: "Wine House Annual Contract",
+        startDate: "2026-01-01", endDate: "2026-12-31", discountType: "percentage",
+        discountValue: "10", minQuantity: 12, active: true,
+        purchaseGoal: "25000", voucherType: "percentage", voucherValue: "5",
+      }).returning();
+      await db.insert(priceContractRules).values([
+        { contractId: contract1.id, categoryIds: [redWine.id, whiteWine.id], brands: [], minQuantity: 6, discountType: "percentage", discountValue: "10" },
+        { contractId: contract1.id, categoryIds: [sparkling.id], brands: [], minQuantity: 12, discountType: "percentage", discountValue: "8" },
+      ]);
+
+      const [contract2] = await db.insert(priceContracts).values({
+        customerId: createdCustomers[7].id, name: "Elite Dining Premium Deal",
+        startDate: "2026-01-01", endDate: "2026-06-30", discountType: "percentage",
+        discountValue: "8", minQuantity: 6, active: true,
+        purchaseGoal: "50000", voucherType: "fixed", voucherValue: "500",
+      }).returning();
+      await db.insert(priceContractRules).values([
+        { contractId: contract2.id, categoryIds: [spirits.id], brands: ["Macallan", "Hennessy"], minQuantity: 3, discountType: "percentage", discountValue: "12" },
+        { contractId: contract2.id, categoryIds: [], brands: [], minQuantity: 24, discountType: "fixed", discountValue: "5" },
+      ]);
+
+      await db.insert(seasonalOffers).values({
+        name: "Spring Wine Festival", description: "Mix and match any 6 bottles from our red and white wine collections for a special discount",
+        startDate: "2026-03-01", endDate: "2026-05-31", discountPercentage: "15",
+        minItems: 6, mixMatch: true, active: true,
+      });
+
+      await db.insert(seasonalOffers).values({
+        name: "Summer Sparkling Special", description: "Buy any 12 sparkling wines and get 20% off",
+        startDate: "2026-06-01", endDate: "2026-08-31", discountPercentage: "20",
+        minItems: 12, mixMatch: false, active: true,
+      });
+
+      await db.insert(seasonalOffers).values({
+        name: "Cyprus Commandaria Week", description: "Special pricing on local Commandaria wines - buy 3 get 10% off",
+        startDate: "2026-04-01", endDate: "2026-04-07", discountPercentage: "10",
+        minItems: 3, mixMatch: false, active: true,
+      });
+
+      res.json({ message: "Demo data seeded successfully", counts: { categories: 7, items: seedItems.length, customers: seedCustomers.length, suppliers: seedSuppliers.length, invoices: 8, offers: 3, contracts: 2 } });
+    } catch (e: any) {
+      console.error("Demo seed error:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/demo/clear", async (_req, res) => {
+    try {
+      await db.delete(emailLogs);
+      await db.delete(portalOrderItems);
+      await db.delete(portalOrders);
+      await db.delete(supplierPayments);
+      await db.delete(purchaseInvoiceItems);
+      await db.delete(purchaseInvoices);
+      await db.delete(payments);
+      await db.delete(invoiceItems);
+      await db.delete(invoices);
+      await db.delete(priceContractItems);
+      await db.delete(priceContractRules);
+      await db.delete(priceContracts);
+      await db.delete(seasonalOfferItems);
+      await db.delete(seasonalOffers);
+      await db.delete(items);
+      await db.delete(categories);
+      await db.delete(customers);
+      await db.delete(suppliers);
+      res.json({ message: "All demo data cleared successfully" });
+    } catch (e: any) {
+      console.error("Demo clear error:", e);
       res.status(500).json({ message: e.message });
     }
   });
