@@ -87,8 +87,27 @@ export async function registerRoutes(
     }
   });
 
+  const numericStringFields = ["price1", "price2", "price3", "price4", "price5", "costPrice", "vatRate"];
+  const numericIntFields = ["stockQuantity", "reorderLevel", "packSize"];
+  function sanitizeItemNumericFields(body: any) {
+    for (const field of numericStringFields) {
+      if (body[field] === "" || body[field] === null || body[field] === undefined) {
+        body[field] = field === "vatRate" ? "19" : "0";
+      }
+    }
+    for (const field of numericIntFields) {
+      if (body[field] === "" || body[field] === null || body[field] === undefined) {
+        body[field] = field === "packSize" ? 1 : 0;
+      } else if (typeof body[field] === "string") {
+        body[field] = parseInt(body[field], 10) || (field === "packSize" ? 1 : 0);
+      }
+    }
+    return body;
+  }
+
   app.post("/api/items", async (req, res) => {
     try {
+      sanitizeItemNumericFields(req.body);
       const data = insertItemSchema.parse(req.body);
       if (data.categoryId === "") data.categoryId = null;
       const item = await storage.createItem(data);
@@ -100,6 +119,7 @@ export async function registerRoutes(
 
   app.patch("/api/items/:id", async (req, res) => {
     try {
+      sanitizeItemNumericFields(req.body);
       const item = await storage.updateItem(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Item not found" });
       res.json(item);
