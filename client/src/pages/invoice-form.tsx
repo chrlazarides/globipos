@@ -379,17 +379,32 @@ export default function InvoiceForm() {
       const amtDisc = parseFloat(discount) || 0;
       const lineTotal = Math.max(0, price - (price * pctDisc / 100) - amtDisc).toFixed(2);
 
-      const newLine: LineItem = {
-        itemId: item.id,
-        description: item.name,
-        quantity: 1,
-        saleUnit: itemToSaleUnit(item),
-        unitPrice,
-        discountPercent,
-        discount,
-        total: lineTotal,
-      };
-      setLines((prev) => [...prev.filter(l => l.description), newLine]);
+      setLines((prev) => {
+        const filtered = prev.filter(l => l.description);
+        const existingIndex = filtered.findIndex(l => l.itemId === item.id);
+        if (existingIndex >= 0) {
+          const existing = filtered[existingIndex];
+          const newQty2 = existing.quantity + 1;
+          const ep = parseFloat(existing.unitPrice) || 0;
+          const ePct = parseFloat(existing.discountPercent) || 0;
+          const eAmt = parseFloat(existing.discount) || 0;
+          const eLineTotal = (Math.max(0, ep - (ep * ePct / 100) - eAmt) * newQty2).toFixed(2);
+          const updated = [...filtered];
+          updated[existingIndex] = { ...existing, quantity: newQty2, total: eLineTotal };
+          return updated;
+        }
+        const newLine: LineItem = {
+          itemId: item.id,
+          description: item.name,
+          quantity: 1,
+          saleUnit: itemToSaleUnit(item),
+          unitPrice,
+          discountPercent,
+          discount,
+          total: lineTotal,
+        };
+        return [...filtered, newLine];
+      });
     } catch {
       toast({ title: "Error", description: "Failed to look up barcode", variant: "destructive" });
     }
