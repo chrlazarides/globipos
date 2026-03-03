@@ -87,6 +87,7 @@ export default function InvoiceForm() {
 
   const [cachedCustomers, setCachedCustomers] = useState<Customer[]>([]);
   const [cachedItems, setCachedItems] = useState<Item[]>([]);
+  const [cachedContracts, setCachedContracts] = useState<(PriceContract & { rules?: PriceContractRule[]; priceLevel?: number })[]>([]);
 
   useEffect(() => {
     if (onlineCustomers.length > 0) {
@@ -95,15 +96,20 @@ export default function InvoiceForm() {
     if (onlineItems.length > 0) {
       offlineStore.cacheItems(onlineItems);
     }
-  }, [onlineCustomers, onlineItems]);
+    if (contracts.length > 0) {
+      offlineStore.cachePriceContracts(contracts);
+    }
+  }, [onlineCustomers, onlineItems, contracts]);
 
   useEffect(() => {
     offlineStore.getCachedCustomers().then(c => setCachedCustomers(c as Customer[])).catch(() => {});
     offlineStore.getCachedItems().then(i => setCachedItems(i as Item[])).catch(() => {});
+    offlineStore.getCachedPriceContracts().then(c => setCachedContracts(c as any[])).catch(() => {});
   }, []);
 
   const customers = onlineCustomers.length > 0 ? onlineCustomers : cachedCustomers;
   const items = onlineItems.length > 0 ? onlineItems : cachedItems;
+  const allContracts = contracts.length > 0 ? contracts : cachedContracts;
 
   const [customerId, setCustomerId] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
@@ -158,13 +164,13 @@ export default function InvoiceForm() {
 
   const getActiveContracts = useCallback((custId: string) => {
     const today = new Date().toISOString().split("T")[0];
-    return contracts.filter(c =>
+    return allContracts.filter(c =>
       c.customerId === custId &&
       c.active &&
       c.startDate <= today &&
       c.endDate >= today
     );
-  }, [contracts]);
+  }, [allContracts]);
 
   const findContractDiscount = useCallback((custId: string, item: Item, quantity: number = 1) => {
     const activeContracts = getActiveContracts(custId);
@@ -272,7 +278,7 @@ export default function InvoiceForm() {
       });
       return changed ? updated : prev;
     });
-  }, [customerId, contracts, items, customers, findContractDiscount]);
+  }, [customerId, allContracts, items, customers, findContractDiscount]);
 
   const calcLineTotal = useCallback((line: LineItem) => {
     const qty = line.quantity || 0;

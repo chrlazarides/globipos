@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { offlineStore } from "@/lib/offline-store";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import Items from "@/pages/items";
@@ -53,6 +54,36 @@ function AdminRouter() {
   );
 }
 
+function OfflineDataSync() {
+  const { data: items } = useQuery<any[]>({ queryKey: ["/api/items"] });
+  const { data: customers } = useQuery<any[]>({ queryKey: ["/api/customers"] });
+  const { data: categories } = useQuery<any[]>({ queryKey: ["/api/categories"] });
+  const { data: contracts } = useQuery<any[]>({ queryKey: ["/api/price-contracts"] });
+  const { data: settings } = useQuery<any[]>({ queryKey: ["/api/settings"] });
+  const { data: suppliers } = useQuery<any[]>({ queryKey: ["/api/suppliers"] });
+
+  useEffect(() => {
+    if (items && items.length > 0) offlineStore.cacheItems(items).catch(() => {});
+  }, [items]);
+  useEffect(() => {
+    if (customers && customers.length > 0) offlineStore.cacheCustomers(customers).catch(() => {});
+  }, [customers]);
+  useEffect(() => {
+    if (categories && categories.length > 0) offlineStore.cacheCategories(categories).catch(() => {});
+  }, [categories]);
+  useEffect(() => {
+    if (contracts && contracts.length > 0) offlineStore.cachePriceContracts(contracts).catch(() => {});
+  }, [contracts]);
+  useEffect(() => {
+    if (settings && settings.length > 0) offlineStore.cacheSettings(settings).catch(() => {});
+  }, [settings]);
+  useEffect(() => {
+    if (suppliers && suppliers.length > 0) offlineStore.cacheSuppliers(suppliers).catch(() => {});
+  }, [suppliers]);
+
+  return null;
+}
+
 function AdminLayout() {
   const style = {
     "--sidebar-width": "16rem",
@@ -61,6 +92,7 @@ function AdminLayout() {
 
   return (
     <SidebarProvider style={style as React.CSSProperties}>
+      <OfflineDataSync />
       <div className="flex h-screen w-full">
         <AppSidebar />
         <div className="flex flex-col flex-1 min-w-0">

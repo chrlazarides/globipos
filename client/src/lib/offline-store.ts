@@ -1,10 +1,14 @@
 const DB_NAME = "vintrade-offline";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORES = {
   items: "items",
   customers: "customers",
   pendingInvoices: "pendingInvoices",
+  categories: "categories",
+  priceContracts: "priceContracts",
+  settings: "settings",
+  suppliers: "suppliers",
 };
 
 function openDB(): Promise<IDBDatabase> {
@@ -15,6 +19,10 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORES.items)) db.createObjectStore(STORES.items, { keyPath: "id" });
       if (!db.objectStoreNames.contains(STORES.customers)) db.createObjectStore(STORES.customers, { keyPath: "id" });
       if (!db.objectStoreNames.contains(STORES.pendingInvoices)) db.createObjectStore(STORES.pendingInvoices, { keyPath: "offlineId" });
+      if (!db.objectStoreNames.contains(STORES.categories)) db.createObjectStore(STORES.categories, { keyPath: "id" });
+      if (!db.objectStoreNames.contains(STORES.priceContracts)) db.createObjectStore(STORES.priceContracts, { keyPath: "id" });
+      if (!db.objectStoreNames.contains(STORES.settings)) db.createObjectStore(STORES.settings, { keyPath: "key" });
+      if (!db.objectStoreNames.contains(STORES.suppliers)) db.createObjectStore(STORES.suppliers, { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -72,6 +80,18 @@ export const offlineStore = {
 
   cacheCustomers: (data: any[]) => putAll(STORES.customers, data),
   getCachedCustomers: () => getAll(STORES.customers),
+
+  cacheCategories: (data: any[]) => putAll(STORES.categories, data),
+  getCachedCategories: () => getAll(STORES.categories),
+
+  cachePriceContracts: (data: any[]) => putAll(STORES.priceContracts, data),
+  getCachedPriceContracts: () => getAll(STORES.priceContracts),
+
+  cacheSettings: (data: any[]) => putAll(STORES.settings, data),
+  getCachedSettings: () => getAll(STORES.settings),
+
+  cacheSuppliers: (data: any[]) => putAll(STORES.suppliers, data),
+  getCachedSuppliers: () => getAll(STORES.suppliers),
 
   savePendingInvoice: (invoice: any) => put(STORES.pendingInvoices, invoice),
   getPendingInvoices: () => getAll(STORES.pendingInvoices),

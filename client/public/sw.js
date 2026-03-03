@@ -1,16 +1,20 @@
-const CACHE_NAME = 'vintrade-v1';
+const CACHE_NAME = 'vintrade-v2';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
   '/favicon.png'
 ];
 
-const API_CACHE_NAME = 'vintrade-api-v1';
+const API_CACHE_NAME = 'vintrade-api-v2';
 const CACHEABLE_API_ROUTES = [
   '/api/items',
   '/api/customers',
   '/api/categories',
-  '/api/settings'
+  '/api/settings',
+  '/api/price-contracts',
+  '/api/suppliers',
+  '/api/seasonal-offers',
+  '/api/items/brands'
 ];
 
 self.addEventListener('install', (event) => {
