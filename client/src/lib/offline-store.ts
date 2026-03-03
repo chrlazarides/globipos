@@ -1,5 +1,5 @@
 const DB_NAME = "vintrade-offline";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 const STORES = {
   items: "items",
@@ -9,6 +9,7 @@ const STORES = {
   priceContracts: "priceContracts",
   settings: "settings",
   suppliers: "suppliers",
+  purchaseInvoices: "purchaseInvoices",
 };
 
 function openDB(): Promise<IDBDatabase> {
@@ -23,6 +24,7 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORES.priceContracts)) db.createObjectStore(STORES.priceContracts, { keyPath: "id" });
       if (!db.objectStoreNames.contains(STORES.settings)) db.createObjectStore(STORES.settings, { keyPath: "key" });
       if (!db.objectStoreNames.contains(STORES.suppliers)) db.createObjectStore(STORES.suppliers, { keyPath: "id" });
+      if (!db.objectStoreNames.contains(STORES.purchaseInvoices)) db.createObjectStore(STORES.purchaseInvoices, { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -92,6 +94,9 @@ export const offlineStore = {
 
   cacheSuppliers: (data: any[]) => putAll(STORES.suppliers, data),
   getCachedSuppliers: () => getAll(STORES.suppliers),
+
+  cachePurchaseInvoices: (data: any[]) => putAll(STORES.purchaseInvoices, data),
+  getCachedPurchaseInvoices: () => getAll(STORES.purchaseInvoices),
 
   savePendingInvoice: (invoice: any) => put(STORES.pendingInvoices, invoice),
   getPendingInvoices: () => getAll(STORES.pendingInvoices),

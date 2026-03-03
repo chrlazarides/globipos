@@ -61,6 +61,7 @@ function OfflineDataSync() {
   const { data: contracts } = useQuery<any[]>({ queryKey: ["/api/price-contracts"] });
   const { data: settings } = useQuery<any[]>({ queryKey: ["/api/settings"] });
   const { data: suppliers } = useQuery<any[]>({ queryKey: ["/api/suppliers"] });
+  const { data: purchaseInvoices } = useQuery<any[]>({ queryKey: ["/api/purchase-invoices"] });
 
   useEffect(() => {
     if (items && items.length > 0) offlineStore.cacheItems(items).catch(() => {});
@@ -80,6 +81,9 @@ function OfflineDataSync() {
   useEffect(() => {
     if (suppliers && suppliers.length > 0) offlineStore.cacheSuppliers(suppliers).catch(() => {});
   }, [suppliers]);
+  useEffect(() => {
+    if (purchaseInvoices && purchaseInvoices.length > 0) offlineStore.cachePurchaseInvoices(purchaseInvoices).catch(() => {});
+  }, [purchaseInvoices]);
 
   return null;
 }

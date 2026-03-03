@@ -13,6 +13,7 @@ const CACHEABLE_API_ROUTES = [
   '/api/settings',
   '/api/price-contracts',
   '/api/suppliers',
+  '/api/purchase-invoices',
   '/api/seasonal-offers',
   '/api/items/brands'
 ];
