@@ -253,6 +253,22 @@ function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; bran
     return String(cell.v ?? "").trim();
   };
 
+  const STANDARD_HEADER_WORDS = [
+    "barcode", "sku", "code", "price1", "price2", "costprice", "stockquantity",
+    "packsize", "unittype", "reorderlevel", "pricelevel", "creditlimit",
+    "paymentterms", "contactperson", "taxid",
+  ];
+  for (let r = 0; r <= Math.min(3, range.e.r); r++) {
+    let headerHits = 0;
+    for (let c = 0; c <= range.e.c; c++) {
+      const v = getCellVal(r, c).toLowerCase().replace(/[\s_\-./]/g, "");
+      for (const kw of STANDARD_HEADER_WORDS) {
+        if (v === kw || v.includes(kw)) { headerHits++; break; }
+      }
+    }
+    if (headerHits >= 2) return null;
+  }
+
   const firstCell = getCellVal(0, 0);
   if (!firstCell || firstCell.length < 3) return null;
 
