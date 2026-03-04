@@ -147,27 +147,8 @@ function colLetter(c: number): string {
 }
 
 function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } {
-  const defaultJson: any[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
-  if (defaultJson.length === 0) return { headers: [], rows: [] };
-
-  const defaultHeaders = Object.keys(defaultJson[0]);
-  const emptyCount = defaultHeaders.filter((h) => h.startsWith("__EMPTY")).length;
-
-  if (emptyCount <= 1 && defaultHeaders.length >= 2) {
-    const cleanHeaders = defaultHeaders.map((h, i) =>
-      h.startsWith("__EMPTY") ? `Col ${colLetter(i)}` : h
-    );
-    const rows = defaultJson.map((row) => {
-      const cleaned: Record<string, any> = {};
-      defaultHeaders.forEach((origH, i) => {
-        cleaned[cleanHeaders[i]] = row[origH] ?? "";
-      });
-      return cleaned;
-    });
-    return { headers: cleanHeaders, rows };
-  }
-
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+  if (range.e.r < 0 || range.e.c < 0) return { headers: [], rows: [] };
 
   const getCellVal = (r: number, c: number): string => {
     const addr = XLSX.utils.encode_cell({ r, c });
