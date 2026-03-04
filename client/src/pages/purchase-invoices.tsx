@@ -33,6 +33,7 @@ interface LineItem {
   discount: string;
   vatRate: string;
   total: string;
+  salePrice: string;
 }
 
 export default function PurchaseInvoices() {
@@ -193,23 +194,27 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
       setDate(existingInvoice.date);
       setDueDate(existingInvoice.dueDate || "");
       setNotes(existingInvoice.notes || "");
-      setLineItems(existingInvoice.items.map(li => ({
-        itemId: li.itemId,
-        description: li.description,
-        quantity: li.quantity,
-        purchaseUnit: li.purchaseUnit,
-        unitCost: li.unitCost,
-        discountPercent: li.discountPercent || "0",
-        discount: li.discount || "0",
-        vatRate: li.vatRate,
-        total: li.total,
-      })));
+      setLineItems(existingInvoice.items.map(li => {
+        const item = allItems.find(i => i.id === li.itemId);
+        return {
+          itemId: li.itemId,
+          description: li.description,
+          quantity: li.quantity,
+          purchaseUnit: li.purchaseUnit,
+          unitCost: li.unitCost,
+          discountPercent: li.discountPercent || "0",
+          discount: li.discount || "0",
+          vatRate: li.vatRate,
+          total: li.total,
+          salePrice: item ? item.price1 : "0",
+        };
+      }));
       setLoaded(true);
     }
   }, [editingId, existingInvoice, loaded]);
 
   const addLine = () => {
-    setLineItems([...lineItems, { itemId: "", description: "", quantity: 1, purchaseUnit: "pc", unitCost: "0", discountPercent: "0", discount: "0", vatRate: "19", total: "0" }]);
+    setLineItems([...lineItems, { itemId: "", description: "", quantity: 1, purchaseUnit: "pc", unitCost: "0", discountPercent: "0", discount: "0", vatRate: "19", total: "0", salePrice: "0" }]);
   };
 
   const updateLine = (index: number, field: keyof LineItem, value: any) => {
@@ -223,6 +228,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
         updated[index].unitCost = item.costPrice;
         updated[index].vatRate = String(item.vatRate || "19");
         updated[index].purchaseUnit = item.packSize > 1 ? "pack" : "pc";
+        updated[index].salePrice = item.price1;
       }
     }
 
@@ -397,7 +403,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                       </Button>
                     </div>
                     {stockInfo && <p className="text-xs text-muted-foreground">{stockInfo}</p>}
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                    <div className="grid grid-cols-3 sm:grid-cols-7 gap-2">
                       <div>
                         <label className="text-xs text-muted-foreground">Qty</label>
                         <Input type="number" min="1" value={li.quantity} onChange={e => updateLine(idx, "quantity", parseInt(e.target.value) || 0)} data-testid={`input-purchase-qty-${idx}`} />
@@ -419,6 +425,10 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                         <Input type="number" step="0.01" value={li.unitCost} onChange={e => updateLine(idx, "unitCost", e.target.value)} data-testid={`input-purchase-cost-${idx}`} />
                       </div>
                       <div>
+                        <label className="text-xs text-muted-foreground">Sale (P1)</label>
+                        <Input type="number" step="0.01" value={li.salePrice} onChange={e => updateLine(idx, "salePrice", e.target.value)} data-testid={`input-purchase-sale-price-${idx}`} />
+                      </div>
+                      <div>
                         <label className="text-xs text-muted-foreground">Disc %</label>
                         <Input type="number" step="0.01" value={li.discountPercent} onChange={e => updateLine(idx, "discountPercent", e.target.value)} data-testid={`input-purchase-disc-pct-${idx}`} />
                       </div>
@@ -438,26 +448,42 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                       const currentCost = parseFloat(li.unitCost) || 0;
                       const prevCost = lastCost ? parseFloat(lastCost.unitCost) : null;
                       const variation = prevCost !== null && prevCost > 0 ? ((currentCost - prevCost) / prevCost) * 100 : null;
+                      const sale = parseFloat(li.salePrice) || 0;
+                      const markupAmt = sale - currentCost;
+                      const markupPct = currentCost > 0 ? (markupAmt / currentCost) * 100 : 0;
+                      const marginPct = sale > 0 ? (markupAmt / sale) * 100 : 0;
+                      const isNegativeMargin = markupAmt < 0;
 
                       return (
-                        <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
-                          <span className="text-muted-foreground">
-                            +{btls} btl{btls > 1 ? "s" : ""}{packInfo}
-                          </span>
-                          {lastCost && prevCost !== null && (
-                            <span className="flex items-center gap-1">
-                              <span className="text-muted-foreground">Last: {"\u20AC"}{prevCost.toFixed(2)}</span>
-                              {variation !== null && variation !== 0 ? (
-                                <span className={`flex items-center gap-0.5 font-medium ${variation > 0 ? "text-red-500" : "text-green-500"}`}>
-                                  {variation > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                  {variation > 0 ? "+" : ""}{variation.toFixed(1)}%
-                                </span>
-                              ) : variation === 0 ? (
-                                <span className="flex items-center gap-0.5 text-muted-foreground">
-                                  <Minus className="w-3 h-3" /> 0%
-                                </span>
-                              ) : null}
+                        <div className="space-y-0.5">
+                          <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
+                            <span className="text-muted-foreground">
+                              +{btls} btl{btls > 1 ? "s" : ""}{packInfo}
                             </span>
+                            {lastCost && prevCost !== null && (
+                              <span className="flex items-center gap-1">
+                                <span className="text-muted-foreground">Last: {"\u20AC"}{prevCost.toFixed(2)}</span>
+                                {variation !== null && variation !== 0 ? (
+                                  <span className={`flex items-center gap-0.5 font-medium ${variation > 0 ? "text-red-500" : "text-green-500"}`}>
+                                    {variation > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                                    {variation > 0 ? "+" : ""}{variation.toFixed(1)}%
+                                  </span>
+                                ) : variation === 0 ? (
+                                  <span className="flex items-center gap-0.5 text-muted-foreground">
+                                    <Minus className="w-3 h-3" /> 0%
+                                  </span>
+                                ) : null}
+                              </span>
+                            )}
+                          </div>
+                          {currentCost > 0 && sale > 0 && (
+                            <div className={`flex flex-wrap items-center gap-2 text-xs ${isNegativeMargin ? "text-red-500 font-medium" : "text-muted-foreground"}`} data-testid={`text-margin-${idx}`}>
+                              <span>Markup: {isNegativeMargin ? "" : "+"}{"\u20AC"}{markupAmt.toFixed(2)} ({markupPct >= 0 ? "+" : ""}{markupPct.toFixed(1)}%)</span>
+                              <span className="hidden sm:inline">•</span>
+                              <span className={isNegativeMargin ? "text-red-500 font-medium" : "text-green-600 dark:text-green-400 font-medium"}>
+                                Margin: {marginPct.toFixed(1)}%
+                              </span>
+                            </div>
                           )}
                         </div>
                       );
