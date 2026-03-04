@@ -227,20 +227,18 @@ export default function InvoiceForm() {
   }, [getActiveContracts, customers]);
 
   useEffect(() => {
-    if (customerId) {
+    if (customerId && invoiceDate && /^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
       const customer = customers.find((c) => c.id === customerId);
       if (customer) {
         const days = getPaymentDays(customer.paymentTerms);
-        if (days > 0) {
-          const due = new Date(invoiceDate);
+        const due = new Date(invoiceDate + "T00:00:00");
+        if (!isNaN(due.getTime())) {
           due.setDate(due.getDate() + days);
           setDueDate(due.toISOString().split("T")[0]);
-        } else if (isNew) {
-          setDueDate(invoiceDate);
         }
       }
     }
-  }, [customerId, invoiceDate, customers, isNew]);
+  }, [customerId, invoiceDate, customers]);
 
   useEffect(() => {
     if (!customerId) return;

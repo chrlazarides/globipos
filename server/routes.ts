@@ -524,6 +524,18 @@ export async function registerRoutes(
       const data = insertInvoiceSchema.parse({ ...invoiceData, invoiceNumber: "TEMP" });
       const parsedItems = (lineItems || []).map((li: any) => insertInvoiceItemSchema.parse({ ...li, invoiceId: "TEMP" }));
 
+      if (!data.dueDate && data.customerId) {
+        const customer = await storage.getCustomer(data.customerId);
+        if (customer) {
+          const invDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+          const daysMatch = customer.paymentTerms.match(/credit_(\d+)/);
+          const days = daysMatch ? parseInt(daysMatch[1]) : 0;
+          const due = new Date(invDate);
+          due.setDate(due.getDate() + days);
+          (data as any).dueDate = due.toISOString().split("T")[0];
+        }
+      }
+
       if (data.type === "invoice" && data.status !== "draft") {
         for (const li of parsedItems) {
           if (li.itemId) {
@@ -1018,6 +1030,18 @@ export async function registerRoutes(
     try {
       const { items: lineItems, ...invoiceData } = req.body;
       const data = insertPurchaseInvoiceSchema.parse(invoiceData);
+
+      if (!data.dueDate && data.supplierId) {
+        const supplier = await storage.getSupplier(data.supplierId);
+        if (supplier) {
+          const piDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+          const daysMatch = supplier.paymentTerms.match(/credit_(\d+)/);
+          const days = daysMatch ? parseInt(daysMatch[1]) : 0;
+          const due = new Date(piDate);
+          due.setDate(due.getDate() + days);
+          (data as any).dueDate = due.toISOString().split("T")[0];
+        }
+      }
 
       if (!lineItems?.length) {
         return res.status(400).json({ message: "At least one line item is required" });

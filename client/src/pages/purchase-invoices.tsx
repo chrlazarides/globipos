@@ -163,7 +163,9 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
   const [loaded, setLoaded] = useState(false);
 
   const calcDueDate = (invoiceDate: string, terms: string) => {
-    const d = new Date(invoiceDate);
+    if (!invoiceDate || !/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) return invoiceDate;
+    const d = new Date(invoiceDate + "T00:00:00");
+    if (isNaN(d.getTime())) return invoiceDate;
     const match = terms.match(/credit_(\d+)/);
     if (match) {
       d.setDate(d.getDate() + parseInt(match[1]));
@@ -174,16 +176,24 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
   const handleSupplierChange = (id: string) => {
     setSupplierId(id);
     const supplier = suppliers.find(s => s.id === id);
-    if (supplier && supplier.paymentTerms !== "cash") {
-      setDueDate(calcDueDate(date, supplier.paymentTerms));
+    if (supplier) {
+      if (supplier.paymentTerms === "cash") {
+        setDueDate(date);
+      } else {
+        setDueDate(calcDueDate(date, supplier.paymentTerms));
+      }
     }
   };
 
   const handleDateChange = (newDate: string) => {
     setDate(newDate);
     const supplier = suppliers.find(s => s.id === supplierId);
-    if (supplier && supplier.paymentTerms !== "cash" && dueDate) {
-      setDueDate(calcDueDate(newDate, supplier.paymentTerms));
+    if (supplier) {
+      if (supplier.paymentTerms === "cash") {
+        setDueDate(newDate);
+      } else {
+        setDueDate(calcDueDate(newDate, supplier.paymentTerms));
+      }
     }
   };
 
