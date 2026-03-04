@@ -157,34 +157,63 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
     return String(cell.v ?? "").trim();
   };
 
+  const HEADER_KEYWORDS = [
+    "name", "item", "product", "sku", "code", "barcode", "price", "cost",
+    "stock", "qty", "quantity", "category", "brand", "unit", "description",
+    "email", "phone", "address", "city", "country", "tax", "notes",
+    "volume", "alcohol", "vintage", "origin", "supplier", "customer",
+    "type", "variety", "wine", "ref", "date", "total", "vat", "discount",
+    "pack", "size", "level", "credit", "terms", "balance",
+    "κωδικός", "όνομα", "τιμή", "κόστος", "περιγραφή", "ποσότητα",
+  ];
+
   let headerRowIdx = -1;
   let bestScore = 0;
 
   for (let r = 0; r <= Math.min(10, range.e.r); r++) {
     let nonEmpty = 0;
     let hasText = 0;
+    let keywordHits = 0;
+    let hasNumericOnly = 0;
     for (let c = 0; c <= range.e.c; c++) {
       const v = getCellVal(r, c);
       if (v) {
         nonEmpty++;
-        if (isNaN(Number(v))) hasText++;
+        if (isNaN(Number(v))) {
+          hasText++;
+          const vLower = v.toLowerCase().replace(/[\s_\-./]/g, "");
+          for (const kw of HEADER_KEYWORDS) {
+            if (vLower.includes(kw) || kw.includes(vLower)) {
+              keywordHits++;
+              break;
+            }
+          }
+        } else {
+          hasNumericOnly++;
+        }
       }
     }
-    const score = nonEmpty * 2 + hasText * 3;
-    if (score > bestScore && nonEmpty >= 2 && hasText >= 1) {
+    const score = keywordHits * 10 + nonEmpty * 2 + hasText * 3 - hasNumericOnly * 2;
+    if (score > bestScore && nonEmpty >= 2 && hasText >= 1 && keywordHits >= 1) {
       bestScore = score;
       headerRowIdx = r;
     }
   }
 
-  if (headerRowIdx < 0) headerRowIdx = 0;
+  const useGenericHeaders = headerRowIdx < 0;
+  const dataStartRow = useGenericHeaders ? 0 : headerRowIdx + 1;
 
   const headers: string[] = [];
   const seen = new Set<string>();
   for (let c = 0; c <= range.e.c; c++) {
-    let hdr = getCellVal(headerRowIdx, c);
-    if (!hdr) {
+    let hdr: string;
+    if (useGenericHeaders) {
       hdr = `Col ${colLetter(c)}`;
+    } else {
+      hdr = getCellVal(headerRowIdx, c);
+      if (!hdr) {
+        hdr = `Col ${colLetter(c)}`;
+      }
     }
     let unique = hdr;
     let suffix = 1;
@@ -196,7 +225,7 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
   }
 
   const rows: any[] = [];
-  for (let r = headerRowIdx + 1; r <= range.e.r; r++) {
+  for (let r = dataStartRow; r <= range.e.r; r++) {
     const row: Record<string, any> = {};
     let hasData = false;
     for (let c = 0; c <= range.e.c; c++) {
