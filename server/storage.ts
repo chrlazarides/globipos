@@ -1,11 +1,11 @@
 import { db } from "./db";
-import { eq, and, gte, lte, desc, sql, ilike, or } from "drizzle-orm";
+import { eq, and, gte, lte, lt, desc, sql, ilike, or } from "drizzle-orm";
 import {
   users, categories, items, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
-  emailLogs,
+  emailLogs, accounts, journalEntries, journalEntryLines, expenses,
   type InsertUser, type User, type InsertCategory, type Category,
   type InsertItem, type Item, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
@@ -23,6 +23,10 @@ import {
   type InsertPurchaseInvoiceItem, type PurchaseInvoiceItem,
   type InsertSupplierPayment, type SupplierPayment,
   type InsertEmailLog, type EmailLog,
+  type InsertAccount, type Account,
+  type InsertJournalEntry, type JournalEntry,
+  type InsertJournalEntryLine, type JournalEntryLine,
+  type InsertExpense, type Expense,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -100,6 +104,26 @@ export interface IStorage {
   getEmailLogs(): Promise<EmailLog[]>;
   getEmailLogsByCustomer(customerId: string): Promise<EmailLog[]>;
   createEmailLog(data: InsertEmailLog): Promise<EmailLog>;
+
+  // Accounting
+  getAccounts(): Promise<Account[]>;
+  getAccount(id: string): Promise<Account | undefined>;
+  getAccountByCode(code: string): Promise<Account | undefined>;
+  createAccount(data: InsertAccount): Promise<Account>;
+  updateAccount(id: string, data: Partial<InsertAccount>): Promise<Account | undefined>;
+
+  getJournalEntries(): Promise<JournalEntry[]>;
+  getJournalEntry(id: string): Promise<(JournalEntry & { lines: (JournalEntryLine & { accountName?: string; accountCode?: string })[] }) | undefined>;
+  createJournalEntry(data: InsertJournalEntry, lines: InsertJournalEntryLine[]): Promise<JournalEntry>;
+  getNextJournalEntryNumber(): Promise<string>;
+
+  getExpenses(): Promise<(Expense & { expenseAccountName?: string; paymentAccountName?: string; supplierName?: string })[]>;
+  createExpense(data: InsertExpense): Promise<Expense>;
+
+  getGeneralLedger(accountId: string, from: string, to: string): Promise<{ entries: any[]; openingBalance: string }>;
+  getTrialBalance(): Promise<{ accounts: any[]; totalDebits: string; totalCredits: string }>;
+  getProfitAndLoss(from: string, to: string): Promise<{ revenue: any[]; expenses: any[]; totalRevenue: string; totalExpenses: string; netIncome: string }>;
+  getBalanceSheet(asOf: string): Promise<{ assets: any[]; liabilities: any[]; equity: any[]; totalAssets: string; totalLiabilities: string; totalEquity: string }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -669,6 +693,283 @@ export class DatabaseStorage implements IStorage {
   async createEmailLog(data: InsertEmailLog) {
     const [log] = await db.insert(emailLogs).values(data).returning();
     return log;
+  }
+
+  // Accounting
+  async getAccounts() {
+    return db.select().from(accounts).orderBy(accounts.code);
+  }
+
+  async getAccount(id: string) {
+    const [account] = await db.select().from(accounts).where(eq(accounts.id, id));
+    return account;
+  }
+
+  async getAccountByCode(code: string) {
+    const [account] = await db.select().from(accounts).where(eq(accounts.code, code));
+    return account;
+  }
+
+  async createAccount(data: InsertAccount) {
+    const [account] = await db.insert(accounts).values(data).returning();
+    return account;
+  }
+
+  async updateAccount(id: string, data: Partial<InsertAccount>) {
+    const [account] = await db.update(accounts).set(data).where(eq(accounts.id, id)).returning();
+    return account;
+  }
+
+  async getJournalEntries() {
+    return db.select().from(journalEntries).orderBy(desc(journalEntries.date), desc(journalEntries.createdAt));
+  }
+
+  async getJournalEntry(id: string) {
+    const [entry] = await db.select().from(journalEntries).where(eq(journalEntries.id, id));
+    if (!entry) return undefined;
+
+    const lines = await db
+      .select({
+        id: journalEntryLines.id,
+        journalEntryId: journalEntryLines.journalEntryId,
+        accountId: journalEntryLines.accountId,
+        debit: journalEntryLines.debit,
+        credit: journalEntryLines.credit,
+        description: journalEntryLines.description,
+        accountName: accounts.name,
+        accountCode: accounts.code,
+      })
+      .from(journalEntryLines)
+      .leftJoin(accounts, eq(journalEntryLines.accountId, accounts.id))
+      .where(eq(journalEntryLines.journalEntryId, id));
+
+    return { ...entry, lines };
+  }
+
+  async createJournalEntry(data: InsertJournalEntry, lines: InsertJournalEntryLine[]) {
+    const [entry] = await db.insert(journalEntries).values(data).returning();
+
+    if (lines.length > 0) {
+      const linesWithEntry = lines.map(l => ({ ...l, journalEntryId: entry.id }));
+      await db.insert(journalEntryLines).values(linesWithEntry);
+    }
+
+    for (const line of lines) {
+      const debitAmt = parseFloat(String(line.debit || "0"));
+      const creditAmt = parseFloat(String(line.credit || "0"));
+      if (debitAmt === 0 && creditAmt === 0) continue;
+
+      const [acct] = await db.select().from(accounts).where(eq(accounts.id, line.accountId));
+      if (!acct) continue;
+
+      const currentBal = parseFloat(acct.balance);
+      let newBal = currentBal;
+      if (acct.type === "asset" || acct.type === "expense") {
+        newBal += debitAmt - creditAmt;
+      } else {
+        newBal += creditAmt - debitAmt;
+      }
+      await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, line.accountId));
+    }
+
+    return entry;
+  }
+
+  async getNextJournalEntryNumber() {
+    const [result] = await db.select({ count: sql<number>`count(*)` }).from(journalEntries);
+    const num = (result?.count || 0) + 1;
+    return `JE-${String(num).padStart(5, "0")}`;
+  }
+
+  async getExpenses() {
+    const result = await db
+      .select({
+        id: expenses.id,
+        date: expenses.date,
+        expenseAccountId: expenses.expenseAccountId,
+        paymentAccountId: expenses.paymentAccountId,
+        amount: expenses.amount,
+        vatAmount: expenses.vatAmount,
+        description: expenses.description,
+        reference: expenses.reference,
+        paymentMethod: expenses.paymentMethod,
+        supplierId: expenses.supplierId,
+        journalEntryId: expenses.journalEntryId,
+        createdAt: expenses.createdAt,
+      })
+      .from(expenses)
+      .orderBy(desc(expenses.date), desc(expenses.createdAt));
+
+    const allAccts = await this.getAccounts();
+    const allSuppliers = await this.getSuppliers();
+    const acctMap = Object.fromEntries(allAccts.map(a => [a.id, a.name]));
+    const supplierMap = Object.fromEntries(allSuppliers.map(s => [s.id, s.name]));
+
+    return result.map(r => ({
+      ...r,
+      expenseAccountName: acctMap[r.expenseAccountId],
+      paymentAccountName: acctMap[r.paymentAccountId],
+      supplierName: r.supplierId ? supplierMap[r.supplierId] : undefined,
+    }));
+  }
+
+  async createExpense(data: InsertExpense) {
+    const [expense] = await db.insert(expenses).values(data).returning();
+    return expense;
+  }
+
+  async getGeneralLedger(accountId: string, from: string, to: string) {
+    const openingLines = await db
+      .select({
+        debit: sql<string>`COALESCE(SUM(${journalEntryLines.debit}), '0')`,
+        credit: sql<string>`COALESCE(SUM(${journalEntryLines.credit}), '0')`,
+      })
+      .from(journalEntryLines)
+      .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+      .where(and(
+        eq(journalEntryLines.accountId, accountId),
+        lt(journalEntries.date, from),
+        eq(journalEntries.status, "posted"),
+      ));
+
+    const [acct] = await db.select().from(accounts).where(eq(accounts.id, accountId));
+    const debitTotal = parseFloat(openingLines[0]?.debit || "0");
+    const creditTotal = parseFloat(openingLines[0]?.credit || "0");
+    let openingBalance = 0;
+    if (acct && (acct.type === "asset" || acct.type === "expense")) {
+      openingBalance = debitTotal - creditTotal;
+    } else {
+      openingBalance = creditTotal - debitTotal;
+    }
+
+    const entries = await db
+      .select({
+        date: journalEntries.date,
+        entryNumber: journalEntries.entryNumber,
+        description: journalEntries.description,
+        reference: journalEntries.reference,
+        debit: journalEntryLines.debit,
+        credit: journalEntryLines.credit,
+        lineDescription: journalEntryLines.description,
+        journalEntryId: journalEntries.id,
+      })
+      .from(journalEntryLines)
+      .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+      .where(and(
+        eq(journalEntryLines.accountId, accountId),
+        gte(journalEntries.date, from),
+        lte(journalEntries.date, to),
+        eq(journalEntries.status, "posted"),
+      ))
+      .orderBy(journalEntries.date, journalEntries.createdAt);
+
+    return { entries, openingBalance: openingBalance.toFixed(2) };
+  }
+
+  async getTrialBalance() {
+    const allAccounts = await db
+      .select({
+        id: accounts.id,
+        code: accounts.code,
+        name: accounts.name,
+        type: accounts.type,
+        balance: accounts.balance,
+      })
+      .from(accounts)
+      .where(eq(accounts.active, true))
+      .orderBy(accounts.code);
+
+    let totalDebits = 0;
+    let totalCredits = 0;
+    const accts = allAccounts.map(a => {
+      const bal = parseFloat(a.balance);
+      let debit = "0.00";
+      let credit = "0.00";
+      if (a.type === "asset" || a.type === "expense") {
+        if (bal >= 0) { debit = bal.toFixed(2); totalDebits += bal; }
+        else { credit = Math.abs(bal).toFixed(2); totalCredits += Math.abs(bal); }
+      } else {
+        if (bal >= 0) { credit = bal.toFixed(2); totalCredits += bal; }
+        else { debit = Math.abs(bal).toFixed(2); totalDebits += Math.abs(bal); }
+      }
+      return { ...a, debit, credit };
+    }).filter(a => a.debit !== "0.00" || a.credit !== "0.00");
+
+    return { accounts: accts, totalDebits: totalDebits.toFixed(2), totalCredits: totalCredits.toFixed(2) };
+  }
+
+  async getProfitAndLoss(from: string, to: string) {
+    const revenueAccounts = await db.select().from(accounts)
+      .where(and(eq(accounts.type, "revenue"), eq(accounts.active, true)))
+      .orderBy(accounts.code);
+
+    const expenseAccounts = await db.select().from(accounts)
+      .where(and(eq(accounts.type, "expense"), eq(accounts.active, true)))
+      .orderBy(accounts.code);
+
+    const getAccountPeriodBalance = async (accountId: string, type: string) => {
+      const [result] = await db.select({
+        debit: sql<string>`COALESCE(SUM(${journalEntryLines.debit}), '0')`,
+        credit: sql<string>`COALESCE(SUM(${journalEntryLines.credit}), '0')`,
+      })
+      .from(journalEntryLines)
+      .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+      .where(and(
+        eq(journalEntryLines.accountId, accountId),
+        gte(journalEntries.date, from),
+        lte(journalEntries.date, to),
+        eq(journalEntries.status, "posted"),
+      ));
+
+      const d = parseFloat(result?.debit || "0");
+      const c = parseFloat(result?.credit || "0");
+      if (type === "revenue") return (c - d).toFixed(2);
+      return (d - c).toFixed(2);
+    };
+
+    const revenue = await Promise.all(revenueAccounts.map(async a => ({
+      ...a,
+      periodBalance: await getAccountPeriodBalance(a.id, "revenue"),
+    })));
+
+    const expensesList = await Promise.all(expenseAccounts.map(async a => ({
+      ...a,
+      periodBalance: await getAccountPeriodBalance(a.id, "expense"),
+    })));
+
+    const totalRevenue = revenue.reduce((s, a) => s + parseFloat(a.periodBalance), 0);
+    const totalExpenses = expensesList.reduce((s, a) => s + parseFloat(a.periodBalance), 0);
+
+    return {
+      revenue: revenue.filter(a => parseFloat(a.periodBalance) !== 0),
+      expenses: expensesList.filter(a => parseFloat(a.periodBalance) !== 0),
+      totalRevenue: totalRevenue.toFixed(2),
+      totalExpenses: totalExpenses.toFixed(2),
+      netIncome: (totalRevenue - totalExpenses).toFixed(2),
+    };
+  }
+
+  async getBalanceSheet(asOf: string) {
+    const allAccounts = await db.select().from(accounts)
+      .where(eq(accounts.active, true))
+      .orderBy(accounts.code);
+
+    const assetAccounts = allAccounts.filter(a => a.type === "asset");
+    const liabilityAccounts = allAccounts.filter(a => a.type === "liability");
+    const equityAccounts = allAccounts.filter(a => a.type === "equity");
+
+    const totalAssets = assetAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
+    const totalLiabilities = liabilityAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
+    const totalEquity = equityAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
+
+    return {
+      assets: assetAccounts.filter(a => parseFloat(a.balance) !== 0),
+      liabilities: liabilityAccounts.filter(a => parseFloat(a.balance) !== 0),
+      equity: equityAccounts.filter(a => parseFloat(a.balance) !== 0),
+      totalAssets: totalAssets.toFixed(2),
+      totalLiabilities: totalLiabilities.toFixed(2),
+      totalEquity: totalEquity.toFixed(2),
+    };
   }
 }
 

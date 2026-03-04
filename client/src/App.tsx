@@ -23,6 +23,11 @@ import PurchaseInvoices from "@/pages/purchase-invoices";
 import SupplierPaymentsPage from "@/pages/supplier-payments";
 import ImportData from "@/pages/import-data";
 import EmailLogs from "@/pages/email-logs";
+import ChartOfAccounts from "@/pages/chart-of-accounts";
+import JournalEntries from "@/pages/journal-entries";
+import Expenses from "@/pages/expenses";
+import AccountingReports from "@/pages/accounting-reports";
+import GeneralLedger from "@/pages/general-ledger";
 import PortalLogin from "@/pages/portal-login";
 import PortalLayout from "@/pages/portal-layout";
 import type { Customer } from "@shared/schema";
@@ -47,6 +52,11 @@ function AdminRouter() {
       <Route path="/offers" component={Offers} />
       <Route path="/reports" component={Reports} />
       <Route path="/email-logs" component={EmailLogs} />
+      <Route path="/accounting/chart-of-accounts" component={ChartOfAccounts} />
+      <Route path="/accounting/journal-entries" component={JournalEntries} />
+      <Route path="/accounting/expenses" component={Expenses} />
+      <Route path="/accounting/reports" component={AccountingReports} />
+      <Route path="/accounting/general-ledger/:accountId" component={GeneralLedger} />
       <Route path="/import" component={ImportData} />
       <Route path="/settings" component={SettingsPage} />
       <Route component={NotFound} />

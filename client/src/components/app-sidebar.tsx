@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart } from "lucide-react";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import {
   Sidebar,
@@ -39,6 +39,13 @@ const purchasingNav = [
 const pricingNav = [
   { title: "Price Contracts", url: "/pricing", icon: Tag },
   { title: "Seasonal Offers", url: "/offers", icon: Gift },
+];
+
+const accountingNav = [
+  { title: "Chart of Accounts", url: "/accounting/chart-of-accounts", icon: BookOpen },
+  { title: "Journal Entries", url: "/accounting/journal-entries", icon: Receipt },
+  { title: "Expenses", url: "/accounting/expenses", icon: Wallet },
+  { title: "Financial Reports", url: "/accounting/reports", icon: PieChart },
 ];
 
 const reportNav = [
@@ -127,6 +134,7 @@ export function AppSidebar() {
         <NavSection label="Sales" items={salesNav} />
         <NavSection label="Purchasing" items={purchasingNav} />
         <NavSection label="Pricing" items={pricingNav} />
+        <NavSection label="Accounting" items={accountingNav} />
         <NavSection label="Analytics" items={reportNav} />
         <NavSection label="System" items={systemNav} />
       </SidebarContent>

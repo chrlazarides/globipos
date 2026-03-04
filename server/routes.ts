@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import * as XLSX from "xlsx";
@@ -10,6 +10,57 @@ import { db } from "./db";
 import { sql } from "drizzle-orm";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+async function autoCreateJournalEntry(opts: {
+  sourceType: string;
+  sourceId: string;
+  date: string;
+  description: string;
+  reference: string;
+  lines: { accountCode: string; debit: number; credit: number; description: string }[];
+}) {
+  try {
+    const resolvedLines = [];
+    for (const line of opts.lines) {
+      const account = await storage.getAccountByCode(line.accountCode);
+      if (!account) continue;
+      if (line.debit === 0 && line.credit === 0) continue;
+      resolvedLines.push({
+        journalEntryId: "",
+        accountId: account.id,
+        debit: line.debit.toFixed(2),
+        credit: line.credit.toFixed(2),
+        description: line.description,
+      });
+    }
+    if (resolvedLines.length < 2) return null;
+
+    const totalDebits = resolvedLines.reduce((s, l) => s + parseFloat(l.debit), 0);
+    const totalCredits = resolvedLines.reduce((s, l) => s + parseFloat(l.credit), 0);
+    if (Math.abs(totalDebits - totalCredits) > 0.01) {
+      console.error(`Auto journal entry aborted: debits (${totalDebits}) != credits (${totalCredits}) for ${opts.sourceType}/${opts.sourceId}`);
+      return null;
+    }
+
+    const entryNumber = await storage.getNextJournalEntryNumber();
+    return await storage.createJournalEntry(
+      {
+        entryNumber,
+        date: opts.date,
+        description: opts.description,
+        reference: opts.reference,
+        sourceType: opts.sourceType,
+        sourceId: opts.sourceId,
+        status: "posted",
+        totalAmount: resolvedLines.reduce((s, l) => s + parseFloat(l.debit), 0).toFixed(2),
+      },
+      resolvedLines
+    );
+  } catch (e) {
+    console.error("Auto journal entry failed:", e);
+    return null;
+  }
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -511,6 +562,39 @@ export async function registerRoutes(
         }
       }
 
+      const invTotal = parseFloat(String(data.total || 0));
+      const invVat = parseFloat(String(data.vatTotal || 0));
+      const invNet = invTotal - invVat;
+      const invDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+
+      if (data.type === "invoice" && data.status !== "draft" && invTotal > 0) {
+        await autoCreateJournalEntry({
+          sourceType: "invoice",
+          sourceId: inv.id,
+          date: invDate,
+          description: `Sales Invoice ${inv.invoiceNumber}`,
+          reference: inv.invoiceNumber,
+          lines: [
+            { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
+            { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+            { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
+          ],
+        });
+      } else if (data.type === "credit_note" && invTotal > 0) {
+        await autoCreateJournalEntry({
+          sourceType: "credit_note",
+          sourceId: inv.id,
+          date: invDate,
+          description: `Credit Note ${inv.invoiceNumber}`,
+          reference: inv.invoiceNumber,
+          lines: [
+            { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+            { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
+            { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
+          ],
+        });
+      }
+
       res.json(inv);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -626,6 +710,25 @@ export async function registerRoutes(
     try {
       const data = insertPaymentSchema.parse(req.body);
       const payment = await storage.createPayment(data);
+
+      const pmtAmount = parseFloat(String(data.amount || 0));
+      const pmtDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+      const pmtAcctCode = data.paymentMethod === "cash" ? "1000" : "1010";
+
+      if (pmtAmount > 0) {
+        await autoCreateJournalEntry({
+          sourceType: "payment",
+          sourceId: payment.id,
+          date: pmtDate,
+          description: `Customer Payment received`,
+          reference: data.reference || payment.id,
+          lines: [
+            { accountCode: pmtAcctCode, debit: pmtAmount, credit: 0, description: data.paymentMethod === "cash" ? "Cash" : "Bank" },
+            { accountCode: "1100", debit: 0, credit: pmtAmount, description: "Accounts Receivable" },
+          ],
+        });
+      }
+
       res.json(payment);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -937,6 +1040,26 @@ export async function registerRoutes(
         await storage.updateSupplier(data.supplierId, { currentBalance: newBalance.toFixed(2) });
       }
 
+      const piTotal = parseFloat(String(data.total || 0));
+      const piVat = parseFloat(String(data.vatTotal || 0));
+      const piNet = piTotal - piVat;
+      const piDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+
+      if (piTotal > 0) {
+        await autoCreateJournalEntry({
+          sourceType: "purchase",
+          sourceId: inv.id,
+          date: piDate,
+          description: `Purchase Invoice ${inv.invoiceNumber}`,
+          reference: inv.invoiceNumber,
+          lines: [
+            { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
+            { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
+            { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
+          ],
+        });
+      }
+
       res.json(inv);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -1016,6 +1139,25 @@ export async function registerRoutes(
       const payment = await storage.createSupplierPayment(data);
       const newBalance = parseFloat(supplier.currentBalance) - parseFloat(String(data.amount));
       await storage.updateSupplier(data.supplierId, { currentBalance: Math.max(0, newBalance).toFixed(2) });
+
+      const spAmount = parseFloat(String(data.amount || 0));
+      const spDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+      const paymentAcctCode = data.paymentMethod === "cash" ? "1000" : "1010";
+
+      if (spAmount > 0) {
+        await autoCreateJournalEntry({
+          sourceType: "supplier_payment",
+          sourceId: payment.id,
+          date: spDate,
+          description: `Supplier Payment to ${supplier.name}`,
+          reference: data.reference || payment.id,
+          lines: [
+            { accountCode: "2000", debit: spAmount, credit: 0, description: "Accounts Payable" },
+            { accountCode: paymentAcctCode, debit: 0, credit: spAmount, description: data.paymentMethod === "cash" ? "Cash" : "Bank" },
+          ],
+        });
+      }
+
       res.json(payment);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -1397,6 +1539,166 @@ export async function registerRoutes(
       console.error("Demo clear error:", e);
       res.status(500).json({ message: e.message });
     }
+  });
+
+  // ===== ACCOUNTING MODULE =====
+
+  const DEFAULT_ACCOUNTS = [
+    { code: "1000", name: "Cash", type: "asset", subtype: "current_asset", isSystem: true },
+    { code: "1010", name: "Bank Account", type: "asset", subtype: "current_asset", isSystem: true },
+    { code: "1100", name: "Accounts Receivable", type: "asset", subtype: "current_asset", isSystem: true },
+    { code: "1200", name: "Inventory", type: "asset", subtype: "current_asset", isSystem: true },
+    { code: "1300", name: "Prepaid Expenses", type: "asset", subtype: "current_asset", isSystem: false },
+    { code: "1500", name: "Equipment", type: "asset", subtype: "fixed_asset", isSystem: false },
+    { code: "1510", name: "Vehicles", type: "asset", subtype: "fixed_asset", isSystem: false },
+    { code: "2000", name: "Accounts Payable", type: "liability", subtype: "current_liability", isSystem: true },
+    { code: "2100", name: "VAT Payable", type: "liability", subtype: "current_liability", isSystem: true },
+    { code: "2200", name: "Accrued Expenses", type: "liability", subtype: "current_liability", isSystem: false },
+    { code: "2300", name: "Short-Term Loans", type: "liability", subtype: "current_liability", isSystem: false },
+    { code: "3000", name: "Owner's Equity", type: "equity", subtype: "equity", isSystem: true },
+    { code: "3100", name: "Retained Earnings", type: "equity", subtype: "equity", isSystem: true },
+    { code: "3200", name: "Owner's Draw", type: "equity", subtype: "equity", isSystem: false },
+    { code: "4000", name: "Sales Revenue", type: "revenue", subtype: "operating", isSystem: true },
+    { code: "4100", name: "Service Revenue", type: "revenue", subtype: "operating", isSystem: false },
+    { code: "4200", name: "Other Income", type: "revenue", subtype: "other", isSystem: false },
+    { code: "4300", name: "Interest Income", type: "revenue", subtype: "other", isSystem: false },
+    { code: "5000", name: "Cost of Goods Sold", type: "expense", subtype: "cogs", isSystem: true },
+    { code: "6000", name: "Salaries & Wages", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6100", name: "Rent", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6200", name: "Utilities", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6300", name: "Insurance", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6400", name: "Marketing & Advertising", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6500", name: "Office Supplies", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6600", name: "Bank Charges", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6700", name: "Depreciation", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6800", name: "Repairs & Maintenance", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6900", name: "Travel & Transport", type: "expense", subtype: "operating", isSystem: false },
+    { code: "7000", name: "Professional Fees", type: "expense", subtype: "operating", isSystem: false },
+    { code: "7100", name: "Telephone & Internet", type: "expense", subtype: "operating", isSystem: false },
+    { code: "7200", name: "Miscellaneous Expense", type: "expense", subtype: "operating", isSystem: false },
+  ];
+
+  app.get("/api/accounts", async (_req, res) => {
+    const accts = await storage.getAccounts();
+    res.json(accts);
+  });
+
+  app.post("/api/accounts", async (req, res) => {
+    try {
+      const account = await storage.createAccount(req.body);
+      res.json(account);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.put("/api/accounts/:id", async (req, res) => {
+    const account = await storage.updateAccount(req.params.id, req.body);
+    if (!account) return res.status(404).json({ message: "Account not found" });
+    res.json(account);
+  });
+
+  app.post("/api/accounts/seed-defaults", async (_req, res) => {
+    try {
+      const existing = await storage.getAccounts();
+      if (existing.length > 0) {
+        return res.json({ message: "Chart of accounts already exists", count: existing.length });
+      }
+      for (const acct of DEFAULT_ACCOUNTS) {
+        await storage.createAccount(acct as any);
+      }
+      res.json({ message: "Default chart of accounts created", count: DEFAULT_ACCOUNTS.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/journal-entries", async (_req, res) => {
+    const entries = await storage.getJournalEntries();
+    res.json(entries);
+  });
+
+  app.get("/api/journal-entries/:id", async (req, res) => {
+    const entry = await storage.getJournalEntry(req.params.id);
+    if (!entry) return res.status(404).json({ message: "Journal entry not found" });
+    res.json(entry);
+  });
+
+  app.post("/api/journal-entries", async (req, res) => {
+    try {
+      const { lines, ...data } = req.body;
+      if (!lines || !Array.isArray(lines) || lines.length < 2) {
+        return res.status(400).json({ message: "At least 2 lines required" });
+      }
+      const totalDebit = lines.reduce((s: number, l: any) => s + parseFloat(l.debit || "0"), 0);
+      const totalCredit = lines.reduce((s: number, l: any) => s + parseFloat(l.credit || "0"), 0);
+      if (Math.abs(totalDebit - totalCredit) > 0.01) {
+        return res.status(400).json({ message: `Debits (${totalDebit.toFixed(2)}) must equal Credits (${totalCredit.toFixed(2)})` });
+      }
+      const entryNumber = await storage.getNextJournalEntryNumber();
+      const entry = await storage.createJournalEntry(
+        { ...data, entryNumber, totalAmount: totalDebit.toFixed(2) },
+        lines
+      );
+      res.json(entry);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/expenses", async (_req, res) => {
+    const exp = await storage.getExpenses();
+    res.json(exp);
+  });
+
+  app.post("/api/expenses", async (req, res) => {
+    try {
+      const expense = await storage.createExpense(req.body);
+
+      const entryNumber = await storage.getNextJournalEntryNumber();
+      const totalWithVat = parseFloat(String(req.body.amount)) + parseFloat(String(req.body.vatAmount || "0"));
+      const lines: any[] = [
+        { accountId: req.body.expenseAccountId, debit: String(req.body.amount), credit: "0", description: req.body.description },
+      ];
+      if (parseFloat(String(req.body.vatAmount || "0")) > 0) {
+        const vatAccounts = await storage.getAccounts();
+        const vatAccount = vatAccounts.find(a => a.code === "2100");
+        if (vatAccount) {
+          lines.push({ accountId: vatAccount.id, debit: String(req.body.vatAmount), credit: "0", description: "VAT on expense" });
+        }
+      }
+      lines.push({ accountId: req.body.paymentAccountId, debit: "0", credit: totalWithVat.toFixed(2), description: req.body.description });
+
+      const je = await storage.createJournalEntry(
+        { entryNumber, date: req.body.date, description: `Expense: ${req.body.description}`, sourceType: "expense", sourceId: expense.id, status: "posted", totalAmount: totalWithVat.toFixed(2) },
+        lines
+      );
+
+      await db.update(expenses).set({ journalEntryId: je.id }).where(sql`id = ${expense.id}`);
+      res.json(expense);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/reports/trial-balance", async (_req, res) => {
+    const tb = await storage.getTrialBalance();
+    res.json(tb);
+  });
+
+  app.get("/api/reports/profit-loss/:from/:to", async (req, res) => {
+    const pl = await storage.getProfitAndLoss(req.params.from, req.params.to);
+    res.json(pl);
+  });
+
+  app.get("/api/reports/balance-sheet/:asOf", async (req, res) => {
+    const bs = await storage.getBalanceSheet(req.params.asOf);
+    res.json(bs);
+  });
+
+  app.get("/api/reports/general-ledger/:accountId/:from/:to", async (req, res) => {
+    const gl = await storage.getGeneralLedger(req.params.accountId, req.params.from, req.params.to);
+    res.json(gl);
   });
 
   return httpServer;

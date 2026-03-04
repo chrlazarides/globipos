@@ -103,3 +103,14 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-02-28: Settings page has "Demo Data Management" section with Load Demo Data and Remove All Data buttons
 - 2026-02-28: Demo data includes 7 categories, 23 items (with brands), 10 Cyprus customers, 5 international suppliers, 8 documents (invoices/CN/PF/QT), 2 contracts, 3 offers
 - 2026-02-28: Remove All Data has confirmation dialog; preserves system settings while clearing all transactional data
+- 2026-03-04: Accounting module with double-entry bookkeeping (QuickBooks-style)
+- 2026-03-04: Tables: accounts, journal_entries, journal_entry_lines, expenses
+- 2026-03-04: Chart of Accounts page (/accounting/chart-of-accounts) with grouped view, add/edit, seed defaults (30+ accounts)
+- 2026-03-04: Journal Entries page (/accounting/journal-entries) with create/view, debit=credit validation, expandable detail rows
+- 2026-03-04: Expenses page (/accounting/expenses) with quick entry, auto VAT calc, auto journal entry generation
+- 2026-03-04: Financial Reports page (/accounting/reports) with Trial Balance, Profit & Loss, Balance Sheet tabs
+- 2026-03-04: General Ledger page (/accounting/general-ledger/:accountId) with running balance, date range filter
+- 2026-03-04: Auto-journal entries: sales invoices (DR A/R, CR Revenue, CR VAT), credit notes (reverse), purchase invoices (DR Inventory, DR VAT, CR A/P), customer payments (DR Cash/Bank, CR A/R), supplier payments (DR A/P, CR Cash/Bank), expenses (DR Expense, DR VAT, CR Payment acct)
+- 2026-03-04: Default Chart of Accounts codes: 1000 Cash, 1010 Bank, 1100 A/R, 1200 Inventory, 2000 A/P, 2100 VAT, 3000 Equity, 4000 Revenue, 5000 COGS, 6000-7200 Operating Expenses
+- 2026-03-04: Sidebar "Accounting" section with Chart of Accounts, Journal Entries, Expenses, Financial Reports links
+- 2026-03-04: API: /api/accounts (CRUD + seed-defaults), /api/journal-entries, /api/expenses, /api/reports/trial-balance, profit-loss, balance-sheet, general-ledger

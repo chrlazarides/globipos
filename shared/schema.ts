@@ -260,6 +260,57 @@ export const emailLogs = pgTable("email_logs", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Accounting Module
+export const accounts = pgTable("accounts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  type: text("type").notNull(), // asset, liability, equity, revenue, expense
+  subtype: text("subtype"), // e.g. current_asset, fixed_asset, current_liability, etc.
+  parentId: varchar("parent_id"),
+  description: text("description"),
+  balance: numeric("balance", { precision: 12, scale: 2 }).notNull().default("0"),
+  isSystem: boolean("is_system").notNull().default(false),
+  active: boolean("active").notNull().default(true),
+});
+
+export const journalEntries = pgTable("journal_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  entryNumber: text("entry_number").notNull().unique(),
+  date: date("date").notNull(),
+  description: text("description").notNull(),
+  reference: text("reference"),
+  sourceType: text("source_type"), // manual, invoice, payment, purchase, supplier_payment, expense, credit_note
+  sourceId: varchar("source_id"),
+  status: text("status").notNull().default("posted"), // posted, draft
+  totalAmount: numeric("total_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const journalEntryLines = pgTable("journal_entry_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  journalEntryId: varchar("journal_entry_id").notNull(),
+  accountId: varchar("account_id").notNull(),
+  debit: numeric("debit", { precision: 12, scale: 2 }).notNull().default("0"),
+  credit: numeric("credit", { precision: 12, scale: 2 }).notNull().default("0"),
+  description: text("description"),
+});
+
+export const expenses = pgTable("expenses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  date: date("date").notNull(),
+  expenseAccountId: varchar("expense_account_id").notNull(),
+  paymentAccountId: varchar("payment_account_id").notNull(),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  description: text("description").notNull(),
+  reference: text("reference"),
+  paymentMethod: text("payment_method").notNull().default("cash"),
+  supplierId: varchar("supplier_id"),
+  journalEntryId: varchar("journal_entry_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).pick({ username: true, password: true });
 export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
@@ -281,6 +332,10 @@ export const insertPurchaseInvoiceSchema = createInsertSchema(purchaseInvoices).
 export const insertPurchaseInvoiceItemSchema = createInsertSchema(purchaseInvoiceItems).omit({ id: true });
 export const insertSupplierPaymentSchema = createInsertSchema(supplierPayments).omit({ id: true, createdAt: true });
 export const insertEmailLogSchema = createInsertSchema(emailLogs).omit({ id: true, createdAt: true });
+export const insertAccountSchema = createInsertSchema(accounts).omit({ id: true });
+export const insertJournalEntrySchema = createInsertSchema(journalEntries).omit({ id: true, createdAt: true });
+export const insertJournalEntryLineSchema = createInsertSchema(journalEntryLines).omit({ id: true });
+export const insertExpenseSchema = createInsertSchema(expenses).omit({ id: true, createdAt: true });
 
 // Types
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -323,3 +378,11 @@ export type InsertSupplierPayment = z.infer<typeof insertSupplierPaymentSchema>;
 export type SupplierPayment = typeof supplierPayments.$inferSelect;
 export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
 export type EmailLog = typeof emailLogs.$inferSelect;
+export type InsertAccount = z.infer<typeof insertAccountSchema>;
+export type Account = typeof accounts.$inferSelect;
+export type InsertJournalEntry = z.infer<typeof insertJournalEntrySchema>;
+export type JournalEntry = typeof journalEntries.$inferSelect;
+export type InsertJournalEntryLine = z.infer<typeof insertJournalEntryLineSchema>;
+export type JournalEntryLine = typeof journalEntryLines.$inferSelect;
+export type InsertExpense = z.infer<typeof insertExpenseSchema>;
+export type Expense = typeof expenses.$inferSelect;
