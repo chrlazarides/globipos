@@ -449,8 +449,11 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                       const prevCost = lastCost ? parseFloat(lastCost.unitCost) : null;
                       const variation = prevCost !== null && prevCost > 0 ? ((currentCost - prevCost) / prevCost) * 100 : null;
                       const sale = parseFloat(li.salePrice) || 0;
-                      const markupAmt = sale - currentCost;
-                      const markupPct = currentCost > 0 ? (markupAmt / currentCost) * 100 : 0;
+                      const qty = parseFloat(String(li.quantity)) || 1;
+                      const lineTotal = parseFloat(li.total) || 0;
+                      const netCostPerUnit = qty > 0 ? lineTotal / qty : currentCost;
+                      const markupAmt = sale - netCostPerUnit;
+                      const markupPct = netCostPerUnit > 0 ? (markupAmt / netCostPerUnit) * 100 : 0;
                       const marginPct = sale > 0 ? (markupAmt / sale) * 100 : 0;
                       const isNegativeMargin = markupAmt < 0;
 
@@ -476,8 +479,11 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                               </span>
                             )}
                           </div>
-                          {currentCost > 0 && sale > 0 && (
+                          {netCostPerUnit > 0 && sale > 0 && (
                             <div className={`flex flex-wrap items-center gap-2 text-xs ${isNegativeMargin ? "text-red-500 font-medium" : "text-muted-foreground"}`} data-testid={`text-margin-${idx}`}>
+                              {netCostPerUnit !== currentCost && (
+                                <span className="text-muted-foreground">Net: {"\u20AC"}{netCostPerUnit.toFixed(2)}</span>
+                              )}
                               <span>Markup: {isNegativeMargin ? "" : "+"}{"\u20AC"}{markupAmt.toFixed(2)} ({markupPct >= 0 ? "+" : ""}{markupPct.toFixed(1)}%)</span>
                               <span className="hidden sm:inline">•</span>
                               <span className={isNegativeMargin ? "text-red-500 font-medium" : "text-green-600 dark:text-green-400 font-medium"}>
