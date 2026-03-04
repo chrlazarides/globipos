@@ -432,23 +432,23 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                       </div>
                       <div>
                         <label className="text-xs text-muted-foreground">Cost</label>
-                        <Input type="number" step="0.01" value={li.unitCost} onChange={e => updateLine(idx, "unitCost", e.target.value)} data-testid={`input-purchase-cost-${idx}`} />
+                        <Input type="text" inputMode="decimal" value={li.unitCost} onChange={e => updateLine(idx, "unitCost", e.target.value)} data-testid={`input-purchase-cost-${idx}`} />
                       </div>
                       <div>
                         <label className="text-xs text-muted-foreground">Sale (P1)</label>
-                        <Input type="number" step="0.01" value={li.salePrice} onChange={e => updateLine(idx, "salePrice", e.target.value)} data-testid={`input-purchase-sale-price-${idx}`} />
+                        <Input type="text" inputMode="decimal" value={li.salePrice} onChange={e => updateLine(idx, "salePrice", e.target.value)} data-testid={`input-purchase-sale-price-${idx}`} />
                       </div>
                       <div>
                         <label className="text-xs text-muted-foreground">Disc %</label>
-                        <Input type="number" step="0.01" value={li.discountPercent} onChange={e => updateLine(idx, "discountPercent", e.target.value)} data-testid={`input-purchase-disc-pct-${idx}`} />
+                        <Input type="text" inputMode="decimal" value={li.discountPercent} onChange={e => updateLine(idx, "discountPercent", e.target.value)} data-testid={`input-purchase-disc-pct-${idx}`} />
                       </div>
                       <div>
                         <label className="text-xs text-muted-foreground">Disc Amt</label>
-                        <Input type="number" step="0.01" value={li.discount} onChange={e => updateLine(idx, "discount", e.target.value)} data-testid={`input-purchase-disc-amt-${idx}`} />
+                        <Input type="text" inputMode="decimal" value={li.discount} onChange={e => updateLine(idx, "discount", e.target.value)} data-testid={`input-purchase-disc-amt-${idx}`} />
                       </div>
                       <div>
                         <label className="text-xs text-muted-foreground">VAT %</label>
-                        <Input type="number" step="0.01" value={li.vatRate} onChange={e => updateLine(idx, "vatRate", e.target.value)} data-testid={`input-purchase-vat-${idx}`} />
+                        <Input type="text" inputMode="decimal" value={li.vatRate} onChange={e => updateLine(idx, "vatRate", e.target.value)} data-testid={`input-purchase-vat-${idx}`} />
                       </div>
                     </div>
                     {selectedItem && li.quantity > 0 && (() => {
