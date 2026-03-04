@@ -4,7 +4,7 @@ import { StatCard } from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Package, Users, FileText, DollarSign, AlertTriangle, TrendingUp } from "lucide-react";
+import { Package, Users, FileText, Euro, AlertTriangle, TrendingUp } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import type { Invoice, Customer, Item } from "@shared/schema";
@@ -51,7 +51,7 @@ export default function Dashboard() {
         <StatCard title="Total Items" value={String(s.totalItems)} icon={Package} description="Active products" />
         <StatCard title="Customers" value={String(s.totalCustomers)} icon={Users} description="Active accounts" />
         <StatCard title="Invoices" value={String(s.totalInvoices)} icon={FileText} description={`${s.overdueInvoices} overdue`} />
-        <StatCard title="Revenue" value={`€${parseFloat(s.totalRevenue).toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={DollarSign} />
+        <StatCard title="Revenue" value={`€${parseFloat(s.totalRevenue).toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={Euro} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
