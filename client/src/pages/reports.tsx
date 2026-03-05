@@ -10,10 +10,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Download, FileText, Users, Printer } from "lucide-react";
+import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2 } from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { Customer, Invoice } from "@shared/schema";
 
 export default function Reports() {
+  const { toast } = useToast();
+  const [sendingId, setSendingId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date();
@@ -44,6 +48,10 @@ export default function Reports() {
     queryKey: ["/api/reports/statements"],
   });
 
+  const previewStatement = (customerId: string) => {
+    window.open(`/api/reports/statement/${customerId}/pdf`, "_blank");
+  };
+
   const printStatement = (customerId: string) => {
     window.open(`/api/reports/statement/${customerId}/pdf?print=1`, "_blank");
   };
@@ -60,6 +68,19 @@ export default function Reports() {
       a.click();
       window.URL.revokeObjectURL(url);
     } catch (e) {}
+  };
+
+  const sendStatementEmail = async (customerId: string) => {
+    setSendingId(customerId);
+    try {
+      const res = await apiRequest("POST", `/api/reports/statement/${customerId}/send-email`);
+      const data = await res.json();
+      toast({ title: "Email Sent", description: data.message });
+    } catch (e: any) {
+      toast({ title: "Email Failed", description: e.message || "Failed to send statement email", variant: "destructive" });
+    } finally {
+      setSendingId(null);
+    }
   };
 
   return (
@@ -186,7 +207,7 @@ export default function Reports() {
                     <TableHead className="text-right">Total Invoiced</TableHead>
                     <TableHead className="text-right">Total Paid</TableHead>
                     <TableHead className="text-right">Balance</TableHead>
-                    <TableHead className="w-[80px]" />
+                    <TableHead className="w-[160px]" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -206,11 +227,24 @@ export default function Reports() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
-                            <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} data-testid={`button-print-statement-${st.customerId}`}>
+                            <Button size="icon" variant="ghost" onClick={() => previewStatement(st.customerId)} title="Preview" data-testid={`button-preview-statement-${st.customerId}`}>
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} title="Print" data-testid={`button-print-statement-${st.customerId}`}>
                               <Printer className="w-4 h-4" />
                             </Button>
-                            <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} data-testid={`button-download-statement-${st.customerId}`}>
+                            <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} title="Download" data-testid={`button-download-statement-${st.customerId}`}>
                               <Download className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => sendStatementEmail(st.customerId)}
+                              disabled={sendingId === st.customerId}
+                              title="Send by Email"
+                              data-testid={`button-email-statement-${st.customerId}`}
+                            >
+                              {sendingId === st.customerId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                             </Button>
                           </div>
                         </TableCell>

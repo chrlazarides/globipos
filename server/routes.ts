@@ -821,6 +821,49 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/reports/statement/:customerId/send-email", async (req, res) => {
+    try {
+      const customer = await storage.getCustomer(req.params.customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const toEmail = req.body?.email || customer.email;
+      if (!toEmail) return res.status(400).json({ message: "Customer has no email address" });
+
+      const statements = await storage.getCustomerStatements();
+      const st = statements.find(s => s.customerId === req.params.customerId);
+      if (!st) return res.status(404).json({ message: "No statement data found for this customer" });
+
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const companyName = settingsMap.company_name || "VinTrade";
+      const subject = `Account Statement from ${companyName}`;
+      const html = generateStatementHtml(customer, st, false, settingsMap);
+
+      const result = await sendInvoiceEmail(toEmail, subject, html);
+
+      await storage.createEmailLog({
+        invoiceId: null,
+        customerId: customer.id,
+        customerName: customer.name,
+        toEmail,
+        fromEmail: result.fromEmail || null,
+        subject,
+        status: result.success ? "sent" : "failed",
+        errorMessage: result.error || null,
+      });
+
+      if (result.success) {
+        res.json({ message: `Statement sent to ${toEmail}` });
+      } else {
+        res.status(500).json({ message: `Failed to send: ${result.error}` });
+      }
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   // System Settings
   app.get("/api/settings", async (_req, res) => {
     try {
