@@ -162,8 +162,8 @@ export default function Pricing() {
       key: "actions",
       header: "",
       cell: (row) => (
-        <Button size="sm" variant="ghost" onClick={() => setSelectedContractId(row.id)} data-testid={`button-view-contract-${row.id}`}>
-          View
+        <Button size="sm" variant="ghost" onClick={() => setSelectedContractId(row.id)} data-testid={`button-edit-contract-${row.id}`}>
+          <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
         </Button>
       ),
     },
@@ -293,7 +293,7 @@ function ContractDetail({ contract, categories, allBrands, allItems, customers, 
 
   const [editRules, setEditRules] = useState<RuleRow[]>([]);
   const [rulesInitialized, setRulesInitialized] = useState(false);
-  const [editingHeader, setEditingHeader] = useState(false);
+  const [editingHeader, setEditingHeader] = useState(true);
   const [headerForm, setHeaderForm] = useState({
     name: contract.name,
     customerId: contract.customerId,
