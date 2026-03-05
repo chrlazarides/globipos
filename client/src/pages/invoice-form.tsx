@@ -117,6 +117,8 @@ export default function InvoiceForm() {
   const [taxRate, setTaxRate] = useState("19");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState("draft");
+  const [overallDiscountPercent, setOverallDiscountPercent] = useState("0");
+  const [overallDiscountAmount, setOverallDiscountAmount] = useState("0");
   const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discountPercent: "0", discount: "0", total: "0" }]);
 
   useEffect(() => {
@@ -127,6 +129,7 @@ export default function InvoiceForm() {
       setTaxRate(existingInvoice.taxRate);
       setNotes(existingInvoice.notes || "");
       setStatus(existingInvoice.status);
+      setOverallDiscountAmount(existingInvoice.discountAmount || "0");
       if (existingInvoice.items?.length) {
         setLines(existingInvoice.items.map((li) => ({
           itemId: li.itemId || "",
@@ -417,7 +420,11 @@ export default function InvoiceForm() {
   const addLine = () => setLines((prev) => [...prev, { itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discountPercent: "0", discount: "0", total: "0" }]);
   const removeLine = (index: number) => setLines((prev) => prev.filter((_, i) => i !== index));
 
-  const subtotal = lines.reduce((sum, l) => sum + (parseFloat(l.total) || 0), 0);
+  const linesSubtotal = lines.reduce((sum, l) => sum + (parseFloat(l.total) || 0), 0);
+  const discPct = parseFloat(overallDiscountPercent) || 0;
+  const discAmt = parseFloat(overallDiscountAmount) || 0;
+  const computedDiscount = discPct > 0 ? linesSubtotal * (discPct / 100) : discAmt;
+  const subtotal = linesSubtotal - computedDiscount;
   const taxAmount = subtotal * (parseFloat(taxRate) / 100);
   const total = subtotal + taxAmount;
 
@@ -431,7 +438,7 @@ export default function InvoiceForm() {
         subtotal: subtotal.toFixed(2),
         taxRate,
         taxAmount: taxAmount.toFixed(2),
-        discountAmount: "0",
+        discountAmount: computedDiscount.toFixed(2),
         total: total.toFixed(2),
         status,
         notes: notes || null,
@@ -956,6 +963,52 @@ export default function InvoiceForm() {
               <CardTitle className="text-base">Summary</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Lines Subtotal</span>
+                <span className="font-medium">€{linesSubtotal.toFixed(2)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-muted-foreground">Discount %</span>
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  value={overallDiscountPercent}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "" || /^\d*\.?\d*$/.test(v)) {
+                      setOverallDiscountPercent(v);
+                      if (parseFloat(v) > 0) setOverallDiscountAmount("0");
+                    }
+                  }}
+                  className="w-20 text-right"
+                  disabled={isViewMode}
+                  data-testid="input-overall-discount-percent"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-muted-foreground">Discount €</span>
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  value={overallDiscountAmount}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "" || /^\d*\.?\d*$/.test(v)) {
+                      setOverallDiscountAmount(v);
+                      if (parseFloat(v) > 0) setOverallDiscountPercent("0");
+                    }
+                  }}
+                  className="w-20 text-right"
+                  disabled={isViewMode || discPct > 0}
+                  data-testid="input-overall-discount-amount"
+                />
+              </div>
+              {computedDiscount > 0 && (
+                <div className="flex justify-between text-sm text-red-600">
+                  <span>Discount</span>
+                  <span>-€{computedDiscount.toFixed(2)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Subtotal</span>
                 <span className="font-medium">€{subtotal.toFixed(2)}</span>

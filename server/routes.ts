@@ -639,7 +639,16 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
-      const html = generateInvoiceHtml(inv, customer, typeLabel, autoPrint, settingsMap);
+      const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
+        if (li.itemId) {
+          const item = await storage.getItem(li.itemId);
+          return { ...li, barcode: item?.barcode || null };
+        }
+        return { ...li, barcode: null };
+      }));
+      const enrichedInv = { ...inv, items: enrichedItems };
+
+      const html = generateInvoiceHtml(enrichedInv, customer, typeLabel, autoPrint, settingsMap);
 
       res.setHeader("Content-Type", "text/html");
       if (req.query.download === "1") {
@@ -673,7 +682,17 @@ export async function registerRoutes(
 
       const companyName = settingsMap.company_name || "VinTrade";
       const subject = `${typeLabel} ${inv.invoiceNumber} from ${companyName}`;
-      const html = generateInvoiceHtml(inv, customer, typeLabel, false, settingsMap);
+
+      const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
+        if (li.itemId) {
+          const item = await storage.getItem(li.itemId);
+          return { ...li, barcode: item?.barcode || null };
+        }
+        return { ...li, barcode: null };
+      }));
+      const enrichedInv = { ...inv, items: enrichedItems };
+
+      const html = generateInvoiceHtml(enrichedInv, customer, typeLabel, false, settingsMap);
 
       const result = await sendInvoiceEmail(toEmail, subject, html);
 
@@ -1732,6 +1751,8 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   const items = inv.items || [];
   const hasDiscountPercent = items.some((li: any) => parseFloat(li.discountPercent || "0") > 0);
   const hasDiscount = items.some((li: any) => parseFloat(li.discount || "0") > 0);
+  const hasBarcodes = items.some((li: any) => li.barcode);
+  const overallDiscount = parseFloat(inv.discountAmount || "0");
 
   const companyName = settings.company_name || "VinTrade";
   const companyAddress = settings.company_address || "";
@@ -1755,6 +1776,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     return `
     <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
       <td class="cell">${li.description || ""}</td>
+      ${hasBarcodes ? `<td class="cell barcode-cell">${li.barcode || "-"}</td>` : ""}
       <td class="cell center">${qty}${unitLabel}</td>
       <td class="cell right">${currencySymbol}${parseFloat(li.unitPrice).toFixed(2)}</td>
       ${hasDiscountPercent ? `<td class="cell right">${discPercent > 0 ? discPercent.toFixed(1) + "%" : "-"}</td>` : ""}
@@ -1802,6 +1824,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .right { text-align: right; }
   .bold { font-weight: 600; }
   .alt-row { background: #fdfcfb; }
+  .barcode-cell { font-family: 'Courier New', Courier, monospace; font-size: 11px; letter-spacing: 0.5px; color: #555; }
   .totals-section { display: flex; justify-content: flex-end; margin-bottom: 28px; }
   .totals-box { width: 280px; }
   .totals-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; }
@@ -1882,6 +1905,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
       <thead>
         <tr>
           <th>Description</th>
+          ${hasBarcodes ? '<th>Barcode</th>' : ""}
           <th class="center">Qty</th>
           <th class="right">Unit Price</th>
           ${hasDiscountPercent ? '<th class="right">Disc %</th>' : ""}
@@ -1896,6 +1920,16 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
 
     <div class="totals-section">
       <div class="totals-box">
+        ${overallDiscount > 0 ? `
+        <div class="totals-row subtotal">
+          <span>Lines Subtotal</span>
+          <span>${currencySymbol}${(parseFloat(inv.subtotal) + overallDiscount).toFixed(2)}</span>
+        </div>
+        <div class="totals-row discount">
+          <span>Discount</span>
+          <span style="color:#c0392b;">-${currencySymbol}${overallDiscount.toFixed(2)}</span>
+        </div>
+        ` : ""}
         <div class="totals-row subtotal">
           <span>Subtotal</span>
           <span>${currencySymbol}${parseFloat(inv.subtotal).toFixed(2)}</span>
