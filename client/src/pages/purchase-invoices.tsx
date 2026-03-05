@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, ShoppingCart, Trash2, PackagePlus, Pencil, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Plus, ShoppingCart, Trash2, PackagePlus, Pencil, TrendingUp, TrendingDown, Minus, ScanBarcode } from "lucide-react";
+import { BarcodeScanner } from "@/components/barcode-scanner";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Supplier, Item, PurchaseInvoice, PurchaseInvoiceItem } from "@shared/schema";
@@ -274,6 +275,55 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
     setLineItems(lineItems.filter((_, i) => i !== index));
   };
 
+  const [scannerOpen, setScannerOpen] = useState(false);
+
+  const handleBarcodeScan = async (barcode: string) => {
+    try {
+      const res = await fetch(`/api/items/barcode/${barcode}`);
+      if (!res.ok) {
+        toast({ title: "Item not found", description: `No item with barcode ${barcode}`, variant: "destructive" });
+        return;
+      }
+      const item = await res.json();
+
+      setLineItems(prev => {
+        const existingIndex = prev.findIndex(l => l.itemId === item.id);
+        if (existingIndex >= 0) {
+          const existing = prev[existingIndex];
+          const newQty = existing.quantity + 1;
+          const cost = parseFloat(existing.unitCost) || 0;
+          const gross = newQty * cost;
+          const pct = parseFloat(existing.discountPercent) || 0;
+          const discAmt = gross * pct / 100;
+          const updated = [...prev];
+          updated[existingIndex] = { ...existing, quantity: newQty, discount: discAmt.toFixed(2), total: (gross - discAmt).toFixed(2) };
+          return updated;
+        }
+        const unitCost = item.costPrice || "0";
+        const salePrice = item.price1 || "0";
+        const purchaseUnit = item.packSize > 1 ? "pack" : "pc";
+        const vatRate = String(item.vatRate || "19");
+        const cost = parseFloat(unitCost) || 0;
+        return [...prev, {
+          itemId: item.id,
+          description: item.name,
+          quantity: 1,
+          purchaseUnit,
+          unitCost,
+          discountPercent: "0",
+          discount: "0",
+          vatRate,
+          total: cost.toFixed(2),
+          salePrice,
+        }];
+      });
+
+      toast({ title: "Item added", description: item.name });
+    } catch {
+      toast({ title: "Error", description: "Failed to look up barcode", variant: "destructive" });
+    }
+  };
+
   const subtotal = lineItems.reduce((sum, li) => sum + (parseFloat(li.total) || 0), 0);
   const vatAmount = lineItems.reduce((sum, li) => {
     const lineTotal = parseFloat(li.total) || 0;
@@ -378,10 +428,16 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-2 p-3">
           <CardTitle className="text-sm">Line Items</CardTitle>
-          <Button size="sm" variant="outline" onClick={addLine} data-testid="button-add-purchase-line">
-            <PackagePlus className="w-4 h-4 mr-1" /> Add Item
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setScannerOpen(true)} data-testid="button-scan-purchase-barcode">
+              <ScanBarcode className="w-4 h-4 mr-1" /> Scan
+            </Button>
+            <Button size="sm" variant="outline" onClick={addLine} data-testid="button-add-purchase-line">
+              <PackagePlus className="w-4 h-4 mr-1" /> Add Item
+            </Button>
+          </div>
         </CardHeader>
+        <BarcodeScanner open={scannerOpen} onOpenChange={setScannerOpen} onScan={handleBarcodeScan} />
         <CardContent className="p-2 sm:p-3 pt-0">
           {lineItems.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-4">Click "Add Item" to add purchase lines</p>
