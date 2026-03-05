@@ -6,14 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, ShoppingCart, Trash2, PackagePlus, Pencil, TrendingUp, TrendingDown, Minus, ScanBarcode } from "lucide-react";
 import { BarcodeScanner } from "@/components/barcode-scanner";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Supplier, Item, PurchaseInvoice, PurchaseInvoiceItem } from "@shared/schema";
+import type { Supplier, Item, PurchaseInvoice, PurchaseInvoiceItem, Category } from "@shared/schema";
 
 interface PurchaseInvoiceWithSupplier extends PurchaseInvoice {
   supplierName: string;
@@ -149,6 +151,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
   const { toast } = useToast();
   const { data: suppliers = [] } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
   const { data: allItems = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
+  const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
   const { data: lastCosts = {} } = useQuery<Record<string, { unitCost: string; date: string }>>({ queryKey: ["/api/purchase-invoices/last-costs"] });
   const { data: existingInvoice } = useQuery<PurchaseInvoiceDetail>({
     queryKey: ["/api/purchase-invoices", editingId],
@@ -324,6 +327,70 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
     }
   };
 
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddLineIdx, setQuickAddLineIdx] = useState<number | null>(null);
+  const [newItem, setNewItem] = useState({
+    name: "", sku: "", barcode: "", categoryId: "", unitType: "bottle" as string,
+    packSize: "1", costPrice: "0", price1: "0", vatRate: "19", brand: "",
+  });
+
+  const resetNewItem = () => setNewItem({
+    name: "", sku: "", barcode: "", categoryId: "", unitType: "bottle",
+    packSize: "1", costPrice: "0", price1: "0", vatRate: "19", brand: "",
+  });
+
+  const quickAddMutation = useMutation({
+    mutationFn: async () => {
+      if (!newItem.name.trim()) throw new Error("Item name is required");
+      if (!newItem.sku.trim()) throw new Error("SKU is required");
+      const payload = {
+        name: newItem.name.trim(),
+        sku: newItem.sku.trim(),
+        barcode: newItem.barcode.trim() || null,
+        categoryId: newItem.categoryId || null,
+        unitType: newItem.unitType,
+        packSize: parseInt(newItem.packSize) || 1,
+        costPrice: newItem.costPrice || "0",
+        price1: newItem.price1 || "0",
+        price2: "0", price3: "0", price4: "0", price5: "0",
+        vatRate: newItem.vatRate || "19",
+        stockQuantity: 0,
+        reorderLevel: 10,
+        brand: newItem.brand.trim() || null,
+      };
+      const res = await apiRequest("POST", "/api/items", payload);
+      return res.json();
+    },
+    onSuccess: (createdItem: Item) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({ title: "Item created", description: createdItem.name });
+      if (quickAddLineIdx !== null) {
+        setLineItems(prev => {
+          const updated = [...prev];
+          updated[quickAddLineIdx] = {
+            ...updated[quickAddLineIdx],
+            itemId: createdItem.id,
+            description: createdItem.name,
+            unitCost: createdItem.costPrice,
+            salePrice: createdItem.price1,
+            purchaseUnit: createdItem.packSize > 1 ? "pack" : "pc",
+            vatRate: String(createdItem.vatRate || "19"),
+          };
+          const qty = parseFloat(String(updated[quickAddLineIdx].quantity)) || 0;
+          const cost = parseFloat(createdItem.costPrice) || 0;
+          updated[quickAddLineIdx].total = (qty * cost).toFixed(2);
+          return updated;
+        });
+      }
+      setQuickAddOpen(false);
+      setQuickAddLineIdx(null);
+      resetNewItem();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
   const subtotal = lineItems.reduce((sum, li) => sum + (parseFloat(li.total) || 0), 0);
   const vatAmount = lineItems.reduce((sum, li) => {
     const lineTotal = parseFloat(li.total) || 0;
@@ -464,6 +531,9 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
                           </SelectContent>
                         </Select>
                       </div>
+                      <Button size="sm" variant="outline" className="shrink-0" onClick={() => { setQuickAddLineIdx(idx); resetNewItem(); setQuickAddOpen(true); }} data-testid={`button-new-item-${idx}`}>
+                        <Plus className="w-4 h-4" />
+                      </Button>
                       <Button size="icon" variant="ghost" className="shrink-0" onClick={() => removeLine(idx)} data-testid={`button-remove-line-${idx}`}>
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -589,6 +659,87 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
           {saveMutation.isPending ? "Saving..." : editingId ? "Update Invoice" : "Save & Update Stock"}
         </Button>
       </div>
+
+      <Dialog open={quickAddOpen} onOpenChange={(open) => { if (!open) { setQuickAddOpen(false); setQuickAddLineIdx(null); } }}>
+        <DialogContent className="max-w-md" data-testid="dialog-quick-add-item">
+          <DialogHeader>
+            <DialogTitle>Quick Add New Item</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <Label>Item Name *</Label>
+                <Input value={newItem.name} onChange={e => setNewItem(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Château Margaux 2020" data-testid="input-quick-item-name" />
+              </div>
+              <div>
+                <Label>SKU *</Label>
+                <Input value={newItem.sku} onChange={e => setNewItem(p => ({ ...p, sku: e.target.value }))} placeholder="e.g. RW-010" data-testid="input-quick-item-sku" />
+              </div>
+              <div>
+                <Label>Barcode</Label>
+                <Input value={newItem.barcode} onChange={e => setNewItem(p => ({ ...p, barcode: e.target.value }))} placeholder="Optional" data-testid="input-quick-item-barcode" />
+              </div>
+            </div>
+            <Separator />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Category</Label>
+                <Select value={newItem.categoryId} onValueChange={v => setNewItem(p => ({ ...p, categoryId: v }))}>
+                  <SelectTrigger data-testid="select-quick-item-category">
+                    <SelectValue placeholder="Select..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.filter(c => c.active).map(c => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Brand</Label>
+                <Input value={newItem.brand} onChange={e => setNewItem(p => ({ ...p, brand: e.target.value }))} placeholder="e.g. Opus One" data-testid="input-quick-item-brand" />
+              </div>
+              <div>
+                <Label>Unit Type</Label>
+                <Select value={newItem.unitType} onValueChange={v => setNewItem(p => ({ ...p, unitType: v }))}>
+                  <SelectTrigger data-testid="select-quick-item-unit-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bottle">Bottle</SelectItem>
+                    <SelectItem value="pack">Pack</SelectItem>
+                    <SelectItem value="pc">Piece</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Pack Size</Label>
+                <Input type="number" min="1" value={newItem.packSize} onChange={e => setNewItem(p => ({ ...p, packSize: e.target.value }))} data-testid="input-quick-item-pack-size" />
+              </div>
+            </div>
+            <Separator />
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label>Cost Price</Label>
+                <Input type="text" inputMode="decimal" value={newItem.costPrice} onChange={e => setNewItem(p => ({ ...p, costPrice: e.target.value }))} data-testid="input-quick-item-cost" />
+              </div>
+              <div>
+                <Label>Sale Price</Label>
+                <Input type="text" inputMode="decimal" value={newItem.price1} onChange={e => setNewItem(p => ({ ...p, price1: e.target.value }))} data-testid="input-quick-item-price" />
+              </div>
+              <div>
+                <Label>VAT %</Label>
+                <Input type="text" inputMode="decimal" value={newItem.vatRate} onChange={e => setNewItem(p => ({ ...p, vatRate: e.target.value }))} data-testid="input-quick-item-vat" />
+              </div>
+            </div>
+            <div className="flex justify-end pt-2">
+              <Button onClick={() => quickAddMutation.mutate()} disabled={quickAddMutation.isPending} data-testid="button-quick-add-save">
+                {quickAddMutation.isPending ? "Creating..." : "Create & Add to Line"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
