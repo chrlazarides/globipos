@@ -1945,12 +1945,15 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   const companyTaxId = settings.company_tax_id || "";
   const currencySymbol = settings.currency_symbol || "\u20AC";
 
-  const invoices = statement?.invoices || [];
-  const invoiceRows = invoices.map((inv: any, idx: number) => `
+  const statementInvoices = statement?.invoices || [];
+  const typeLabels: Record<string, string> = { invoice: "Invoice", credit_note: "Credit Note", proforma: "Proforma", quotation: "Quotation" };
+  const invoiceRows = statementInvoices.map((inv: any, idx: number) => `
     <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
       <td class="cell">${inv.invoiceNumber || ""}</td>
       <td class="cell">${new Date(inv.date).toLocaleDateString("en-GB")}</td>
-      <td class="cell">${inv.type === "credit_note" ? "Credit Note" : "Invoice"}</td>
+      <td class="cell">${inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "-"}</td>
+      <td class="cell">${typeLabels[inv.type] || inv.type}</td>
+      <td class="cell">${inv.status || ""}</td>
       <td class="cell right">${currencySymbol}${parseFloat(inv.total || "0").toFixed(2)}</td>
       <td class="cell right">${currencySymbol}${parseFloat(inv.paid || "0").toFixed(2)}</td>
       <td class="cell right bold">${currencySymbol}${parseFloat(inv.balance || "0").toFixed(2)}</td>
@@ -2046,6 +2049,10 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
         <div class="summary-value">${currencySymbol}${parseFloat(statement?.totalInvoiced || "0").toFixed(2)}</div>
       </div>
       <div class="summary-card">
+        <div class="summary-label">Credit Notes</div>
+        <div class="summary-value">${currencySymbol}${parseFloat(statement?.totalCredits || "0").toFixed(2)}</div>
+      </div>
+      <div class="summary-card">
         <div class="summary-label">Total Paid</div>
         <div class="summary-value">${currencySymbol}${parseFloat(statement?.totalPaid || "0").toFixed(2)}</div>
       </div>
@@ -2061,7 +2068,9 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
         <tr>
           <th>Document</th>
           <th>Date</th>
+          <th>Due Date</th>
           <th>Type</th>
+          <th>Status</th>
           <th class="right">Total</th>
           <th class="right">Paid</th>
           <th class="right">Balance</th>

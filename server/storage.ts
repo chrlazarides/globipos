@@ -452,18 +452,39 @@ export class DatabaseStorage implements IStorage {
     const custs = await db.select().from(customers).where(eq(customers.active, true));
     const statements = [];
     for (const cust of custs) {
-      const invs = await db.select().from(invoices).where(and(eq(invoices.customerId, cust.id), eq(invoices.type, "invoice")));
+      const allInvs = await db.select().from(invoices).where(eq(invoices.customerId, cust.id));
+      const invs = allInvs.filter(i => i.type === "invoice");
+      const cns = allInvs.filter(i => i.type === "credit_note");
+
       const totalInvoiced = invs.reduce((s, i) => s + parseFloat(i.total), 0);
+      const totalCredits = cns.reduce((s, i) => s + parseFloat(i.total), 0);
       const paidInvs = invs.filter(i => i.status === "paid");
       const totalPaid = paidInvs.reduce((s, i) => s + parseFloat(i.total), 0);
+
+      const invoiceList = allInvs.map(inv => {
+        const total = parseFloat(inv.total);
+        const paid = inv.status === "paid" ? total : 0;
+        return {
+          invoiceNumber: inv.invoiceNumber,
+          date: inv.date,
+          type: inv.type,
+          status: inv.status,
+          dueDate: inv.dueDate,
+          total: total.toFixed(2),
+          paid: paid.toFixed(2),
+          balance: (total - paid).toFixed(2),
+        };
+      });
 
       statements.push({
         customerId: cust.id,
         customerName: cust.name,
         totalInvoiced: totalInvoiced.toFixed(2),
+        totalCredits: totalCredits.toFixed(2),
         totalPaid: totalPaid.toFixed(2),
-        balance: (totalInvoiced - totalPaid).toFixed(2),
-        invoiceCount: invs.length,
+        balance: (totalInvoiced - totalCredits - totalPaid).toFixed(2),
+        invoiceCount: allInvs.length,
+        invoices: invoiceList,
       });
     }
     return statements;
