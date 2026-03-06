@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="76" fill="#722F37"/>
+  <rect width="512" height="512" rx="76" fill="#1a1a1a"/>
   <text x="256" y="200" font-family="Arial,sans-serif" font-weight="bold" font-size="120" fill="#fff" text-anchor="middle" dominant-baseline="middle">VT</text>
-  <path d="M206 240 C206 240 220 340 256 340 C292 340 306 240 306 240" stroke="#D4A574" stroke-width="12" fill="none" stroke-linecap="round"/>
+  <path d="M206 240 C206 240 220 340 256 340 C292 340 306 240 306 240" stroke="#888888" stroke-width="12" fill="none" stroke-linecap="round"/>
   <line x1="256" y1="340" x2="256" y2="410" stroke="#fff" stroke-width="10" stroke-linecap="round"/>
   <ellipse cx="256" cy="420" rx="50" ry="12" fill="#fff"/>
-  <path d="M196 240 L316 240" stroke="#D4A574" stroke-width="8" stroke-linecap="round"/>
+  <path d="M196 240 L316 240" stroke="#888888" stroke-width="8" stroke-linecap="round"/>
 </svg>

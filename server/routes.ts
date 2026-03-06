@@ -1841,11 +1841,11 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; padding: 0; background: #f5f5f5; }
   .page { max-width: 800px; margin: 0 auto; background: #fff; padding: 48px; min-height: 100vh; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #722f37; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #1a1a1a; }
   .brand { }
   .brand-top { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
   .brand-logo { height: 48px; width: auto; object-fit: contain; }
-  .brand-name { font-size: 22px; font-weight: 800; color: #722f37; letter-spacing: -0.5px; }
+  .brand-name { font-size: 22px; font-weight: 800; color: #1a1a1a; letter-spacing: -0.5px; }
   .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
   .brand-detail { font-size: 11px; color: #666; line-height: 1.6; margin-top: 4px; }
   .doc-info { text-align: right; }
@@ -1856,12 +1856,12 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .party-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; font-weight: 600; margin-bottom: 8px; }
   .party-name { font-size: 15px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; }
   .party-detail { font-size: 12px; color: #555; line-height: 1.6; }
-  .meta-row { display: flex; gap: 24px; margin-bottom: 28px; padding: 14px 18px; background: #faf8f6; border-radius: 6px; border: 1px solid #f0ebe6; }
+  .meta-row { display: flex; gap: 24px; margin-bottom: 28px; padding: 14px 18px; background: #f5f5f5; border-radius: 6px; border: 1px solid #f0ebe6; }
   .meta-item { flex: 1; }
   .meta-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; }
   .meta-value { font-size: 13px; font-weight: 600; color: #333; margin-top: 2px; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-  thead th { background: #722f37; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
+  thead th { background: #1a1a1a; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
   thead th.center { text-align: center; }
   thead th.right { text-align: right; }
   .cell { padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #f0f0f0; }
@@ -1875,8 +1875,8 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .totals-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; }
   .totals-row.subtotal { color: #555; }
   .totals-row.tax { color: #555; }
-  .totals-row.grand { font-size: 18px; font-weight: 800; color: #722f37; padding-top: 12px; margin-top: 4px; border-top: 2px solid #722f37; }
-  .notes-box { padding: 16px 20px; background: #faf8f6; border-radius: 6px; border-left: 3px solid #722f37; margin-bottom: 32px; }
+  .totals-row.grand { font-size: 18px; font-weight: 800; color: #1a1a1a; padding-top: 12px; margin-top: 4px; border-top: 2px solid #1a1a1a; }
+  .notes-box { padding: 16px 20px; background: #f5f5f5; border-radius: 6px; border-left: 3px solid #1a1a1a; margin-bottom: 32px; }
   .notes-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; margin-bottom: 4px; }
   .notes-text { font-size: 12px; color: #444; line-height: 1.6; }
   .bank-details { padding: 16px 20px; background: #f8f9fa; border-radius: 6px; border: 1px solid #e9ecef; margin-bottom: 32px; }
@@ -1886,7 +1886,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .footer p { font-size: 11px; color: #aaa; line-height: 1.8; }
   .no-print { text-align: center; margin-bottom: 16px; padding: 12px; }
   .no-print button { padding: 10px 28px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; margin: 0 6px; }
-  .btn-print { background: #722f37; color: #fff; }
+  .btn-print { background: #1a1a1a; color: #fff; }
   .btn-print:hover { background: #5a2530; }
   .btn-close { background: #e5e5e5; color: #333; }
   .btn-close:hover { background: #d5d5d5; }
@@ -1894,10 +1894,10 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     body { background: #fff; padding: 0; }
     .page { padding: 24px; max-width: 100%; box-shadow: none; }
     .no-print { display: none !important; }
-    .header { border-bottom-color: #722f37 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    thead th { background: #722f37 !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .totals-row.grand { color: #722f37 !important; border-top-color: #722f37 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .meta-row { background: #faf8f6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .header { border-bottom-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    thead th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .totals-row.grand { color: #1a1a1a !important; border-top-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .meta-row { background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
   @page { margin: 15mm; size: A4; }
@@ -2052,10 +2052,10 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; padding: 0; background: #f5f5f5; }
   .page { max-width: 800px; margin: 0 auto; background: #fff; padding: 48px; min-height: 100vh; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #722f37; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #1a1a1a; }
   .brand-top { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
   .brand-logo { height: 48px; width: auto; object-fit: contain; }
-  .brand-name { font-size: 22px; font-weight: 800; color: #722f37; }
+  .brand-name { font-size: 22px; font-weight: 800; color: #1a1a1a; }
   .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
   .brand-detail { font-size: 11px; color: #666; line-height: 1.6; margin-top: 4px; }
   .doc-type { font-size: 22px; font-weight: 700; color: #333; text-transform: uppercase; letter-spacing: 1px; }
@@ -2064,12 +2064,12 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   .customer-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
   .customer-detail { font-size: 12px; color: #555; line-height: 1.6; }
   .summary { display: flex; gap: 16px; margin-bottom: 32px; }
-  .summary-card { flex: 1; background: #faf8f6; padding: 18px 20px; border-radius: 6px; border: 1px solid #f0ebe6; }
+  .summary-card { flex: 1; background: #f5f5f5; padding: 18px 20px; border-radius: 6px; border: 1px solid #f0ebe6; }
   .summary-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; }
   .summary-value { font-size: 22px; font-weight: 800; margin-top: 4px; }
-  .summary-value.due { color: #722f37; }
+  .summary-value.due { color: #1a1a1a; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-  thead th { background: #722f37; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
+  thead th { background: #1a1a1a; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
   thead th.right { text-align: right; }
   .cell { padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #f0f0f0; }
   .right { text-align: right; }
@@ -2079,7 +2079,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   .footer p { font-size: 11px; color: #aaa; line-height: 1.8; }
   .no-print { text-align: center; margin-bottom: 16px; padding: 12px; }
   .no-print button { padding: 10px 28px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; margin: 0 6px; }
-  .btn-print { background: #722f37; color: #fff; }
+  .btn-print { background: #1a1a1a; color: #fff; }
   .btn-print:hover { background: #5a2530; }
   .btn-close { background: #e5e5e5; color: #333; }
   .btn-close:hover { background: #d5d5d5; }
@@ -2087,9 +2087,9 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
     body { background: #fff; padding: 0; }
     .page { padding: 24px; max-width: 100%; }
     .no-print { display: none !important; }
-    .header { border-bottom-color: #722f37 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    thead th { background: #722f37 !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .summary-card { background: #faf8f6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .header { border-bottom-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    thead th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .summary-card { background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
   @page { margin: 15mm; size: A4; }
