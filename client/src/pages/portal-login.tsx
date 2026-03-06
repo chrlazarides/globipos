@@ -40,9 +40,7 @@ export default function PortalLogin({ onLogin }: PortalLoginProps) {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center pb-2">
           <div className="flex items-center justify-center gap-2 mb-2">
-            <div className="flex items-center justify-center w-10 h-10 rounded-md bg-primary">
-              <Grape className="w-5 h-5 text-primary-foreground" />
-            </div>
+            <img src="/logo.png" alt="Logo" className="h-14 object-contain dark:invert" />
           </div>
           <h1 className="text-xl font-semibold">{companyName} Portal</h1>
           <p className="text-sm text-muted-foreground">Sign in to your customer account</p>

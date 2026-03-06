@@ -1843,6 +1843,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .page { max-width: 800px; margin: 0 auto; background: #fff; padding: 48px; min-height: 100vh; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #722f37; }
   .brand { }
+  .brand-logo { height: 40px; object-fit: contain; margin-bottom: 4px; }
   .brand-name { font-size: 26px; font-weight: 800; color: #722f37; letter-spacing: -0.5px; }
   .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
   .brand-detail { font-size: 11px; color: #666; line-height: 1.6; margin-top: 6px; }
@@ -1909,8 +1910,8 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   <div class="page">
     <div class="header">
       <div class="brand">
+        <img src="/logo.png" alt="Logo" class="brand-logo" />
         <div class="brand-name">${companyName}</div>
-        <div class="brand-sub">Wholesale Wine & Spirits</div>
         <div class="brand-detail">
           ${companyAddress ? companyAddress + "<br>" : ""}
           ${companyPhone ? "Tel: " + companyPhone : ""}${companyEmail ? " | " + companyEmail : ""}
@@ -2049,6 +2050,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; padding: 0; background: #f5f5f5; }
   .page { max-width: 800px; margin: 0 auto; background: #fff; padding: 48px; min-height: 100vh; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #722f37; }
+  .brand-logo { height: 40px; object-fit: contain; margin-bottom: 4px; }
   .brand-name { font-size: 26px; font-weight: 800; color: #722f37; }
   .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
   .brand-detail { font-size: 11px; color: #666; line-height: 1.6; margin-top: 6px; }
@@ -2097,8 +2099,8 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   <div class="page">
     <div class="header">
       <div>
+        <img src="/logo.png" alt="Logo" class="brand-logo" />
         <div class="brand-name">${companyName}</div>
-        <div class="brand-sub">Wholesale Wine & Spirits</div>
         <div class="brand-detail">
           ${companyAddress ? companyAddress : ""}
           ${companyPhone ? " | Tel: " + companyPhone : ""}

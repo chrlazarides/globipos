@@ -113,9 +113,7 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-2">
-          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-sidebar-primary">
-            <Grape className="w-4 h-4 text-sidebar-primary-foreground" />
-          </div>
+          <img src="/logo.png" alt="Logo" className="w-8 h-8 object-contain dark:invert" />
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-sidebar-foreground leading-tight">{companyName}</span>
             <span className="text-xs text-sidebar-foreground/60">Wholesale Management</span>
