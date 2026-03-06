@@ -7,9 +7,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Package, Users, FileText, Euro, AlertTriangle, TrendingUp } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import type { Invoice, Customer, Item } from "@shared/schema";
+import type { Invoice, Customer, Item, SystemSetting } from "@shared/schema";
 
 export default function Dashboard() {
+  const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
+  const companyName = settings.find(s => s.key === "company_name")?.value || "VINERIA DI MARE Trading";
   const { data: stats, isLoading } = useQuery<{
     totalItems: number;
     totalCustomers: number;
@@ -37,15 +39,20 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6">
-      <PageHeader
-        title="Dashboard"
-        description="Overview of your wholesale operations"
-        action={
+      <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
+        <div className="flex items-center gap-4">
+          <img src="/logo.png" alt="Logo" className="h-12 object-contain dark:invert" data-testid="img-dashboard-logo" />
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">{companyName}</h1>
+            <p className="text-sm text-muted-foreground mt-1" data-testid="text-page-description">Overview of your wholesale operations</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
           <Link href="/invoices/new">
             <Button data-testid="button-new-invoice">New Invoice</Button>
           </Link>
-        }
-      />
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="Total Items" value={String(s.totalItems)} icon={Package} description="Active products" />
