@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Switch, Route, useLocation, Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Grape, LayoutDashboard, ShoppingCart, FileText, Receipt, LogOut, MessageCircle, Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
-import type { Customer } from "@shared/schema";
+import type { Customer, SystemSetting } from "@shared/schema";
 import PortalDashboard from "./portal-dashboard";
 import PortalShop from "./portal-shop";
 import PortalOrders from "./portal-orders";
@@ -26,6 +27,8 @@ const navItems = [
 export default function PortalLayout({ customer, onLogout }: PortalLayoutProps) {
   const [location] = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
+  const companyName = settings.find(s => s.key === "company_name")?.value || "VINERIA DI MARE Trading";
 
   return (
     <div className="min-h-screen bg-background">
@@ -35,7 +38,7 @@ export default function PortalLayout({ customer, onLogout }: PortalLayoutProps) 
             <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary">
               <Grape className="w-4 h-4 text-primary-foreground" />
             </div>
-            <span className="text-sm font-semibold hidden sm:inline">VinTrade</span>
+            <span className="text-sm font-semibold hidden sm:inline">{companyName}</span>
           </div>
 
           <nav className="hidden md:flex items-center gap-1">

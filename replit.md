@@ -114,3 +114,7 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-03-04: Default Chart of Accounts codes: 1000 Cash, 1010 Bank, 1100 A/R, 1200 Inventory, 2000 A/P, 2100 VAT, 3000 Equity, 4000 Revenue, 5000 COGS, 6000-7200 Operating Expenses
 - 2026-03-04: Sidebar "Accounting" section with Chart of Accounts, Journal Entries, Expenses, Financial Reports links
 - 2026-03-04: API: /api/accounts (CRUD + seed-defaults), /api/journal-entries, /api/expenses, /api/reports/trial-balance, profit-loss, balance-sheet, general-ledger
+- 2026-03-06: Company name changed to "VINERIA DI MARE Trading" (default); all UI references are dynamic from settings
+- 2026-03-06: Sidebar, portal header, portal login, page title, PWA manifest all read company name from /api/settings
+- 2026-03-06: Customer statements have Preview (eye icon) and Send Email (paper plane icon) buttons
+- 2026-03-06: API route: POST /api/reports/statement/:customerId/send-email for emailing statements

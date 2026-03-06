@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Grape, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart } from "lucide-react";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import {
@@ -15,6 +16,7 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import { offlineStore } from "@/lib/offline-store";
+import type { SystemSetting } from "@shared/schema";
 
 const mainNav = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -87,6 +89,8 @@ export function AppSidebar() {
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const [pendingCount, setPendingCount] = useState(0);
   const { isInstallable, isInstalled, install } = usePwaInstall();
+  const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
+  const companyName = settings.find(s => s.key === "company_name")?.value || "VINERIA DI MARE Trading";
 
   useEffect(() => {
     const goOnline = () => setIsOnline(true);
@@ -113,7 +117,7 @@ export function AppSidebar() {
             <Grape className="w-4 h-4 text-sidebar-primary-foreground" />
           </div>
           <div className="flex flex-col">
-            <span className="text-sm font-semibold text-sidebar-foreground">VinTrade</span>
+            <span className="text-sm font-semibold text-sidebar-foreground leading-tight">{companyName}</span>
             <span className="text-xs text-sidebar-foreground/60">Wholesale Management</span>
           </div>
         </div>
@@ -157,7 +161,7 @@ export function AppSidebar() {
         )}
         <div className="flex items-center gap-2 text-xs text-sidebar-foreground/50">
           <Wine className="w-3 h-3" />
-          <span>VinTrade v1.0</span>
+          <span>{companyName} v1.0</span>
         </div>
       </SidebarFooter>
     </Sidebar>

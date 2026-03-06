@@ -680,7 +680,7 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
-      const companyName = settingsMap.company_name || "VinTrade";
+      const companyName = settingsMap.company_name || "VINERIA DI MARE Trading";
       const subject = `${typeLabel} ${inv.invoiceNumber} from ${companyName}`;
 
       const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
@@ -837,7 +837,7 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
-      const companyName = settingsMap.company_name || "VinTrade";
+      const companyName = settingsMap.company_name || "VINERIA DI MARE Trading";
       const subject = `Account Statement from ${companyName}`;
       const html = generateStatementHtml(customer, st, false, settingsMap);
 
@@ -892,10 +892,10 @@ export async function registerRoutes(
   app.post("/api/settings/seed-defaults", async (_req, res) => {
     try {
       const defaults = [
-        { key: "company_name", value: "VinTrade", label: "Company Name", group: "company" },
+        { key: "company_name", value: "VINERIA DI MARE Trading", label: "Company Name", group: "company" },
         { key: "company_address", value: "Limassol, Cyprus", label: "Company Address", group: "company" },
         { key: "company_phone", value: "+357-25-000000", label: "Company Phone", group: "company" },
-        { key: "company_email", value: "info@vintrade.cy", label: "Company Email", group: "company" },
+        { key: "company_email", value: "info@vineriadimare.cy", label: "Company Email", group: "company" },
         { key: "company_tax_id", value: "CY-00000000A", label: "Company Tax ID (TIN)", group: "company" },
         { key: "company_reg_no", value: "", label: "Company Registration No.", group: "company" },
         { key: "company_iban", value: "", label: "Bank IBAN", group: "company" },
@@ -1797,7 +1797,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   const hasBarcodes = items.some((li: any) => li.barcode);
   const overallDiscount = parseFloat(inv.discountAmount || "0");
 
-  const companyName = settings.company_name || "VinTrade";
+  const companyName = settings.company_name || "VINERIA DI MARE Trading";
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";
@@ -2015,7 +2015,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
 }
 
 function generateStatementHtml(customer: any, statement: any, autoPrint: boolean = false, settings: Record<string, string> = {}) {
-  const companyName = settings.company_name || "VinTrade";
+  const companyName = settings.company_name || "VINERIA DI MARE Trading";
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";

@@ -1,10 +1,12 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Grape, LogIn } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import type { SystemSetting } from "@shared/schema";
 
 interface PortalLoginProps {
   onLogin: (customer: any) => void;
@@ -13,6 +15,8 @@ interface PortalLoginProps {
 export default function PortalLogin({ onLogin }: PortalLoginProps) {
   const [code, setCode] = useState("");
   const [accessCode, setAccessCode] = useState("");
+  const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
+  const companyName = settings.find(s => s.key === "company_name")?.value || "VINERIA DI MARE Trading";
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -40,7 +44,7 @@ export default function PortalLogin({ onLogin }: PortalLoginProps) {
               <Grape className="w-5 h-5 text-primary-foreground" />
             </div>
           </div>
-          <h1 className="text-xl font-semibold">VinTrade Portal</h1>
+          <h1 className="text-xl font-semibold">{companyName} Portal</h1>
           <p className="text-sm text-muted-foreground">Sign in to your customer account</p>
         </CardHeader>
         <CardContent>

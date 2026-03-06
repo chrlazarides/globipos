@@ -1,6 +1,6 @@
 {
-  "name": "VinTrade - Wine & Spirits Invoicing",
-  "short_name": "VinTrade",
+  "name": "VINERIA DI MARE Trading",
+  "short_name": "VDM Trading",
   "description": "Wholesale wine and spirits invoicing and inventory management",
   "start_url": "/invoices/new",
   "display": "standalone",
