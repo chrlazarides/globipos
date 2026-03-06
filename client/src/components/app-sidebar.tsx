@@ -112,8 +112,8 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="p-4">
-        <div className="flex items-center gap-2">
-          <img src="/logo.png" alt="Logo" className="w-8 h-8 object-contain dark:invert" />
+        <div className="flex items-center gap-3">
+          <img src="/logo.png" alt="Logo" className="h-10 w-auto object-contain dark:invert" />
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-sidebar-foreground leading-tight">{companyName}</span>
             <span className="text-xs text-sidebar-foreground/60">Wholesale Management</span>
