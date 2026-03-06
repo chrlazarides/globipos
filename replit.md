@@ -118,3 +118,5 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-03-06: Sidebar, portal header, portal login, page title, PWA manifest all read company name from /api/settings
 - 2026-03-06: Customer statements have Preview (eye icon) and Send Email (paper plane icon) buttons
 - 2026-03-06: API route: POST /api/reports/statement/:customerId/send-email for emailing statements
+- 2026-03-06: Sales report now includes profit margin analysis: per-invoice cost/profit/margin, per-customer profitability table, and overall summary cards (Total Sales, Cost, Gross Profit, Margin %, Tax, Invoice Count)
+- 2026-03-06: Profit calculated from invoice line items joined with items.costPrice; pack sales multiply cost by packSize

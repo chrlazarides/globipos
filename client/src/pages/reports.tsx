@@ -28,10 +28,14 @@ export default function Reports() {
 
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: salesReport, isLoading: salesLoading } = useQuery<{
-    invoices: (Invoice & { customerName: string })[];
+    invoices: (Invoice & { customerName: string; costTotal: string; profit: string; marginPct: string })[];
     totalSales: string;
     totalTax: string;
+    totalCost: string;
+    totalProfit: string;
+    overallMargin: string;
     invoiceCount: number;
+    customerProfits: { customerId: string; customerName: string; revenue: string; cost: string; profit: string; marginPct: string; invoiceCount: number }[];
   }>({
     queryKey: ["/api/reports/sales", dateFrom, dateTo, selectedCustomer],
   });
@@ -131,19 +135,43 @@ export default function Reports() {
             <Skeleton className="h-64" />
           ) : salesReport ? (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
                 <Card>
                   <CardContent className="p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Sales</p>
-                    <p className="text-2xl font-bold mt-1" data-testid="stat-total-sales">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Sales (incl. VAT)</p>
+                    <p className="text-xl font-bold mt-1" data-testid="stat-total-sales">
                       €{parseFloat(salesReport.totalSales).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
                   </CardContent>
                 </Card>
                 <Card>
                   <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Cost</p>
+                    <p className="text-xl font-bold mt-1" data-testid="stat-total-cost">
+                      €{parseFloat(salesReport.totalCost).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Gross Profit</p>
+                    <p className={`text-xl font-bold mt-1 ${parseFloat(salesReport.totalProfit) >= 0 ? "text-green-600" : "text-red-500"}`} data-testid="stat-total-profit">
+                      €{parseFloat(salesReport.totalProfit).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Margin</p>
+                    <p className={`text-xl font-bold mt-1 ${parseFloat(salesReport.overallMargin) >= 0 ? "text-green-600" : "text-red-500"}`} data-testid="stat-overall-margin">
+                      {salesReport.overallMargin}%
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
                     <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Tax</p>
-                    <p className="text-2xl font-bold mt-1">
+                    <p className="text-xl font-bold mt-1">
                       €{parseFloat(salesReport.totalTax).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
                   </CardContent>
@@ -151,10 +179,50 @@ export default function Reports() {
                 <Card>
                   <CardContent className="p-4">
                     <p className="text-xs text-muted-foreground uppercase tracking-wider">Invoices</p>
-                    <p className="text-2xl font-bold mt-1">{salesReport.invoiceCount}</p>
+                    <p className="text-xl font-bold mt-1">{salesReport.invoiceCount}</p>
                   </CardContent>
                 </Card>
               </div>
+
+              {salesReport.customerProfits.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Profit Margin by Customer</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Customer</TableHead>
+                          <TableHead className="text-center">Invoices</TableHead>
+                          <TableHead className="text-right">Revenue</TableHead>
+                          <TableHead className="text-right">Cost</TableHead>
+                          <TableHead className="text-right">Profit</TableHead>
+                          <TableHead className="text-right">Margin</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {salesReport.customerProfits.map((cp) => (
+                          <TableRow key={cp.customerId}>
+                            <TableCell className="font-medium text-sm">{cp.customerName}</TableCell>
+                            <TableCell className="text-center text-sm">{cp.invoiceCount}</TableCell>
+                            <TableCell className="text-right text-sm">€{parseFloat(cp.revenue).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</TableCell>
+                            <TableCell className="text-right text-sm">€{parseFloat(cp.cost).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</TableCell>
+                            <TableCell className={`text-right text-sm font-medium ${parseFloat(cp.profit) >= 0 ? "text-green-600" : "text-red-500"}`}>
+                              €{parseFloat(cp.profit).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
+                            </TableCell>
+                            <TableCell className="text-right text-sm">
+                              <Badge variant={parseFloat(cp.marginPct) >= 20 ? "default" : parseFloat(cp.marginPct) >= 0 ? "secondary" : "destructive"} data-testid={`badge-margin-${cp.customerId}`}>
+                                {cp.marginPct}%
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              )}
 
               <Card>
                 <CardContent className="p-0">
@@ -166,12 +234,15 @@ export default function Reports() {
                         <TableHead>Date</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead className="text-right">Total</TableHead>
+                        <TableHead className="text-right">Cost</TableHead>
+                        <TableHead className="text-right">Profit</TableHead>
+                        <TableHead className="text-right">Margin</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {salesReport.invoices.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No invoices in this period</TableCell>
+                          <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No invoices in this period</TableCell>
                         </TableRow>
                       ) : (
                         salesReport.invoices.map((inv) => (
@@ -185,6 +256,11 @@ export default function Reports() {
                               </Badge>
                             </TableCell>
                             <TableCell className="text-right font-medium text-sm">€{parseFloat(inv.total).toFixed(2)}</TableCell>
+                            <TableCell className="text-right text-sm">€{parseFloat(inv.costTotal).toFixed(2)}</TableCell>
+                            <TableCell className={`text-right text-sm font-medium ${parseFloat(inv.profit) >= 0 ? "text-green-600" : "text-red-500"}`}>
+                              €{parseFloat(inv.profit).toFixed(2)}
+                            </TableCell>
+                            <TableCell className="text-right text-sm">{inv.marginPct}%</TableCell>
                           </TableRow>
                         ))
                       )}

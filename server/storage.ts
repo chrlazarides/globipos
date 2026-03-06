@@ -437,14 +437,68 @@ export class DatabaseStorage implements IStorage {
       .where(and(...conditions))
       .orderBy(desc(invoices.date));
 
-    const totalSales = invs.reduce((s, i) => s + parseFloat(i.total), 0);
-    const totalTax = invs.reduce((s, i) => s + parseFloat(i.taxAmount), 0);
+    const invoicesWithCost = await Promise.all(invs.map(async (inv) => {
+      const lineItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
+      let totalCost = 0;
+      for (const li of lineItems) {
+        if (li.itemId) {
+          const item = await db.select({ costPrice: items.costPrice, packSize: items.packSize }).from(items).where(eq(items.id, li.itemId)).limit(1);
+          if (item.length > 0) {
+            const costPerUnit = parseFloat(item[0].costPrice);
+            const saleInPacks = li.saleUnit === "pack" ? li.quantity * (item[0].packSize || 1) : li.quantity;
+            totalCost += costPerUnit * saleInPacks;
+          }
+        }
+      }
+      const revenue = parseFloat(inv.subtotal) - parseFloat(inv.discountAmount || "0");
+      const profit = revenue - totalCost;
+      const marginPct = revenue > 0 ? (profit / revenue) * 100 : 0;
+      return {
+        ...inv,
+        customerName: inv.customerName || "Unknown",
+        costTotal: totalCost.toFixed(2),
+        profit: profit.toFixed(2),
+        marginPct: marginPct.toFixed(1),
+      };
+    }));
+
+    const totalSales = invoicesWithCost.reduce((s, i) => s + parseFloat(i.total), 0);
+    const totalTax = invoicesWithCost.reduce((s, i) => s + parseFloat(i.taxAmount), 0);
+    const totalCost = invoicesWithCost.reduce((s, i) => s + parseFloat(i.costTotal), 0);
+    const totalProfit = invoicesWithCost.reduce((s, i) => s + parseFloat(i.profit), 0);
+    const totalRevenue = invoicesWithCost.reduce((s, i) => s + parseFloat(i.subtotal) - parseFloat(i.discountAmount || "0"), 0);
+    const overallMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+
+    const customerMap: Record<string, { name: string; revenue: number; cost: number; profit: number; invoiceCount: number }> = {};
+    for (const inv of invoicesWithCost) {
+      if (!customerMap[inv.customerId]) {
+        customerMap[inv.customerId] = { name: inv.customerName, revenue: 0, cost: 0, profit: 0, invoiceCount: 0 };
+      }
+      const c = customerMap[inv.customerId];
+      c.revenue += parseFloat(inv.subtotal) - parseFloat(inv.discountAmount || "0");
+      c.cost += parseFloat(inv.costTotal);
+      c.profit += parseFloat(inv.profit);
+      c.invoiceCount += 1;
+    }
+    const customerProfits = Object.entries(customerMap).map(([id, c]) => ({
+      customerId: id,
+      customerName: c.name,
+      revenue: c.revenue.toFixed(2),
+      cost: c.cost.toFixed(2),
+      profit: c.profit.toFixed(2),
+      marginPct: c.revenue > 0 ? ((c.profit / c.revenue) * 100).toFixed(1) : "0.0",
+      invoiceCount: c.invoiceCount,
+    })).sort((a, b) => parseFloat(b.profit) - parseFloat(a.profit));
 
     return {
-      invoices: invs.map(r => ({ ...r, customerName: r.customerName || "Unknown" })),
+      invoices: invoicesWithCost,
       totalSales: totalSales.toFixed(2),
       totalTax: totalTax.toFixed(2),
-      invoiceCount: invs.length,
+      totalCost: totalCost.toFixed(2),
+      totalProfit: totalProfit.toFixed(2),
+      overallMargin: overallMargin.toFixed(1),
+      invoiceCount: invoicesWithCost.length,
+      customerProfits,
     };
   }
 
