@@ -41,7 +41,9 @@ export default function Dashboard() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
         <div className="flex items-center gap-4">
-          <img src="/logo.png" alt="Logo" className="h-16 w-auto object-contain dark:invert" data-testid="img-dashboard-logo" />
+          <div className="w-16 h-16 overflow-hidden flex-shrink-0 flex items-center justify-center" data-testid="img-dashboard-logo">
+            <img src="/logo.png" alt="Logo" className="w-[200%] h-[200%] object-contain" />
+          </div>
           <div>
             <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">{companyName}</h1>
             <p className="text-sm text-muted-foreground mt-1" data-testid="text-page-description">Overview of your wholesale operations</p>

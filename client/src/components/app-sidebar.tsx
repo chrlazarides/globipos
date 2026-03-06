@@ -113,7 +113,9 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="Logo" className="h-10 w-auto object-contain dark:invert" />
+          <div className="w-10 h-10 overflow-hidden flex-shrink-0 flex items-center justify-center">
+            <img src="/logo.png" alt="Logo" className="w-[200%] h-[200%] object-contain" />
+          </div>
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-sidebar-foreground leading-tight">{companyName}</span>
             <span className="text-xs text-sidebar-foreground/60">Wholesale Management</span>
