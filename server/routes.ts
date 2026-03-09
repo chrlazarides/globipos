@@ -2138,13 +2138,18 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .btn-close:hover { background: #d5d5d5; }
   @page { margin: 0; size: A4; }
   @media print {
-    body { background: #fff; padding: 0; margin: 15mm; }
-    .page { padding: 24px; max-width: 100%; box-shadow: none; }
+    body { background: #fff; padding: 0; margin: 10mm 15mm; }
+    .page { padding: 0; max-width: 100%; box-shadow: none; min-height: auto !important; }
     .no-print { display: none !important; }
-    .header { border-bottom-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .header { border-bottom-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin-bottom: 20px !important; padding-bottom: 16px !important; }
+    .parties { margin-bottom: 20px !important; }
+    .meta-row { margin-bottom: 16px !important; background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     thead th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .totals-row.grand { color: #1a1a1a !important; border-top-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .meta-row { background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .totals-section { margin-bottom: 16px !important; }
+    .notes-box { margin-bottom: 16px !important; }
+    .bank-details { margin-bottom: 16px !important; }
+    .footer { padding-top: 12px !important; }
     .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
 </style>
@@ -2332,7 +2337,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   @page { margin: 0; size: A4; }
   @media print {
     body { background: #fff; padding: 0; margin: 15mm; }
-    .page { padding: 24px; max-width: 100%; }
+    .page { padding: 0; max-width: 100%; min-height: auto !important; }
     .no-print { display: none !important; }
     .header { border-bottom-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     thead th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
