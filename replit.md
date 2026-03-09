@@ -110,7 +110,7 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-03-04: Expenses page (/accounting/expenses) with quick entry, auto VAT calc, auto journal entry generation
 - 2026-03-04: Financial Reports page (/accounting/reports) with Trial Balance, Profit & Loss, Balance Sheet tabs
 - 2026-03-04: General Ledger page (/accounting/general-ledger/:accountId) with running balance, date range filter
-- 2026-03-04: Auto-journal entries: sales invoices (DR A/R, CR Revenue, CR VAT), credit notes (reverse), purchase invoices (DR Inventory, DR VAT, CR A/P), customer payments (DR Cash/Bank, CR A/R), supplier payments (DR A/P, CR Cash/Bank), expenses (DR Expense, DR VAT, CR Payment acct)
+- 2026-03-04: Auto-journal entries: sales invoices (DR A/R, CR Revenue, CR VAT, DR COGS, CR Inventory), credit notes (reverse including COGS), purchase invoices (DR Inventory, DR VAT, CR A/P), customer payments (DR Cash/Bank, CR A/R), supplier payments (DR A/P, CR Cash/Bank), expenses (DR Expense, DR VAT, CR Payment acct)
 - 2026-03-04: Default Chart of Accounts codes: 1000 Cash, 1010 Bank, 1100 A/R, 1200 Inventory, 2000 A/P, 2100 VAT, 3000 Equity, 4000 Revenue, 5000 COGS, 6000-7200 Operating Expenses
 - 2026-03-04: Sidebar "Accounting" section with Chart of Accounts, Journal Entries, Expenses, Financial Reports links
 - 2026-03-04: API: /api/accounts (CRUD + seed-defaults), /api/journal-entries, /api/expenses, /api/reports/trial-balance, profit-loss, balance-sheet, general-ledger

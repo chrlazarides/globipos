@@ -589,30 +589,66 @@ export async function registerRoutes(
       const invDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
 
       if (data.type === "invoice" && data.status !== "draft" && invTotal > 0) {
+        let totalCost = 0;
+        for (const li of parsedItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const costPerUnit = parseFloat(item.costPrice);
+              const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              totalCost += costPerUnit * qty;
+            }
+          }
+        }
+        const journalLines = [
+          { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
+          { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+          { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
+        ];
+        if (totalCost > 0) {
+          journalLines.push(
+            { accountCode: "5000", debit: totalCost, credit: 0, description: "Cost of Goods Sold" },
+            { accountCode: "1200", debit: 0, credit: totalCost, description: "Inventory" },
+          );
+        }
         await autoCreateJournalEntry({
           sourceType: "invoice",
           sourceId: inv.id,
           date: invDate,
           description: `Sales Invoice ${inv.invoiceNumber}`,
           reference: inv.invoiceNumber,
-          lines: [
-            { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
-            { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
-            { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
-          ],
+          lines: journalLines,
         });
       } else if (data.type === "credit_note" && invTotal > 0) {
+        let totalCost = 0;
+        for (const li of parsedItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const costPerUnit = parseFloat(item.costPrice);
+              const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              totalCost += costPerUnit * qty;
+            }
+          }
+        }
+        const journalLines = [
+          { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+          { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
+          { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
+        ];
+        if (totalCost > 0) {
+          journalLines.push(
+            { accountCode: "1200", debit: totalCost, credit: 0, description: "Inventory restored" },
+            { accountCode: "5000", debit: 0, credit: totalCost, description: "COGS reversal" },
+          );
+        }
         await autoCreateJournalEntry({
           sourceType: "credit_note",
           sourceId: inv.id,
           date: invDate,
           description: `Credit Note ${inv.invoiceNumber}`,
           reference: inv.invoiceNumber,
-          lines: [
-            { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
-            { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
-            { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
-          ],
+          lines: journalLines,
         });
       }
 
@@ -1760,6 +1796,8 @@ export async function registerRoutes(
       let skipped = 0;
 
       const allInvoices = await db.select().from(invoices);
+      const allInvoiceItems = await db.select().from(invoiceItems);
+      const allItems = await db.select().from(items);
       for (const inv of allInvoices) {
         const invTotal = parseFloat(inv.total);
         const invVat = parseFloat(inv.taxAmount);
@@ -1767,26 +1805,53 @@ export async function registerRoutes(
         const invDate = typeof inv.date === "string" ? inv.date : new Date().toISOString().split("T")[0];
         if (invTotal <= 0) continue;
 
+        let totalCost = 0;
+        const invLines = allInvoiceItems.filter(li => li.invoiceId === inv.id);
+        for (const li of invLines) {
+          if (li.itemId) {
+            const item = allItems.find(i => i.id === li.itemId);
+            if (item) {
+              const costPerUnit = parseFloat(item.costPrice);
+              const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              totalCost += costPerUnit * qty;
+            }
+          }
+        }
+
         if (inv.type === "invoice" && inv.status !== "draft") {
+          const lines = [
+            { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
+            { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+            { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
+          ];
+          if (totalCost > 0) {
+            lines.push(
+              { accountCode: "5000", debit: totalCost, credit: 0, description: "Cost of Goods Sold" },
+              { accountCode: "1200", debit: 0, credit: totalCost, description: "Inventory" },
+            );
+          }
           const result = await autoCreateJournalEntry({
             sourceType: "invoice", sourceId: inv.id, date: invDate,
             description: `Sales Invoice ${inv.invoiceNumber}`, reference: inv.invoiceNumber,
-            lines: [
-              { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
-              { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
-              { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
-            ],
+            lines,
           });
           result ? generated++ : skipped++;
         } else if (inv.type === "credit_note") {
+          const lines = [
+            { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+            { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
+            { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
+          ];
+          if (totalCost > 0) {
+            lines.push(
+              { accountCode: "1200", debit: totalCost, credit: 0, description: "Inventory restored" },
+              { accountCode: "5000", debit: 0, credit: totalCost, description: "COGS reversal" },
+            );
+          }
           const result = await autoCreateJournalEntry({
             sourceType: "credit_note", sourceId: inv.id, date: invDate,
             description: `Credit Note ${inv.invoiceNumber}`, reference: inv.invoiceNumber,
-            lines: [
-              { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
-              { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
-              { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
-            ],
+            lines,
           });
           result ? generated++ : skipped++;
         }
