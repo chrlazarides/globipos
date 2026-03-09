@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import * as XLSX from "xlsx";
@@ -138,7 +138,7 @@ export async function registerRoutes(
     }
   });
 
-  const numericStringFields = ["price1", "price2", "price3", "price4", "price5", "costPrice", "vatRate"];
+  const numericStringFields = ["price1", "price2", "price3", "price4", "price5", "costPrice", "vatRate", "alcoholPercentage"];
   const numericIntFields = ["stockQuantity", "reorderLevel", "packSize"];
   function sanitizeItemNumericFields(body: any) {
     for (const field of numericStringFields) {
@@ -151,6 +151,15 @@ export async function registerRoutes(
         body[field] = field === "packSize" ? 1 : 0;
       } else if (typeof body[field] === "string") {
         body[field] = parseInt(body[field], 10) || (field === "packSize" ? 1 : 0);
+      }
+    }
+    return body;
+  }
+
+  function sanitizeNumericFields(body: any, fields: string[], defaultVal = "0") {
+    for (const field of fields) {
+      if (body[field] === "" || body[field] === null || body[field] === undefined) {
+        body[field] = defaultVal;
       }
     }
     return body;
@@ -1091,6 +1100,13 @@ export async function registerRoutes(
   app.post("/api/purchase-invoices", async (req, res) => {
     try {
       const { items: lineItems, ...invoiceData } = req.body;
+      sanitizeNumericFields(invoiceData, ["subtotal", "vatAmount", "total"]);
+      if (lineItems?.length) {
+        for (const li of lineItems) {
+          sanitizeNumericFields(li, ["unitCost", "discountPercent", "discount", "vatRate", "total"]);
+          if (li.vatRate === "0" || li.vatRate === "") li.vatRate = "19";
+        }
+      }
       const data = insertPurchaseInvoiceSchema.parse(invoiceData);
 
       if (!data.dueDate && data.supplierId) {
@@ -1159,6 +1175,13 @@ export async function registerRoutes(
       if (!existing) return res.status(404).json({ message: "Purchase invoice not found" });
 
       const { items: lineItems, ...invoiceData } = req.body;
+      sanitizeNumericFields(invoiceData, ["subtotal", "vatAmount", "total"]);
+      if (lineItems?.length) {
+        for (const li of lineItems) {
+          sanitizeNumericFields(li, ["unitCost", "discountPercent", "discount", "vatRate", "total"]);
+          if (li.vatRate === "0" || li.vatRate === "") li.vatRate = "19";
+        }
+      }
 
       // Reverse old stock impact
       for (const oldItem of existing.items) {
@@ -1694,6 +1717,164 @@ export async function registerRoutes(
         await storage.createAccount(acct as any);
       }
       res.json({ message: "Default chart of accounts created", count: DEFAULT_ACCOUNTS.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/accounts/recalculate", async (_req, res) => {
+    try {
+      const accts = await storage.getAccounts();
+      if (accts.length === 0) return res.status(400).json({ message: "No chart of accounts. Seed defaults first." });
+
+      const { journalEntryLines: jelTable, journalEntries: jeTable } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+
+      const manualEntries = await db.select().from(jeTable).where(eq(jeTable.sourceType, "manual"));
+      const manualEntryIds = manualEntries.map(e => e.id);
+      const allExistingLines = await db.select().from(jelTable);
+      const manualLines = allExistingLines.filter(l => manualEntryIds.includes(l.journalEntryId));
+
+      await db.delete(jelTable);
+      await db.delete(jeTable);
+      await db.update(accounts).set({ balance: "0.00" });
+
+      for (const me of manualEntries) {
+        await db.insert(jeTable).values(me);
+      }
+      for (const ml of manualLines) {
+        await db.insert(jelTable).values(ml);
+        const acct = accts.find(a => a.id === ml.accountId);
+        if (acct) {
+          const debit = parseFloat(ml.debit);
+          const credit = parseFloat(ml.credit);
+          const isDebitNormal = acct.type === "asset" || acct.type === "expense";
+          const balanceChange = isDebitNormal ? (debit - credit) : (credit - debit);
+          const currentBal = await db.select({ balance: accounts.balance }).from(accounts).where(eq(accounts.id, acct.id));
+          const newBal = parseFloat(currentBal[0]?.balance || "0") + balanceChange;
+          await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, acct.id));
+        }
+      }
+
+      let generated = 0;
+      let skipped = 0;
+
+      const allInvoices = await db.select().from(invoices);
+      for (const inv of allInvoices) {
+        const invTotal = parseFloat(inv.total);
+        const invVat = parseFloat(inv.taxAmount);
+        const invNet = parseFloat(inv.subtotal) - parseFloat(inv.discountAmount);
+        const invDate = typeof inv.date === "string" ? inv.date : new Date().toISOString().split("T")[0];
+        if (invTotal <= 0) continue;
+
+        if (inv.type === "invoice" && inv.status !== "draft") {
+          const result = await autoCreateJournalEntry({
+            sourceType: "invoice", sourceId: inv.id, date: invDate,
+            description: `Sales Invoice ${inv.invoiceNumber}`, reference: inv.invoiceNumber,
+            lines: [
+              { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
+              { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+              { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
+            ],
+          });
+          result ? generated++ : skipped++;
+        } else if (inv.type === "credit_note") {
+          const result = await autoCreateJournalEntry({
+            sourceType: "credit_note", sourceId: inv.id, date: invDate,
+            description: `Credit Note ${inv.invoiceNumber}`, reference: inv.invoiceNumber,
+            lines: [
+              { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+              { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
+              { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
+            ],
+          });
+          result ? generated++ : skipped++;
+        }
+      }
+
+      const allPayments = await db.select().from(payments);
+      for (const pmt of allPayments) {
+        const pmtAmount = parseFloat(pmt.amount);
+        if (pmtAmount <= 0) continue;
+        const pmtDate = typeof pmt.paymentDate === "string" ? pmt.paymentDate : new Date().toISOString().split("T")[0];
+        const pmtAcctCode = pmt.paymentMethod === "cash" ? "1000" : "1010";
+        const result = await autoCreateJournalEntry({
+          sourceType: "payment", sourceId: pmt.id, date: pmtDate,
+          description: "Customer Payment received", reference: pmt.reference || pmt.id,
+          lines: [
+            { accountCode: pmtAcctCode, debit: pmtAmount, credit: 0, description: pmt.paymentMethod === "cash" ? "Cash" : "Bank" },
+            { accountCode: "1100", debit: 0, credit: pmtAmount, description: "Accounts Receivable" },
+          ],
+        });
+        result ? generated++ : skipped++;
+      }
+
+      const allPI = await db.select().from(purchaseInvoices);
+      for (const pi of allPI) {
+        const piTotal = parseFloat(pi.total);
+        const piVat = parseFloat(pi.vatAmount);
+        const piNet = parseFloat(pi.subtotal);
+        const piDate = typeof pi.date === "string" ? pi.date : new Date().toISOString().split("T")[0];
+        if (piTotal <= 0) continue;
+        const result = await autoCreateJournalEntry({
+          sourceType: "purchase", sourceId: pi.id, date: piDate,
+          description: `Purchase Invoice ${pi.invoiceNumber}`, reference: pi.invoiceNumber,
+          lines: [
+            { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
+            { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT" },
+            { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
+          ],
+        });
+        result ? generated++ : skipped++;
+      }
+
+      const allSP = await db.select().from(supplierPayments);
+      for (const sp of allSP) {
+        const spAmount = parseFloat(sp.amount);
+        if (spAmount <= 0) continue;
+        const spDate = typeof sp.paymentDate === "string" ? sp.paymentDate : new Date().toISOString().split("T")[0];
+        const paymentAcctCode = sp.paymentMethod === "cash" ? "1000" : "1010";
+        const result = await autoCreateJournalEntry({
+          sourceType: "supplier_payment", sourceId: sp.id, date: spDate,
+          description: `Supplier Payment`, reference: sp.reference || sp.id,
+          lines: [
+            { accountCode: "2000", debit: spAmount, credit: 0, description: "Accounts Payable" },
+            { accountCode: paymentAcctCode, debit: 0, credit: spAmount, description: sp.paymentMethod === "cash" ? "Cash" : "Bank" },
+          ],
+        });
+        result ? generated++ : skipped++;
+      }
+
+      const allExpenses = await db.select().from(expenses);
+      for (const exp of allExpenses) {
+        const expAmount = parseFloat(exp.amount);
+        const expVat = parseFloat(exp.vatAmount || "0");
+        const expTotal = expAmount + expVat;
+        if (expAmount <= 0) continue;
+        const expDate = typeof exp.date === "string" ? exp.date : new Date().toISOString().split("T")[0];
+        const expAcct = await storage.getAccount(exp.expenseAccountId);
+        const payAcct = await storage.getAccount(exp.paymentAccountId);
+        const result = await autoCreateJournalEntry({
+          sourceType: "expense", sourceId: exp.id, date: expDate,
+          description: `Expense: ${exp.description}`, reference: exp.reference || exp.id,
+          lines: [
+            { accountCode: expAcct?.code || "6000", debit: expAmount, credit: 0, description: exp.description },
+            ...(expVat > 0 ? [{ accountCode: "2100", debit: expVat, credit: 0, description: "Input VAT" }] : []),
+            { accountCode: payAcct?.code || "1000", debit: 0, credit: expTotal, description: "Payment" },
+          ],
+        });
+        result ? generated++ : skipped++;
+      }
+
+      const updatedAccts = await storage.getAccounts();
+      const nonZero = updatedAccts.filter(a => parseFloat(a.balance) !== 0);
+      res.json({ 
+        message: `Recalculated. Generated ${generated} journal entries (${skipped} skipped). ${manualEntries.length} manual entries preserved. All account balances rebuilt.`, 
+        nonZeroAccounts: nonZero.length,
+        generated,
+        skipped,
+        manualPreserved: manualEntries.length
+      });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

@@ -120,3 +120,6 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-03-06: API route: POST /api/reports/statement/:customerId/send-email for emailing statements
 - 2026-03-06: Sales report now includes profit margin analysis: per-invoice cost/profit/margin, per-customer profitability table, and overall summary cards (Total Sales, Cost, Gross Profit, Margin %, Tax, Invoice Count)
 - 2026-03-06: Profit calculated from invoice line items joined with items.costPrice; pack sales multiply cost by packSize
+- 2026-03-09: Recalculate Balances feature (POST /api/accounts/recalculate) — deletes all journal entries, regenerates from all transactions (invoices, payments, purchase invoices, supplier payments, expenses), resets account balances
+- 2026-03-09: "Recalculate Balances" button on Chart of Accounts page with spinning icon indicator
+- 2026-03-09: Fixes production accounting corruption where accounts were seeded after invoices were already created

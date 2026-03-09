@@ -15,7 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, ChevronDown, ChevronRight, Database, BookOpen, Edit2 } from "lucide-react";
+import { Plus, ChevronDown, ChevronRight, Database, BookOpen, Edit2, RefreshCw } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertAccountSchema, type Account } from "@shared/schema";
@@ -120,6 +120,19 @@ export default function ChartOfAccounts() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const recalculate = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/accounts/recalculate");
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
+      toast({ title: "Accounting recalculated", description: data.message });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const toggleSection = (type: string) => {
     setOpenSections((prev) => ({ ...prev, [type]: !prev[type] }));
   };
@@ -169,6 +182,15 @@ export default function ChartOfAccounts() {
                 {seedDefaults.isPending ? "Initializing..." : "Initialize Chart of Accounts"}
               </Button>
             )}
+            <Button
+              variant="outline"
+              onClick={() => recalculate.mutate()}
+              disabled={recalculate.isPending}
+              data-testid="button-recalculate"
+            >
+              <RefreshCw className={`w-4 h-4 mr-1 ${recalculate.isPending ? "animate-spin" : ""}`} />
+              {recalculate.isPending ? "Recalculating..." : "Recalculate Balances"}
+            </Button>
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
                 <Button data-testid="button-new-account">
