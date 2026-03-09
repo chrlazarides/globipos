@@ -2136,8 +2136,9 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .btn-print:hover { background: #5a2530; }
   .btn-close { background: #e5e5e5; color: #333; }
   .btn-close:hover { background: #d5d5d5; }
+  @page { margin: 0; size: A4; }
   @media print {
-    body { background: #fff; padding: 0; }
+    body { background: #fff; padding: 0; margin: 15mm; }
     .page { padding: 24px; max-width: 100%; box-shadow: none; }
     .no-print { display: none !important; }
     .header { border-bottom-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -2146,7 +2147,6 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     .meta-row { background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
-  @page { margin: 15mm; size: A4; }
 </style>
 </head>
 <body>
@@ -2329,8 +2329,9 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   .btn-print:hover { background: #5a2530; }
   .btn-close { background: #e5e5e5; color: #333; }
   .btn-close:hover { background: #d5d5d5; }
+  @page { margin: 0; size: A4; }
   @media print {
-    body { background: #fff; padding: 0; }
+    body { background: #fff; padding: 0; margin: 15mm; }
     .page { padding: 24px; max-width: 100%; }
     .no-print { display: none !important; }
     .header { border-bottom-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -2338,7 +2339,6 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
     .summary-card { background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
-  @page { margin: 15mm; size: A4; }
 </style>
 </head>
 <body>
