@@ -123,7 +123,7 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-03-09: Recalculate Balances feature (POST /api/accounts/recalculate) — deletes all journal entries, regenerates from all transactions (invoices, payments, purchase invoices, supplier payments, expenses), resets account balances
 - 2026-03-09: "Recalculate Balances" button on Chart of Accounts page with spinning icon indicator
 - 2026-03-09: Fixes production accounting corruption where accounts were seeded after invoices were already created
-- 2026-03-10: Invoice view mode no longer recalculates line prices/discounts — shows stored amounts exactly as saved
+- 2026-03-10: Invoice view mode uses stored DB values for subtotal/taxAmount/total/discount — never recalculates summary amounts
 - 2026-03-10: Customer account number (code) auto-generated as CUST0001, CUST0002, etc. via GET /api/customers/next-code
 - 2026-03-10: Duplicate customer detection on create — checks name, email, taxId (case-insensitive); returns 409 with details
 - 2026-03-10: Fixed VAT journal entry bug — invoices used non-existent data.vatTotal instead of data.taxAmount; purchase invoices used data.vatAmount

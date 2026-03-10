@@ -424,9 +424,15 @@ export default function InvoiceForm() {
   const discPct = parseFloat(overallDiscountPercent) || 0;
   const discAmt = parseFloat(overallDiscountAmount) || 0;
   const computedDiscount = discPct > 0 ? linesSubtotal * (discPct / 100) : discAmt;
-  const subtotal = linesSubtotal - computedDiscount;
-  const taxAmount = subtotal * (parseFloat(taxRate) / 100);
-  const total = subtotal + taxAmount;
+
+  const displaySubtotal = isViewMode && existingInvoice ? parseFloat(existingInvoice.subtotal) : linesSubtotal - computedDiscount;
+  const displayTaxAmount = isViewMode && existingInvoice ? parseFloat(existingInvoice.taxAmount) : displaySubtotal * (parseFloat(taxRate) / 100);
+  const displayTotal = isViewMode && existingInvoice ? parseFloat(existingInvoice.total) : displaySubtotal + displayTaxAmount;
+  const displayDiscount = isViewMode && existingInvoice ? parseFloat(existingInvoice.discountAmount || "0") : computedDiscount;
+
+  const subtotal = isViewMode ? displaySubtotal : linesSubtotal - computedDiscount;
+  const taxAmount = isViewMode ? displayTaxAmount : subtotal * (parseFloat(taxRate) / 100);
+  const total = isViewMode ? displayTotal : subtotal + taxAmount;
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -1003,10 +1009,10 @@ export default function InvoiceForm() {
                   data-testid="input-overall-discount-amount"
                 />
               </div>
-              {computedDiscount > 0 && (
+              {(isViewMode ? displayDiscount : computedDiscount) > 0 && (
                 <div className="flex justify-between text-sm text-red-600">
-                  <span>Discount</span>
-                  <span>-€{computedDiscount.toFixed(2)}</span>
+                  <span>Overall Discount</span>
+                  <span>-€{(isViewMode ? displayDiscount : computedDiscount).toFixed(2)}</span>
                 </div>
               )}
               <div className="flex justify-between text-sm">

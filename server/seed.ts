@@ -62,7 +62,7 @@ export async function seedDatabase() {
   const [inv2] = await db.insert(invoices).values({
     invoiceNumber: "INV-00002", type: "invoice", customerId: createdCustomers[3].id,
     date: "2026-02-15", dueDate: "2026-04-16", subtotal: inv2Subtotal.toFixed(2),
-    taxRate: "19", taxAmount: inv2Tax.toFixed(2), discountAmount: "50.00", total: (inv2Subtotal + inv2Tax).toFixed(2), status: "paid",
+    taxRate: "19", taxAmount: inv2Tax.toFixed(2), discountAmount: "0", total: (inv2Subtotal + inv2Tax).toFixed(2), status: "paid",
   }).returning();
   await db.insert(invoiceItems).values(inv2Items.map(li => ({ ...li, invoiceId: inv2.id })));
 
