@@ -347,6 +347,15 @@ export async function registerRoutes(
     res.json(custs);
   });
 
+  app.get("/api/customers/next-code", async (_req, res) => {
+    try {
+      const code = await storage.getNextCustomerCode();
+      res.json({ code });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.get("/api/customers/:id", async (req, res) => {
     const cust = await storage.getCustomer(req.params.id);
     if (!cust) return res.status(404).json({ message: "Customer not found" });
@@ -356,6 +365,25 @@ export async function registerRoutes(
   app.post("/api/customers", async (req, res) => {
     try {
       const data = insertCustomerSchema.parse(req.body);
+
+      if (!data.code || data.code.trim() === "") {
+        data.code = await storage.getNextCustomerCode();
+      }
+
+      const duplicates = await storage.findDuplicateCustomer(data.name, data.email, data.taxId);
+      if (duplicates.length > 0) {
+        const matchReasons: string[] = [];
+        for (const dup of duplicates) {
+          if (dup.name.toLowerCase().trim() === data.name.toLowerCase().trim()) matchReasons.push(`name "${dup.name}" (${dup.code})`);
+          if (data.email && dup.email && dup.email.toLowerCase().trim() === data.email.toLowerCase().trim()) matchReasons.push(`email "${dup.email}" (${dup.code})`);
+          if (data.taxId && dup.taxId && dup.taxId.toLowerCase().trim() === data.taxId.toLowerCase().trim()) matchReasons.push(`tax ID "${dup.taxId}" (${dup.code})`);
+        }
+        return res.status(409).json({
+          message: `Duplicate customer found: ${matchReasons.join(", ")}`,
+          duplicates: duplicates.map(d => ({ id: d.id, name: d.name, code: d.code, email: d.email, taxId: d.taxId })),
+        });
+      }
+
       const cust = await storage.createCustomer(data);
       res.json(cust);
     } catch (e: any) {
@@ -584,7 +612,7 @@ export async function registerRoutes(
       }
 
       const invTotal = parseFloat(String(data.total || 0));
-      const invVat = parseFloat(String(data.vatTotal || 0));
+      const invVat = parseFloat(String(data.taxAmount || 0));
       const invNet = invTotal - invVat;
       const invDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
 
@@ -1179,7 +1207,7 @@ export async function registerRoutes(
       }
 
       const piTotal = parseFloat(String(data.total || 0));
-      const piVat = parseFloat(String(data.vatTotal || 0));
+      const piVat = parseFloat(String(data.vatAmount || 0));
       const piNet = piTotal - piVat;
       const piDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
 

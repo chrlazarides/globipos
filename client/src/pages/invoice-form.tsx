@@ -244,7 +244,7 @@ export default function InvoiceForm() {
   }, [customerId, invoiceDate, customers]);
 
   useEffect(() => {
-    if (!customerId) return;
+    if (!customerId || isViewMode) return;
     const customer = customers.find(c => c.id === customerId);
     if (!customer) return;
     setLines((prev) => {
@@ -279,7 +279,7 @@ export default function InvoiceForm() {
       });
       return changed ? updated : prev;
     });
-  }, [customerId, allContracts, items, customers, findContractDiscount]);
+  }, [customerId, allContracts, items, customers, findContractDiscount, isViewMode]);
 
   const calcLineTotal = useCallback((line: LineItem) => {
     const qty = line.quantity || 0;

@@ -37,7 +37,7 @@ const customerImportFields = [
 
 const customerFormSchema = insertCustomerSchema.extend({
   name: z.string().min(1, "Name is required"),
-  code: z.string().min(1, "Code is required"),
+  code: z.string().optional().default(""),
 });
 
 export default function Customers() {
@@ -58,10 +58,11 @@ export default function Customers() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customers/next-code"] });
       setDialogOpen(false);
       toast({ title: "Customer created successfully" });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Duplicate Customer", description: e.message, variant: "destructive" }),
   });
 
   const updateCustomer = useMutation({
@@ -103,7 +104,7 @@ export default function Customers() {
           </div>
           <div>
             <p className="font-medium text-sm">{row.name}</p>
-            <p className="text-xs text-muted-foreground">{row.code}</p>
+            <p className="text-xs text-muted-foreground">Acct: {row.code}</p>
           </div>
         </div>
       ),
@@ -221,6 +222,12 @@ export default function Customers() {
 }
 
 function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: { onSubmit: (d: any) => void; isPending: boolean; defaultValues?: any; priceLevelNames: string[] }) {
+  const isEditing = !!defaultValues?.code;
+  const { data: nextCodeData } = useQuery<{ code: string }>({
+    queryKey: ["/api/customers/next-code"],
+    enabled: !isEditing,
+  });
+
   const form = useForm({
     resolver: zodResolver(customerFormSchema),
     defaultValues: defaultValues || {
@@ -242,9 +249,10 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: {
           )} />
           <FormField control={form.control} name="code" render={({ field }) => (
             <FormItem>
-              <FormLabel>Customer Code</FormLabel>
-              <FormControl><Input {...field} placeholder="e.g. CUST001" data-testid="input-customer-code" /></FormControl>
+              <FormLabel>Account Number</FormLabel>
+              <FormControl><Input {...field} placeholder={nextCodeData?.code || "Auto-generated"} data-testid="input-customer-code" disabled={isEditing} /></FormControl>
               <FormMessage />
+              {!isEditing && <p className="text-xs text-muted-foreground">Leave blank to auto-generate</p>}
             </FormItem>
           )} />
         </div>

@@ -316,7 +316,9 @@ export const insertUserSchema = createInsertSchema(users).pick({ username: true,
 export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
 export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });
-export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true });
+export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true }).extend({
+  code: z.string().optional().default(""),
+});
 export const insertPriceContractSchema = createInsertSchema(priceContracts).omit({ id: true });
 export const insertPriceContractRuleSchema = createInsertSchema(priceContractRules).omit({ id: true });
 export const insertPriceContractItemSchema = createInsertSchema(priceContractItems).omit({ id: true });

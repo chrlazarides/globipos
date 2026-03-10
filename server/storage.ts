@@ -47,6 +47,8 @@ export interface IStorage {
 
   getCustomers(): Promise<Customer[]>;
   getCustomer(id: string): Promise<Customer | undefined>;
+  getNextCustomerCode(): Promise<string>;
+  findDuplicateCustomer(name: string, email?: string | null, taxId?: string | null, excludeId?: string): Promise<Customer[]>;
   createCustomer(data: InsertCustomer): Promise<Customer>;
   updateCustomer(id: string, data: Partial<InsertCustomer>): Promise<Customer | undefined>;
 
@@ -183,6 +185,28 @@ export class DatabaseStorage implements IStorage {
     const [cust] = await db.select().from(customers).where(eq(customers.id, id));
     return cust;
   }
+  async getNextCustomerCode() {
+    const [result] = await db
+      .select({ maxNum: sql<string>`MAX(CAST(NULLIF(REGEXP_REPLACE(code, '[^0-9]', '', 'g'), '') AS INTEGER))` })
+      .from(customers);
+    const num = (parseInt(result?.maxNum || "0") || 0) + 1;
+    return `CUST${String(num).padStart(4, "0")}`;
+  }
+
+  async findDuplicateCustomer(name: string, email?: string | null, taxId?: string | null, excludeId?: string) {
+    const conditions = [];
+    conditions.push(ilike(customers.name, name.trim()));
+    if (email && email.trim()) {
+      conditions.push(ilike(customers.email, email.trim()));
+    }
+    if (taxId && taxId.trim()) {
+      conditions.push(ilike(customers.taxId, taxId.trim()));
+    }
+    let query = db.select().from(customers).where(or(...conditions));
+    const results = await query;
+    return results.filter(c => !excludeId || c.id !== excludeId);
+  }
+
   async createCustomer(data: InsertCustomer) {
     const [cust] = await db.insert(customers).values(data).returning();
     return cust;
