@@ -159,7 +159,7 @@ export default function AccountingReports() {
       />
 
       <Tabs defaultValue="trial-balance">
-        <TabsList>
+        <TabsList className="flex flex-wrap h-auto gap-1">
           <TabsTrigger value="trial-balance" data-testid="tab-trial-balance">
             <Scale className="w-4 h-4 mr-1" /> Trial Balance
           </TabsTrigger>
