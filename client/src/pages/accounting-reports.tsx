@@ -6,10 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Printer, Scale, TrendingUp, BarChart3 } from "lucide-react";
+import { Printer, Scale, TrendingUp, BarChart3, Receipt } from "lucide-react";
 
 interface TrialBalanceAccount {
   code: string;
@@ -49,6 +51,26 @@ interface BalanceSheetData {
   totalEquity: string;
 }
 
+interface VatCategory {
+  count: number;
+  netAmount: string;
+  vatAmount: string;
+  grossAmount?: string;
+}
+
+interface VatReturnData {
+  period: { from: string; to: string };
+  sales: VatCategory;
+  creditNotes: VatCategory;
+  purchases: VatCategory;
+  expenses: VatCategory;
+  outputVat: string;
+  outputNet: string;
+  inputVat: string;
+  inputNet: string;
+  netVatPayable: string;
+}
+
 function formatEUR(value: string | number): string {
   const num = typeof value === "string" ? parseFloat(value) : value;
   return new Intl.NumberFormat("de-DE", {
@@ -67,10 +89,50 @@ function getToday(): string {
   return new Date().toISOString().split("T")[0];
 }
 
+function getCurrentQuarter(): string {
+  const d = new Date();
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return `${d.getFullYear()}-Q${q}`;
+}
+
+function padDate(y: number, m: number, d: number): string {
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+function getQuarterDates(qStr: string): { from: string; to: string } {
+  const [yearStr, qPart] = qStr.split("-Q");
+  const year = parseInt(yearStr);
+  const q = parseInt(qPart);
+  const startMonth = (q - 1) * 3 + 1;
+  const endMonth = q * 3;
+  const lastDay = new Date(year, endMonth, 0).getDate();
+  return { from: padDate(year, startMonth, 1), to: padDate(year, endMonth, lastDay) };
+}
+
+function getAvailableQuarters(): string[] {
+  const quarters: string[] = [];
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  for (let y = currentYear - 1; y <= currentYear + 1; y++) {
+    for (let q = 1; q <= 4; q++) {
+      quarters.push(`${y}-Q${q}`);
+    }
+  }
+  return quarters;
+}
+
+function formatQuarterLabel(qStr: string): string {
+  const [yearStr, qPart] = qStr.split("-Q");
+  const q = parseInt(qPart);
+  const months = ["Jan-Mar", "Apr-Jun", "Jul-Sep", "Oct-Dec"];
+  return `Q${q} ${yearStr} (${months[q - 1]})`;
+}
+
 export default function AccountingReports() {
   const [plFrom, setPlFrom] = useState(getFirstDayOfMonth);
   const [plTo, setPlTo] = useState(getToday);
   const [bsAsOf, setBsAsOf] = useState(getToday);
+  const [vatQuarter, setVatQuarter] = useState(getCurrentQuarter);
 
   const { data: trialBalance, isLoading: tbLoading } = useQuery<TrialBalanceData>({
     queryKey: ["/api/reports/trial-balance"],
@@ -84,11 +146,16 @@ export default function AccountingReports() {
     queryKey: ["/api/reports/balance-sheet", bsAsOf],
   });
 
+  const vatDates = getQuarterDates(vatQuarter);
+  const { data: vatReturn, isLoading: vatLoading } = useQuery<VatReturnData>({
+    queryKey: ["/api/reports/vat-return", vatDates.from, vatDates.to],
+  });
+
   return (
     <div className="p-6 space-y-6">
       <PageHeader
         title="Accounting Reports"
-        description="Trial Balance, Profit & Loss, and Balance Sheet reports"
+        description="Trial Balance, Profit & Loss, Balance Sheet, and VAT Return reports"
       />
 
       <Tabs defaultValue="trial-balance">
@@ -101,6 +168,9 @@ export default function AccountingReports() {
           </TabsTrigger>
           <TabsTrigger value="balance-sheet" data-testid="tab-balance-sheet">
             <BarChart3 className="w-4 h-4 mr-1" /> Balance Sheet
+          </TabsTrigger>
+          <TabsTrigger value="vat-return" data-testid="tab-vat-return">
+            <Receipt className="w-4 h-4 mr-1" /> VAT Return
           </TabsTrigger>
         </TabsList>
 
@@ -503,6 +573,154 @@ export default function AccountingReports() {
                       ) : (
                         <Badge variant="destructive" data-testid="badge-bs-unbalanced">Unbalanced</Badge>
                       )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="vat-return" className="mt-4 space-y-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-end gap-4 flex-wrap">
+                <div>
+                  <Label className="text-xs">Quarter</Label>
+                  <Select value={vatQuarter} onValueChange={setVatQuarter}>
+                    <SelectTrigger className="w-[260px]" data-testid="select-vat-quarter">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getAvailableQuarters().map((q) => (
+                        <SelectItem key={q} value={q}>{formatQuarterLabel(q)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Period: {vatDates.from} to {vatDates.to}
+                </div>
+                <Button variant="outline" onClick={() => window.print()} data-testid="button-print-vat-return">
+                  <Printer className="w-4 h-4 mr-2" /> Print
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {vatLoading ? (
+            <Skeleton className="h-64" />
+          ) : vatReturn ? (
+            <>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg">Output VAT (Sales)</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead data-testid="th-vat-output-desc">Description</TableHead>
+                        <TableHead className="text-center" data-testid="th-vat-output-count">Count</TableHead>
+                        <TableHead className="text-right" data-testid="th-vat-output-net">Net Amount</TableHead>
+                        <TableHead className="text-right" data-testid="th-vat-output-vat">VAT Amount</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow data-testid="row-vat-sales">
+                        <TableCell className="text-sm">Sales Invoices</TableCell>
+                        <TableCell className="text-center text-sm" data-testid="text-vat-sales-count">{vatReturn.sales.count}</TableCell>
+                        <TableCell className="text-right text-sm" data-testid="text-vat-sales-net">{formatEUR(vatReturn.sales.netAmount)}</TableCell>
+                        <TableCell className="text-right text-sm font-medium" data-testid="text-vat-sales-vat">{formatEUR(vatReturn.sales.vatAmount)}</TableCell>
+                      </TableRow>
+                      {vatReturn.creditNotes.count > 0 && (
+                        <TableRow data-testid="row-vat-credit-notes">
+                          <TableCell className="text-sm text-red-600 dark:text-red-400">Less: Credit Notes</TableCell>
+                          <TableCell className="text-center text-sm text-red-600 dark:text-red-400" data-testid="text-vat-cn-count">{vatReturn.creditNotes.count}</TableCell>
+                          <TableCell className="text-right text-sm text-red-600 dark:text-red-400" data-testid="text-vat-cn-net">({formatEUR(vatReturn.creditNotes.netAmount)})</TableCell>
+                          <TableCell className="text-right text-sm font-medium text-red-600 dark:text-red-400" data-testid="text-vat-cn-vat">({formatEUR(vatReturn.creditNotes.vatAmount)})</TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="font-bold">
+                        <TableCell colSpan={2}>Total Output VAT</TableCell>
+                        <TableCell className="text-right" data-testid="text-vat-output-net-total">{formatEUR(vatReturn.outputNet)}</TableCell>
+                        <TableCell className="text-right" data-testid="text-vat-output-total">{formatEUR(vatReturn.outputVat)}</TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg">Input VAT (Purchases)</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Description</TableHead>
+                        <TableHead className="text-center">Count</TableHead>
+                        <TableHead className="text-right">Net Amount</TableHead>
+                        <TableHead className="text-right">VAT Amount</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow data-testid="row-vat-purchases">
+                        <TableCell className="text-sm">Purchase Invoices</TableCell>
+                        <TableCell className="text-center text-sm" data-testid="text-vat-purch-count">{vatReturn.purchases.count}</TableCell>
+                        <TableCell className="text-right text-sm" data-testid="text-vat-purch-net">{formatEUR(vatReturn.purchases.netAmount)}</TableCell>
+                        <TableCell className="text-right text-sm font-medium" data-testid="text-vat-purch-vat">{formatEUR(vatReturn.purchases.vatAmount)}</TableCell>
+                      </TableRow>
+                      <TableRow data-testid="row-vat-expenses">
+                        <TableCell className="text-sm">Business Expenses</TableCell>
+                        <TableCell className="text-center text-sm" data-testid="text-vat-exp-count">{vatReturn.expenses.count}</TableCell>
+                        <TableCell className="text-right text-sm" data-testid="text-vat-exp-net">{formatEUR(vatReturn.expenses.netAmount)}</TableCell>
+                        <TableCell className="text-right text-sm font-medium" data-testid="text-vat-exp-vat">{formatEUR(vatReturn.expenses.vatAmount)}</TableCell>
+                      </TableRow>
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="font-bold">
+                        <TableCell colSpan={2}>Total Input VAT</TableCell>
+                        <TableCell className="text-right" data-testid="text-vat-input-net-total">{formatEUR(vatReturn.inputNet)}</TableCell>
+                        <TableCell className="text-right" data-testid="text-vat-input-total">{formatEUR(vatReturn.inputVat)}</TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              <Card className="border-2">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg">VAT Return Summary — {formatQuarterLabel(vatQuarter)}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-sm text-muted-foreground">Output VAT (collected from sales)</span>
+                      <span className="text-sm font-medium" data-testid="text-vat-summary-output">{formatEUR(vatReturn.outputVat)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-sm text-muted-foreground">Input VAT (paid on purchases & expenses)</span>
+                      <span className="text-sm font-medium" data-testid="text-vat-summary-input">{formatEUR(vatReturn.inputVat)}</span>
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-base font-semibold">
+                        {parseFloat(vatReturn.netVatPayable) >= 0 ? "Net VAT Payable to Tax Department" : "Net VAT Refundable from Tax Department"}
+                      </span>
+                      <span
+                        className={`text-lg font-bold ${parseFloat(vatReturn.netVatPayable) >= 0 ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}
+                        data-testid="text-vat-net-payable"
+                      >
+                        {formatEUR(Math.abs(parseFloat(vatReturn.netVatPayable)))}
+                      </span>
+                    </div>
+                    <div className="pt-2 text-xs text-muted-foreground">
+                      <p>Cyprus VAT Return (Form VAT 4) — Quarterly filing at 19% standard rate</p>
+                      <p>Filing deadline: 10th day of the month following the quarter end</p>
                     </div>
                   </div>
                 </CardContent>

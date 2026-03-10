@@ -129,3 +129,7 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-03-10: Fixed VAT journal entry bug — invoices used non-existent data.vatTotal instead of data.taxAmount; purchase invoices used data.vatAmount
 - 2026-03-10: Error messages from API now extract JSON message field for cleaner user-facing display
 - 2026-03-10: Print CSS optimized — min-height: auto in print, reduced margins/spacing to prevent extra blank pages
+- 2026-03-10: Cyprus quarterly VAT Return report (Form VAT 4) on Accounting Reports page
+- 2026-03-10: VAT Return shows Output VAT (sales minus credit notes), Input VAT (purchases + expenses), Net VAT Payable/Refundable
+- 2026-03-10: Quarter selector with 3-year range (previous, current, next year), shows period dates
+- 2026-03-10: API: GET /api/reports/vat-return/:from/:to — aggregates from invoices, purchase_invoices, expenses tables

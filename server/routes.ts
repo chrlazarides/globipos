@@ -7,7 +7,7 @@ import multer from "multer";
 import * as XLSX from "xlsx";
 import { sendInvoiceEmail } from "./email";
 import { db } from "./db";
-import { sql } from "drizzle-orm";
+import { sql, and, eq, gte, lte } from "drizzle-orm";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -2054,6 +2054,84 @@ export async function registerRoutes(
   app.get("/api/reports/balance-sheet/:asOf", async (req, res) => {
     const bs = await storage.getBalanceSheet(req.params.asOf);
     res.json(bs);
+  });
+
+  app.get("/api/reports/vat-return/:from/:to", async (req, res) => {
+    const { from, to } = req.params;
+    const salesInvs = await db.select().from(invoices)
+      .where(and(
+        gte(invoices.date, from),
+        lte(invoices.date, to),
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} != 'draft'`
+      ));
+    const creditNotes = await db.select().from(invoices)
+      .where(and(
+        gte(invoices.date, from),
+        lte(invoices.date, to),
+        eq(invoices.type, "credit_note"),
+        sql`${invoices.status} != 'draft'`
+      ));
+    const purchaseInvs = await db.select().from(purchaseInvoices)
+      .where(and(
+        gte(purchaseInvoices.date, from),
+        lte(purchaseInvoices.date, to),
+        sql`${purchaseInvoices.status} != 'draft'`
+      ));
+    const expensesList = await db.select().from(expenses)
+      .where(and(
+        gte(expenses.date, from),
+        lte(expenses.date, to),
+      ));
+
+    const salesVat = salesInvs.reduce((s, i) => s + parseFloat(i.taxAmount || "0"), 0);
+    const salesNet = salesInvs.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
+    const salesGross = salesInvs.reduce((s, i) => s + parseFloat(i.total || "0"), 0);
+
+    const cnVat = creditNotes.reduce((s, i) => s + parseFloat(i.taxAmount || "0"), 0);
+    const cnNet = creditNotes.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
+
+    const purchaseVat = purchaseInvs.reduce((s, i) => s + parseFloat(i.vatAmount || "0"), 0);
+    const purchaseNet = purchaseInvs.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
+
+    const expenseVat = expensesList.reduce((s, i) => s + parseFloat(i.vatAmount || "0"), 0);
+    const expenseNet = expensesList.reduce((s, i) => s + parseFloat(i.amount || "0"), 0);
+
+    const outputVat = salesVat - cnVat;
+    const outputNet = salesNet - cnNet;
+    const inputVat = purchaseVat + expenseVat;
+    const inputNet = purchaseNet + expenseNet;
+    const netVatPayable = outputVat - inputVat;
+
+    res.json({
+      period: { from, to },
+      sales: {
+        count: salesInvs.length,
+        netAmount: salesNet.toFixed(2),
+        vatAmount: salesVat.toFixed(2),
+        grossAmount: salesGross.toFixed(2),
+      },
+      creditNotes: {
+        count: creditNotes.length,
+        netAmount: cnNet.toFixed(2),
+        vatAmount: cnVat.toFixed(2),
+      },
+      purchases: {
+        count: purchaseInvs.length,
+        netAmount: purchaseNet.toFixed(2),
+        vatAmount: purchaseVat.toFixed(2),
+      },
+      expenses: {
+        count: expensesList.length,
+        netAmount: expenseNet.toFixed(2),
+        vatAmount: expenseVat.toFixed(2),
+      },
+      outputVat: outputVat.toFixed(2),
+      outputNet: outputNet.toFixed(2),
+      inputVat: inputVat.toFixed(2),
+      inputNet: inputNet.toFixed(2),
+      netVatPayable: netVatPayable.toFixed(2),
+    });
   });
 
   app.get("/api/reports/general-ledger/:accountId/:from/:to", async (req, res) => {
