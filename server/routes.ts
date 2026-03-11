@@ -2420,11 +2420,21 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   .customer-info { margin-bottom: 28px; }
   .customer-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
   .customer-detail { font-size: 12px; color: #555; line-height: 1.6; }
-  .summary { display: flex; gap: 16px; margin-bottom: 32px; }
-  .summary-card { flex: 1; background: #f5f5f5; padding: 18px 20px; border-radius: 6px; border: 1px solid #f0ebe6; }
+  .summary { display: flex; gap: 16px; margin-bottom: 32px; flex-wrap: wrap; }
+  .summary-card { flex: 1; min-width: 120px; background: #f5f5f5; padding: 18px 20px; border-radius: 6px; border: 1px solid #f0ebe6; }
   .summary-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; }
   .summary-value { font-size: 22px; font-weight: 800; margin-top: 4px; }
   .summary-value.due { color: #1a1a1a; }
+  .aging-section { margin-top: 32px; margin-bottom: 24px; }
+  .aging-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #333; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 2px solid #1a1a1a; }
+  .aging-table { width: 100%; border-collapse: collapse; }
+  .aging-table th { background: #1a1a1a; color: #fff; padding: 8px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: center; }
+  .aging-table td { padding: 12px; font-size: 12px; text-align: center; border-bottom: 1px solid #f0f0f0; }
+  .aging-table .aging-label { text-align: left; font-weight: 600; color: #333; }
+  .aging-table .aging-amount { font-weight: 700; font-size: 14px; }
+  .aging-overdue { color: #c0392b; }
+  .aging-warning { color: #e67e22; }
+  .aging-ok { color: #27ae60; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
   thead th { background: #1a1a1a; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
   thead th.right { text-align: right; }
@@ -2449,6 +2459,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
     thead th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .summary-card { background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .aging-table th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
 </style>
 </head>
@@ -2520,6 +2531,41 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       </thead>
       <tbody>${invoiceRows}</tbody>
     </table>` : ""}
+
+    ${statement?.aging ? (() => {
+      const ag = statement.aging;
+      const hasAging = parseFloat(ag.current) > 0 || parseFloat(ag.days1_30) > 0 || parseFloat(ag.days31_60) > 0 || parseFloat(ag.days61_90) > 0 || parseFloat(ag.days90plus) > 0;
+      if (!hasAging) return "";
+      const total = (parseFloat(ag.current) + parseFloat(ag.days1_30) + parseFloat(ag.days31_60) + parseFloat(ag.days61_90) + parseFloat(ag.days90plus)).toFixed(2);
+      return `
+    <div class="aging-section">
+      <div class="aging-title">Aging Analysis — Outstanding Balances</div>
+      <table class="aging-table">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Customer</th>
+            <th>Current<br><span style="font-weight:400;font-size:9px;">(Not Yet Due)</span></th>
+            <th>1–30 Days</th>
+            <th>31–60 Days</th>
+            <th>61–90 Days</th>
+            <th>90+ Days</th>
+            <th>Total Outstanding</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="aging-label">${customer.name}</td>
+            <td class="aging-amount aging-ok">${currencySymbol}${parseFloat(ag.current).toFixed(2)}</td>
+            <td class="aging-amount aging-warning">${currencySymbol}${parseFloat(ag.days1_30).toFixed(2)}</td>
+            <td class="aging-amount aging-overdue">${currencySymbol}${parseFloat(ag.days31_60).toFixed(2)}</td>
+            <td class="aging-amount aging-overdue">${currencySymbol}${parseFloat(ag.days61_90).toFixed(2)}</td>
+            <td class="aging-amount aging-overdue">${currencySymbol}${parseFloat(ag.days90plus).toFixed(2)}</td>
+            <td class="aging-amount" style="font-size:15px;">${currencySymbol}${total}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+    })() : ""}
 
     <div class="footer">
       <p>${companyName} - Wholesale Wine & Spirits</p>

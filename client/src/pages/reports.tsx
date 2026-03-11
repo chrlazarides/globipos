@@ -48,6 +48,13 @@ export default function Reports() {
     totalPaid: string;
     balance: string;
     invoiceCount: number;
+    aging: {
+      current: string;
+      days1_30: string;
+      days31_60: string;
+      days61_90: string;
+      days90plus: string;
+    };
   }[]>({
     queryKey: ["/api/reports/statements"],
   });
@@ -274,58 +281,76 @@ export default function Reports() {
 
         <TabsContent value="statements" className="mt-4 space-y-4">
           <Card>
-            <CardContent className="p-0">
+            <CardContent className="p-0 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Customer</TableHead>
-                    <TableHead>Invoices</TableHead>
-                    <TableHead className="text-right">Total Invoiced</TableHead>
-                    <TableHead className="text-right">Total Paid</TableHead>
-                    <TableHead className="text-right">Balance</TableHead>
+                    <TableHead className="text-right">Balance Due</TableHead>
+                    <TableHead className="text-right text-green-700 dark:text-green-400">Current</TableHead>
+                    <TableHead className="text-right text-yellow-600 dark:text-yellow-400">1–30 Days</TableHead>
+                    <TableHead className="text-right text-orange-600 dark:text-orange-400">31–60 Days</TableHead>
+                    <TableHead className="text-right text-red-600 dark:text-red-400">61–90 Days</TableHead>
+                    <TableHead className="text-right text-red-700 dark:text-red-500">90+ Days</TableHead>
                     <TableHead className="w-[160px]" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {customerStatements.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No data available</TableCell>
+                      <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No data available</TableCell>
                     </TableRow>
                   ) : (
-                    customerStatements.map((st) => (
-                      <TableRow key={st.customerId}>
-                        <TableCell className="font-medium text-sm">{st.customerName}</TableCell>
-                        <TableCell className="text-sm">{st.invoiceCount}</TableCell>
-                        <TableCell className="text-right text-sm">€{parseFloat(st.totalInvoiced).toFixed(2)}</TableCell>
-                        <TableCell className="text-right text-sm">€{parseFloat(st.totalPaid).toFixed(2)}</TableCell>
-                        <TableCell className={`text-right font-medium text-sm ${parseFloat(st.balance) > 0 ? "text-red-500" : ""}`}>
-                          €{parseFloat(st.balance).toFixed(2)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <Button size="icon" variant="ghost" onClick={() => previewStatement(st.customerId)} title="Preview" data-testid={`button-preview-statement-${st.customerId}`}>
-                              <Eye className="w-4 h-4" />
-                            </Button>
-                            <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} title="Print" data-testid={`button-print-statement-${st.customerId}`}>
-                              <Printer className="w-4 h-4" />
-                            </Button>
-                            <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} title="Download" data-testid={`button-download-statement-${st.customerId}`}>
-                              <Download className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => sendStatementEmail(st.customerId)}
-                              disabled={sendingId === st.customerId}
-                              title="Send by Email"
-                              data-testid={`button-email-statement-${st.customerId}`}
-                            >
-                              {sendingId === st.customerId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
+                    customerStatements.map((st) => {
+                      const ag = st.aging || { current: "0", days1_30: "0", days31_60: "0", days61_90: "0", days90plus: "0" };
+                      const hasOverdue = parseFloat(ag.days1_30) > 0 || parseFloat(ag.days31_60) > 0 || parseFloat(ag.days61_90) > 0 || parseFloat(ag.days90plus) > 0;
+                      return (
+                        <TableRow key={st.customerId} className={hasOverdue ? "bg-red-50/30 dark:bg-red-950/10" : ""}>
+                          <TableCell className="font-medium text-sm">{st.customerName}</TableCell>
+                          <TableCell className={`text-right font-semibold text-sm ${parseFloat(st.balance) > 0 ? "text-red-600 dark:text-red-400" : ""}`} data-testid={`text-balance-${st.customerId}`}>
+                            €{parseFloat(st.balance).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-green-700 dark:text-green-400" data-testid={`text-aging-current-${st.customerId}`}>
+                            {parseFloat(ag.current) > 0 ? `€${parseFloat(ag.current).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-yellow-600 dark:text-yellow-400" data-testid={`text-aging-1-30-${st.customerId}`}>
+                            {parseFloat(ag.days1_30) > 0 ? `€${parseFloat(ag.days1_30).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-orange-600 dark:text-orange-400" data-testid={`text-aging-31-60-${st.customerId}`}>
+                            {parseFloat(ag.days31_60) > 0 ? `€${parseFloat(ag.days31_60).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-red-600 dark:text-red-400" data-testid={`text-aging-61-90-${st.customerId}`}>
+                            {parseFloat(ag.days61_90) > 0 ? `€${parseFloat(ag.days61_90).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-sm font-semibold text-red-700 dark:text-red-500" data-testid={`text-aging-90plus-${st.customerId}`}>
+                            {parseFloat(ag.days90plus) > 0 ? `€${parseFloat(ag.days90plus).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Button size="icon" variant="ghost" onClick={() => previewStatement(st.customerId)} title="Preview" data-testid={`button-preview-statement-${st.customerId}`}>
+                                <Eye className="w-4 h-4" />
+                              </Button>
+                              <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} title="Print" data-testid={`button-print-statement-${st.customerId}`}>
+                                <Printer className="w-4 h-4" />
+                              </Button>
+                              <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} title="Download" data-testid={`button-download-statement-${st.customerId}`}>
+                                <Download className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => sendStatementEmail(st.customerId)}
+                                disabled={sendingId === st.customerId}
+                                title="Send by Email"
+                                data-testid={`button-email-statement-${st.customerId}`}
+                              >
+                                {sendingId === st.customerId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>

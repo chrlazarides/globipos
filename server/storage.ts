@@ -529,6 +529,9 @@ export class DatabaseStorage implements IStorage {
   async getCustomerStatements() {
     const custs = await db.select().from(customers).where(eq(customers.active, true));
     const statements = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     for (const cust of custs) {
       const allInvs = await db.select().from(invoices).where(eq(invoices.customerId, cust.id));
       const invs = allInvs.filter(i => i.type === "invoice");
@@ -539,9 +542,29 @@ export class DatabaseStorage implements IStorage {
       const paidInvs = invs.filter(i => i.status === "paid");
       const totalPaid = paidInvs.reduce((s, i) => s + parseFloat(i.total), 0);
 
+      // Aging analysis: bucket unpaid invoice balances by days overdue
+      const aging = { current: 0, days1_30: 0, days31_60: 0, days61_90: 0, days90plus: 0 };
+      for (const inv of invs) {
+        if (inv.status === "paid") continue;
+        const balance = parseFloat(inv.total);
+        const refDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
+        refDate.setHours(0, 0, 0, 0);
+        const daysOverdue = Math.floor((today.getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysOverdue <= 0) aging.current += balance;
+        else if (daysOverdue <= 30) aging.days1_30 += balance;
+        else if (daysOverdue <= 60) aging.days31_60 += balance;
+        else if (daysOverdue <= 90) aging.days61_90 += balance;
+        else aging.days90plus += balance;
+      }
+
       const invoiceList = allInvs.map(inv => {
         const total = parseFloat(inv.total);
         const paid = inv.status === "paid" ? total : 0;
+        const refDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
+        refDate.setHours(0, 0, 0, 0);
+        const daysOverdue = inv.type === "invoice" && inv.status !== "paid"
+          ? Math.floor((today.getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24))
+          : null;
         return {
           invoiceNumber: inv.invoiceNumber,
           date: inv.date,
@@ -551,6 +574,7 @@ export class DatabaseStorage implements IStorage {
           total: total.toFixed(2),
           paid: paid.toFixed(2),
           balance: (total - paid).toFixed(2),
+          daysOverdue,
         };
       });
 
@@ -563,6 +587,13 @@ export class DatabaseStorage implements IStorage {
         balance: (totalInvoiced - totalCredits - totalPaid).toFixed(2),
         invoiceCount: allInvs.length,
         invoices: invoiceList,
+        aging: {
+          current: aging.current.toFixed(2),
+          days1_30: aging.days1_30.toFixed(2),
+          days31_60: aging.days31_60.toFixed(2),
+          days61_90: aging.days61_90.toFixed(2),
+          days90plus: aging.days90plus.toFixed(2),
+        },
       });
     }
     return statements;

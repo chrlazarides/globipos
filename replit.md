@@ -133,3 +133,7 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-03-10: VAT Return shows Output VAT (sales minus credit notes), Input VAT (purchases + expenses), Net VAT Payable/Refundable
 - 2026-03-10: Quarter selector with 3-year range (previous, current, next year), shows period dates
 - 2026-03-10: API: GET /api/reports/vat-return/:from/:to — aggregates from invoices, purchase_invoices, expenses tables
+- 2026-03-11: Aging analysis added to customer statements — 5 buckets: Current, 1-30, 31-60, 61-90, 90+ days overdue
+- 2026-03-11: Aging columns shown in Reports > Statements tab (color-coded: green/yellow/orange/red); rows highlight in red if overdue
+- 2026-03-11: Aging analysis section added to printed/emailed statement HTML documents after the transaction table
+- 2026-03-11: Aging computed only for unpaid invoices; uses dueDate if present, otherwise invoice date
