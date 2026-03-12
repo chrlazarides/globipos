@@ -230,6 +230,7 @@ export default function UsersPage() {
       </Card>
 
       <UserDialog
+        key={editUser?.id ?? "new"}
         open={dialogOpen}
         onClose={() => { setDialogOpen(false); setEditUser(null); }}
         user={editUser}
