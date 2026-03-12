@@ -1,6 +1,67 @@
 import { db } from "./db";
-import { categories, items, customers, priceContracts, seasonalOffers, invoices, invoiceItems } from "@shared/schema";
-import { sql } from "drizzle-orm";
+import { categories, items, customers, priceContracts, seasonalOffers, invoices, invoiceItems, systemSettings } from "@shared/schema";
+import { sql, eq } from "drizzle-orm";
+
+const DEFAULT_SETTINGS = [
+  { key: "company_name", value: "VINERIA DI MARE Trading", label: "Company Name", group: "company" },
+  { key: "company_address", value: "", label: "Company Address", group: "company" },
+  { key: "company_phone", value: "", label: "Company Phone", group: "company" },
+  { key: "company_email", value: "", label: "Company Email", group: "company" },
+  { key: "company_tax_id", value: "", label: "Company Tax ID (TIN)", group: "company" },
+  { key: "company_reg_no", value: "", label: "Company Registration No.", group: "company" },
+  { key: "company_iban", value: "", label: "Bank IBAN", group: "company" },
+  { key: "company_swift", value: "", label: "Bank SWIFT/BIC", group: "company" },
+  { key: "company_bank_name", value: "", label: "Bank Name", group: "company" },
+  { key: "vat_rate", value: "19", label: "Default VAT Rate (%)", group: "tax" },
+  { key: "currency", value: "EUR", label: "Currency", group: "tax" },
+  { key: "currency_symbol", value: "€", label: "Currency Symbol", group: "tax" },
+  { key: "invoice_prefix", value: "INV", label: "Invoice Number Prefix", group: "invoicing" },
+  { key: "credit_note_prefix", value: "CN", label: "Credit Note Number Prefix", group: "invoicing" },
+  { key: "proforma_prefix", value: "PF", label: "Proforma Number Prefix", group: "invoicing" },
+  { key: "invoice_footer", value: "Thank you for your business", label: "Invoice Footer Message", group: "invoicing" },
+  { key: "payment_terms_default", value: "cash", label: "Default Payment Terms", group: "invoicing" },
+  { key: "price_level_1", value: "Price Level 1", label: "Price Level 1 Name", group: "pricing" },
+  { key: "price_level_2", value: "Price Level 2", label: "Price Level 2 Name", group: "pricing" },
+  { key: "price_level_3", value: "Price Level 3", label: "Price Level 3 Name", group: "pricing" },
+  { key: "price_level_4", value: "Price Level 4", label: "Price Level 4 Name", group: "pricing" },
+  { key: "price_level_5", value: "Price Level 5", label: "Price Level 5 Name", group: "pricing" },
+  { key: "low_stock_threshold", value: "10", label: "Low Stock Alert Threshold", group: "inventory" },
+  { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
+  { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
+];
+
+// Known stale/wrong company names that should be reset to default
+const INVALID_COMPANY_NAMES = ["ALBANIA POWER", "Demo Company", "Test Company", "Your Company Name"];
+
+export async function ensureDefaultSettings() {
+  try {
+    // Fix known bad company names
+    const [nameSetting] = await db.select().from(systemSettings).where(eq(systemSettings.key, "company_name"));
+    if (nameSetting && INVALID_COMPANY_NAMES.includes(nameSetting.value)) {
+      console.log(`Resetting invalid company name "${nameSetting.value}" to default`);
+      await db.update(systemSettings)
+        .set({ value: "VINERIA DI MARE Trading" })
+        .where(eq(systemSettings.key, "company_name"));
+    }
+
+    // Ensure all required settings exist (insert only if missing)
+    for (const setting of DEFAULT_SETTINGS) {
+      const existing = await db.select({ id: systemSettings.id })
+        .from(systemSettings)
+        .where(eq(systemSettings.key, setting.key));
+      if (existing.length === 0) {
+        await db.insert(systemSettings).values({
+          key: setting.key,
+          value: setting.value,
+          label: setting.label,
+          group: setting.group,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("ensureDefaultSettings error:", e);
+  }
+}
 
 export async function seedDatabase() {
   const [existingCats] = await db.select({ count: sql<number>`count(*)` }).from(categories);

@@ -60,8 +60,9 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  const { seedDatabase } = await import("./seed");
+  const { seedDatabase, ensureDefaultSettings } = await import("./seed");
   await seedDatabase().catch(e => console.error("Seed error:", e));
+  await ensureDefaultSettings().catch(e => console.error("Settings init error:", e));
 
   await registerRoutes(httpServer, app);
 
