@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Receipt } from "lucide-react";
+import { formatDate } from "@/lib/utils";
 import type { Customer } from "@shared/schema";
 
 interface PortalOrdersProps {
@@ -57,7 +58,7 @@ export default function PortalOrders({ customer }: PortalOrdersProps) {
                   </Badge>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {new Date(order.createdAt).toLocaleDateString("en-CY")}
+                  {formatDate(order.createdAt)}
                 </span>
               </CardHeader>
               <CardContent className="p-4 pt-0">

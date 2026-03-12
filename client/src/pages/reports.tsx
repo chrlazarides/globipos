@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { formatDate } from "@/lib/utils";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -256,7 +257,7 @@ export default function Reports() {
                           <TableRow key={inv.id}>
                             <TableCell className="font-medium text-sm">{inv.invoiceNumber}</TableCell>
                             <TableCell className="text-sm">{inv.customerName}</TableCell>
-                            <TableCell className="text-sm">{new Date(inv.date).toLocaleDateString()}</TableCell>
+                            <TableCell className="text-sm">{formatDate(inv.date)}</TableCell>
                             <TableCell>
                               <Badge variant={inv.status === "paid" ? "default" : inv.status === "overdue" ? "destructive" : "secondary"}>
                                 {inv.status}

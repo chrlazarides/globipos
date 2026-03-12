@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
+import { formatDate } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -82,7 +83,7 @@ export default function PurchaseInvoices() {
     {
       key: "date",
       header: "Date",
-      cell: (row) => <span className="text-sm">{new Date(row.date).toLocaleDateString()}</span>,
+      cell: (row) => <span className="text-sm">{formatDate(row.date)}</span>,
       className: "hidden md:table-cell",
     },
     {

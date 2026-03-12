@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
+import { formatDateTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Search, Mail } from "lucide-react";
@@ -28,9 +29,7 @@ export default function EmailLogs() {
       header: "Date",
       cell: (row) => (
         <span className="text-sm" data-testid={`text-email-date-${row.id}`}>
-          {new Date(row.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
-          {" "}
-          <span className="text-muted-foreground">{new Date(row.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+          {formatDateTime(row.createdAt)}
         </span>
       ),
     },

@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FileText } from "lucide-react";
+import { formatDate } from "@/lib/utils";
 import type { Customer } from "@shared/schema";
 
 interface PortalStatementProps {
@@ -92,7 +93,7 @@ export default function PortalStatement({ customer }: PortalStatementProps) {
                   <div className="flex items-center gap-2 flex-wrap min-w-0">
                     <span className="font-medium text-sm">{inv.invoiceNumber}</span>
                     <Badge variant={typeVariant(inv.type)} className="text-xs">{typeLabel(inv.type)}</Badge>
-                    <span className="text-xs text-muted-foreground">{new Date(inv.date).toLocaleDateString("en-CY")}</span>
+                    <span className="text-xs text-muted-foreground">{formatDate(inv.date)}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant={inv.status === "paid" ? "default" : inv.status === "overdue" ? "destructive" : "secondary"} className="text-xs">

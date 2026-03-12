@@ -3,6 +3,7 @@ import { useParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
+import { formatDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -197,7 +198,7 @@ export default function GeneralLedger() {
                     {rowsWithBalance.map((entry, index) => (
                       <TableRow key={index} data-testid={`row-ledger-entry-${index}`}>
                         <TableCell className="text-sm">
-                          {new Date(entry.date).toLocaleDateString()}
+                          {formatDate(entry.date)}
                         </TableCell>
                         <TableCell className="text-sm font-medium" data-testid={`text-entry-number-${index}`}>
                           {entry.entryNumber}

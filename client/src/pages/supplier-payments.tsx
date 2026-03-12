@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
+import { formatDate } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -57,7 +58,7 @@ export default function SupplierPaymentsPage() {
           <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10">
             <CreditCard className="w-4 h-4 text-primary" />
           </div>
-          <span className="text-sm">{new Date(row.paymentDate).toLocaleDateString()}</span>
+          <span className="text-sm">{formatDate(row.paymentDate)}</span>
         </div>
       ),
     },

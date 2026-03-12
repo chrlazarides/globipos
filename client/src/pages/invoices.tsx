@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation, Link } from "wouter";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
+import { formatDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -62,7 +63,7 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
           </div>
           <div>
             <p className="font-medium text-sm">{row.invoiceNumber}</p>
-            <p className="text-xs text-muted-foreground">{new Date(row.date).toLocaleDateString()}</p>
+            <p className="text-xs text-muted-foreground">{formatDate(row.date)}</p>
           </div>
         </div>
       ),
@@ -71,7 +72,7 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
     {
       key: "dueDate",
       header: "Due Date",
-      cell: (row) => <span className="text-sm">{row.dueDate ? new Date(row.dueDate).toLocaleDateString() : "-"}</span>,
+      cell: (row) => <span className="text-sm">{formatDate(row.dueDate)}</span>,
     },
     {
       key: "total",

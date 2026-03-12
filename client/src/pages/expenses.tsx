@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
+import { formatDate } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -91,7 +92,7 @@ export default function ExpensesPage() {
           <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10">
             <Receipt className="w-4 h-4 text-primary" />
           </div>
-          <span className="text-sm" data-testid={`text-expense-date-${row.id}`}>{new Date(row.date).toLocaleDateString()}</span>
+          <span className="text-sm" data-testid={`text-expense-date-${row.id}`}>{formatDate(row.date)}</span>
         </div>
       ),
     },

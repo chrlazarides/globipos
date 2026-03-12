@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Users, Plus, Pencil, Trash2, ShieldCheck, Shield, Clock, Loader2 } from "lucide-react";
-import { format } from "date-fns";
+import { formatDateTime } from "@/lib/utils";
 
 interface User {
   id: string;
@@ -194,7 +194,7 @@ export default function UsersPage() {
                       {user.lastLoginAt ? (
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3" />
-                          {format(new Date(user.lastLoginAt), "dd MMM yyyy HH:mm")}
+                          {formatDateTime(user.lastLoginAt)}
                         </span>
                       ) : "Never"}
                     </TableCell>

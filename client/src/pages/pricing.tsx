@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
+import { formatDate } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -127,7 +128,7 @@ export default function Pricing() {
       header: "Period",
       cell: (row) => (
         <span className="text-sm">
-          {new Date(row.startDate).toLocaleDateString()} - {new Date(row.endDate).toLocaleDateString()}
+          {formatDate(row.startDate)} - {formatDate(row.endDate)}
         </span>
       ),
     },
@@ -491,7 +492,7 @@ function ContractDetail({ contract, categories, allBrands, allItems, customers, 
               <CardTitle className="text-sm font-medium">Contract Period</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1">
-              <p className="text-sm">{new Date(contract.startDate).toLocaleDateString()} - {new Date(contract.endDate).toLocaleDateString()}</p>
+              <p className="text-sm">{formatDate(contract.startDate)} - {formatDate(contract.endDate)}</p>
               <p className="text-sm text-muted-foreground">{contract.name}</p>
             </CardContent>
           </Card>

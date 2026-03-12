@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Activity, Search, Loader2, LogIn, LogOut, Plus, Pencil, Trash2 } from "lucide-react";
-import { format } from "date-fns";
+import { formatDateTime } from "@/lib/utils";
 
 interface ActivityLog {
   id: string;
@@ -93,7 +93,7 @@ export default function ActivityLogsPage() {
                   return (
                     <TableRow key={log.id} data-testid={`row-log-${log.id}`}>
                       <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                        {format(new Date(log.createdAt), "dd MMM yyyy HH:mm:ss")}
+                        {formatDateTime(log.createdAt)}
                       </TableCell>
                       <TableCell className="font-medium text-sm">{log.username || "—"}</TableCell>
                       <TableCell>
