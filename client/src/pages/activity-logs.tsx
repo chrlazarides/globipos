@@ -53,7 +53,6 @@ export default function ActivityLogsPage() {
       <PageHeader
         title="Activity Log"
         description="Full audit trail of all system activity"
-        icon={<Activity className="w-5 h-5" />}
       />
 
       <div className="flex items-center gap-3 mt-6 mb-4">

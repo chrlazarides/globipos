@@ -147,8 +147,7 @@ export default function UsersPage() {
       <PageHeader
         title="User Management"
         description="Manage who can access this system"
-        icon={<Users className="w-5 h-5" />}
-        actions={
+        action={
           <Button onClick={() => { setEditUser(null); setDialogOpen(true); }} data-testid="button-create-user">
             <Plus className="w-4 h-4 mr-2" />
             Add User
