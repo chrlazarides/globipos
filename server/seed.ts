@@ -30,7 +30,7 @@ const DEFAULT_SETTINGS = [
   { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
   { key: "settings_password", value: "", label: "Settings Password Hash", group: "security" },
   { key: "backup_email", value: "", label: "Backup Email Address", group: "backup" },
-  { key: "backup_auto", value: "false", label: "Automatic Daily Backup", group: "backup" },
+  { key: "backup_auto", value: "true", label: "Automatic Daily Backup", group: "backup" },
   { key: "backup_last_date", value: "", label: "Last Backup Date", group: "backup" },
 ];
 
@@ -61,6 +61,13 @@ export async function ensureDefaultSettings() {
           group: setting.group,
         });
       }
+    }
+
+    // Enable automatic backup if it was at the old "false" default
+    const backupAutoSetting = await db.select().from(systemSettings).where(eq(systemSettings.key, "backup_auto"));
+    if (backupAutoSetting.length > 0 && backupAutoSetting[0].value === "false") {
+      console.log("Enabling automatic daily backup");
+      await db.update(systemSettings).set({ value: "true" }).where(eq(systemSettings.key, "backup_auto"));
     }
   } catch (e) {
     console.error("ensureDefaultSettings error:", e);
