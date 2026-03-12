@@ -253,6 +253,119 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // ─── DATA EXPORT / IMPORT (admin only) ──────────────────────────────────────
+  app.get("/api/admin/export", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const [
+        settingsRows, categoriesRows, itemsRows, customersRows, suppliersRows,
+        invoicesRows, invoiceItemsRows, paymentsRows,
+        purchaseInvoicesRows, purchaseInvoiceItemsRows, supplierPaymentsRows,
+        accountsRows, journalEntriesRows, journalEntryLinesRows, expensesRows,
+        priceContractsRows, priceContractRulesRows, priceContractItemsRows,
+        seasonalOffersRows, seasonalOfferItemsRows,
+      ] = await Promise.all([
+        db.select().from(systemSettings),
+        db.select().from(categories),
+        db.select().from(items),
+        db.select().from(customers),
+        db.select().from(suppliers),
+        db.select().from(invoices),
+        db.select().from(invoiceItems),
+        db.select().from(payments),
+        db.select().from(purchaseInvoices),
+        db.select().from(purchaseInvoiceItems),
+        db.select().from(supplierPayments),
+        db.select().from(accounts),
+        db.select().from(journalEntries),
+        db.select().from(journalEntryLines),
+        db.select().from(expenses),
+        db.select().from(priceContracts),
+        db.select().from(priceContractRules),
+        db.select().from(priceContractItems),
+        db.select().from(seasonalOffers),
+        db.select().from(seasonalOfferItems),
+      ]);
+      res.json({
+        exportedAt: new Date().toISOString(),
+        version: 1,
+        systemSettings: settingsRows,
+        categories: categoriesRows,
+        items: itemsRows,
+        customers: customersRows,
+        suppliers: suppliersRows,
+        invoices: invoicesRows,
+        invoiceItems: invoiceItemsRows,
+        payments: paymentsRows,
+        purchaseInvoices: purchaseInvoicesRows,
+        purchaseInvoiceItems: purchaseInvoiceItemsRows,
+        supplierPayments: supplierPaymentsRows,
+        accounts: accountsRows,
+        journalEntries: journalEntriesRows,
+        journalEntryLines: journalEntryLinesRows,
+        expenses: expensesRows,
+        priceContracts: priceContractsRows,
+        priceContractRules: priceContractRulesRows,
+        priceContractItems: priceContractItemsRows,
+        seasonalOffers: seasonalOffersRows,
+        seasonalOfferItems: seasonalOfferItemsRows,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/import", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const data = req.body;
+      if (!data || data.version !== 1) return res.status(400).json({ message: "Invalid export file" });
+
+      // Clear all data tables (preserve users)
+      await db.delete(journalEntryLines);
+      await db.delete(journalEntries);
+      await db.delete(expenses);
+      await db.delete(supplierPayments);
+      await db.delete(purchaseInvoiceItems);
+      await db.delete(purchaseInvoices);
+      await db.delete(payments);
+      await db.delete(invoiceItems);
+      await db.delete(invoices);
+      await db.delete(priceContractRules);
+      await db.delete(priceContractItems);
+      await db.delete(priceContracts);
+      await db.delete(seasonalOfferItems);
+      await db.delete(seasonalOffers);
+      await db.delete(customers);
+      await db.delete(suppliers);
+      await db.delete(items);
+      await db.delete(categories);
+      await db.delete(accounts);
+      await db.delete(systemSettings);
+
+      const ins = async (table: any, rows: any[]) => { if (rows?.length) await db.insert(table).values(rows); };
+
+      await ins(systemSettings, data.systemSettings);
+      await ins(categories, data.categories);
+      await ins(items, data.items);
+      await ins(customers, data.customers);
+      await ins(suppliers, data.suppliers);
+      await ins(accounts, data.accounts);
+      await ins(invoices, data.invoices);
+      await ins(invoiceItems, data.invoiceItems);
+      await ins(payments, data.payments);
+      await ins(purchaseInvoices, data.purchaseInvoices);
+      await ins(purchaseInvoiceItems, data.purchaseInvoiceItems);
+      await ins(supplierPayments, data.supplierPayments);
+      await ins(journalEntries, data.journalEntries);
+      await ins(journalEntryLines, data.journalEntryLines);
+      await ins(expenses, data.expenses);
+      await ins(priceContracts, data.priceContracts);
+      await ins(priceContractRules, data.priceContractRules);
+      await ins(priceContractItems, data.priceContractItems);
+      await ins(seasonalOffers, data.seasonalOffers);
+      await ins(seasonalOfferItems, data.seasonalOfferItems);
+
+      res.json({ message: "Data imported successfully" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // Dashboard
   app.get("/api/dashboard/stats", async (_req, res) => {
     try {

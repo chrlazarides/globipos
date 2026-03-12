@@ -11,7 +11,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { PageHeader } from "@/components/page-header";
 import {
   Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags,
-  Database, Lock, Unlock, Shield, Download,
+  Database, Lock, Unlock, Shield, Download, Upload,
   Mail, Eye, EyeOff, CheckCircle2,
 } from "lucide-react";
 import type { SystemSetting } from "@shared/schema";
@@ -64,6 +64,9 @@ export default function SettingsPage() {
   const [backupAuto, setBackupAuto] = useState("false");
   const [backupLoading, setBackupLoading] = useState(false);
   const [emailingBackup, setEmailingBackup] = useState(false);
+
+  // Data migration (dev → production)
+  const [importing, setImporting] = useState(false);
 
   const { data: settings, isLoading } = useQuery<SystemSetting[]>({
     queryKey: ["/api/settings"],
@@ -202,6 +205,45 @@ export default function SettingsPage() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setBackupLoading(false);
+    }
+  };
+
+  const handleExportData = async () => {
+    try {
+      const res = await fetch("/api/admin/export", { credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `vintrade-export-${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Export complete", description: "Import this file in the production app to migrate your data." });
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleImportData = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!confirm(`This will REPLACE ALL data in this system with the data from "${file.name}". Users/passwords are preserved. Are you sure?`)) {
+      e.target.value = "";
+      return;
+    }
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      await apiRequest("POST", "/api/admin/import", json);
+      toast({ title: "Import successful", description: "All data has been restored. Refreshing..." });
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err: any) {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    } finally {
+      setImporting(false);
+      e.target.value = "";
     }
   };
 
@@ -563,6 +605,26 @@ export default function SettingsPage() {
               <Mail className={`w-4 h-4 mr-2 ${emailingBackup ? "animate-pulse" : ""}`} />
               {emailingBackup ? "Sending..." : "Send Backup Now"}
             </Button>
+          </div>
+
+          <div className="border-t pt-4 space-y-3">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Migrate to Production</h4>
+            <p className="text-xs text-muted-foreground">Export all your data here (dev), then import it into the live production app to sync everything.</p>
+            <div className="flex flex-wrap gap-3 items-center">
+              <Button variant="outline" size="sm" onClick={handleExportData} data-testid="button-export-data">
+                <Upload className="w-4 h-4 mr-2" />
+                Export All Data
+              </Button>
+              <label>
+                <Button variant="outline" size="sm" asChild disabled={importing} data-testid="button-import-data">
+                  <span className={importing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}>
+                    <Download className="w-4 h-4 mr-2" />
+                    {importing ? "Importing..." : "Import Data File"}
+                  </span>
+                </Button>
+                <input type="file" accept=".json" className="hidden" onChange={handleImportData} disabled={importing} />
+              </label>
+            </div>
           </div>
 
           <div className="border-t pt-4 space-y-3 max-w-md">
