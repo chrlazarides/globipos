@@ -1,13 +1,60 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import { sendInvoiceEmail } from "./email";
+import { sendInvoiceEmail, sendBackupEmail } from "./email";
 import { db } from "./db";
 import { sql, and, eq, gte, lte } from "drizzle-orm";
+import crypto from "crypto";
+
+function hashPassword(pw: string) {
+  return crypto.createHash("sha256").update(pw).digest("hex");
+}
+
+export async function generateBackupJson(): Promise<string> {
+  const [
+    cats, itms, custs, supps, invs, invItems, piList, piItems,
+    pays, suppPays, pcList, pcRules, soList, soItems,
+    accts, jes, jeLines, exps, settings
+  ] = await Promise.all([
+    db.select().from(categories),
+    db.select().from(items),
+    db.select().from(customers),
+    db.select().from(suppliers),
+    db.select().from(invoices),
+    db.select().from(invoiceItems),
+    db.select().from(purchaseInvoices),
+    db.select().from(purchaseInvoiceItems),
+    db.select().from(payments),
+    db.select().from(supplierPayments),
+    db.select().from(priceContracts),
+    db.select().from(priceContractRules),
+    db.select().from(seasonalOffers),
+    db.select().from(seasonalOfferItems),
+    db.select().from(accounts),
+    db.select().from(journalEntries),
+    db.select().from(journalEntryLines),
+    db.select().from(expenses),
+    db.select().from(systemSettings).then(rows => rows.filter(r => r.key !== "settings_password")),
+  ]);
+  return JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    version: 1,
+    data: {
+      categories: cats, items: itms, customers: custs, suppliers: supps,
+      invoices: invs, invoiceItems: invItems,
+      purchaseInvoices: piList, purchaseInvoiceItems: piItems,
+      payments: pays, supplierPayments: suppPays,
+      priceContracts: pcList, priceContractRules: pcRules,
+      seasonalOffers: soList, seasonalOfferItems: soItems,
+      accounts: accts, journalEntries: jes, journalEntryLines: jeLines,
+      expenses: exps, settings,
+    }
+  }, null, 2);
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -1002,6 +1049,67 @@ export async function registerRoutes(
         }
       }
       res.json(results);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Settings password
+  app.post("/api/settings/verify-password", async (req, res) => {
+    try {
+      const { password } = req.body;
+      const stored = await storage.getSetting("settings_password");
+      if (!stored || !stored.value) return res.json({ valid: true, hasPassword: false });
+      const valid = stored.value === hashPassword(password || "");
+      res.json({ valid, hasPassword: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/settings/change-password", async (req, res) => {
+    try {
+      const { currentPassword, newPassword } = req.body;
+      const stored = await storage.getSetting("settings_password");
+      if (stored && stored.value) {
+        if (stored.value !== hashPassword(currentPassword || "")) {
+          return res.status(403).json({ message: "Current password is incorrect" });
+        }
+      }
+      const hash = newPassword ? hashPassword(newPassword) : "";
+      await storage.upsertSetting("settings_password", hash, "Settings Password Hash", "security");
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Backup
+  app.get("/api/backup/export", async (_req, res) => {
+    try {
+      const json = await generateBackupJson();
+      const date = new Date().toISOString().split("T")[0];
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="backup-${date}.json"`);
+      res.send(json);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/backup/send-email", async (req, res) => {
+    try {
+      const emailSetting = await storage.getSetting("backup_email");
+      const companySetting = await storage.getSetting("company_name");
+      const toEmail = req.body?.email || emailSetting?.value || "";
+      if (!toEmail) return res.status(400).json({ message: "No backup email address configured" });
+      const companyName = companySetting?.value || "VinTrade";
+      const date = new Date().toISOString().split("T")[0];
+      const json = await generateBackupJson();
+      const result = await sendBackupEmail(toEmail, companyName, json, date);
+      if (!result.success) return res.status(500).json({ message: result.error || "Failed to send backup email" });
+      await storage.upsertSetting("backup_last_date", new Date().toISOString(), "Last Backup Date", "backup");
+      res.json({ success: true, sentTo: toEmail });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

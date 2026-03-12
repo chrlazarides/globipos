@@ -137,3 +137,11 @@ A comprehensive stock and invoicing system for wholesale customers purchasing wi
 - 2026-03-11: Aging columns shown in Reports > Statements tab (color-coded: green/yellow/orange/red); rows highlight in red if overdue
 - 2026-03-11: Aging analysis section added to printed/emailed statement HTML documents after the transaction table
 - 2026-03-11: Aging computed only for unpaid invoices; uses dueDate if present, otherwise invoice date
+- 2026-03-12: Settings page password protection — SHA-256 hashed password stored in system_settings; session remembered in sessionStorage
+- 2026-03-12: Settings password gate shows lock screen before allowing access; Lock button to re-lock manually
+- 2026-03-12: API: POST /api/settings/verify-password, POST /api/settings/change-password
+- 2026-03-12: Automatic daily backup — GET /api/backup/export (JSON download), POST /api/backup/send-email (email via Resend)
+- 2026-03-12: Backup includes all tables: categories, items, customers, suppliers, invoices, purchase invoices, payments, accounts, journal entries, expenses, settings (excluding password hash)
+- 2026-03-12: Scheduled backup: runs 1 min after startup then every hour; sends if backup_auto=true and 24+ hours since last backup
+- 2026-03-12: Backup & Security sections added to Settings page (separate from main settings groups)
+- 2026-03-12: ensureDefaultSettings() on startup fixes known bad company names (e.g. "ALBANIA POWER") and ensures all settings keys exist

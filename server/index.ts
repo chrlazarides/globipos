@@ -1,7 +1,9 @@
 import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
+import { registerRoutes, generateBackupJson } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { sendBackupEmail } from "./email";
+import { storage } from "./storage";
 
 const app = express();
 const httpServer = createServer(app);
@@ -78,6 +80,37 @@ app.use((req, res, next) => {
 
     return res.status(status).json({ message });
   });
+
+  // Scheduled daily backup — checks every hour
+  const runScheduledBackup = async () => {
+    try {
+      const autoSetting = await storage.getSetting("backup_auto");
+      if (autoSetting?.value !== "true") return;
+      const lastSetting = await storage.getSetting("backup_last_date");
+      const lastDate = lastSetting?.value ? new Date(lastSetting.value) : null;
+      const now = new Date();
+      const hoursSinceLast = lastDate ? (now.getTime() - lastDate.getTime()) / 3600000 : Infinity;
+      if (hoursSinceLast < 24) return;
+      const emailSetting = await storage.getSetting("backup_email");
+      const companySetting = await storage.getSetting("company_name");
+      const toEmail = emailSetting?.value || "";
+      if (!toEmail) return;
+      const date = now.toISOString().split("T")[0];
+      const json = await generateBackupJson();
+      const result = await sendBackupEmail(toEmail, companySetting?.value || "VinTrade", json, date);
+      if (result.success) {
+        await storage.upsertSetting("backup_last_date", now.toISOString(), "Last Backup Date", "backup");
+        console.log(`[backup] Daily backup sent to ${toEmail}`);
+      } else {
+        console.error(`[backup] Failed to send backup: ${result.error}`);
+      }
+    } catch (e) {
+      console.error("[backup] Scheduled backup error:", e);
+    }
+  };
+  // Run once shortly after startup, then every hour
+  setTimeout(runScheduledBackup, 60000);
+  setInterval(runScheduledBackup, 3600000);
 
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route

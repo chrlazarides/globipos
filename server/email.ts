@@ -57,3 +57,24 @@ export async function sendInvoiceEmail(toEmail: string, subject: string, htmlCon
     return { success: false, fromEmail: '', error: error?.message || 'Failed to send email' };
   }
 }
+
+export async function sendBackupEmail(toEmail: string, companyName: string, backupJson: string, date: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const filename = `backup-${date}.json`;
+    await client.emails.send({
+      to: toEmail,
+      from: fromEmail,
+      subject: `${companyName} — Database Backup ${date}`,
+      html: `<p>Automated database backup for <strong>${companyName}</strong>.</p>
+             <p>Date: ${date}</p>
+             <p>The full backup is attached as <code>${filename}</code>.</p>
+             <p style="color:#666;font-size:12px;">This is an automated backup email. Keep this file in a safe place.</p>`,
+      attachments: [{ filename, content: Buffer.from(backupJson).toString('base64') }],
+    });
+    return { success: true };
+  } catch (error: any) {
+    console.error('Backup email error:', error?.message || error);
+    return { success: false, error: error?.message || 'Failed to send backup email' };
+  }
+}

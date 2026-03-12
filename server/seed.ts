@@ -28,6 +28,10 @@ const DEFAULT_SETTINGS = [
   { key: "low_stock_threshold", value: "10", label: "Low Stock Alert Threshold", group: "inventory" },
   { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
   { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
+  { key: "settings_password", value: "", label: "Settings Password Hash", group: "security" },
+  { key: "backup_email", value: "", label: "Backup Email Address", group: "backup" },
+  { key: "backup_auto", value: "false", label: "Automatic Daily Backup", group: "backup" },
+  { key: "backup_last_date", value: "", label: "Last Backup Date", group: "backup" },
 ];
 
 // Known stale/wrong company names that should be reset to default
