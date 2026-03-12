@@ -7,7 +7,25 @@ import { relations } from "drizzle-orm";
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
+  email: text("email"),
   password: text("password").notNull(),
+  role: text("role").notNull().default("staff"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  lastLoginAt: timestamp("last_login_at"),
+});
+
+export const activityLogs = pgTable("activity_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id"),
+  username: text("username"),
+  action: text("action").notNull(),
+  entity: text("entity"),
+  entityId: text("entity_id"),
+  description: text("description"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const systemSettings = pgTable("system_settings", {
@@ -312,7 +330,7 @@ export const expenses = pgTable("expenses", {
 });
 
 // Insert schemas
-export const insertUserSchema = createInsertSchema(users).pick({ username: true, password: true });
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, lastLoginAt: true });
 export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
 export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });
@@ -388,3 +406,7 @@ export type InsertJournalEntryLine = z.infer<typeof insertJournalEntryLineSchema
 export type JournalEntryLine = typeof journalEntryLines.$inferSelect;
 export type InsertExpense = z.infer<typeof insertExpenseSchema>;
 export type Expense = typeof expenses.$inferSelect;
+
+export const insertActivityLogSchema = createInsertSchema(activityLogs).omit({ id: true, createdAt: true });
+export type InsertActivityLog = z.infer<typeof insertActivityLogSchema>;
+export type ActivityLog = typeof activityLogs.$inferSelect;

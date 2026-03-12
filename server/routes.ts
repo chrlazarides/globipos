@@ -1,17 +1,57 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import { sendInvoiceEmail, sendBackupEmail } from "./email";
 import { db } from "./db";
-import { sql, and, eq, gte, lte } from "drizzle-orm";
+import { sql, and, eq, gte, lte, desc } from "drizzle-orm";
 import crypto from "crypto";
+import { hashPassword, verifyPassword, signToken, setAuthCookie, clearAuthCookie, requireAdmin } from "./auth";
 
-function hashPassword(pw: string) {
+function hashSettingsPassword(pw: string) {
   return crypto.createHash("sha256").update(pw).digest("hex");
+}
+
+async function logActivity(userId: string | null, username: string | null, action: string, entity: string | null, entityId: string | null, description: string | null, ipAddress: string | null, userAgent: string | null) {
+  try {
+    await db.insert(activityLogs).values({ userId, username, action, entity, entityId, description, ipAddress, userAgent });
+  } catch {}
+}
+
+function activityMiddleware(app: Express) {
+  const SKIP_PATHS = ["/api/auth/", "/api/portal/"];
+  const ENTITY_MAP: Record<string, string> = {
+    "/api/items": "item", "/api/customers": "customer", "/api/invoices": "invoice",
+    "/api/suppliers": "supplier", "/api/categories": "category", "/api/price-contracts": "price_contract",
+    "/api/seasonal-offers": "seasonal_offer", "/api/purchase-invoices": "purchase_invoice",
+    "/api/payments": "payment", "/api/supplier-payments": "supplier_payment",
+    "/api/expenses": "expense", "/api/journal-entries": "journal_entry",
+    "/api/accounts": "account", "/api/users": "user", "/api/settings": "settings",
+    "/api/backup": "backup",
+  };
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
+    if (!req.path.startsWith("/api/")) return next();
+    if (SKIP_PATHS.some(p => req.path.startsWith(p))) return next();
+
+    const origJson = res.json.bind(res);
+    res.json = (body: any) => {
+      if (res.statusCode < 400 && req.user) {
+        const entity = Object.entries(ENTITY_MAP).find(([k]) => req.path.startsWith(k))?.[1] || null;
+        const action = req.method === "POST" ? "create" : req.method === "DELETE" ? "delete" : "update";
+        const entityId = body?.id ?? (Array.isArray(body) ? body[0]?.id : null) ?? null;
+        const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.ip || null;
+        const ua = req.headers["user-agent"] || null;
+        logActivity(req.user.id, req.user.username, action, entity, entityId?.toString() || null, `${req.method} ${req.path}`, ip, ua);
+      }
+      return origJson(body);
+    };
+    next();
+  });
 }
 
 export async function generateBackupJson(): Promise<string> {
@@ -113,6 +153,105 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  activityMiddleware(app);
+
+  // ─── AUTH ───────────────────────────────────────────────────────────────────
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    try {
+      const { username, password } = req.body;
+      if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+      const [user] = await db.select().from(users).where(eq(users.username, username.toLowerCase().trim()));
+      if (!user || !user.active) return res.status(401).json({ message: "Invalid credentials" });
+      if (!verifyPassword(password, user.password)) return res.status(401).json({ message: "Invalid credentials" });
+      await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+      const token = signToken({ id: user.id, username: user.username, email: user.email, role: user.role });
+      setAuthCookie(res, token);
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.ip || null;
+      const ua = req.headers["user-agent"] || null;
+      logActivity(user.id, user.username, "login", "auth", null, `Login from ${ip}`, ip, ua);
+      res.json({ id: user.id, username: user.username, email: user.email, role: user.role });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/auth/me", async (req: Request, res: Response) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    res.json(req.user);
+  });
+
+  app.post("/api/auth/logout", async (req: Request, res: Response) => {
+    if (req.user) {
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.ip || null;
+      const ua = req.headers["user-agent"] || null;
+      logActivity(req.user.id, req.user.username, "logout", "auth", null, "Logout", ip, ua);
+    }
+    clearAuthCookie(res);
+    res.json({ message: "Logged out" });
+  });
+
+  // ─── USERS (admin only) ──────────────────────────────────────────────────────
+  app.get("/api/users", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const rows = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt }).from(users).orderBy(users.createdAt);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/users", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { username, email, password, role } = req.body;
+      if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+      const existing = await db.select({ id: users.id }).from(users).where(eq(users.username, username.toLowerCase().trim()));
+      if (existing.length > 0) return res.status(409).json({ message: "Username already exists" });
+      const [user] = await db.insert(users).values({ username: username.toLowerCase().trim(), email: email || null, password: hashPassword(password), role: role || "staff", active: true }).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt });
+      res.status(201).json(user);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.put("/api/users/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { username, email, role, active, password } = req.body;
+      const updates: any = {};
+      if (username) updates.username = username.toLowerCase().trim();
+      if (email !== undefined) updates.email = email || null;
+      if (role) updates.role = role;
+      if (active !== undefined) updates.active = active;
+      if (password) updates.password = hashPassword(password);
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, req.params.id)).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active });
+      if (!updated) return res.status(404).json({ message: "User not found" });
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/users/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      if (req.user?.id === req.params.id) return res.status(400).json({ message: "Cannot delete your own account" });
+      await db.delete(users).where(eq(users.id, req.params.id));
+      res.json({ message: "User deleted" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Change own password
+  app.post("/api/users/change-password", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const { currentPassword, newPassword } = req.body;
+      const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
+      if (!user || !verifyPassword(currentPassword, user.password)) return res.status(400).json({ message: "Current password is incorrect" });
+      await db.update(users).set({ password: hashPassword(newPassword) }).where(eq(users.id, req.user.id));
+      res.json({ message: "Password changed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── ACTIVITY LOGS (admin only) ─────────────────────────────────────────────
+  app.get("/api/activity-logs", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 200;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const rows = await db.select().from(activityLogs).orderBy(desc(activityLogs.createdAt)).limit(limit).offset(offset);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
 
   // Dashboard
   app.get("/api/dashboard/stats", async (_req, res) => {
@@ -1060,7 +1199,7 @@ export async function registerRoutes(
       const { password } = req.body;
       const stored = await storage.getSetting("settings_password");
       if (!stored || !stored.value) return res.json({ valid: true, hasPassword: false });
-      const valid = stored.value === hashPassword(password || "");
+      const valid = stored.value === hashSettingsPassword(password || "");
       res.json({ valid, hasPassword: true });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -1072,7 +1211,7 @@ export async function registerRoutes(
       const { currentPassword, newPassword } = req.body;
       const stored = await storage.getSetting("settings_password");
       if (stored && stored.value) {
-        if (stored.value !== hashPassword(currentPassword || "")) {
+        if (stored.value !== hashSettingsPassword(currentPassword || "")) {
           return res.status(403).json({ message: "Current password is incorrect" });
         }
       }

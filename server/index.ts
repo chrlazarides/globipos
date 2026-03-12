@@ -1,9 +1,11 @@
 import express, { type Request, Response, NextFunction } from "express";
+import cookieParser from "cookie-parser";
 import { registerRoutes, generateBackupJson } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { sendBackupEmail } from "./email";
 import { storage } from "./storage";
+import { requireAuth } from "./auth";
 
 const app = express();
 const httpServer = createServer(app);
@@ -14,6 +16,8 @@ declare module "http" {
   }
 }
 
+app.use(cookieParser());
+
 app.use(
   express.json({
     verify: (req, _res, buf) => {
@@ -23,6 +27,16 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+app.use((req, res, next) => {
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
+
+app.use(requireAuth);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {

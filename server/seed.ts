@@ -1,6 +1,7 @@
 import { db } from "./db";
-import { categories, items, customers, priceContracts, seasonalOffers, invoices, invoiceItems, systemSettings } from "@shared/schema";
+import { categories, items, customers, priceContracts, seasonalOffers, invoices, invoiceItems, systemSettings, users } from "@shared/schema";
 import { sql, eq } from "drizzle-orm";
+import { hashPassword } from "./auth";
 
 const DEFAULT_SETTINGS = [
   { key: "company_name", value: "VINERIA DI MARE Trading", label: "Company Name", group: "company" },
@@ -68,6 +69,19 @@ export async function ensureDefaultSettings() {
     if (backupAutoSetting.length > 0 && backupAutoSetting[0].value === "false") {
       console.log("Enabling automatic daily backup");
       await db.update(systemSettings).set({ value: "true" }).where(eq(systemSettings.key, "backup_auto"));
+    }
+
+    // Ensure a default admin user exists
+    const adminUsers = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
+    if (adminUsers.length === 0) {
+      console.log("Creating default admin user (admin / admin123)");
+      await db.insert(users).values({
+        username: "admin",
+        email: "admin@vintrade.com",
+        password: hashPassword("admin123"),
+        role: "admin",
+        active: true,
+      });
     }
   } catch (e) {
     console.error("ensureDefaultSettings error:", e);
