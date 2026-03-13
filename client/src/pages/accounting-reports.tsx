@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -150,6 +151,7 @@ export default function AccountingReports() {
   const [bsAsOf, setBsAsOf] = useState(getToday);
   const [vatFrom, setVatFrom] = useState(() => getQuarterDates(getCurrentQuarter()).from);
   const [vatTo, setVatTo] = useState(() => getQuarterDates(getCurrentQuarter()).to);
+  const [, setLocation] = useLocation();
   const [showSalesDetail, setShowSalesDetail] = useState(false);
   const [showPurchaseDetail, setShowPurchaseDetail] = useState(false);
   const [drillDown, setDrillDown] = useState<{ id: string; name: string; code: string; from: string; to: string } | null>(null);
@@ -777,8 +779,16 @@ export default function AccountingReports() {
                         </TableHeader>
                         <TableBody>
                           {vatReturn.sales.items.map((item, idx) => (
-                            <TableRow key={idx} className="text-xs" data-testid={`row-vat-sale-${idx}`}>
-                              <TableCell className="text-xs font-mono">{item.invoiceNumber}</TableCell>
+                            <TableRow
+                              key={idx}
+                              className="text-xs cursor-pointer hover:bg-muted/50 transition-colors"
+                              data-testid={`row-vat-sale-${idx}`}
+                              onClick={() => setLocation(`/invoices/${item.id}`)}
+                              title="Open invoice"
+                            >
+                              <TableCell className="text-xs font-mono text-primary underline-offset-2 hover:underline">
+                                <span className="flex items-center gap-1">{item.invoiceNumber}<ExternalLink className="w-3 h-3 opacity-50" /></span>
+                              </TableCell>
                               <TableCell className="text-xs">{item.customerName}</TableCell>
                               <TableCell className="text-xs text-muted-foreground">{item.date}</TableCell>
                               <TableCell className="text-right text-xs">{formatEUR(item.netAmount)}</TableCell>
@@ -787,8 +797,16 @@ export default function AccountingReports() {
                             </TableRow>
                           ))}
                           {vatReturn.creditNotes.items.map((item, idx) => (
-                            <TableRow key={`cn-${idx}`} className="text-xs text-red-600 dark:text-red-400" data-testid={`row-vat-cn-${idx}`}>
-                              <TableCell className="text-xs font-mono">{item.invoiceNumber}</TableCell>
+                            <TableRow
+                              key={`cn-${idx}`}
+                              className="text-xs text-red-600 dark:text-red-400 cursor-pointer hover:bg-red-50/50 dark:hover:bg-red-950/20 transition-colors"
+                              data-testid={`row-vat-cn-${idx}`}
+                              onClick={() => setLocation(`/invoices/${item.id}`)}
+                              title="Open credit note"
+                            >
+                              <TableCell className="text-xs font-mono underline-offset-2 hover:underline">
+                                <span className="flex items-center gap-1">{item.invoiceNumber}<ExternalLink className="w-3 h-3 opacity-50" /></span>
+                              </TableCell>
                               <TableCell className="text-xs">{item.customerName}</TableCell>
                               <TableCell className="text-xs text-red-400">{item.date}</TableCell>
                               <TableCell className="text-right text-xs">({formatEUR(item.netAmount)})</TableCell>
@@ -865,8 +883,16 @@ export default function AccountingReports() {
                             </TableHeader>
                             <TableBody>
                               {vatReturn.purchases.items.map((item, idx) => (
-                                <TableRow key={idx} className="text-xs" data-testid={`row-vat-purchase-${idx}`}>
-                                  <TableCell className="text-xs font-mono">{item.invoiceNumber}</TableCell>
+                                <TableRow
+                                  key={idx}
+                                  className="text-xs cursor-pointer hover:bg-muted/50 transition-colors"
+                                  data-testid={`row-vat-purchase-${idx}`}
+                                  onClick={() => setLocation("/purchase-invoices")}
+                                  title="Open purchase invoices"
+                                >
+                                  <TableCell className="text-xs font-mono text-primary underline-offset-2 hover:underline">
+                                    <span className="flex items-center gap-1">{item.invoiceNumber}<ExternalLink className="w-3 h-3 opacity-50" /></span>
+                                  </TableCell>
                                   <TableCell className="text-xs text-muted-foreground">{item.supplierRef}</TableCell>
                                   <TableCell className="text-xs">{item.supplierName}</TableCell>
                                   <TableCell className="text-xs text-muted-foreground">{item.date}</TableCell>
@@ -894,8 +920,16 @@ export default function AccountingReports() {
                             </TableHeader>
                             <TableBody>
                               {vatReturn.expenses.items.map((item, idx) => (
-                                <TableRow key={idx} className="text-xs" data-testid={`row-vat-expense-${idx}`}>
-                                  <TableCell className="text-xs">{item.description}</TableCell>
+                                <TableRow
+                                  key={idx}
+                                  className="text-xs cursor-pointer hover:bg-muted/50 transition-colors"
+                                  data-testid={`row-vat-expense-${idx}`}
+                                  onClick={() => setLocation("/accounting/expenses")}
+                                  title="Open expenses"
+                                >
+                                  <TableCell className="text-xs">
+                                    <span className="flex items-center gap-1">{item.description}<ExternalLink className="w-3 h-3 opacity-40" /></span>
+                                  </TableCell>
                                   <TableCell className="text-xs text-muted-foreground">{item.date}</TableCell>
                                   <TableCell className="text-right text-xs">{formatEUR(item.netAmount)}</TableCell>
                                   <TableCell className="text-right text-xs">{formatEUR(item.vatAmount)}</TableCell>

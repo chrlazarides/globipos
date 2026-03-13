@@ -2701,6 +2701,7 @@ export async function registerRoutes(
         vatAmount: salesVat.toFixed(2),
         grossAmount: salesGross.toFixed(2),
         items: salesInvs.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          id: i.id,
           invoiceNumber: i.invoiceNumber,
           customerName: custMap[i.customerId || ""] || "—",
           date: i.date,
@@ -2714,6 +2715,7 @@ export async function registerRoutes(
         netAmount: cnNet.toFixed(2),
         vatAmount: cnVat.toFixed(2),
         items: creditNotesList.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          id: i.id,
           invoiceNumber: i.invoiceNumber,
           customerName: custMap[i.customerId || ""] || "—",
           date: i.date,
@@ -2727,6 +2729,7 @@ export async function registerRoutes(
         netAmount: purchaseNet.toFixed(2),
         vatAmount: purchaseVat.toFixed(2),
         items: purchaseInvs.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          id: i.id,
           invoiceNumber: i.invoiceNumber,
           supplierRef: i.supplierInvoiceRef || "—",
           supplierName: suppMap[i.supplierId || ""] || "—",
@@ -2741,6 +2744,7 @@ export async function registerRoutes(
         netAmount: expenseNet.toFixed(2),
         vatAmount: expenseVat.toFixed(2),
         items: expensesList.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          id: i.id,
           description: i.description,
           date: i.date,
           netAmount: parseFloat(i.amount || "0").toFixed(2),
