@@ -2978,6 +2978,11 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   const companySwift = settings.company_swift || "";
   const currencySymbol = settings.currency_symbol || "\u20AC";
 
+  const paymentTermsLabel: Record<string, string> = {
+    cash: "Cash on Delivery", credit_7: "Net 7 Days", credit_14: "Net 14 Days",
+    credit_30: "Net 30 Days", credit_60: "Net 60 Days", credit_90: "Net 90 Days",
+  };
+
   const statementInvoices = statement?.invoices || [];
   const typeLabels: Record<string, string> = { invoice: "Invoice", credit_note: "Credit Note", proforma: "Proforma", quotation: "Quotation" };
   const invoiceRows = statementInvoices.map((inv: any, idx: number) => `
@@ -3083,11 +3088,11 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
 
     <div class="customer-info">
       <div class="customer-name">${customer.name} (${customer.code})</div>
+      <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;">Payment Terms: ${paymentTermsLabel[customer.paymentTerms] || customer.paymentTerms}</div>
       <div class="customer-detail">
         ${customer.address ? customer.address + "<br>" : ""}
         ${customer.city || ""}
         ${customer.taxId ? "<br>Tax ID: " + customer.taxId : ""}
-        <br>Payment Terms: ${customer.paymentTerms}
       </div>
     </div>
 
