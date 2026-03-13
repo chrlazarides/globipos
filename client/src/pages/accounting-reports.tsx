@@ -11,9 +11,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Printer, Scale, TrendingUp, BarChart3, Receipt, ChevronDown, ChevronRight } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Printer, Scale, TrendingUp, BarChart3, Receipt, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 
 interface TrialBalanceAccount {
+  id: string;
   code: string;
   name: string;
   type: string;
@@ -149,6 +152,7 @@ export default function AccountingReports() {
   const [vatTo, setVatTo] = useState(() => getQuarterDates(getCurrentQuarter()).to);
   const [showSalesDetail, setShowSalesDetail] = useState(false);
   const [showPurchaseDetail, setShowPurchaseDetail] = useState(false);
+  const [drillDown, setDrillDown] = useState<{ id: string; name: string; code: string; from: string; to: string } | null>(null);
 
   const { data: trialBalance, isLoading: tbLoading } = useQuery<TrialBalanceData>({
     queryKey: ["/api/reports/trial-balance"],
@@ -166,6 +170,14 @@ export default function AccountingReports() {
     queryKey: ["/api/reports/vat-return", vatFrom, vatTo],
     enabled: !!vatFrom && !!vatTo,
   });
+
+  const { data: glData, isLoading: glLoading } = useQuery<{ entries: any[]; openingBalance: string }>({
+    queryKey: ["/api/reports/general-ledger", drillDown?.id, drillDown?.from, drillDown?.to],
+    enabled: !!drillDown,
+  });
+
+  const openDrill = (id: string, code: string, name: string, from: string, to: string) =>
+    setDrillDown({ id, code, name, from, to });
 
   return (
     <div className="p-6 space-y-6">
@@ -221,9 +233,17 @@ export default function AccountingReports() {
                       </TableRow>
                     ) : (
                       trialBalance.accounts.map((acc, idx) => (
-                        <TableRow key={`${acc.code}-${idx}`} data-testid={`row-tb-${acc.code}`}>
+                        <TableRow
+                          key={`${acc.code}-${idx}`}
+                          data-testid={`row-tb-${acc.code}`}
+                          className="cursor-pointer hover:bg-muted/60 group"
+                          onClick={() => openDrill(acc.id, acc.code, acc.name, "1900-01-01", "9999-12-31")}
+                        >
                           <TableCell className="font-mono text-sm">{acc.code}</TableCell>
-                          <TableCell className="text-sm">{acc.name}</TableCell>
+                          <TableCell className="text-sm">
+                            <span className="group-hover:underline">{acc.name}</span>
+                            <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                          </TableCell>
                           <TableCell>
                             <Badge variant="secondary" className="capitalize">{acc.type}</Badge>
                           </TableCell>
@@ -309,9 +329,17 @@ export default function AccountingReports() {
                         </TableRow>
                       ) : (
                         profitLoss.revenue.map((acc) => (
-                          <TableRow key={acc.id} data-testid={`row-pl-revenue-${acc.code}`}>
+                          <TableRow
+                            key={acc.id}
+                            data-testid={`row-pl-revenue-${acc.code}`}
+                            className="cursor-pointer hover:bg-muted/60 group"
+                            onClick={() => openDrill(acc.id, acc.code, acc.name, plFrom, plTo)}
+                          >
                             <TableCell className="font-mono text-sm">{acc.code}</TableCell>
-                            <TableCell className="text-sm">{acc.name}</TableCell>
+                            <TableCell className="text-sm">
+                              <span className="group-hover:underline">{acc.name}</span>
+                              <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                            </TableCell>
                             <TableCell className="text-right text-sm" data-testid={`text-pl-revenue-amount-${acc.code}`}>
                               {formatEUR(acc.balance)}
                             </TableCell>
@@ -353,9 +381,17 @@ export default function AccountingReports() {
                         </TableRow>
                       ) : (
                         profitLoss.expenses.map((acc) => (
-                          <TableRow key={acc.id} data-testid={`row-pl-expense-${acc.code}`}>
+                          <TableRow
+                            key={acc.id}
+                            data-testid={`row-pl-expense-${acc.code}`}
+                            className="cursor-pointer hover:bg-muted/60 group"
+                            onClick={() => openDrill(acc.id, acc.code, acc.name, plFrom, plTo)}
+                          >
                             <TableCell className="font-mono text-sm">{acc.code}</TableCell>
-                            <TableCell className="text-sm">{acc.name}</TableCell>
+                            <TableCell className="text-sm">
+                              <span className="group-hover:underline">{acc.name}</span>
+                              <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                            </TableCell>
                             <TableCell className="text-right text-sm" data-testid={`text-pl-expense-amount-${acc.code}`}>
                               {formatEUR(acc.balance)}
                             </TableCell>
@@ -452,9 +488,17 @@ export default function AccountingReports() {
                         </TableRow>
                       ) : (
                         balanceSheet.assets.map((acc) => (
-                          <TableRow key={acc.id} data-testid={`row-bs-asset-${acc.code}`}>
+                          <TableRow
+                            key={acc.id}
+                            data-testid={`row-bs-asset-${acc.code}`}
+                            className="cursor-pointer hover:bg-muted/60 group"
+                            onClick={() => openDrill(acc.id, acc.code, acc.name, "1900-01-01", bsAsOf)}
+                          >
                             <TableCell className="font-mono text-sm">{acc.code}</TableCell>
-                            <TableCell className="text-sm">{acc.name}</TableCell>
+                            <TableCell className="text-sm">
+                              <span className="group-hover:underline">{acc.name}</span>
+                              <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                            </TableCell>
                             <TableCell className="text-right text-sm" data-testid={`text-bs-asset-balance-${acc.code}`}>
                               {formatEUR(acc.balance)}
                             </TableCell>
@@ -496,9 +540,17 @@ export default function AccountingReports() {
                         </TableRow>
                       ) : (
                         balanceSheet.liabilities.map((acc) => (
-                          <TableRow key={acc.id} data-testid={`row-bs-liability-${acc.code}`}>
+                          <TableRow
+                            key={acc.id}
+                            data-testid={`row-bs-liability-${acc.code}`}
+                            className="cursor-pointer hover:bg-muted/60 group"
+                            onClick={() => openDrill(acc.id, acc.code, acc.name, "1900-01-01", bsAsOf)}
+                          >
                             <TableCell className="font-mono text-sm">{acc.code}</TableCell>
-                            <TableCell className="text-sm">{acc.name}</TableCell>
+                            <TableCell className="text-sm">
+                              <span className="group-hover:underline">{acc.name}</span>
+                              <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                            </TableCell>
                             <TableCell className="text-right text-sm" data-testid={`text-bs-liability-balance-${acc.code}`}>
                               {formatEUR(acc.balance)}
                             </TableCell>
@@ -541,9 +593,17 @@ export default function AccountingReports() {
                       ) : (
                         <>
                           {balanceSheet.equity.map((acc) => (
-                            <TableRow key={acc.id} data-testid={`row-bs-equity-${acc.code}`}>
+                            <TableRow
+                              key={acc.id}
+                              data-testid={`row-bs-equity-${acc.code}`}
+                              className="cursor-pointer hover:bg-muted/60 group"
+                              onClick={() => openDrill(acc.id, acc.code, acc.name, "1900-01-01", bsAsOf)}
+                            >
                               <TableCell className="font-mono text-sm">{acc.code}</TableCell>
-                              <TableCell className="text-sm">{acc.name}</TableCell>
+                              <TableCell className="text-sm">
+                                <span className="group-hover:underline">{acc.name}</span>
+                                <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                              </TableCell>
                               <TableCell className="text-right text-sm" data-testid={`text-bs-equity-balance-${acc.code}`}>
                                 {formatEUR(acc.balance)}
                               </TableCell>
@@ -888,6 +948,101 @@ export default function AccountingReports() {
           ) : null}
         </TabsContent>
       </Tabs>
+
+      {/* General Ledger Drill-Down Sheet */}
+      <Sheet open={!!drillDown} onOpenChange={(open) => !open && setDrillDown(null)}>
+        <SheetContent className="w-full sm:max-w-2xl flex flex-col p-0" data-testid="sheet-gl-drilldown">
+          <SheetHeader className="px-6 py-4 border-b shrink-0">
+            <SheetTitle className="flex items-center gap-2">
+              <span className="font-mono text-sm text-muted-foreground">{drillDown?.code}</span>
+              <span>{drillDown?.name}</span>
+            </SheetTitle>
+            <p className="text-xs text-muted-foreground">
+              General Ledger · {drillDown?.from === "1900-01-01" ? "All time" : `${drillDown?.from} to ${drillDown?.to}`}
+            </p>
+          </SheetHeader>
+
+          <ScrollArea className="flex-1">
+            {glLoading ? (
+              <div className="p-6 space-y-2">
+                <Skeleton className="h-8" />
+                <Skeleton className="h-8" />
+                <Skeleton className="h-8" />
+              </div>
+            ) : glData ? (
+              <div>
+                {/* Opening Balance */}
+                <div className="px-6 py-3 bg-muted/40 border-b flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Opening Balance</span>
+                  <span className="text-sm font-semibold" data-testid="text-gl-opening">{formatEUR(glData.openingBalance)}</span>
+                </div>
+
+                {glData.entries.length === 0 ? (
+                  <div className="px-6 py-12 text-center text-muted-foreground text-sm">
+                    No transactions in this period
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="text-xs">Date</TableHead>
+                        <TableHead className="text-xs">Entry #</TableHead>
+                        <TableHead className="text-xs">Description</TableHead>
+                        <TableHead className="text-right text-xs">Debit</TableHead>
+                        <TableHead className="text-right text-xs">Credit</TableHead>
+                        <TableHead className="text-right text-xs">Balance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(() => {
+                        let running = parseFloat(glData.openingBalance);
+                        return glData.entries.map((entry: any, idx: number) => {
+                          const d = parseFloat(entry.debit || "0");
+                          const c = parseFloat(entry.credit || "0");
+                          running += d - c;
+                          return (
+                            <TableRow key={idx} className="text-xs" data-testid={`row-gl-entry-${idx}`}>
+                              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{entry.date}</TableCell>
+                              <TableCell className="text-xs font-mono whitespace-nowrap">{entry.entryNumber}</TableCell>
+                              <TableCell className="text-xs max-w-[200px] truncate" title={entry.description}>
+                                {entry.lineDescription || entry.description}
+                              </TableCell>
+                              <TableCell className="text-right text-xs">
+                                {d > 0 ? formatEUR(d) : "—"}
+                              </TableCell>
+                              <TableCell className="text-right text-xs">
+                                {c > 0 ? formatEUR(c) : "—"}
+                              </TableCell>
+                              <TableCell className={`text-right text-xs font-medium ${running < 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+                                {formatEUR(running)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        });
+                      })()}
+                    </TableBody>
+                  </Table>
+                )}
+
+                {/* Closing Balance */}
+                {glData.entries.length > 0 && (() => {
+                  const closing = glData.entries.reduce((bal: number, e: any) => {
+                    return bal + parseFloat(e.debit || "0") - parseFloat(e.credit || "0");
+                  }, parseFloat(glData.openingBalance));
+                  return (
+                    <div className="px-6 py-3 bg-muted/40 border-t flex justify-between items-center">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Closing Balance</span>
+                      <span className={`text-sm font-bold ${closing < 0 ? "text-red-600 dark:text-red-400" : ""}`} data-testid="text-gl-closing">
+                        {formatEUR(closing)}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+            ) : null}
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
