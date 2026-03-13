@@ -150,12 +150,17 @@ export default function Customers() {
           <div>
             <p className="font-medium text-sm">{row.name}</p>
             <p className="text-xs text-muted-foreground">Acct: {row.code}</p>
-            {(row.contactFirstName || row.contactLastName) && (
-              <p className="text-xs text-muted-foreground">{[row.contactFirstName, row.contactLastName].filter(Boolean).join(" ")}</p>
-            )}
           </div>
         </div>
       ),
+    },
+    {
+      key: "contact",
+      header: "Contact",
+      cell: (row) => {
+        const name = [row.contactFirstName, row.contactLastName].filter(Boolean).join(" ");
+        return <span className="text-sm">{name || <span className="text-muted-foreground">—</span>}</span>;
+      },
     },
     { key: "phone", header: "Phone", cell: (row) => <span className="text-sm text-muted-foreground">{row.phone || "-"}</span> },
     { key: "email", header: "Email", cell: (row) => <span className="text-sm text-muted-foreground">{row.email || "-"}</span> },
