@@ -183,7 +183,42 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCustomers() {
-    return db.select().from(customers).orderBy(customers.name);
+    const custs = await db.select().from(customers).orderBy(customers.name);
+
+    // Compute live balance per customer from invoices (all statuses incl. draft) and payments
+    const allInvs = await db.select({
+      customerId: invoices.customerId,
+      total: invoices.total,
+      type: invoices.type,
+      id: invoices.id,
+      status: invoices.status,
+    }).from(invoices);
+
+    const allPayments = await db.select({
+      customerId: payments.customerId,
+      invoiceId: payments.invoiceId,
+      amount: payments.amount,
+    }).from(payments);
+
+    const paymentsByInvoice = new Map<string, number>();
+    for (const p of allPayments) {
+      paymentsByInvoice.set(p.invoiceId, (paymentsByInvoice.get(p.invoiceId) || 0) + parseFloat(p.amount));
+    }
+
+    return custs.map(c => {
+      const custInvs = allInvs.filter(i => i.customerId === c.id && i.type === "invoice");
+      const custCns = allInvs.filter(i => i.customerId === c.id && i.type === "credit_note");
+      const totalInvoiced = custInvs.reduce((s, i) => s + parseFloat(i.total), 0);
+      const totalCredits = custCns.reduce((s, i) => s + parseFloat(i.total), 0);
+      const totalPaid = custInvs.reduce((s, i) => {
+        const pmts = paymentsByInvoice.get(i.id) || 0;
+        if (pmts > 0) return s + Math.min(pmts, parseFloat(i.total));
+        if (i.status === "paid") return s + parseFloat(i.total);
+        return s;
+      }, 0);
+      const liveBalance = Math.max(0, totalInvoiced - totalCredits - totalPaid);
+      return { ...c, currentBalance: liveBalance.toFixed(2) };
+    });
   }
   async getCustomer(id: string) {
     const [cust] = await db.select().from(customers).where(eq(customers.id, id));
