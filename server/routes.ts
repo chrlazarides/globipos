@@ -1146,20 +1146,34 @@ export async function registerRoutes(
   });
 
   app.post("/api/payments", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
     try {
       const data = insertPaymentSchema.parse(req.body);
       const payment = await storage.createPayment(data);
 
       const pmtAmount = parseFloat(String(data.amount || 0));
-      const pmtDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+      const pmtDate = typeof data.paymentDate === "string" ? data.paymentDate : new Date().toISOString().split("T")[0];
       const pmtAcctCode = data.paymentMethod === "cash" ? "1000" : "1010";
+
+      // Resolve customer name for journal description
+      let customerName = "";
+      if (data.customerId) {
+        const cust = await storage.getCustomer(data.customerId);
+        customerName = cust ? ` — ${cust.name}` : "";
+      } else if (data.invoiceId) {
+        const inv = await db.select().from(invoices).where(eq(invoices.id, data.invoiceId)).limit(1);
+        if (inv[0]) {
+          const cust = await storage.getCustomer(inv[0].customerId);
+          customerName = cust ? ` — ${cust.name}` : "";
+        }
+      }
 
       if (pmtAmount > 0) {
         await autoCreateJournalEntry({
           sourceType: "payment",
           sourceId: payment.id,
           date: pmtDate,
-          description: `Customer Payment received`,
+          description: `Customer Payment received${customerName}`,
           reference: data.reference || payment.id,
           lines: [
             { accountCode: pmtAcctCode, debit: pmtAmount, credit: 0, description: data.paymentMethod === "cash" ? "Cash" : "Bank" },
@@ -1701,16 +1715,16 @@ export async function registerRoutes(
   });
 
   app.post("/api/supplier-payments", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
     try {
       const data = insertSupplierPaymentSchema.parse(req.body);
       const supplier = await storage.getSupplier(data.supplierId);
       if (!supplier) return res.status(404).json({ message: "Supplier not found" });
+      // createSupplierPayment already handles balance deduction — do not call updateSupplier again
       const payment = await storage.createSupplierPayment(data);
-      const newBalance = parseFloat(supplier.currentBalance) - parseFloat(String(data.amount));
-      await storage.updateSupplier(data.supplierId, { currentBalance: Math.max(0, newBalance).toFixed(2) });
 
       const spAmount = parseFloat(String(data.amount || 0));
-      const spDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+      const spDate = typeof data.paymentDate === "string" ? data.paymentDate : new Date().toISOString().split("T")[0];
       const paymentAcctCode = data.paymentMethod === "cash" ? "1000" : "1010";
 
       if (spAmount > 0) {
@@ -1718,10 +1732,10 @@ export async function registerRoutes(
           sourceType: "supplier_payment",
           sourceId: payment.id,
           date: spDate,
-          description: `Supplier Payment to ${supplier.name}`,
+          description: `Supplier Payment — ${supplier.name}`,
           reference: data.reference || payment.id,
           lines: [
-            { accountCode: "2000", debit: spAmount, credit: 0, description: "Accounts Payable" },
+            { accountCode: "2000", debit: spAmount, credit: 0, description: `Accounts Payable — ${supplier.name}` },
             { accountCode: paymentAcctCode, debit: 0, credit: spAmount, description: data.paymentMethod === "cash" ? "Cash" : "Bank" },
           ],
         });
