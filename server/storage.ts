@@ -809,6 +809,8 @@ export class DatabaseStorage implements IStorage {
         else aging.days90plus += balance;
       }
 
+      const invById = new Map(allInvs.map(i => [i.id, i]));
+
       const invoiceList = allInvs.map(inv => {
         const total = parseFloat(inv.total);
         const paid = getPaid(inv);
@@ -831,6 +833,22 @@ export class DatabaseStorage implements IStorage {
         };
       });
 
+      const custInvIds = new Set(allInvs.map(i => i.id));
+      const paymentList = allPayments
+        .filter(p => p.customerId === cust.id || custInvIds.has(p.invoiceId || ""))
+        .sort((a, b) => String(a.paymentDate).localeCompare(String(b.paymentDate)))
+        .map(p => {
+          const inv = p.invoiceId ? invById.get(p.invoiceId) : null;
+          return {
+            date: p.paymentDate,
+            amount: parseFloat(String(p.amount)).toFixed(2),
+            paymentMethod: p.paymentMethod,
+            reference: p.reference || null,
+            notes: p.notes || null,
+            invoiceNumber: inv ? inv.invoiceNumber : null,
+          };
+        });
+
       statements.push({
         customerId: cust.id,
         customerName: cust.name,
@@ -840,6 +858,7 @@ export class DatabaseStorage implements IStorage {
         balance: Math.max(0, totalInvoiced - totalCredits - totalPaid).toFixed(2),
         invoiceCount: allInvs.length,
         invoices: invoiceList,
+        payments: paymentList,
         aging: {
           current: aging.current.toFixed(2),
           days1_30: aging.days1_30.toFixed(2),

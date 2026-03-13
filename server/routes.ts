@@ -3004,7 +3004,12 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   };
 
   const statementInvoices = statement?.invoices || [];
+  const statementPayments = statement?.payments || [];
   const typeLabels: Record<string, string> = { invoice: "Invoice", credit_note: "Credit Note", proforma: "Proforma", quotation: "Quotation" };
+  const methodLabels: Record<string, string> = {
+    cash: "Cash", bank_transfer: "Bank Transfer", cheque: "Cheque",
+    card: "Card", other: "Other",
+  };
   const invoiceRows = statementInvoices.map((inv: any, idx: number) => `
     <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
       <td class="cell">${inv.invoiceNumber || ""}</td>
@@ -3017,6 +3022,29 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       <td class="cell right bold">${currencySymbol}${parseFloat(inv.balance || "0").toFixed(2)}</td>
     </tr>
   `).join("");
+
+  const paymentRows = statementPayments.map((pmt: any, idx: number) => {
+    const methodLabel = methodLabels[pmt.paymentMethod] || pmt.paymentMethod || "—";
+    const details: string[] = [];
+    if (pmt.reference) details.push(`Ref: ${pmt.reference}`);
+    if (pmt.invoiceNumber) details.push(`Invoice: ${pmt.invoiceNumber}`);
+    if (pmt.notes) details.push(pmt.notes);
+    const detailStr = details.join(" &nbsp;·&nbsp; ");
+    return `
+    <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
+      <td class="cell" colspan="4">
+        <div style="font-weight:600;color:#1a1a1a;">Payment Received</div>
+        <div style="font-size:11px;color:#666;margin-top:2px;">
+          <span style="display:inline-block;background:#e8f5e9;color:#2e7d32;padding:1px 7px;border-radius:10px;font-weight:600;font-size:10px;">${methodLabel}</span>
+          ${detailStr ? `&nbsp;&nbsp;${detailStr}` : ""}
+        </div>
+      </td>
+      <td class="cell" style="color:#2e7d32;font-weight:600;">${new Date(pmt.date).toLocaleDateString("en-GB")}</td>
+      <td class="cell right" style="color:#2e7d32;font-weight:700;">−${currencySymbol}${parseFloat(pmt.amount || "0").toFixed(2)}</td>
+      <td class="cell"></td>
+      <td class="cell"></td>
+    </tr>
+  `}).join("");
 
   const printScript = autoPrint ? `<script>window.onload = function() { window.print(); }</script>` : "";
 
@@ -3150,6 +3178,23 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
         </tr>
       </thead>
       <tbody>${invoiceRows}</tbody>
+    </table>` : ""}
+
+    ${paymentRows ? `
+    <div style="margin-top:8px;margin-bottom:4px;">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#333;padding-bottom:6px;border-bottom:2px solid #1a1a1a;margin-bottom:0;">Payments Received</div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th colspan="4">Description</th>
+          <th>Date</th>
+          <th class="right">Amount</th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${paymentRows}</tbody>
     </table>` : ""}
 
     ${statement?.aging ? (() => {
