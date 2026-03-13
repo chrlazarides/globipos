@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Users, Upload } from "lucide-react";
+import { Plus, Search, Users, Upload, Printer } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertCustomerSchema, type Customer } from "@shared/schema";
@@ -93,6 +93,48 @@ export default function Customers() {
     cash: "Cash", credit_7: "7 Days", credit_14: "14 Days", credit_30: "30 Days", credit_60: "60 Days", credit_90: "90 Days",
   };
 
+  const handlePrint = () => {
+    const rows = filtered.map((c) => `
+      <tr>
+        <td>${c.name}</td>
+        <td>${c.code}</td>
+        <td>${c.phone || "-"}</td>
+        <td>${c.email || "-"}</td>
+        <td>${c.city || "-"}</td>
+        <td>${paymentTermsLabel[c.paymentTerms] || c.paymentTerms}</td>
+        <td style="text-align:right">€${parseFloat(c.currentBalance).toFixed(2)}</td>
+        <td>${c.active ? "Active" : "Inactive"}</td>
+      </tr>`).join("");
+
+    const html = `<!DOCTYPE html><html><head><title>Customer List</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; font-size: 11px; padding: 20px; color: #111; }
+        h1 { font-size: 16px; margin-bottom: 4px; }
+        p.sub { color: #666; font-size: 10px; margin-bottom: 14px; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #1a1a1a; color: #fff; text-align: left; padding: 6px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+        td { padding: 5px 8px; border-bottom: 1px solid #e5e5e5; vertical-align: top; }
+        tr:last-child td { border-bottom: none; }
+        tr:nth-child(even) td { background: #f9f9f9; }
+        @media print { @page { margin: 15mm; size: A4 landscape; } }
+      </style></head><body>
+      <h1>Customer List</h1>
+      <p class="sub">Printed ${new Date().toLocaleString()} &nbsp;·&nbsp; ${filtered.length} customer${filtered.length !== 1 ? "s" : ""}</p>
+      <table>
+        <thead><tr>
+          <th>Business Name</th><th>Code</th><th>Phone</th><th>Email</th>
+          <th>City</th><th>Terms</th><th style="text-align:right">Balance</th><th>Status</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <script>window.onload = function(){ window.print(); }</script>
+      </body></html>`;
+
+    const win = window.open("", "_blank");
+    if (win) { win.document.write(html); win.document.close(); }
+  };
+
   const columns: Column<Customer>[] = [
     {
       key: "name",
@@ -109,6 +151,7 @@ export default function Customers() {
         </div>
       ),
     },
+    { key: "phone", header: "Phone", cell: (row) => <span className="text-sm text-muted-foreground">{row.phone || "-"}</span> },
     { key: "email", header: "Email", cell: (row) => <span className="text-sm text-muted-foreground">{row.email || "-"}</span> },
     { key: "city", header: "City", cell: (row) => <span className="text-sm">{row.city || "-"}</span> },
     {
@@ -148,6 +191,9 @@ export default function Customers() {
         description="Manage wholesale customer accounts"
         action={
           <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="outline" onClick={handlePrint} data-testid="button-print-customers">
+              <Printer className="w-4 h-4 mr-1" /> Print
+            </Button>
             <Button variant="outline" onClick={() => setImportDialogOpen(true)} data-testid="button-import-customers">
               <Upload className="w-4 h-4 mr-1" /> Import
             </Button>
