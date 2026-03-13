@@ -1145,6 +1145,16 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/payments/:id", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      await storage.deletePayment(req.params.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   app.post("/api/payments", async (req, res) => {
     if (!req.user) return res.status(401).json({ message: "Not authenticated" });
     try {

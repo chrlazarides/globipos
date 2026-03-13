@@ -126,6 +126,13 @@ app.use((req, res, next) => {
   setTimeout(runScheduledBackup, 60000);
   setInterval(runScheduledBackup, 3600000);
 
+  // Auto-mark overdue invoices at startup and every hour
+  const runOverdueSweep = async () => {
+    try { await storage.autoMarkOverdue(); } catch (e) { console.error("[overdue] sweep error:", e); }
+  };
+  runOverdueSweep();
+  setInterval(runOverdueSweep, 3600000);
+
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes

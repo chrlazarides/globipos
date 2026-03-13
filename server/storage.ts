@@ -73,6 +73,8 @@ export interface IStorage {
   getAllPayments(): Promise<(Payment & { invoiceNumber?: string; customerName?: string; invoiceTotal?: string })[]>;
   createPayment(data: InsertPayment): Promise<Payment>;
   updatePayment(id: string, data: Partial<InsertPayment>): Promise<Payment>;
+  deletePayment(id: string): Promise<void>;
+  autoMarkOverdue(): Promise<void>;
 
   getDashboardStats(): Promise<any>;
   getDashboardCharts(): Promise<any>;
@@ -444,16 +446,56 @@ export class DatabaseStorage implements IStorage {
   private async recalcInvoiceStatus(invoiceId: string) {
     const inv = await db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
     if (!inv[0]) return;
+    // Only auto-manage status for actual invoices; never touch cancelled
+    if (inv[0].type !== "invoice") return;
+    if (inv[0].status === "cancelled") return;
+
     const allPmts = await this.getPayments(invoiceId);
     const totalPaid = allPmts.reduce((s, p) => s + parseFloat(String(p.amount)), 0);
     const invoiceTotal = parseFloat(String(inv[0].total));
-    if (totalPaid >= invoiceTotal) {
-      await db.update(invoices).set({ status: "paid" }).where(eq(invoices.id, invoiceId));
-    } else if (totalPaid > 0 && inv[0].status === "draft") {
-      await db.update(invoices).set({ status: "sent" }).where(eq(invoices.id, invoiceId));
-    } else if (totalPaid === 0 && inv[0].status === "paid") {
-      await db.update(invoices).set({ status: "sent" }).where(eq(invoices.id, invoiceId));
+    const currentStatus = inv[0].status;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dueDate = inv[0].dueDate ? new Date(inv[0].dueDate) : null;
+    const isPastDue = dueDate ? dueDate < today : false;
+
+    let newStatus: string = currentStatus;
+
+    if (totalPaid >= invoiceTotal && invoiceTotal > 0) {
+      newStatus = "paid";
+    } else if (totalPaid > 0) {
+      // Partially paid — always mark as partial (promotes out of draft too)
+      newStatus = "partial";
+    } else {
+      // No payments
+      if (currentStatus === "paid" || currentStatus === "partial") {
+        // All payments removed — fall back based on due date
+        newStatus = isPastDue ? "overdue" : "sent";
+      } else if (currentStatus === "sent" && isPastDue) {
+        newStatus = "overdue";
+      }
+      // draft stays draft; overdue stays overdue (no payments, still past due)
     }
+
+    if (newStatus !== currentStatus) {
+      await db.update(invoices).set({ status: newStatus }).where(eq(invoices.id, invoiceId));
+    }
+  }
+
+  // Sweep all non-draft, non-paid, non-cancelled invoices past their due date → mark overdue
+  async autoMarkOverdue() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split("T")[0];
+    await db.update(invoices).set({ status: "overdue" }).where(
+      and(
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} IN ('sent', 'partial')`,
+        sql`${invoices.dueDate} IS NOT NULL`,
+        sql`${invoices.dueDate} < ${todayStr}`,
+      )
+    );
   }
 
   async createPayment(data: InsertPayment) {
@@ -512,12 +554,42 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async deletePayment(id: string) {
+    const [pmt] = await db.select().from(payments).where(eq(payments.id, id)).limit(1);
+    if (!pmt) throw new Error("Payment not found");
+    // Also delete any child split-payments created by a balance payment
+    await db.delete(payments).where(sql`${payments.notes} LIKE ${'Applied from balance payment ' + id + '%'}`);
+    await db.delete(payments).where(eq(payments.id, id));
+    if (pmt.invoiceId) {
+      await this.recalcInvoiceStatus(pmt.invoiceId);
+    } else if (pmt.customerId) {
+      // Balance payment: recalc status for all invoices of this customer that may have been affected
+      const custInvs = await db.select({ id: invoices.id }).from(invoices)
+        .where(and(eq(invoices.customerId, pmt.customerId), eq(invoices.type, "invoice")));
+      for (const inv of custInvs) {
+        await this.recalcInvoiceStatus(inv.id);
+      }
+    }
+  }
+
   async getDashboardStats() {
     const [itemCount] = await db.select({ count: sql<number>`count(*)` }).from(items).where(eq(items.active, true));
     const [custCount] = await db.select({ count: sql<number>`count(*)` }).from(customers).where(eq(customers.active, true));
     const [invCount] = await db.select({ count: sql<number>`count(*)` }).from(invoices).where(eq(invoices.type, "invoice"));
-    const [overdueCount] = await db.select({ count: sql<number>`count(*)` }).from(invoices).where(and(eq(invoices.status, "overdue"), eq(invoices.type, "invoice")));
-    const [revenue] = await db.select({ total: sql<string>`coalesce(sum(${invoices.total}::numeric), 0)` }).from(invoices).where(and(eq(invoices.type, "invoice"), eq(invoices.status, "paid")));
+    // Dynamic overdue count: unpaid/partial invoices past their due date
+    const todayStr = new Date().toISOString().split("T")[0];
+    const [overdueCount] = await db.select({ count: sql<number>`count(*)` }).from(invoices).where(
+      and(
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} IN ('sent', 'partial', 'overdue')`,
+        sql`${invoices.dueDate} IS NOT NULL`,
+        sql`${invoices.dueDate} < ${todayStr}`,
+      )
+    );
+    // Revenue: total collected (sum of payments received)
+    const [revenueRow] = await db.select({ total: sql<string>`coalesce(sum(amount::numeric), 0)` }).from(payments)
+      .leftJoin(invoices, eq(payments.invoiceId, invoices.id))
+      .where(sql`${invoices.type} = 'invoice' OR ${payments.invoiceId} IS NULL`);
 
     const lowStockItems = await db.select().from(items)
       .where(and(eq(items.active, true), sql`${items.stockQuantity} <= ${items.reorderLevel}`))
@@ -554,7 +626,7 @@ export class DatabaseStorage implements IStorage {
       totalCustomers: custCount?.count || 0,
       totalInvoices: invCount?.count || 0,
       overdueInvoices: overdueCount?.count || 0,
-      totalRevenue: revenue?.total || "0",
+      totalRevenue: revenueRow?.total || "0",
       lowStockItems,
       recentInvoices: recentInvs.map(r => ({ ...r, customerName: r.customerName || "Unknown" })),
     };
@@ -835,7 +907,13 @@ export class DatabaseStorage implements IStorage {
 
       const custInvIds = new Set(allInvs.map(i => i.id));
       const paymentList = allPayments
-        .filter(p => p.customerId === cust.id || custInvIds.has(p.invoiceId || ""))
+        .filter(p => {
+          // Only include invoice-linked payments, OR customer-level payments that were NOT split into children
+          // (children have notes starting with "Applied from balance payment")
+          if (p.invoiceId && custInvIds.has(p.invoiceId)) return true;
+          if (!p.invoiceId && p.customerId === cust.id && !(p.notes || "").startsWith("Applied from balance payment")) return true;
+          return false;
+        })
         .sort((a, b) => String(a.paymentDate).localeCompare(String(b.paymentDate)))
         .map(p => {
           const inv = p.invoiceId ? invById.get(p.invoiceId) : null;
