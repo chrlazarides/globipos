@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2 } from "lucide-react";
+import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Customer, Invoice } from "@shared/schema";
@@ -19,6 +19,7 @@ import type { Customer, Invoice } from "@shared/schema";
 export default function Reports() {
   const { toast } = useToast();
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [expandedStatement, setExpandedStatement] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date();
@@ -286,6 +287,7 @@ export default function Reports() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-8" />
                     <TableHead>Customer</TableHead>
                     <TableHead className="text-right">Balance Due</TableHead>
                     <TableHead className="text-right text-green-700 dark:text-green-400">Current</TableHead>
@@ -299,57 +301,159 @@ export default function Reports() {
                 <TableBody>
                   {customerStatements.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No data available</TableCell>
+                      <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">No data available</TableCell>
                     </TableRow>
                   ) : (
                     customerStatements.map((st) => {
                       const ag = st.aging || { current: "0", days1_30: "0", days31_60: "0", days61_90: "0", days90plus: "0" };
                       const hasOverdue = parseFloat(ag.days1_30) > 0 || parseFloat(ag.days31_60) > 0 || parseFloat(ag.days61_90) > 0 || parseFloat(ag.days90plus) > 0;
+                      const isExpanded = expandedStatement === st.customerId;
+                      const stInvoices: any[] = st.invoices || [];
+                      const stPayments: any[] = st.payments || [];
+                      const methodLabels: Record<string, string> = {
+                        cash: "Cash", bank_transfer: "Bank Transfer", cheque: "Cheque", card: "Card", other: "Other",
+                      };
+                      const methodColors: Record<string, string> = {
+                        cash: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
+                        bank_transfer: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
+                        cheque: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
+                        card: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
+                        other: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+                      };
                       return (
-                        <TableRow key={st.customerId} className={hasOverdue ? "bg-red-50/30 dark:bg-red-950/10" : ""}>
-                          <TableCell className="font-medium text-sm">{st.customerName}</TableCell>
-                          <TableCell className={`text-right font-semibold text-sm ${parseFloat(st.balance) > 0 ? "text-red-600 dark:text-red-400" : ""}`} data-testid={`text-balance-${st.customerId}`}>
-                            €{parseFloat(st.balance).toFixed(2)}
-                          </TableCell>
-                          <TableCell className="text-right text-sm text-green-700 dark:text-green-400" data-testid={`text-aging-current-${st.customerId}`}>
-                            {parseFloat(ag.current) > 0 ? `€${parseFloat(ag.current).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                          </TableCell>
-                          <TableCell className="text-right text-sm text-yellow-600 dark:text-yellow-400" data-testid={`text-aging-1-30-${st.customerId}`}>
-                            {parseFloat(ag.days1_30) > 0 ? `€${parseFloat(ag.days1_30).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                          </TableCell>
-                          <TableCell className="text-right text-sm text-orange-600 dark:text-orange-400" data-testid={`text-aging-31-60-${st.customerId}`}>
-                            {parseFloat(ag.days31_60) > 0 ? `€${parseFloat(ag.days31_60).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                          </TableCell>
-                          <TableCell className="text-right text-sm text-red-600 dark:text-red-400" data-testid={`text-aging-61-90-${st.customerId}`}>
-                            {parseFloat(ag.days61_90) > 0 ? `€${parseFloat(ag.days61_90).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                          </TableCell>
-                          <TableCell className="text-right text-sm font-semibold text-red-700 dark:text-red-500" data-testid={`text-aging-90plus-${st.customerId}`}>
-                            {parseFloat(ag.days90plus) > 0 ? `€${parseFloat(ag.days90plus).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1">
-                              <Button size="icon" variant="ghost" onClick={() => previewStatement(st.customerId)} title="Preview" data-testid={`button-preview-statement-${st.customerId}`}>
-                                <Eye className="w-4 h-4" />
-                              </Button>
-                              <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} title="Print" data-testid={`button-print-statement-${st.customerId}`}>
-                                <Printer className="w-4 h-4" />
-                              </Button>
-                              <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} title="Download" data-testid={`button-download-statement-${st.customerId}`}>
-                                <Download className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                onClick={() => sendStatementEmail(st.customerId)}
-                                disabled={sendingId === st.customerId}
-                                title="Send by Email"
-                                data-testid={`button-email-statement-${st.customerId}`}
-                              >
-                                {sendingId === st.customerId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
+                        <Fragment key={st.customerId}>
+                          <TableRow
+                            className={`cursor-pointer select-none ${hasOverdue ? "bg-red-50/30 dark:bg-red-950/10" : ""} hover:bg-muted/40`}
+                            onClick={() => setExpandedStatement(isExpanded ? null : st.customerId)}
+                            data-testid={`row-statement-${st.customerId}`}
+                          >
+                            <TableCell className="pr-0">
+                              {isExpanded
+                                ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                                : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                            </TableCell>
+                            <TableCell className="font-medium text-sm">{st.customerName}</TableCell>
+                            <TableCell className={`text-right font-semibold text-sm ${parseFloat(st.balance) > 0 ? "text-red-600 dark:text-red-400" : ""}`} data-testid={`text-balance-${st.customerId}`}>
+                              €{parseFloat(st.balance).toFixed(2)}
+                            </TableCell>
+                            <TableCell className="text-right text-sm text-green-700 dark:text-green-400" data-testid={`text-aging-current-${st.customerId}`}>
+                              {parseFloat(ag.current) > 0 ? `€${parseFloat(ag.current).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                            <TableCell className="text-right text-sm text-yellow-600 dark:text-yellow-400" data-testid={`text-aging-1-30-${st.customerId}`}>
+                              {parseFloat(ag.days1_30) > 0 ? `€${parseFloat(ag.days1_30).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                            <TableCell className="text-right text-sm text-orange-600 dark:text-orange-400" data-testid={`text-aging-31-60-${st.customerId}`}>
+                              {parseFloat(ag.days31_60) > 0 ? `€${parseFloat(ag.days31_60).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                            <TableCell className="text-right text-sm text-red-600 dark:text-red-400" data-testid={`text-aging-61-90-${st.customerId}`}>
+                              {parseFloat(ag.days61_90) > 0 ? `€${parseFloat(ag.days61_90).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                            <TableCell className="text-right text-sm font-semibold text-red-700 dark:text-red-500" data-testid={`text-aging-90plus-${st.customerId}`}>
+                              {parseFloat(ag.days90plus) > 0 ? `€${parseFloat(ag.days90plus).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
+                            </TableCell>
+                            <TableCell onClick={e => e.stopPropagation()}>
+                              <div className="flex items-center gap-1">
+                                <Button size="icon" variant="ghost" onClick={() => previewStatement(st.customerId)} title="Preview" data-testid={`button-preview-statement-${st.customerId}`}>
+                                  <Eye className="w-4 h-4" />
+                                </Button>
+                                <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} title="Print" data-testid={`button-print-statement-${st.customerId}`}>
+                                  <Printer className="w-4 h-4" />
+                                </Button>
+                                <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} title="Download" data-testid={`button-download-statement-${st.customerId}`}>
+                                  <Download className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => sendStatementEmail(st.customerId)}
+                                  disabled={sendingId === st.customerId}
+                                  title="Send by Email"
+                                  data-testid={`button-email-statement-${st.customerId}`}
+                                >
+                                  {sendingId === st.customerId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+
+                          {isExpanded && (
+                            <TableRow key={`${st.customerId}-detail`} className="bg-muted/20 dark:bg-muted/10">
+                              <TableCell colSpan={9} className="p-0">
+                                <div className="mx-6 my-3 rounded-lg border border-border overflow-hidden text-xs">
+                                  <table className="w-full border-collapse">
+                                    <thead>
+                                      <tr className="bg-muted/60 dark:bg-muted/30 text-muted-foreground">
+                                        <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Document</th>
+                                        <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Date</th>
+                                        <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Due Date</th>
+                                        <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Details</th>
+                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Total</th>
+                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Paid</th>
+                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Balance</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {stInvoices.map((inv: any, i: number) => (
+                                        <tr key={`inv-${i}`} className="border-t border-border/50 hover:bg-muted/20">
+                                          <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
+                                          <td className="px-3 py-2 text-muted-foreground">{inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</td>
+                                          <td className="px-3 py-2 text-muted-foreground">{inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—"}</td>
+                                          <td className="px-3 py-2">
+                                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                                              {inv.type === "credit_note" ? "Credit Note" : inv.type === "invoice" ? "Invoice" : inv.type}
+                                            </Badge>
+                                            {" "}
+                                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{inv.status}</Badge>
+                                          </td>
+                                          <td className="px-3 py-2 text-right font-medium">€{parseFloat(inv.total || "0").toFixed(2)}</td>
+                                          <td className="px-3 py-2 text-right text-green-700 dark:text-green-400">
+                                            {parseFloat(inv.paid || "0") > 0 ? `€${parseFloat(inv.paid).toFixed(2)}` : "—"}
+                                          </td>
+                                          <td className={`px-3 py-2 text-right font-semibold ${parseFloat(inv.balance || "0") > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
+                                            €{parseFloat(inv.balance || "0").toFixed(2)}
+                                          </td>
+                                        </tr>
+                                      ))}
+
+                                      {stPayments.map((pmt: any, i: number) => {
+                                        const method = pmt.paymentMethod || "other";
+                                        const label = methodLabels[method] || method;
+                                        const colorClass = methodColors[method] || methodColors.other;
+                                        const details = [
+                                          pmt.reference ? `Ref: ${pmt.reference}` : null,
+                                          pmt.invoiceNumber ? `Invoice: ${pmt.invoiceNumber}` : null,
+                                          pmt.notes && !pmt.notes.startsWith("Applied from balance") ? pmt.notes : null,
+                                        ].filter(Boolean).join(" · ");
+                                        return (
+                                          <tr key={`pmt-${i}`} className="border-t border-border/50 bg-green-50/30 dark:bg-green-950/10 hover:bg-green-50/50">
+                                            <td className="px-3 py-2 font-medium text-green-700 dark:text-green-400">Payment</td>
+                                            <td className="px-3 py-2 text-muted-foreground">{pmt.date ? new Date(pmt.date).toLocaleDateString("en-GB") : "—"}</td>
+                                            <td className="px-3 py-2" />
+                                            <td className="px-3 py-2">
+                                              <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${colorClass}`}>{label}</span>
+                                              {details && <span className="ml-2 text-muted-foreground">{details}</span>}
+                                            </td>
+                                            <td className="px-3 py-2" />
+                                            <td className="px-3 py-2 text-right font-semibold text-green-700 dark:text-green-400">
+                                              −€{parseFloat(pmt.amount || "0").toFixed(2)}
+                                            </td>
+                                            <td className="px-3 py-2" />
+                                          </tr>
+                                        );
+                                      })}
+
+                                      {stInvoices.length === 0 && stPayments.length === 0 && (
+                                        <tr>
+                                          <td colSpan={7} className="px-3 py-4 text-center text-muted-foreground">No transactions</td>
+                                        </tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </Fragment>
                       );
                     })
                   )}
