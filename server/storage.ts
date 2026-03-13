@@ -70,7 +70,9 @@ export interface IStorage {
   getNextInvoiceNumber(type: string): Promise<string>;
 
   getPayments(invoiceId: string): Promise<Payment[]>;
+  getAllPayments(): Promise<(Payment & { invoiceNumber?: string; customerName?: string; invoiceTotal?: string })[]>;
   createPayment(data: InsertPayment): Promise<Payment>;
+  updatePayment(id: string, data: Partial<InsertPayment>): Promise<Payment>;
 
   getDashboardStats(): Promise<any>;
   getDashboardCharts(): Promise<any>;
@@ -376,9 +378,65 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(payments).where(eq(payments.invoiceId, invoiceId)).orderBy(desc(payments.paymentDate));
   }
 
+  async getAllPayments() {
+    const rows = await db
+      .select({
+        id: payments.id,
+        invoiceId: payments.invoiceId,
+        amount: payments.amount,
+        paymentDate: payments.paymentDate,
+        paymentMethod: payments.paymentMethod,
+        reference: payments.reference,
+        createdAt: payments.createdAt,
+        invoiceNumber: invoices.invoiceNumber,
+        invoiceTotal: invoices.total,
+        customerName: customers.name,
+      })
+      .from(payments)
+      .leftJoin(invoices, eq(payments.invoiceId, invoices.id))
+      .leftJoin(customers, eq(invoices.customerId, customers.id))
+      .orderBy(desc(payments.createdAt));
+    return rows.map(r => ({
+      ...r,
+      invoiceNumber: r.invoiceNumber || undefined,
+      invoiceTotal: r.invoiceTotal || undefined,
+      customerName: r.customerName || undefined,
+    }));
+  }
+
   async createPayment(data: InsertPayment) {
     const [payment] = await db.insert(payments).values(data).returning();
+    // Auto-mark invoice as paid if total payments >= invoice total
+    const inv = await db.select().from(invoices).where(eq(invoices.id, data.invoiceId)).limit(1);
+    if (inv[0]) {
+      const allPmts = await this.getPayments(data.invoiceId);
+      const totalPaid = allPmts.reduce((s, p) => s + parseFloat(String(p.amount)), 0);
+      const invoiceTotal = parseFloat(String(inv[0].total));
+      if (totalPaid >= invoiceTotal && inv[0].status !== "paid") {
+        await db.update(invoices).set({ status: "paid" }).where(eq(invoices.id, data.invoiceId));
+      } else if (totalPaid > 0 && inv[0].status === "draft") {
+        await db.update(invoices).set({ status: "sent" }).where(eq(invoices.id, data.invoiceId));
+      }
+    }
     return payment;
+  }
+
+  async updatePayment(id: string, data: Partial<InsertPayment>) {
+    const [updated] = await db.update(payments).set(data).where(eq(payments.id, id)).returning();
+    if (!updated) throw new Error("Payment not found");
+    // Re-evaluate invoice status after update
+    const inv = await db.select().from(invoices).where(eq(invoices.id, updated.invoiceId)).limit(1);
+    if (inv[0]) {
+      const allPmts = await this.getPayments(updated.invoiceId);
+      const totalPaid = allPmts.reduce((s, p) => s + parseFloat(String(p.amount)), 0);
+      const invoiceTotal = parseFloat(String(inv[0].total));
+      if (totalPaid >= invoiceTotal) {
+        await db.update(invoices).set({ status: "paid" }).where(eq(invoices.id, updated.invoiceId));
+      } else if (totalPaid > 0) {
+        await db.update(invoices).set({ status: "sent" }).where(eq(invoices.id, updated.invoiceId));
+      }
+    }
+    return updated;
   }
 
   async getDashboardStats() {

@@ -1118,6 +1118,33 @@ export async function registerRoutes(
   });
 
   // Payments
+  app.get("/api/payments", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const invoiceId = req.query.invoiceId as string | undefined;
+      if (invoiceId) {
+        const pmts = await storage.getPayments(invoiceId);
+        return res.json(pmts);
+      }
+      const pmts = await storage.getAllPayments();
+      res.json(pmts);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/payments/:id", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const { id } = req.params;
+      const data = insertPaymentSchema.partial().parse(req.body);
+      const updated = await storage.updatePayment(id, data);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   app.post("/api/payments", async (req, res) => {
     try {
       const data = insertPaymentSchema.parse(req.body);

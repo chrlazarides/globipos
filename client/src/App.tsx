@@ -21,6 +21,7 @@ import SettingsPage from "@/pages/settings";
 import Suppliers from "@/pages/suppliers";
 import PurchaseInvoices from "@/pages/purchase-invoices";
 import SupplierPaymentsPage from "@/pages/supplier-payments";
+import CustomerPaymentsPage from "@/pages/customer-payments";
 import ImportData from "@/pages/import-data";
 import EmailLogs from "@/pages/email-logs";
 import ChartOfAccounts from "@/pages/chart-of-accounts";
@@ -81,6 +82,7 @@ function AdminRouter() {
       <Route path="/suppliers" component={Suppliers} />
       <Route path="/purchase-invoices" component={PurchaseInvoices} />
       <Route path="/supplier-payments" component={SupplierPaymentsPage} />
+      <Route path="/customer-payments" component={CustomerPaymentsPage} />
       <Route path="/pricing" component={Pricing} />
       <Route path="/offers" component={Offers} />
       <Route path="/reports" component={Reports} />

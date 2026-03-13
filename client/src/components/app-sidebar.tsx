@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote } from "lucide-react";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import {
   Sidebar,
@@ -31,6 +31,7 @@ const salesNav = [
   { title: "Credit Notes", url: "/credit-notes", icon: FileText },
   { title: "Proforma", url: "/proforma", icon: FileText },
   { title: "Quotations", url: "/quotations", icon: FileText },
+  { title: "Customer Payments", url: "/customer-payments", icon: Banknote },
 ];
 
 const purchasingNav = [
