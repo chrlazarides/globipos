@@ -1706,7 +1706,8 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/supplier-payments/:id", requireAuth, async (req, res) => {
+  app.patch("/api/supplier-payments/:id", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
     try {
       const { id } = req.params;
       const data = insertSupplierPaymentSchema.partial().parse(req.body);
