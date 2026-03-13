@@ -23,6 +23,8 @@ import { z } from "zod";
 const customerImportFields = [
   { key: "name", label: "Business Name", required: true },
   { key: "code", label: "Customer Code", required: true },
+  { key: "contactFirstName", label: "Contact First Name" },
+  { key: "contactLastName", label: "Contact Last Name" },
   { key: "email", label: "Email" },
   { key: "phone", label: "Phone" },
   { key: "address", label: "Address" },
@@ -98,6 +100,7 @@ export default function Customers() {
       <tr>
         <td>${c.name}</td>
         <td>${c.code}</td>
+        <td>${[c.contactFirstName, c.contactLastName].filter(Boolean).join(" ") || "-"}</td>
         <td>${c.phone || "-"}</td>
         <td>${c.email || "-"}</td>
         <td>${c.city || "-"}</td>
@@ -123,7 +126,7 @@ export default function Customers() {
       <p class="sub">Printed ${new Date().toLocaleString()} &nbsp;·&nbsp; ${filtered.length} customer${filtered.length !== 1 ? "s" : ""}</p>
       <table>
         <thead><tr>
-          <th>Business Name</th><th>Code</th><th>Phone</th><th>Email</th>
+          <th>Business Name</th><th>Code</th><th>Contact</th><th>Phone</th><th>Email</th>
           <th>City</th><th>Terms</th><th style="text-align:right">Balance</th><th>Status</th>
         </tr></thead>
         <tbody>${rows}</tbody>
@@ -147,6 +150,9 @@ export default function Customers() {
           <div>
             <p className="font-medium text-sm">{row.name}</p>
             <p className="text-xs text-muted-foreground">Acct: {row.code}</p>
+            {(row.contactFirstName || row.contactLastName) && (
+              <p className="text-xs text-muted-foreground">{[row.contactFirstName, row.contactLastName].filter(Boolean).join(" ")}</p>
+            )}
           </div>
         </div>
       ),
@@ -247,6 +253,8 @@ export default function Customers() {
               defaultValues={{
                 name: editingCustomer.name,
                 code: editingCustomer.code,
+                contactFirstName: editingCustomer.contactFirstName || "",
+                contactLastName: editingCustomer.contactLastName || "",
                 email: editingCustomer.email || "",
                 phone: editingCustomer.phone || "",
                 address: editingCustomer.address || "",
@@ -277,7 +285,8 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: {
   const form = useForm({
     resolver: zodResolver(customerFormSchema),
     defaultValues: defaultValues || {
-      name: "", code: "", email: "", phone: "", address: "", city: "", taxId: "",
+      name: "", code: "", contactFirstName: "", contactLastName: "",
+      email: "", phone: "", address: "", city: "", taxId: "",
       paymentTerms: "cash", creditLimit: "0", currentBalance: "0", priceLevel: 1, notes: "", active: true,
     },
   });
@@ -299,6 +308,22 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: {
               <FormControl><Input {...field} placeholder={nextCodeData?.code || "Auto-generated"} data-testid="input-customer-code" disabled={isEditing} /></FormControl>
               <FormMessage />
               {!isEditing && <p className="text-xs text-muted-foreground">Leave blank to auto-generate</p>}
+            </FormItem>
+          )} />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <FormField control={form.control} name="contactFirstName" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Contact First Name</FormLabel>
+              <FormControl><Input {...field} value={field.value || ""} data-testid="input-customer-contact-firstname" /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )} />
+          <FormField control={form.control} name="contactLastName" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Contact Last Name</FormLabel>
+              <FormControl><Input {...field} value={field.value || ""} data-testid="input-customer-contact-lastname" /></FormControl>
+              <FormMessage />
             </FormItem>
           )} />
         </div>

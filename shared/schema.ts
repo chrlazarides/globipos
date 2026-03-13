@@ -74,6 +74,8 @@ export const customers = pgTable("customers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
   code: text("code").notNull().unique(),
+  contactFirstName: text("contact_first_name"),
+  contactLastName: text("contact_last_name"),
   email: text("email"),
   phone: text("phone"),
   address: text("address"),
