@@ -4,14 +4,28 @@ import { StatCard } from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Package, Users, FileText, Euro, AlertTriangle, TrendingUp } from "lucide-react";
+import { Package, Users, FileText, Euro, AlertTriangle, TrendingUp, BarChart3 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import type { Invoice, Customer, Item, SystemSetting } from "@shared/schema";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell,
+} from "recharts";
+import type { Invoice, Item, SystemSetting } from "@shared/schema";
+import { formatDate } from "@/lib/utils";
+
+const PIE_COLORS: Record<string, string> = {
+  paid: "#22c55e",
+  draft: "#a1a1aa",
+  sent: "#3b82f6",
+  overdue: "#ef4444",
+  cancelled: "#d4d4d8",
+};
 
 export default function Dashboard() {
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
   const companyName = settings.find(s => s.key === "company_name")?.value || "VINERIA DI MARE Trading";
+
   const { data: stats, isLoading } = useQuery<{
     totalItems: number;
     totalCustomers: number;
@@ -22,47 +36,174 @@ export default function Dashboard() {
     overdueInvoices: number;
   }>({ queryKey: ["/api/dashboard/stats"] });
 
+  const { data: charts, isLoading: chartsLoading } = useQuery<{
+    monthlySales: { month: string; revenue: number; profit: number; invoices: number }[];
+    topCustomers: { name: string; revenue: number }[];
+    invoiceStatus: { status: string; count: number; amount: number }[];
+  }>({ queryKey: ["/api/dashboard/charts"] });
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-6">
-        <PageHeader title="Dashboard" description="Overview of your wholesale operations" />
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-28" />
-          ))}
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)}
         </div>
+        <Skeleton className="h-64 w-full" />
       </div>
     );
   }
 
   const s = stats || { totalItems: 0, totalCustomers: 0, totalInvoices: 0, totalRevenue: "0.00", lowStockItems: [], recentInvoices: [], overdueInvoices: 0 };
+  const c = charts || { monthlySales: [], topCustomers: [], invoiceStatus: [] };
+
+  const totalRevNum = parseFloat(s.totalRevenue);
+  const totalProfit = c.monthlySales.reduce((sum, m) => sum + m.profit, 0);
+  const avgMargin = c.monthlySales.reduce((sum, m) => sum + m.revenue, 0) > 0
+    ? (totalProfit / c.monthlySales.reduce((sum, m) => sum + m.revenue, 0) * 100).toFixed(1)
+    : "0.0";
+
+  const fmtEur = (v: number) => `€${v.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`;
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-4">
-          <div className="w-16 h-16 overflow-hidden flex-shrink-0 flex items-center justify-center" data-testid="img-dashboard-logo">
+          <div className="w-14 h-14 overflow-hidden flex-shrink-0 flex items-center justify-center" data-testid="img-dashboard-logo">
             <img src="/logo.png" alt="Logo" className="w-[200%] h-[200%] object-contain" />
           </div>
           <div>
             <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">{companyName}</h1>
-            <p className="text-sm text-muted-foreground mt-1" data-testid="text-page-description">Overview of your wholesale operations</p>
+            <p className="text-sm text-muted-foreground mt-0.5" data-testid="text-page-description">Operations overview</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Link href="/invoices/new">
-            <Button data-testid="button-new-invoice">New Invoice</Button>
-          </Link>
-        </div>
+        <Link href="/invoices/new">
+          <Button data-testid="button-new-invoice">New Invoice</Button>
+        </Link>
       </div>
 
+      {/* Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="Total Items" value={String(s.totalItems)} icon={Package} description="Active products" />
         <StatCard title="Customers" value={String(s.totalCustomers)} icon={Users} description="Active accounts" />
         <StatCard title="Invoices" value={String(s.totalInvoices)} icon={FileText} description={`${s.overdueInvoices} overdue`} />
-        <StatCard title="Revenue" value={`€${parseFloat(s.totalRevenue).toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={Euro} />
+        <StatCard title="Revenue (Paid)" value={`€${totalRevNum.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={Euro} />
       </div>
 
+      {/* Main Chart — Sales & Profit */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-primary" />
+              Sales &amp; Profit — Last 6 Months
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">Gross profit margin (6-month avg): <span className="font-semibold">{avgMargin}%</span></p>
+          </div>
+          <div className="hidden sm:flex items-center gap-4 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-foreground inline-block" />Revenue</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-primary inline-block" />Profit</span>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-2">
+          {chartsLoading ? (
+            <Skeleton className="h-56 w-full" />
+          ) : c.monthlySales.length === 0 || c.monthlySales.every(m => m.revenue === 0) ? (
+            <div className="h-56 flex items-center justify-center text-sm text-muted-foreground">No sales data yet</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={230}>
+              <BarChart data={c.monthlySales} barCategoryGap="30%" margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+                <YAxis tickFormatter={v => `€${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={48} />
+                <Tooltip
+                  formatter={(value: number, name: string) => [fmtEur(value), name === "revenue" ? "Revenue" : "Gross Profit"]}
+                  contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                  cursor={{ fill: "hsl(var(--muted))" }}
+                />
+                <Bar dataKey="revenue" name="revenue" fill="hsl(var(--foreground))" radius={[4, 4, 0, 0]} opacity={0.85} />
+                <Bar dataKey="profit" name="profit" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Two charts side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Top Customers */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-primary" />
+              Top Customers by Revenue
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-2">
+            {chartsLoading ? (
+              <Skeleton className="h-48 w-full" />
+            ) : c.topCustomers.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={c.topCustomers} layout="vertical" margin={{ top: 0, right: 12, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
+                  <XAxis type="number" tickFormatter={v => `€${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={110} />
+                  <Tooltip formatter={(v: number) => [fmtEur(v), "Revenue"]} contentStyle={{ fontSize: 12, borderRadius: 8 }} cursor={{ fill: "hsl(var(--muted))" }} />
+                  <Bar dataKey="revenue" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Invoice Status Donut */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <FileText className="w-4 h-4 text-primary" />
+              Invoice Status Breakdown
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-2">
+            {chartsLoading ? (
+              <Skeleton className="h-48 w-full" />
+            ) : c.invoiceStatus.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-sm text-muted-foreground">No invoices yet</div>
+            ) : (
+              <div className="flex items-center gap-4">
+                <ResponsiveContainer width="55%" height={180}>
+                  <PieChart>
+                    <Pie data={c.invoiceStatus} dataKey="amount" nameKey="status" cx="50%" cy="50%" innerRadius={45} outerRadius={75} paddingAngle={2}>
+                      {c.invoiceStatus.map((entry) => (
+                        <Cell key={entry.status} fill={PIE_COLORS[entry.status] || "#a1a1aa"} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(v: number, name: string) => [fmtEur(v), name]} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="flex flex-col gap-2 flex-1">
+                  {c.invoiceStatus.map(entry => (
+                    <div key={entry.status} className="flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: PIE_COLORS[entry.status] || "#a1a1aa" }} />
+                        <span className="capitalize text-muted-foreground">{entry.status}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-semibold">{entry.count}</span>
+                        <span className="text-muted-foreground ml-1">({fmtEur(entry.amount)})</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Recent Invoices + Low Stock */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
@@ -81,10 +222,10 @@ export default function Dashboard() {
                     <div className="flex items-center justify-between gap-4 px-4 py-3 hover-elevate cursor-pointer" data-testid={`invoice-row-${inv.id}`}>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium truncate">{inv.invoiceNumber}</p>
-                        <p className="text-xs text-muted-foreground">{inv.customerName}</p>
+                        <p className="text-xs text-muted-foreground">{inv.customerName} · {formatDate(inv.date)}</p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-medium">€{parseFloat(inv.total).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</p>
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-medium">{fmtEur(parseFloat(inv.total))}</p>
                         <StatusBadge status={inv.status} />
                       </div>
                     </div>
@@ -116,9 +257,7 @@ export default function Dashboard() {
                         <p className="text-xs text-muted-foreground">{item.sku}</p>
                       </div>
                     </div>
-                    <Badge variant="secondary" className="shrink-0">
-                      {item.stockQuantity} left
-                    </Badge>
+                    <Badge variant="secondary" className="shrink-0">{item.stockQuantity} left</Badge>
                   </div>
                 ))}
               </div>

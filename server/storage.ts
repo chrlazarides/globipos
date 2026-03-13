@@ -73,6 +73,7 @@ export interface IStorage {
   createPayment(data: InsertPayment): Promise<Payment>;
 
   getDashboardStats(): Promise<any>;
+  getDashboardCharts(): Promise<any>;
   getSalesReport(from: string, to: string, customerId?: string): Promise<any>;
   getCustomerStatements(): Promise<any[]>;
 
@@ -425,6 +426,107 @@ export class DatabaseStorage implements IStorage {
       lowStockItems,
       recentInvoices: recentInvs.map(r => ({ ...r, customerName: r.customerName || "Unknown" })),
     };
+  }
+
+  async getDashboardCharts() {
+    // Last 6 full months + current month = 7 data points
+    const now = new Date();
+    const months: { label: string; from: string; to: string }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+      const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      const to = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      const label = d.toLocaleString("en-GB", { month: "short", year: "2-digit" });
+      months.push({ label, from, to });
+    }
+
+    // Fetch all sales invoices with their items + item cost prices in date range
+    const sixMonthsAgo = months[0].from;
+    const allInvs = await db
+      .select({ id: invoices.id, date: invoices.date, total: invoices.total, subtotal: invoices.subtotal })
+      .from(invoices)
+      .where(and(eq(invoices.type, "invoice"), gte(invoices.date, sixMonthsAgo)));
+
+    const allInvIds = allInvs.map(i => i.id);
+
+    // Get all invoice items with cost price from items table
+    let itemCostMap: Record<string, number> = {};
+    let invItemCosts: Record<string, number> = {};
+    if (allInvIds.length > 0) {
+      const invItemRows = await db
+        .select({
+          invoiceId: invoiceItems.invoiceId,
+          quantity: invoiceItems.quantity,
+          unitPrice: invoiceItems.unitPrice,
+          discount: invoiceItems.discount,
+          itemId: invoiceItems.itemId,
+        })
+        .from(invoiceItems)
+        .where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(allInvIds.map(id => `'${id}'`).join(","))}]::text[])`);
+
+      const allItemIds = [...new Set(invItemRows.map(r => r.itemId).filter(Boolean))] as string[];
+      if (allItemIds.length > 0) {
+        const itemRows = await db
+          .select({ id: items.id, costPrice: items.costPrice })
+          .from(items)
+          .where(sql`${items.id} = ANY(ARRAY[${sql.raw(allItemIds.map(id => `'${id}'`).join(","))}]::text[])`);
+        itemCostMap = Object.fromEntries(itemRows.map(r => [r.id, parseFloat(r.costPrice || "0")]));
+      }
+
+      for (const row of invItemRows) {
+        const qty = parseFloat(String(row.quantity || 0));
+        const cost = row.itemId ? (itemCostMap[row.itemId] || 0) : 0;
+        const lineCost = qty * cost;
+        invItemCosts[row.invoiceId] = (invItemCosts[row.invoiceId] || 0) + lineCost;
+      }
+    }
+
+    // Build monthly buckets
+    const monthlySales = months.map(m => {
+      const monthInvs = allInvs.filter(i => i.date >= m.from && i.date <= m.to);
+      const revenue = monthInvs.reduce((s, i) => s + parseFloat(i.total), 0);
+      const cost = monthInvs.reduce((s, i) => s + (invItemCosts[i.id] || 0), 0);
+      const profit = Math.max(0, revenue - cost);
+      return { month: m.label, revenue: Math.round(revenue * 100) / 100, profit: Math.round(profit * 100) / 100, invoices: monthInvs.length };
+    });
+
+    // Top 5 customers by revenue (all time)
+    const custRevRows = await db
+      .select({ customerId: invoices.customerId, customerName: customers.name, total: invoices.total })
+      .from(invoices)
+      .leftJoin(customers, eq(invoices.customerId, customers.id))
+      .where(eq(invoices.type, "invoice"));
+
+    const custTotals: Record<string, { name: string; revenue: number }> = {};
+    for (const r of custRevRows) {
+      if (!r.customerId) continue;
+      if (!custTotals[r.customerId]) custTotals[r.customerId] = { name: r.customerName || "Unknown", revenue: 0 };
+      custTotals[r.customerId].revenue += parseFloat(r.total);
+    }
+    const topCustomers = Object.values(custTotals)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5)
+      .map(c => ({ name: c.name.length > 18 ? c.name.slice(0, 18) + "…" : c.name, revenue: Math.round(c.revenue * 100) / 100 }));
+
+    // Invoice status breakdown
+    const statusRows = await db
+      .select({ status: invoices.status, total: invoices.total })
+      .from(invoices)
+      .where(eq(invoices.type, "invoice"));
+    const statusMap: Record<string, { count: number; amount: number }> = {};
+    for (const r of statusRows) {
+      if (!statusMap[r.status]) statusMap[r.status] = { count: 0, amount: 0 };
+      statusMap[r.status].count++;
+      statusMap[r.status].amount += parseFloat(r.total);
+    }
+    const invoiceStatus = Object.entries(statusMap).map(([status, v]) => ({
+      status,
+      count: v.count,
+      amount: Math.round(v.amount * 100) / 100,
+    }));
+
+    return { monthlySales, topCustomers, invoiceStatus };
   }
 
   async getSalesReport(from: string, to: string, customerId?: string) {

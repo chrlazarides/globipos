@@ -376,6 +376,15 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/dashboard/charts", async (_req, res) => {
+    try {
+      const charts = await storage.getDashboardCharts();
+      res.json(charts);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   // Categories
   app.get("/api/categories", async (_req, res) => {
     const cats = await storage.getCategories();
