@@ -46,6 +46,7 @@ interface BalanceSheetData {
   assets: ReportAccount[];
   liabilities: ReportAccount[];
   equity: ReportAccount[];
+  netIncome: string;
   totalAssets: string;
   totalLiabilities: string;
   totalEquity: string;
@@ -515,22 +516,34 @@ export default function AccountingReports() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {balanceSheet.equity.length === 0 ? (
+                      {balanceSheet.equity.length === 0 && parseFloat(balanceSheet.netIncome) === 0 ? (
                         <TableRow>
                           <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
                             No equity accounts
                           </TableCell>
                         </TableRow>
                       ) : (
-                        balanceSheet.equity.map((acc) => (
-                          <TableRow key={acc.id} data-testid={`row-bs-equity-${acc.code}`}>
-                            <TableCell className="font-mono text-sm">{acc.code}</TableCell>
-                            <TableCell className="text-sm">{acc.name}</TableCell>
-                            <TableCell className="text-right text-sm" data-testid={`text-bs-equity-balance-${acc.code}`}>
-                              {formatEUR(acc.balance)}
+                        <>
+                          {balanceSheet.equity.map((acc) => (
+                            <TableRow key={acc.id} data-testid={`row-bs-equity-${acc.code}`}>
+                              <TableCell className="font-mono text-sm">{acc.code}</TableCell>
+                              <TableCell className="text-sm">{acc.name}</TableCell>
+                              <TableCell className="text-right text-sm" data-testid={`text-bs-equity-balance-${acc.code}`}>
+                                {formatEUR(acc.balance)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow data-testid="row-bs-net-income">
+                            <TableCell className="font-mono text-sm text-muted-foreground">—</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">Current Year Net Income</TableCell>
+                            <TableCell
+                              className={`text-right text-sm font-medium ${parseFloat(balanceSheet.netIncome) >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}
+                              data-testid="text-bs-net-income"
+                            >
+                              {formatEUR(balanceSheet.netIncome)}
                             </TableCell>
                           </TableRow>
-                        ))
+                        </>
                       )}
                     </TableBody>
                     <TableFooter>

@@ -1258,31 +1258,37 @@ export class DatabaseStorage implements IStorage {
 
   async getTrialBalance() {
     const allAccounts = await db
-      .select({
-        id: accounts.id,
-        code: accounts.code,
-        name: accounts.name,
-        type: accounts.type,
-        balance: accounts.balance,
-      })
+      .select({ id: accounts.id, code: accounts.code, name: accounts.name, type: accounts.type })
       .from(accounts)
       .where(eq(accounts.active, true))
       .orderBy(accounts.code);
 
+    const lineTotals = await db.select({
+      accountId: journalEntryLines.accountId,
+      totalDebit: sql<string>`COALESCE(SUM(${journalEntryLines.debit}), '0')`,
+      totalCredit: sql<string>`COALESCE(SUM(${journalEntryLines.credit}), '0')`,
+    })
+    .from(journalEntryLines)
+    .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+    .where(eq(journalEntries.status, "posted"))
+    .groupBy(journalEntryLines.accountId);
+
+    const totalsMap = new Map(lineTotals.map(r => [r.accountId, { d: parseFloat(r.totalDebit), c: parseFloat(r.totalCredit) }]));
+
     let totalDebits = 0;
     let totalCredits = 0;
     const accts = allAccounts.map(a => {
-      const bal = parseFloat(a.balance);
+      const t = totalsMap.get(a.id) || { d: 0, c: 0 };
       let debit = "0.00";
       let credit = "0.00";
-      if (a.type === "asset" || a.type === "expense") {
-        if (bal >= 0) { debit = bal.toFixed(2); totalDebits += bal; }
-        else { credit = Math.abs(bal).toFixed(2); totalCredits += Math.abs(bal); }
-      } else {
-        if (bal >= 0) { credit = bal.toFixed(2); totalCredits += bal; }
-        else { debit = Math.abs(bal).toFixed(2); totalDebits += Math.abs(bal); }
+      if (t.d > t.c) {
+        debit = (t.d - t.c).toFixed(2);
+        totalDebits += t.d - t.c;
+      } else if (t.c > t.d) {
+        credit = (t.c - t.d).toFixed(2);
+        totalCredits += t.c - t.d;
       }
-      return { ...a, debit, credit };
+      return { ...a, balance: (t.d - t.c).toFixed(2), debit, credit };
     }).filter(a => a.debit !== "0.00" || a.credit !== "0.00");
 
     return { accounts: accts, totalDebits: totalDebits.toFixed(2), totalCredits: totalCredits.toFixed(2) };
@@ -1340,22 +1346,60 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getBalanceSheet(asOf: string) {
-    const allAccounts = await db.select().from(accounts)
+    const allAccounts = await db
+      .select({ id: accounts.id, code: accounts.code, name: accounts.name, type: accounts.type })
+      .from(accounts)
       .where(eq(accounts.active, true))
       .orderBy(accounts.code);
 
-    const assetAccounts = allAccounts.filter(a => a.type === "asset");
-    const liabilityAccounts = allAccounts.filter(a => a.type === "liability");
-    const equityAccounts = allAccounts.filter(a => a.type === "equity");
+    // Compute balances from journal entry lines up to asOf date
+    const lineTotals = await db.select({
+      accountId: journalEntryLines.accountId,
+      totalDebit: sql<string>`COALESCE(SUM(${journalEntryLines.debit}), '0')`,
+      totalCredit: sql<string>`COALESCE(SUM(${journalEntryLines.credit}), '0')`,
+    })
+    .from(journalEntryLines)
+    .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+    .where(and(eq(journalEntries.status, "posted"), lte(journalEntries.date, asOf)))
+    .groupBy(journalEntryLines.accountId);
+
+    const totalsMap = new Map(lineTotals.map(r => [r.accountId, { d: parseFloat(r.totalDebit), c: parseFloat(r.totalCredit) }]));
+
+    const getBalance = (accountId: string, type: string): number => {
+      const t = totalsMap.get(accountId) || { d: 0, c: 0 };
+      if (type === "asset" || type === "expense") return t.d - t.c;
+      return t.c - t.d; // liability, equity, revenue: credit-normal
+    };
+
+    const assetAccounts = allAccounts.filter(a => a.type === "asset")
+      .map(a => ({ ...a, balance: getBalance(a.id, "asset").toFixed(2) }))
+      .filter(a => parseFloat(a.balance) !== 0);
+
+    const liabilityAccounts = allAccounts.filter(a => a.type === "liability")
+      .map(a => ({ ...a, balance: getBalance(a.id, "liability").toFixed(2) }))
+      .filter(a => parseFloat(a.balance) !== 0);
+
+    const equityAccounts = allAccounts.filter(a => a.type === "equity")
+      .map(a => ({ ...a, balance: getBalance(a.id, "equity").toFixed(2) }))
+      .filter(a => parseFloat(a.balance) !== 0);
+
+    // Net income (revenue - expenses) must be included in equity to balance the sheet
+    const revenueTotal = allAccounts.filter(a => a.type === "revenue")
+      .reduce((s, a) => s + getBalance(a.id, "revenue"), 0);
+    const expenseTotal = allAccounts.filter(a => a.type === "expense")
+      .reduce((s, a) => s + getBalance(a.id, "expense"), 0);
+    const netIncome = revenueTotal - expenseTotal;
 
     const totalAssets = assetAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
     const totalLiabilities = liabilityAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
-    const totalEquity = equityAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
+    const totalEquityAccounts = equityAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
+    const totalEquity = totalEquityAccounts + netIncome;
 
     return {
-      assets: assetAccounts.filter(a => parseFloat(a.balance) !== 0),
-      liabilities: liabilityAccounts.filter(a => parseFloat(a.balance) !== 0),
-      equity: equityAccounts.filter(a => parseFloat(a.balance) !== 0),
+      assets: assetAccounts,
+      liabilities: liabilityAccounts,
+      equity: equityAccounts,
+      netIncome: netIncome.toFixed(2),
       totalAssets: totalAssets.toFixed(2),
       totalLiabilities: totalLiabilities.toFixed(2),
       totalEquity: totalEquity.toFixed(2),
