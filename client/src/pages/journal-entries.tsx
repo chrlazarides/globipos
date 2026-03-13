@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Trash2, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { JournalEntry, JournalEntryLine, Account } from "@shared/schema";
@@ -183,6 +183,20 @@ export default function JournalEntries() {
     },
   });
 
+  const repostMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/accounting/repost-journals", {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
+      toast({ title: "Journals reposted", description: data.message });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Repost failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   function resetForm() {
     setFormDate(new Date().toISOString().split("T")[0]);
     setFormDescription("");
@@ -247,15 +261,30 @@ export default function JournalEntries() {
         title="Journal Entries"
         description="View and manage accounting journal entries"
         action={
-          <Button
-            data-testid="button-new-journal-entry"
-            onClick={() => {
-              resetForm();
-              setDialogOpen(true);
-            }}
-          >
-            <Plus className="w-4 h-4 mr-1" /> New Journal Entry
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              data-testid="button-repost-journals"
+              variant="outline"
+              onClick={() => {
+                if (confirm("This will delete and regenerate all auto-generated journal entries (purchases, sales, payments, expenses) from the current transaction data. Manual entries are preserved. Continue?")) {
+                  repostMutation.mutate();
+                }
+              }}
+              disabled={repostMutation.isPending}
+            >
+              {repostMutation.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}
+              Repost All
+            </Button>
+            <Button
+              data-testid="button-new-journal-entry"
+              onClick={() => {
+                resetForm();
+                setDialogOpen(true);
+              }}
+            >
+              <Plus className="w-4 h-4 mr-1" /> New Journal Entry
+            </Button>
+          </div>
         }
       />
 

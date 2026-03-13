@@ -2428,6 +2428,176 @@ export async function registerRoutes(
     }
   });
 
+  // Repost all auto-generated journal entries from source transactions
+  app.post("/api/accounting/repost-journals", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      // 1. Delete all auto-generated journal entries and their lines
+      await db.execute(sql`
+        DELETE FROM journal_entry_lines
+        WHERE journal_entry_id IN (
+          SELECT id FROM journal_entries
+          WHERE source_type IN ('invoice','credit_note','purchase','payment','supplier_payment','expense')
+        )
+      `);
+      await db.execute(sql`
+        DELETE FROM journal_entries
+        WHERE source_type IN ('invoice','credit_note','purchase','payment','supplier_payment','expense')
+      `);
+
+      let created = 0;
+
+      // 2. Repost purchase invoices
+      const allPIs = await storage.getPurchaseInvoices();
+      for (const pi of allPIs) {
+        const piTotal = parseFloat(pi.total);
+        const piVat = parseFloat(pi.vatAmount);
+        const piNet = piTotal - piVat;
+        if (piTotal <= 0) continue;
+        const r = await autoCreateJournalEntry({
+          sourceType: "purchase", sourceId: pi.id,
+          date: typeof pi.date === "string" ? pi.date : new Date(pi.date).toISOString().split("T")[0],
+          description: `Purchase Invoice ${pi.invoiceNumber}`, reference: pi.invoiceNumber,
+          lines: [
+            { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
+            { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
+            { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
+          ],
+        });
+        if (r) created++;
+      }
+
+      // 3. Repost sales invoices and credit notes
+      const allInvs = await storage.getInvoices();
+      for (const inv of allInvs) {
+        if (inv.status === "draft") continue;
+        const invTotal = parseFloat(String(inv.total));
+        const invVat = parseFloat(String(inv.taxAmount));
+        const invNet = invTotal - invVat;
+        if (invTotal <= 0) continue;
+        const invDate = typeof inv.date === "string" ? inv.date : new Date(inv.date).toISOString().split("T")[0];
+
+        // Calculate COGS from current item cost prices
+        let totalCost = 0;
+        const lineItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
+        for (const li of lineItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const costPerUnit = parseFloat(item.costPrice);
+              const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              totalCost += costPerUnit * qty;
+            }
+          }
+        }
+
+        if (inv.type === "invoice") {
+          const jlines: { accountCode: string; debit: number; credit: number; description: string }[] = [
+            { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
+            { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+            { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
+          ];
+          if (totalCost > 0) {
+            jlines.push({ accountCode: "5000", debit: totalCost, credit: 0, description: "Cost of Goods Sold" });
+            jlines.push({ accountCode: "1200", debit: 0, credit: totalCost, description: "Inventory" });
+          }
+          const r = await autoCreateJournalEntry({
+            sourceType: "invoice", sourceId: inv.id, date: invDate,
+            description: `Sales Invoice ${inv.invoiceNumber}`, reference: inv.invoiceNumber, lines: jlines,
+          });
+          if (r) created++;
+        } else if (inv.type === "credit_note") {
+          const jlines: { accountCode: string; debit: number; credit: number; description: string }[] = [
+            { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+            { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
+            { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
+          ];
+          if (totalCost > 0) {
+            jlines.push({ accountCode: "1200", debit: totalCost, credit: 0, description: "Inventory restored" });
+            jlines.push({ accountCode: "5000", debit: 0, credit: totalCost, description: "COGS reversal" });
+          }
+          const r = await autoCreateJournalEntry({
+            sourceType: "credit_note", sourceId: inv.id, date: invDate,
+            description: `Credit Note ${inv.invoiceNumber}`, reference: inv.invoiceNumber, lines: jlines,
+          });
+          if (r) created++;
+        }
+      }
+
+      // 4. Repost customer payments
+      const allPmts = await storage.getAllPayments();
+      for (const pmt of allPmts) {
+        const pmtAmount = parseFloat(String(pmt.amount));
+        if (pmtAmount <= 0) continue;
+        const paymentAcctCode = (pmt as any).paymentMethod === "cash" ? "1000" : "1010";
+        const customerName = (pmt as any).customerName ? ` — ${(pmt as any).customerName}` : "";
+        const pmtDate = typeof pmt.paymentDate === "string" ? pmt.paymentDate : new Date(pmt.paymentDate).toISOString().split("T")[0];
+        const r = await autoCreateJournalEntry({
+          sourceType: "payment", sourceId: pmt.id, date: pmtDate,
+          description: `Customer Payment received${customerName}`,
+          reference: (pmt as any).reference || pmt.id,
+          lines: [
+            { accountCode: paymentAcctCode, debit: pmtAmount, credit: 0, description: (pmt as any).paymentMethod === "cash" ? "Cash" : "Bank" },
+            { accountCode: "1100", debit: 0, credit: pmtAmount, description: "Accounts Receivable" },
+          ],
+        });
+        if (r) created++;
+      }
+
+      // 5. Repost supplier payments
+      const allSPs = await storage.getSupplierPayments();
+      for (const sp of allSPs) {
+        const spAmount = parseFloat(String(sp.amount));
+        if (spAmount <= 0) continue;
+        const paymentAcctCode = (sp as any).paymentMethod === "cash" ? "1000" : "1010";
+        const spDate = typeof sp.paymentDate === "string" ? sp.paymentDate : new Date(sp.paymentDate).toISOString().split("T")[0];
+        const supplier = await storage.getSupplier(sp.supplierId);
+        const r = await autoCreateJournalEntry({
+          sourceType: "supplier_payment", sourceId: sp.id, date: spDate,
+          description: `Supplier Payment — ${supplier?.name || sp.supplierId}`,
+          reference: (sp as any).reference || sp.id,
+          lines: [
+            { accountCode: "2000", debit: spAmount, credit: 0, description: `Accounts Payable — ${supplier?.name || ""}` },
+            { accountCode: paymentAcctCode, debit: 0, credit: spAmount, description: (sp as any).paymentMethod === "cash" ? "Cash" : "Bank" },
+          ],
+        });
+        if (r) created++;
+      }
+
+      // 6. Repost expenses
+      const allExps = await storage.getExpenses();
+      const allAccounts = await storage.getAccounts();
+      const vatAccount = allAccounts.find(a => a.code === "2100");
+      for (const exp of allExps) {
+        const expAmount = parseFloat(String(exp.amount));
+        const vatAmt = parseFloat(String((exp as any).vatAmount || "0"));
+        const totalWithVat = expAmount + vatAmt;
+        const expDate = typeof exp.date === "string" ? exp.date : new Date(exp.date).toISOString().split("T")[0];
+        const lines: any[] = [
+          { accountId: (exp as any).expenseAccountId, debit: exp.amount, credit: "0", description: exp.description },
+        ];
+        if (vatAmt > 0 && vatAccount) {
+          lines.push({ accountId: vatAccount.id, debit: String(vatAmt), credit: "0", description: "VAT on expense" });
+        }
+        lines.push({ accountId: (exp as any).paymentAccountId, debit: "0", credit: totalWithVat.toFixed(2), description: exp.description });
+        const entryNumber = await storage.getNextJournalEntryNumber();
+        const je = await storage.createJournalEntry(
+          { entryNumber, date: expDate, description: `Expense: ${exp.description}`, sourceType: "expense", sourceId: exp.id, status: "posted", totalAmount: totalWithVat.toFixed(2) },
+          lines
+        );
+        if (je) {
+          created++;
+          await db.update(expenses).set({ journalEntryId: je.id }).where(sql`id = ${exp.id}`);
+        }
+      }
+
+      res.json({ success: true, created, message: `Successfully reposted ${created} journal entries` });
+    } catch (e: any) {
+      console.error("Repost journals error:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.get("/api/expenses", async (_req, res) => {
     const exp = await storage.getExpenses();
     res.json(exp);
