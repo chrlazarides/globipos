@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Printer, Scale, TrendingUp, BarChart3, Receipt } from "lucide-react";
+import { Printer, Scale, TrendingUp, BarChart3, Receipt, ChevronDown, ChevronRight } from "lucide-react";
 
 interface TrialBalanceAccount {
   code: string;
@@ -52,11 +52,24 @@ interface BalanceSheetData {
   totalEquity: string;
 }
 
+interface VatInvoiceItem {
+  invoiceNumber?: string;
+  customerName?: string;
+  supplierName?: string;
+  supplierRef?: string;
+  description?: string;
+  date: string;
+  netAmount: string;
+  vatAmount: string;
+  grossAmount: string;
+}
+
 interface VatCategory {
   count: number;
   netAmount: string;
   vatAmount: string;
   grossAmount?: string;
+  items: VatInvoiceItem[];
 }
 
 interface VatReturnData {
@@ -133,6 +146,8 @@ export default function AccountingReports() {
   const [plTo, setPlTo] = useState(getToday);
   const [bsAsOf, setBsAsOf] = useState(getToday);
   const [vatQuarter, setVatQuarter] = useState(getCurrentQuarter);
+  const [showSalesDetail, setShowSalesDetail] = useState(false);
+  const [showPurchaseDetail, setShowPurchaseDetail] = useState(false);
 
   const { data: trialBalance, isLoading: tbLoading } = useQuery<TrialBalanceData>({
     queryKey: ["/api/reports/trial-balance"],
@@ -626,7 +641,13 @@ export default function AccountingReports() {
             <>
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-lg">Output VAT (Sales)</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg">Output VAT (Sales)</CardTitle>
+                    <Button variant="ghost" size="sm" onClick={() => setShowSalesDetail(v => !v)} data-testid="button-toggle-sales-detail">
+                      {showSalesDetail ? <ChevronDown className="w-4 h-4 mr-1" /> : <ChevronRight className="w-4 h-4 mr-1" />}
+                      {showSalesDetail ? "Hide" : "Show"} Invoice Analysis
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="p-0">
                   <Table>
@@ -662,12 +683,58 @@ export default function AccountingReports() {
                       </TableRow>
                     </TableFooter>
                   </Table>
+
+                  {showSalesDetail && (
+                    <div className="border-t">
+                      <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide bg-muted/30">Sales Invoice Analysis</div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="text-xs">
+                            <TableHead className="text-xs">Invoice #</TableHead>
+                            <TableHead className="text-xs">Customer</TableHead>
+                            <TableHead className="text-xs">Date</TableHead>
+                            <TableHead className="text-right text-xs">Net</TableHead>
+                            <TableHead className="text-right text-xs">VAT</TableHead>
+                            <TableHead className="text-right text-xs">Gross</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {vatReturn.sales.items.map((item, idx) => (
+                            <TableRow key={idx} className="text-xs" data-testid={`row-vat-sale-${idx}`}>
+                              <TableCell className="text-xs font-mono">{item.invoiceNumber}</TableCell>
+                              <TableCell className="text-xs">{item.customerName}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{item.date}</TableCell>
+                              <TableCell className="text-right text-xs">{formatEUR(item.netAmount)}</TableCell>
+                              <TableCell className="text-right text-xs">{formatEUR(item.vatAmount)}</TableCell>
+                              <TableCell className="text-right text-xs font-medium">{formatEUR(item.grossAmount)}</TableCell>
+                            </TableRow>
+                          ))}
+                          {vatReturn.creditNotes.items.map((item, idx) => (
+                            <TableRow key={`cn-${idx}`} className="text-xs text-red-600 dark:text-red-400" data-testid={`row-vat-cn-${idx}`}>
+                              <TableCell className="text-xs font-mono">{item.invoiceNumber}</TableCell>
+                              <TableCell className="text-xs">{item.customerName}</TableCell>
+                              <TableCell className="text-xs text-red-400">{item.date}</TableCell>
+                              <TableCell className="text-right text-xs">({formatEUR(item.netAmount)})</TableCell>
+                              <TableCell className="text-right text-xs">({formatEUR(item.vatAmount)})</TableCell>
+                              <TableCell className="text-right text-xs font-medium">({formatEUR(item.grossAmount)})</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-lg">Input VAT (Purchases)</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg">Input VAT (Purchases)</CardTitle>
+                    <Button variant="ghost" size="sm" onClick={() => setShowPurchaseDetail(v => !v)} data-testid="button-toggle-purchase-detail">
+                      {showPurchaseDetail ? <ChevronDown className="w-4 h-4 mr-1" /> : <ChevronRight className="w-4 h-4 mr-1" />}
+                      {showPurchaseDetail ? "Hide" : "Show"} Invoice Analysis
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="p-0">
                   <Table>
@@ -701,6 +768,69 @@ export default function AccountingReports() {
                       </TableRow>
                     </TableFooter>
                   </Table>
+
+                  {showPurchaseDetail && (
+                    <div className="border-t">
+                      {vatReturn.purchases.items.length > 0 && (
+                        <>
+                          <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide bg-muted/30">Purchase Invoice Analysis</div>
+                          <Table>
+                            <TableHeader>
+                              <TableRow className="text-xs">
+                                <TableHead className="text-xs">Invoice #</TableHead>
+                                <TableHead className="text-xs">Supplier Ref</TableHead>
+                                <TableHead className="text-xs">Supplier</TableHead>
+                                <TableHead className="text-xs">Date</TableHead>
+                                <TableHead className="text-right text-xs">Net</TableHead>
+                                <TableHead className="text-right text-xs">VAT</TableHead>
+                                <TableHead className="text-right text-xs">Gross</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {vatReturn.purchases.items.map((item, idx) => (
+                                <TableRow key={idx} className="text-xs" data-testid={`row-vat-purchase-${idx}`}>
+                                  <TableCell className="text-xs font-mono">{item.invoiceNumber}</TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{item.supplierRef}</TableCell>
+                                  <TableCell className="text-xs">{item.supplierName}</TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{item.date}</TableCell>
+                                  <TableCell className="text-right text-xs">{formatEUR(item.netAmount)}</TableCell>
+                                  <TableCell className="text-right text-xs">{formatEUR(item.vatAmount)}</TableCell>
+                                  <TableCell className="text-right text-xs font-medium">{formatEUR(item.grossAmount)}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </>
+                      )}
+                      {vatReturn.expenses.items.length > 0 && (
+                        <>
+                          <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide bg-muted/30 border-t">Business Expense Analysis</div>
+                          <Table>
+                            <TableHeader>
+                              <TableRow className="text-xs">
+                                <TableHead className="text-xs">Description</TableHead>
+                                <TableHead className="text-xs">Date</TableHead>
+                                <TableHead className="text-right text-xs">Net</TableHead>
+                                <TableHead className="text-right text-xs">VAT</TableHead>
+                                <TableHead className="text-right text-xs">Gross</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {vatReturn.expenses.items.map((item, idx) => (
+                                <TableRow key={idx} className="text-xs" data-testid={`row-vat-expense-${idx}`}>
+                                  <TableCell className="text-xs">{item.description}</TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{item.date}</TableCell>
+                                  <TableCell className="text-right text-xs">{formatEUR(item.netAmount)}</TableCell>
+                                  <TableCell className="text-right text-xs">{formatEUR(item.vatAmount)}</TableCell>
+                                  <TableCell className="text-right text-xs font-medium">{formatEUR(item.grossAmount)}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 

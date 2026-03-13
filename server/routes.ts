@@ -2650,38 +2650,26 @@ export async function registerRoutes(
 
   app.get("/api/reports/vat-return/:from/:to", async (req, res) => {
     const { from, to } = req.params;
-    const salesInvs = await db.select().from(invoices)
-      .where(and(
-        gte(invoices.date, from),
-        lte(invoices.date, to),
-        eq(invoices.type, "invoice"),
-        sql`${invoices.status} != 'draft'`
-      ));
-    const creditNotes = await db.select().from(invoices)
-      .where(and(
-        gte(invoices.date, from),
-        lte(invoices.date, to),
-        eq(invoices.type, "credit_note"),
-        sql`${invoices.status} != 'draft'`
-      ));
-    const purchaseInvs = await db.select().from(purchaseInvoices)
-      .where(and(
-        gte(purchaseInvoices.date, from),
-        lte(purchaseInvoices.date, to),
-        sql`${purchaseInvoices.status} != 'draft'`
-      ));
-    const expensesList = await db.select().from(expenses)
-      .where(and(
-        gte(expenses.date, from),
-        lte(expenses.date, to),
-      ));
+    const [salesInvs, creditNotesList, purchaseInvs, expensesList, allCustomers, allSuppliers] = await Promise.all([
+      db.select().from(invoices).where(and(gte(invoices.date, from), lte(invoices.date, to), eq(invoices.type, "invoice"), sql`${invoices.status} != 'draft'`)),
+      db.select().from(invoices).where(and(gte(invoices.date, from), lte(invoices.date, to), eq(invoices.type, "credit_note"), sql`${invoices.status} != 'draft'`)),
+      db.select().from(purchaseInvoices).where(and(gte(purchaseInvoices.date, from), lte(purchaseInvoices.date, to), sql`${purchaseInvoices.status} != 'draft'`)),
+      db.select().from(expenses).where(and(gte(expenses.date, from), lte(expenses.date, to))),
+      db.select({ id: customers.id, name: customers.name }).from(customers),
+      db.select({ id: suppliers.id, name: suppliers.name }).from(suppliers),
+    ]);
+
+    const custMap: Record<string, string> = {};
+    allCustomers.forEach(c => { custMap[c.id] = c.name; });
+    const suppMap: Record<string, string> = {};
+    allSuppliers.forEach(s => { suppMap[s.id] = s.name; });
 
     const salesVat = salesInvs.reduce((s, i) => s + parseFloat(i.taxAmount || "0"), 0);
     const salesNet = salesInvs.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
     const salesGross = salesInvs.reduce((s, i) => s + parseFloat(i.total || "0"), 0);
 
-    const cnVat = creditNotes.reduce((s, i) => s + parseFloat(i.taxAmount || "0"), 0);
-    const cnNet = creditNotes.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
+    const cnVat = creditNotesList.reduce((s, i) => s + parseFloat(i.taxAmount || "0"), 0);
+    const cnNet = creditNotesList.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
 
     const purchaseVat = purchaseInvs.reduce((s, i) => s + parseFloat(i.vatAmount || "0"), 0);
     const purchaseNet = purchaseInvs.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
@@ -2702,21 +2690,53 @@ export async function registerRoutes(
         netAmount: salesNet.toFixed(2),
         vatAmount: salesVat.toFixed(2),
         grossAmount: salesGross.toFixed(2),
+        items: salesInvs.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          invoiceNumber: i.invoiceNumber,
+          customerName: custMap[i.customerId || ""] || "—",
+          date: i.date,
+          netAmount: parseFloat(i.subtotal || "0").toFixed(2),
+          vatAmount: parseFloat(i.taxAmount || "0").toFixed(2),
+          grossAmount: parseFloat(i.total || "0").toFixed(2),
+        })),
       },
       creditNotes: {
-        count: creditNotes.length,
+        count: creditNotesList.length,
         netAmount: cnNet.toFixed(2),
         vatAmount: cnVat.toFixed(2),
+        items: creditNotesList.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          invoiceNumber: i.invoiceNumber,
+          customerName: custMap[i.customerId || ""] || "—",
+          date: i.date,
+          netAmount: parseFloat(i.subtotal || "0").toFixed(2),
+          vatAmount: parseFloat(i.taxAmount || "0").toFixed(2),
+          grossAmount: parseFloat(i.total || "0").toFixed(2),
+        })),
       },
       purchases: {
         count: purchaseInvs.length,
         netAmount: purchaseNet.toFixed(2),
         vatAmount: purchaseVat.toFixed(2),
+        items: purchaseInvs.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          invoiceNumber: i.invoiceNumber,
+          supplierRef: i.supplierInvoiceRef || "—",
+          supplierName: suppMap[i.supplierId || ""] || "—",
+          date: i.date,
+          netAmount: parseFloat(i.subtotal || "0").toFixed(2),
+          vatAmount: parseFloat(i.vatAmount || "0").toFixed(2),
+          grossAmount: parseFloat(i.total || "0").toFixed(2),
+        })),
       },
       expenses: {
         count: expensesList.length,
         netAmount: expenseNet.toFixed(2),
         vatAmount: expenseVat.toFixed(2),
+        items: expensesList.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          description: i.description,
+          date: i.date,
+          netAmount: parseFloat(i.amount || "0").toFixed(2),
+          vatAmount: parseFloat(i.vatAmount || "0").toFixed(2),
+          grossAmount: (parseFloat(i.amount || "0") + parseFloat(i.vatAmount || "0")).toFixed(2),
+        })),
       },
       outputVat: outputVat.toFixed(2),
       outputNet: outputNet.toFixed(2),
