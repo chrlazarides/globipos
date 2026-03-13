@@ -645,26 +645,35 @@ export class DatabaseStorage implements IStorage {
       months.push({ label, from, to });
     }
 
-    // Fetch all sales invoices with their items + item cost prices in date range
+    // Fetch all sales invoices (non-cancelled) with their items + item cost prices in date range
     const sixMonthsAgo = months[0].from;
     const allInvs = await db
-      .select({ id: invoices.id, date: invoices.date, total: invoices.total, subtotal: invoices.subtotal })
+      .select({
+        id: invoices.id,
+        date: invoices.date,
+        subtotal: invoices.subtotal,
+        discountAmount: invoices.discountAmount,
+      })
       .from(invoices)
-      .where(and(eq(invoices.type, "invoice"), gte(invoices.date, sixMonthsAgo)));
+      .where(and(
+        eq(invoices.type, "invoice"),
+        gte(invoices.date, sixMonthsAgo),
+        sql`${invoices.status} != 'cancelled'`,
+      ));
 
     const allInvIds = allInvs.map(i => i.id);
 
-    // Get all invoice items with cost price from items table
+    // Get all invoice items with cost price (pack-size adjusted) matching getSalesReport logic
     let itemCostMap: Record<string, number> = {};
+    let itemPackMap: Record<string, number> = {};
     let invItemCosts: Record<string, number> = {};
     if (allInvIds.length > 0) {
       const invItemRows = await db
         .select({
           invoiceId: invoiceItems.invoiceId,
           quantity: invoiceItems.quantity,
-          unitPrice: invoiceItems.unitPrice,
-          discount: invoiceItems.discount,
           itemId: invoiceItems.itemId,
+          saleUnit: invoiceItems.saleUnit,
         })
         .from(invoiceItems)
         .where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(allInvIds.map(id => `'${id}'`).join(","))}]::text[])`);
@@ -672,41 +681,50 @@ export class DatabaseStorage implements IStorage {
       const allItemIds = [...new Set(invItemRows.map(r => r.itemId).filter(Boolean))] as string[];
       if (allItemIds.length > 0) {
         const itemRows = await db
-          .select({ id: items.id, costPrice: items.costPrice })
+          .select({ id: items.id, costPrice: items.costPrice, packSize: items.packSize })
           .from(items)
           .where(sql`${items.id} = ANY(ARRAY[${sql.raw(allItemIds.map(id => `'${id}'`).join(","))}]::text[])`);
         itemCostMap = Object.fromEntries(itemRows.map(r => [r.id, parseFloat(r.costPrice || "0")]));
+        itemPackMap = Object.fromEntries(itemRows.map(r => [r.id, r.packSize || 1]));
       }
 
       for (const row of invItemRows) {
         const qty = parseFloat(String(row.quantity || 0));
         const cost = row.itemId ? (itemCostMap[row.itemId] || 0) : 0;
-        const lineCost = qty * cost;
+        const packSize = row.itemId ? (itemPackMap[row.itemId] || 1) : 1;
+        // Match getSalesReport: if sold in packs, multiply qty by packSize for cost
+        const effectiveQty = row.saleUnit === "pack" ? qty * packSize : qty;
+        const lineCost = effectiveQty * cost;
         invItemCosts[row.invoiceId] = (invItemCosts[row.invoiceId] || 0) + lineCost;
       }
     }
 
-    // Build monthly buckets
+    // Build monthly buckets — revenue = subtotal - discount (ex-VAT), matching sales report
     const monthlySales = months.map(m => {
       const monthInvs = allInvs.filter(i => i.date >= m.from && i.date <= m.to);
-      const revenue = monthInvs.reduce((s, i) => s + parseFloat(i.total), 0);
+      const revenue = monthInvs.reduce((s, i) => s + parseFloat(i.subtotal) - parseFloat(i.discountAmount || "0"), 0);
       const cost = monthInvs.reduce((s, i) => s + (invItemCosts[i.id] || 0), 0);
-      const profit = Math.max(0, revenue - cost);
+      const profit = revenue - cost;
       return { month: m.label, revenue: Math.round(revenue * 100) / 100, profit: Math.round(profit * 100) / 100, invoices: monthInvs.length };
     });
 
-    // Top 5 customers by revenue (all time)
+    // Top 5 customers by net revenue ex-VAT (all time, non-cancelled)
     const custRevRows = await db
-      .select({ customerId: invoices.customerId, customerName: customers.name, total: invoices.total })
+      .select({
+        customerId: invoices.customerId,
+        customerName: customers.name,
+        subtotal: invoices.subtotal,
+        discountAmount: invoices.discountAmount,
+      })
       .from(invoices)
       .leftJoin(customers, eq(invoices.customerId, customers.id))
-      .where(eq(invoices.type, "invoice"));
+      .where(and(eq(invoices.type, "invoice"), sql`${invoices.status} != 'cancelled'`));
 
     const custTotals: Record<string, { name: string; revenue: number }> = {};
     for (const r of custRevRows) {
       if (!r.customerId) continue;
       if (!custTotals[r.customerId]) custTotals[r.customerId] = { name: r.customerName || "Unknown", revenue: 0 };
-      custTotals[r.customerId].revenue += parseFloat(r.total);
+      custTotals[r.customerId].revenue += parseFloat(r.subtotal) - parseFloat(r.discountAmount || "0");
     }
     const topCustomers = Object.values(custTotals)
       .sort((a, b) => b.revenue - a.revenue)
@@ -738,6 +756,7 @@ export class DatabaseStorage implements IStorage {
       eq(invoices.type, "invoice"),
       gte(invoices.date, from),
       lte(invoices.date, to),
+      sql`${invoices.status} != 'cancelled'`,
     ];
     if (customerId && customerId !== "all") {
       conditions.push(eq(invoices.customerId, customerId));

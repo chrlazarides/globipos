@@ -92,7 +92,7 @@ export default function Dashboard() {
         <StatCard title="Total Items" value={String(s.totalItems)} icon={Package} description="Active products" />
         <StatCard title="Customers" value={String(s.totalCustomers)} icon={Users} description="Active accounts" />
         <StatCard title="Invoices" value={String(s.totalInvoices)} icon={FileText} description={`${s.overdueInvoices} overdue`} />
-        <StatCard title="Revenue (Paid)" value={`€${totalRevNum.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={Euro} />
+        <StatCard title="Cash Collected" value={`€${totalRevNum.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={Euro} />
       </div>
 
       {/* Main Chart — Sales & Profit */}
@@ -106,7 +106,7 @@ export default function Dashboard() {
             <p className="text-xs text-muted-foreground mt-0.5">Gross profit margin (6-month avg): <span className="font-semibold">{avgMargin}%</span></p>
           </div>
           <div className="hidden sm:flex items-center gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: REVENUE_COLOR }} />Revenue</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: REVENUE_COLOR }} />Revenue (ex-VAT)</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: PROFIT_COLOR }} />Profit</span>
           </div>
         </CardHeader>
@@ -132,7 +132,7 @@ export default function Dashboard() {
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                 <YAxis tickFormatter={v => `€${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={48} />
                 <Tooltip
-                  formatter={(value: number, name: string) => [fmtEur(value), name === "revenue" ? "Revenue" : "Gross Profit"]}
+                  formatter={(value: number, name: string) => [fmtEur(value), name === "revenue" ? "Revenue (ex-VAT)" : "Gross Profit"]}
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
                   cursor={{ fill: "rgba(99,102,241,0.06)" }}
                 />
@@ -165,7 +165,7 @@ export default function Dashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
                   <XAxis type="number" tickFormatter={v => `€${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={110} />
-                  <Tooltip formatter={(v: number) => [fmtEur(v), "Revenue"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} cursor={{ fill: "rgba(99,102,241,0.06)" }} />
+                  <Tooltip formatter={(v: number) => [fmtEur(v), "Revenue (ex-VAT)"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} cursor={{ fill: "rgba(99,102,241,0.06)" }} />
                   <Bar dataKey="revenue" radius={[0, 4, 4, 0]}>
                     {c.topCustomers.map((_, i) => (
                       <Cell key={i} fill={CUSTOMER_COLORS[i % CUSTOMER_COLORS.length]} />
