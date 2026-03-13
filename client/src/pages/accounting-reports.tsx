@@ -145,7 +145,8 @@ export default function AccountingReports() {
   const [plFrom, setPlFrom] = useState(getFirstDayOfMonth);
   const [plTo, setPlTo] = useState(getToday);
   const [bsAsOf, setBsAsOf] = useState(getToday);
-  const [vatQuarter, setVatQuarter] = useState(getCurrentQuarter);
+  const [vatFrom, setVatFrom] = useState(() => getQuarterDates(getCurrentQuarter()).from);
+  const [vatTo, setVatTo] = useState(() => getQuarterDates(getCurrentQuarter()).to);
   const [showSalesDetail, setShowSalesDetail] = useState(false);
   const [showPurchaseDetail, setShowPurchaseDetail] = useState(false);
 
@@ -161,9 +162,9 @@ export default function AccountingReports() {
     queryKey: ["/api/reports/balance-sheet", bsAsOf],
   });
 
-  const vatDates = getQuarterDates(vatQuarter);
   const { data: vatReturn, isLoading: vatLoading } = useQuery<VatReturnData>({
-    queryKey: ["/api/reports/vat-return", vatDates.from, vatDates.to],
+    queryKey: ["/api/reports/vat-return", vatFrom, vatTo],
+    enabled: !!vatFrom && !!vatTo,
   });
 
   return (
@@ -611,26 +612,42 @@ export default function AccountingReports() {
         <TabsContent value="vat-return" className="mt-4 space-y-4">
           <Card>
             <CardContent className="p-4">
-              <div className="flex items-end gap-4 flex-wrap">
-                <div>
-                  <Label className="text-xs">Quarter</Label>
-                  <Select value={vatQuarter} onValueChange={setVatQuarter}>
-                    <SelectTrigger className="w-[260px]" data-testid="select-vat-quarter">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {getAvailableQuarters().map((q) => (
-                        <SelectItem key={q} value={q}>{formatQuarterLabel(q)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              <div className="space-y-3">
+                <div className="flex items-end gap-3 flex-wrap">
+                  <div>
+                    <Label className="text-xs">From</Label>
+                    <Input type="date" value={vatFrom} onChange={e => setVatFrom(e.target.value)} className="w-[160px]" data-testid="input-vat-from" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">To</Label>
+                    <Input type="date" value={vatTo} onChange={e => setVatTo(e.target.value)} className="w-[160px]" data-testid="input-vat-to" />
+                  </div>
+                  <Button variant="outline" onClick={() => window.print()} data-testid="button-print-vat-return">
+                    <Printer className="w-4 h-4 mr-2" /> Print
+                  </Button>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  Period: {vatDates.from} to {vatDates.to}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground">Quick select:</span>
+                  {getAvailableQuarters().filter(q => {
+                    const y = parseInt(q.split("-Q")[0]);
+                    return y >= new Date().getFullYear() - 1;
+                  }).map(q => {
+                    const d = getQuarterDates(q);
+                    const isActive = vatFrom === d.from && vatTo === d.to;
+                    return (
+                      <Button
+                        key={q}
+                        variant={isActive ? "default" : "outline"}
+                        size="sm"
+                        className="h-6 text-xs px-2"
+                        onClick={() => { setVatFrom(d.from); setVatTo(d.to); }}
+                        data-testid={`button-vat-quarter-${q}`}
+                      >
+                        {formatQuarterLabel(q)}
+                      </Button>
+                    );
+                  })}
                 </div>
-                <Button variant="outline" onClick={() => window.print()} data-testid="button-print-vat-return">
-                  <Printer className="w-4 h-4 mr-2" /> Print
-                </Button>
               </div>
             </CardContent>
           </Card>
@@ -836,7 +853,7 @@ export default function AccountingReports() {
 
               <Card className="border-2">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-lg">VAT Return Summary — {formatQuarterLabel(vatQuarter)}</CardTitle>
+                  <CardTitle className="text-lg">VAT Return Summary — {vatFrom} to {vatTo}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
