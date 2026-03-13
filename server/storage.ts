@@ -528,6 +528,24 @@ export class DatabaseStorage implements IStorage {
 
   async getCustomerStatements() {
     const custs = await db.select().from(customers).where(eq(customers.active, true));
+
+    // Load ALL payments at once and build a lookup map: invoiceId -> total paid
+    const allPayments = await db.select().from(payments);
+    const paymentsByInvoice = new Map<string, number>();
+    for (const pmt of allPayments) {
+      const prev = paymentsByInvoice.get(pmt.invoiceId) || 0;
+      paymentsByInvoice.set(pmt.invoiceId, prev + parseFloat(String(pmt.amount)));
+    }
+
+    // Helper: get actual paid amount for an invoice
+    const getPaid = (inv: { id: string; total: string; status: string }) => {
+      const pmtTotal = paymentsByInvoice.get(inv.id) || 0;
+      if (pmtTotal > 0) return Math.min(pmtTotal, parseFloat(inv.total));
+      // Fallback for invoices marked paid with no payment records (legacy data)
+      if (inv.status === "paid") return parseFloat(inv.total);
+      return 0;
+    };
+
     const statements = [];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -539,14 +557,14 @@ export class DatabaseStorage implements IStorage {
 
       const totalInvoiced = invs.reduce((s, i) => s + parseFloat(i.total), 0);
       const totalCredits = cns.reduce((s, i) => s + parseFloat(i.total), 0);
-      const paidInvs = invs.filter(i => i.status === "paid");
-      const totalPaid = paidInvs.reduce((s, i) => s + parseFloat(i.total), 0);
+      const totalPaid = invs.reduce((s, i) => s + getPaid(i), 0);
 
-      // Aging analysis: bucket unpaid invoice balances by days overdue
+      // Aging analysis: bucket outstanding invoice balances by days overdue
       const aging = { current: 0, days1_30: 0, days31_60: 0, days61_90: 0, days90plus: 0 };
       for (const inv of invs) {
-        if (inv.status === "paid") continue;
-        const balance = parseFloat(inv.total);
+        const paid = getPaid(inv);
+        const balance = parseFloat(inv.total) - paid;
+        if (balance <= 0) continue;
         const refDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
         refDate.setHours(0, 0, 0, 0);
         const daysOverdue = Math.floor((today.getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24));
@@ -559,10 +577,11 @@ export class DatabaseStorage implements IStorage {
 
       const invoiceList = allInvs.map(inv => {
         const total = parseFloat(inv.total);
-        const paid = inv.status === "paid" ? total : 0;
+        const paid = getPaid(inv);
+        const outstanding = Math.max(0, total - paid);
         const refDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
         refDate.setHours(0, 0, 0, 0);
-        const daysOverdue = inv.type === "invoice" && inv.status !== "paid"
+        const daysOverdue = inv.type === "invoice" && outstanding > 0
           ? Math.floor((today.getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24))
           : null;
         return {
@@ -573,7 +592,7 @@ export class DatabaseStorage implements IStorage {
           dueDate: inv.dueDate,
           total: total.toFixed(2),
           paid: paid.toFixed(2),
-          balance: (total - paid).toFixed(2),
+          balance: outstanding.toFixed(2),
           daysOverdue,
         };
       });
@@ -584,7 +603,7 @@ export class DatabaseStorage implements IStorage {
         totalInvoiced: totalInvoiced.toFixed(2),
         totalCredits: totalCredits.toFixed(2),
         totalPaid: totalPaid.toFixed(2),
-        balance: (totalInvoiced - totalCredits - totalPaid).toFixed(2),
+        balance: Math.max(0, totalInvoiced - totalCredits - totalPaid).toFixed(2),
         invoiceCount: allInvs.length,
         invoices: invoiceList,
         aging: {

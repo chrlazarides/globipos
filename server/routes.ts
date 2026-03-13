@@ -2741,6 +2741,9 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";
   const companyTaxId = settings.company_tax_id || "";
+  const companyIban = settings.company_iban || "";
+  const companyBankName = settings.company_bank_name || "";
+  const companySwift = settings.company_swift || "";
   const currencySymbol = settings.currency_symbol || "\u20AC";
 
   const statementInvoices = statement?.invoices || [];
@@ -2926,6 +2929,29 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       </table>
     </div>`;
     })() : ""}
+
+    ${companyIban ? `
+    <div style="margin-top:28px;padding:18px 20px;background:#f5f5f5;border-radius:6px;border:1px solid #e5e5e5;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#555;margin-bottom:10px;">Payment Details</div>
+      <table style="border-collapse:collapse;width:100%;">
+        <tr>
+          <td style="font-size:11px;color:#888;padding:3px 0;width:120px;">Bank Name</td>
+          <td style="font-size:12px;font-weight:600;color:#1a1a1a;padding:3px 0;">${companyBankName}</td>
+        </tr>
+        <tr>
+          <td style="font-size:11px;color:#888;padding:3px 0;">IBAN</td>
+          <td style="font-size:12px;font-weight:700;color:#1a1a1a;padding:3px 0;letter-spacing:0.5px;">${companyIban}</td>
+        </tr>
+        ${companySwift ? `<tr>
+          <td style="font-size:11px;color:#888;padding:3px 0;">SWIFT/BIC</td>
+          <td style="font-size:12px;font-weight:600;color:#1a1a1a;padding:3px 0;">${companySwift}</td>
+        </tr>` : ""}
+        <tr>
+          <td style="font-size:11px;color:#888;padding:3px 0;">Reference</td>
+          <td style="font-size:12px;color:#555;padding:3px 0;">Please quote customer code: <strong>${customer.code}</strong></td>
+        </tr>
+      </table>
+    </div>` : ""}
 
     <div class="footer">
       <p>${companyName} - Wholesale Wine & Spirits</p>
