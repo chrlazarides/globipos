@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, ChevronDown, ChevronRight, Database, BookOpen, Edit2, RefreshCw } from "lucide-react";
+import { Plus, ChevronDown, ChevronRight, Database, BookOpen, Edit2, RefreshCw, BarChart3, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertAccountSchema, type Account } from "@shared/schema";
@@ -44,9 +45,7 @@ const subtypesByType: Record<string, { value: string; label: string }[]> = {
     { value: "current_liability", label: "Current Liability" },
     { value: "long_term_liability", label: "Long Term Liability" },
   ],
-  equity: [
-    { value: "equity", label: "Equity" },
-  ],
+  equity: [{ value: "equity", label: "Equity" }],
   revenue: [
     { value: "operating", label: "Operating" },
     { value: "other", label: "Other" },
@@ -69,14 +68,237 @@ const subtypeLabel = (subtype: string | null) => {
   return subtype.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
+interface LedgerEntry {
+  date: string;
+  entryNumber: string;
+  description: string;
+  reference: string | null;
+  debit: string;
+  credit: string;
+  lineDescription: string | null;
+  journalEntryId: string;
+}
+
+interface AccountAnalysis {
+  account: Account;
+  fromDate: string;
+  toDate: string;
+}
+
+function AccountAnalysisSheet({ analysis, onClose }: { analysis: AccountAnalysis; onClose: () => void }) {
+  const [from, setFrom] = useState(analysis.fromDate);
+  const [to, setTo] = useState(analysis.toDate);
+  const cfg = typeConfig[analysis.account.type] || typeConfig.asset;
+
+  const { data, isLoading } = useQuery<{ entries: LedgerEntry[]; openingBalance: string }>({
+    queryKey: ["/api/reports/general-ledger", analysis.account.id, from, to],
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/general-ledger/${analysis.account.id}/${from}/${to}`, { credentials: "include" });
+      return res.json();
+    },
+  });
+
+  const entries = data?.entries || [];
+  const openingBalance = parseFloat(data?.openingBalance || "0");
+
+  const isDebitNormal = analysis.account.type === "asset" || analysis.account.type === "expense";
+
+  // Build rows with running balance
+  let runningBalance = openingBalance;
+  const rows = entries.map((e) => {
+    const debit = parseFloat(e.debit || "0");
+    const credit = parseFloat(e.credit || "0");
+    if (isDebitNormal) {
+      runningBalance += debit - credit;
+    } else {
+      runningBalance += credit - debit;
+    }
+    return { ...e, runningBalance };
+  });
+
+  const totalDebits = entries.reduce((s, e) => s + parseFloat(e.debit || "0"), 0);
+  const totalCredits = entries.reduce((s, e) => s + parseFloat(e.credit || "0"), 0);
+  const closingBalance = rows.length > 0 ? rows[rows.length - 1].runningBalance : openingBalance;
+
+  const netMove = closingBalance - openingBalance;
+
+  return (
+    <SheetContent side="right" className="w-full sm:max-w-4xl overflow-y-auto p-0">
+      <div className="flex flex-col h-full">
+        {/* Header */}
+        <div className={`px-6 py-5 border-b ${cfg.bgClass}`}>
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-3">
+              <div className={`flex items-center justify-center w-10 h-10 rounded-lg bg-white/60 dark:bg-black/30`}>
+                <BarChart3 className={`w-5 h-5 ${cfg.textClass}`} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className={`font-mono text-sm font-semibold ${cfg.textClass}`}>{analysis.account.code}</span>
+                  <span className="text-foreground font-semibold text-lg">{analysis.account.name}</span>
+                </div>
+                <div className="text-sm text-muted-foreground font-normal">Account Analysis</div>
+              </div>
+            </SheetTitle>
+          </SheetHeader>
+          {/* Date filters */}
+          <div className="flex items-center gap-3 mt-4">
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-muted-foreground font-medium">From</label>
+              <Input
+                type="date"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                className="h-8 w-36 text-sm bg-white/70 dark:bg-black/30"
+                data-testid="input-analysis-from"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-muted-foreground font-medium">To</label>
+              <Input
+                type="date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                className="h-8 w-36 text-sm bg-white/70 dark:bg-black/30"
+                data-testid="input-analysis-to"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Summary cards */}
+        <div className="grid grid-cols-4 gap-px bg-border border-b">
+          {[
+            { label: "Opening Balance", value: openingBalance, icon: Minus, neutral: true },
+            { label: "Total Debits", value: totalDebits, icon: TrendingUp, positive: true },
+            { label: "Total Credits", value: totalCredits, icon: TrendingDown, negative: true },
+            { label: "Closing Balance", value: closingBalance, icon: BarChart3, bold: true },
+          ].map(({ label, value, icon: Icon, neutral, positive, negative, bold }) => (
+            <div key={label} className="bg-background px-4 py-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Icon className={`w-3.5 h-3.5 ${positive ? "text-green-600" : negative ? "text-red-500" : "text-muted-foreground"}`} />
+                <span className="text-xs text-muted-foreground">{label}</span>
+              </div>
+              <div className={`text-sm font-semibold tabular-nums ${bold ? cfg.textClass : neutral ? "text-muted-foreground" : positive ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>
+                {formatEUR(value)}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Net movement banner */}
+        {entries.length > 0 && (
+          <div className={`px-6 py-2 text-xs flex items-center gap-2 border-b ${netMove >= 0 ? "bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400"}`}>
+            {netMove >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+            <span>
+              Net movement for period: <strong>{netMove >= 0 ? "+" : ""}{formatEUR(netMove)}</strong>
+              &nbsp;·&nbsp; {entries.length} transaction{entries.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+        )}
+
+        {/* Transactions table */}
+        <div className="flex-1 overflow-auto">
+          {isLoading ? (
+            <div className="p-6 space-y-3">
+              {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-10 w-full" />)}
+            </div>
+          ) : entries.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-center">
+              <div className={`w-16 h-16 rounded-full ${cfg.bgClass} flex items-center justify-center mb-4`}>
+                <BarChart3 className={`w-8 h-8 ${cfg.textClass}`} />
+              </div>
+              <p className="text-muted-foreground text-sm">No transactions in this period</p>
+              <p className="text-muted-foreground text-xs mt-1">Try adjusting the date range</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/30">
+                  <TableHead className="w-[100px]">Date</TableHead>
+                  <TableHead className="w-[110px]">Reference</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="text-right w-[110px]">Debit</TableHead>
+                  <TableHead className="text-right w-[110px]">Credit</TableHead>
+                  <TableHead className="text-right w-[120px] font-semibold">Balance</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {/* Opening balance row */}
+                <TableRow className="bg-muted/20 text-muted-foreground text-xs">
+                  <TableCell colSpan={5} className="py-2 italic pl-3">Opening Balance</TableCell>
+                  <TableCell className="text-right py-2 font-medium tabular-nums text-foreground">
+                    {formatEUR(openingBalance)}
+                  </TableCell>
+                </TableRow>
+                {rows.map((row, i) => {
+                  const hasDebit = parseFloat(row.debit) > 0;
+                  const hasCredit = parseFloat(row.credit) > 0;
+                  return (
+                    <TableRow key={i} className="text-sm hover:bg-muted/30" data-testid={`row-analysis-${i}`}>
+                      <TableCell className="py-2 text-muted-foreground tabular-nums whitespace-nowrap">
+                        {new Date(row.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" })}
+                      </TableCell>
+                      <TableCell className="py-2">
+                        <span className={`font-mono text-xs font-medium ${cfg.textClass}`}>{row.entryNumber}</span>
+                      </TableCell>
+                      <TableCell className="py-2 max-w-[200px]">
+                        <div className="truncate text-sm">{row.description}</div>
+                        {row.lineDescription && row.lineDescription !== row.description && (
+                          <div className="truncate text-xs text-muted-foreground">{row.lineDescription}</div>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-2 text-right tabular-nums">
+                        {hasDebit ? (
+                          <span className="text-green-700 dark:text-green-400 font-medium">{formatEUR(row.debit)}</span>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-2 text-right tabular-nums">
+                        {hasCredit ? (
+                          <span className="text-red-600 dark:text-red-400 font-medium">{formatEUR(row.credit)}</span>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-2 text-right tabular-nums font-semibold">
+                        <span className={row.runningBalance < 0 ? "text-red-600 dark:text-red-400" : ""}>
+                          {formatEUR(Math.abs(row.runningBalance))}{row.runningBalance < 0 ? " Cr" : ""}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {/* Closing balance row */}
+                <TableRow className={`font-semibold text-sm ${cfg.bgClass}`}>
+                  <TableCell colSpan={3} className="py-2 pl-3">Closing Balance</TableCell>
+                  <TableCell className="text-right py-2 tabular-nums text-green-700 dark:text-green-400">{formatEUR(totalDebits)}</TableCell>
+                  <TableCell className="text-right py-2 tabular-nums text-red-600 dark:text-red-400">{formatEUR(totalCredits)}</TableCell>
+                  <TableCell className={`text-right py-2 tabular-nums ${cfg.textClass}`}>{formatEUR(closingBalance)}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      </div>
+    </SheetContent>
+  );
+}
+
 export default function ChartOfAccounts() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [analysisAccount, setAnalysisAccount] = useState<Account | null>(null);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     asset: true, liability: true, equity: true, revenue: true, expense: true,
   });
   const { toast } = useToast();
+
+  const now = new Date();
+  const defaultFrom = `${now.getFullYear()}-01-01`;
+  const defaultTo = now.toISOString().split("T")[0];
 
   const { data: accounts = [], isLoading } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
 
@@ -208,6 +430,7 @@ export default function ChartOfAccounts() {
         }
       />
 
+      {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         {typeOrder.map((type) => {
           const cfg = typeConfig[type];
@@ -230,6 +453,7 @@ export default function ChartOfAccounts() {
         })}
       </div>
 
+      {/* Account sections */}
       <div className="space-y-3">
         {typeOrder.map((type) => {
           const cfg = typeConfig[type];
@@ -271,12 +495,17 @@ export default function ChartOfAccounts() {
                             <TableHead>Subtype</TableHead>
                             <TableHead className="text-right">Balance</TableHead>
                             <TableHead className="w-[80px]">Status</TableHead>
-                            <TableHead className="w-[60px]" />
+                            <TableHead className="w-[100px]" />
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {accts.map((account) => (
-                            <TableRow key={account.id} data-testid={`row-account-${account.id}`}>
+                            <TableRow
+                              key={account.id}
+                              data-testid={`row-account-${account.id}`}
+                              className="cursor-pointer hover:bg-muted/40 group"
+                              onClick={() => setAnalysisAccount(account)}
+                            >
                               <TableCell>
                                 <span className={`font-mono text-sm font-medium ${cfg.textClass}`} data-testid={`text-code-${account.id}`}>
                                   {account.code}
@@ -299,14 +528,27 @@ export default function ChartOfAccounts() {
                                 </Badge>
                               </TableCell>
                               <TableCell>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={() => handleEdit(account)}
-                                  data-testid={`button-edit-${account.id}`}
-                                >
-                                  <Edit2 className="w-4 h-4" />
-                                </Button>
+                                <div className="flex items-center gap-1 justify-end">
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    onClick={(e) => { e.stopPropagation(); setAnalysisAccount(account); }}
+                                    data-testid={`button-analyse-${account.id}`}
+                                    title="Account Analysis"
+                                  >
+                                    <BarChart3 className="w-3.5 h-3.5" />
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-7 w-7"
+                                    onClick={(e) => { e.stopPropagation(); handleEdit(account); }}
+                                    data-testid={`button-edit-${account.id}`}
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </Button>
+                                </div>
                               </TableCell>
                             </TableRow>
                           ))}
@@ -321,6 +563,7 @@ export default function ChartOfAccounts() {
         })}
       </div>
 
+      {/* Edit Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={(open) => { setEditDialogOpen(open); if (!open) setEditingAccount(null); }}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -345,6 +588,16 @@ export default function ChartOfAccounts() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Account Analysis Sheet */}
+      <Sheet open={!!analysisAccount} onOpenChange={(open) => { if (!open) setAnalysisAccount(null); }}>
+        {analysisAccount && (
+          <AccountAnalysisSheet
+            analysis={{ account: analysisAccount, fromDate: defaultFrom, toDate: defaultTo }}
+            onClose={() => setAnalysisAccount(null)}
+          />
+        )}
+      </Sheet>
     </div>
   );
 }
