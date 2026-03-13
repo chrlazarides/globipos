@@ -1706,6 +1706,17 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/supplier-payments/:id", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const data = insertSupplierPaymentSchema.partial().parse(req.body);
+      const updated = await storage.updateSupplierPayment(id, data);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Portal API Routes
   app.post("/api/portal/login", async (req, res) => {
     try {

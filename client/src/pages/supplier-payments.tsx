@@ -12,7 +12,7 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, CreditCard } from "lucide-react";
+import { Plus, CreditCard, Eye, Pencil } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertSupplierPaymentSchema, type Supplier, type SupplierPayment } from "@shared/schema";
@@ -28,8 +28,17 @@ const paymentFormSchema = insertSupplierPaymentSchema.extend({
   paymentDate: z.string().min(1, "Date required"),
 });
 
+const METHOD_LABELS: Record<string, string> = {
+  bank_transfer: "Bank Transfer",
+  cash: "Cash",
+  cheque: "Cheque",
+  card: "Card",
+};
+
 export default function SupplierPaymentsPage() {
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editPayment, setEditPayment] = useState<SupplierPaymentWithName | null>(null);
+  const [previewPayment, setPreviewPayment] = useState<SupplierPaymentWithName | null>(null);
   const { toast } = useToast();
 
   const { data: payments = [], isLoading } = useQuery<SupplierPaymentWithName[]>({ queryKey: ["/api/supplier-payments"] });
@@ -43,8 +52,22 @@ export default function SupplierPaymentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/supplier-payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
-      setDialogOpen(false);
+      setCreateOpen(false);
       toast({ title: "Payment recorded, supplier balance updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updatePayment = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: z.infer<typeof paymentFormSchema> }) => {
+      const res = await apiRequest("PATCH", `/api/supplier-payments/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/supplier-payments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
+      setEditPayment(null);
+      toast({ title: "Payment updated" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -73,17 +96,31 @@ export default function SupplierPaymentsPage() {
     {
       key: "amount",
       header: "Amount",
-      cell: (row) => <span className="text-sm font-medium">{"\u20AC"}{parseFloat(row.amount).toFixed(2)}</span>,
+      cell: (row) => <span className="text-sm font-medium">€{parseFloat(row.amount).toFixed(2)}</span>,
     },
     {
       key: "method",
       header: "Method",
-      cell: (row) => <Badge variant="secondary">{row.paymentMethod.replace("_", " ")}</Badge>,
+      cell: (row) => <Badge variant="secondary">{METHOD_LABELS[row.paymentMethod] || row.paymentMethod.replace("_", " ")}</Badge>,
     },
     {
       key: "reference",
       header: "Reference",
       cell: (row) => <span className="text-sm text-muted-foreground">{row.reference || "-"}</span>,
+    },
+    {
+      key: "actions",
+      header: "",
+      cell: (row) => (
+        <div className="flex items-center gap-1 justify-end">
+          <Button size="sm" variant="ghost" data-testid={`button-preview-payment-${row.id}`} onClick={() => setPreviewPayment(row)}>
+            <Eye className="w-4 h-4" />
+          </Button>
+          <Button size="sm" variant="ghost" data-testid={`button-edit-payment-${row.id}`} onClick={() => setEditPayment(row)}>
+            <Pencil className="w-4 h-4" />
+          </Button>
+        </div>
+      ),
     },
   ];
 
@@ -95,13 +132,17 @@ export default function SupplierPaymentsPage() {
         title="Supplier Payments"
         description="Record payments to suppliers"
         action={
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
               <Button data-testid="button-new-supplier-payment"><Plus className="w-4 h-4 mr-1" /> Record Payment</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader><DialogTitle>Record Supplier Payment</DialogTitle></DialogHeader>
-              <PaymentForm onSubmit={(d) => createPayment.mutate(d)} isPending={createPayment.isPending} suppliers={suppliers} />
+              <PaymentForm
+                onSubmit={(d) => createPayment.mutate(d)}
+                isPending={createPayment.isPending}
+                suppliers={suppliers}
+              />
             </DialogContent>
           </Dialog>
         }
@@ -111,14 +152,14 @@ export default function SupplierPaymentsPage() {
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-muted-foreground">Total Owed to Suppliers</p>
-            <p className="text-2xl font-bold">{"\u20AC"}{totalOwed.toFixed(2)}</p>
+            <p className="text-2xl font-bold">€{totalOwed.toFixed(2)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-muted-foreground">Payments This Month</p>
             <p className="text-2xl font-bold">
-              {"\u20AC"}{payments
+              €{payments
                 .filter(p => {
                   const d = new Date(p.paymentDate);
                   const now = new Date();
@@ -145,7 +186,7 @@ export default function SupplierPaymentsPage() {
               {suppliers.filter(s => parseFloat(s.currentBalance) > 0).map(s => (
                 <div key={s.id} className="flex items-center justify-between text-sm">
                   <span>{s.name} ({s.code})</span>
-                  <span className="font-medium text-destructive">{"\u20AC"}{parseFloat(s.currentBalance).toFixed(2)}</span>
+                  <span className="font-medium text-destructive">€{parseFloat(s.currentBalance).toFixed(2)}</span>
                 </div>
               ))}
             </div>
@@ -158,16 +199,92 @@ export default function SupplierPaymentsPage() {
           <DataTable columns={columns} data={payments} isLoading={isLoading} emptyMessage="No payments recorded" />
         </CardContent>
       </Card>
+
+      {/* Edit Dialog */}
+      <Dialog open={!!editPayment} onOpenChange={(open) => !open && setEditPayment(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Edit Supplier Payment</DialogTitle></DialogHeader>
+          {editPayment && (
+            <PaymentForm
+              defaultValues={{
+                supplierId: editPayment.supplierId,
+                purchaseInvoiceId: editPayment.purchaseInvoiceId,
+                amount: editPayment.amount,
+                paymentDate: editPayment.paymentDate,
+                paymentMethod: editPayment.paymentMethod,
+                reference: editPayment.reference || "",
+              }}
+              onSubmit={(d) => updatePayment.mutate({ id: editPayment.id, data: d })}
+              isPending={updatePayment.isPending}
+              suppliers={suppliers}
+              submitLabel="Save Changes"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Preview Dialog */}
+      <Dialog open={!!previewPayment} onOpenChange={(open) => !open && setPreviewPayment(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Payment Details</DialogTitle></DialogHeader>
+          {previewPayment && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-center w-14 h-14 rounded-full bg-primary/10 mx-auto">
+                <CreditCard className="w-7 h-7 text-primary" />
+              </div>
+              <div className="divide-y rounded-lg border overflow-hidden text-sm">
+                <Row label="Supplier" value={previewPayment.supplierName || suppliers.find(s => s.id === previewPayment.supplierId)?.name || "-"} />
+                <Row label="Amount" value={`€${parseFloat(previewPayment.amount).toFixed(2)}`} bold />
+                <Row label="Date" value={formatDate(previewPayment.paymentDate)} />
+                <Row label="Method" value={METHOD_LABELS[previewPayment.paymentMethod] || previewPayment.paymentMethod} />
+                <Row label="Reference" value={previewPayment.reference || "-"} />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => { setPreviewPayment(null); setEditPayment(previewPayment); }}>
+                  <Pencil className="w-4 h-4 mr-1" /> Edit
+                </Button>
+                <Button variant="outline" onClick={() => setPreviewPayment(null)}>Close</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function PaymentForm({ onSubmit, isPending, suppliers }: { onSubmit: (d: any) => void; isPending: boolean; suppliers: Supplier[] }) {
+function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
+  return (
+    <div className="flex justify-between px-4 py-2.5 bg-background">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={bold ? "font-semibold" : ""}>{value}</span>
+    </div>
+  );
+}
+
+function PaymentForm({
+  onSubmit,
+  isPending,
+  suppliers,
+  defaultValues,
+  submitLabel = "Record Payment",
+}: {
+  onSubmit: (d: any) => void;
+  isPending: boolean;
+  suppliers: Supplier[];
+  defaultValues?: Partial<z.infer<typeof paymentFormSchema>>;
+  submitLabel?: string;
+}) {
   const form = useForm({
     resolver: zodResolver(paymentFormSchema),
     defaultValues: {
-      supplierId: "", purchaseInvoiceId: null, amount: "", paymentDate: new Date().toISOString().split("T")[0],
-      paymentMethod: "bank_transfer", reference: "",
+      supplierId: "",
+      purchaseInvoiceId: null,
+      amount: "",
+      paymentDate: new Date().toISOString().split("T")[0],
+      paymentMethod: "bank_transfer",
+      reference: "",
+      ...defaultValues,
     },
   });
 
@@ -188,7 +305,7 @@ function PaymentForm({ onSubmit, isPending, suppliers }: { onSubmit: (d: any) =>
               <SelectContent>
                 {suppliers.map(s => (
                   <SelectItem key={s.id} value={s.id}>
-                    {s.name} (Balance: {"\u20AC"}{parseFloat(s.currentBalance).toFixed(2)})
+                    {s.name} (Balance: €{parseFloat(s.currentBalance).toFixed(2)})
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -199,7 +316,7 @@ function PaymentForm({ onSubmit, isPending, suppliers }: { onSubmit: (d: any) =>
 
         {selectedSupplier && (
           <div className="text-sm text-muted-foreground p-2 border rounded-md">
-            Current balance owed: <span className="font-medium">{"\u20AC"}{parseFloat(selectedSupplier.currentBalance).toFixed(2)}</span>
+            Current balance owed: <span className="font-medium">€{parseFloat(selectedSupplier.currentBalance).toFixed(2)}</span>
           </div>
         )}
 
@@ -251,7 +368,7 @@ function PaymentForm({ onSubmit, isPending, suppliers }: { onSubmit: (d: any) =>
 
         <div className="flex justify-end">
           <Button type="submit" disabled={isPending} data-testid="button-save-payment">
-            {isPending ? "Saving..." : "Record Payment"}
+            {isPending ? "Saving..." : submitLabel}
           </Button>
         </div>
       </form>

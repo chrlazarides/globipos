@@ -103,6 +103,7 @@ export interface IStorage {
 
   getSupplierPayments(supplierId?: string): Promise<(SupplierPayment & { supplierName?: string })[]>;
   createSupplierPayment(data: InsertSupplierPayment): Promise<SupplierPayment>;
+  updateSupplierPayment(id: string, data: Partial<InsertSupplierPayment>): Promise<SupplierPayment>;
 
   getEmailLogs(): Promise<EmailLog[]>;
   getEmailLogsByCustomer(customerId: string): Promise<EmailLog[]>;
@@ -931,6 +932,25 @@ export class DatabaseStorage implements IStorage {
       }
     }
     return payment;
+  }
+
+  async updateSupplierPayment(id: string, data: Partial<InsertSupplierPayment>) {
+    const [existing] = await db.select().from(supplierPayments).where(eq(supplierPayments.id, id));
+    if (!existing) throw new Error("Payment not found");
+    const [updated] = await db.update(supplierPayments).set(data).where(eq(supplierPayments.id, id)).returning();
+    if (data.amount !== undefined && existing.supplierId) {
+      const oldAmount = parseFloat(String(existing.amount));
+      const newAmount = parseFloat(String(data.amount));
+      const diff = newAmount - oldAmount;
+      if (diff !== 0) {
+        const supplier = await this.getSupplier(existing.supplierId);
+        if (supplier) {
+          const newBalance = parseFloat(supplier.currentBalance) + diff;
+          await this.updateSupplier(existing.supplierId, { currentBalance: Math.max(0, newBalance).toFixed(2) });
+        }
+      }
+    }
+    return updated;
   }
 
   async getEmailLogs() {
