@@ -11,9 +11,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Banknote, Eye, Pencil, CheckCircle2, FileText, Users } from "lucide-react";
+import { Plus, Banknote, Eye, Pencil, CheckCircle2, FileText, Users, Printer, Download, Send, Loader2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Customer, Invoice, Payment } from "@shared/schema";
@@ -59,11 +61,41 @@ export default function CustomerPaymentsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editPayment, setEditPayment] = useState<PaymentWithDetails | null>(null);
   const [previewPayment, setPreviewPayment] = useState<PaymentWithDetails | null>(null);
+  const [sendingId, setSendingId] = useState<string | null>(null);
   const { toast } = useToast();
 
   const { data: payments = [], isLoading } = useQuery<PaymentWithDetails[]>({ queryKey: ["/api/payments"] });
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: allInvoices = [] } = useQuery<Invoice[]>({ queryKey: ["/api/invoices"] });
+
+  const { data: customerStatements = [] } = useQuery<{
+    customerId: string; customerName: string; totalInvoiced: string;
+    totalPaid: string; balance: string; invoiceCount: number;
+    aging?: { current: string; days1_30: string; days31_60: string; days61_90: string; days90plus: string };
+  }[]>({ queryKey: ["/api/reports/statements"] });
+
+  const previewStatement = (customerId: string) => window.open(`/api/reports/statement/${customerId}/pdf`, "_blank");
+  const printStatement = (customerId: string) => window.open(`/api/reports/statement/${customerId}/pdf?print=1`, "_blank");
+  const downloadStatement = async (customerId: string) => {
+    const res = await fetch(`/api/reports/statement/${customerId}/pdf?download=1`);
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `statement-${customerId}.html`;
+    a.click();
+  };
+  const sendStatementEmail = async (customerId: string) => {
+    setSendingId(customerId);
+    try {
+      const res = await apiRequest("POST", `/api/reports/statement/${customerId}/send-email`);
+      const data = await res.json();
+      toast({ title: "Statement Sent", description: data.message });
+    } catch (e: any) {
+      toast({ title: "Email Failed", description: e.message || "Failed to send statement email", variant: "destructive" });
+    } finally {
+      setSendingId(null);
+    }
+  };
 
   const invoices = allInvoices.filter(inv =>
     inv.type === "invoice" && inv.status !== "cancelled"
@@ -208,7 +240,7 @@ export default function CustomerPaymentsPage() {
     <div className="p-6 space-y-6">
       <PageHeader
         title="Customer Payments"
-        description="Record and track payments received from customers"
+        description="Record payments and view account statements"
         action={
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
@@ -229,37 +261,124 @@ export default function CustomerPaymentsPage() {
         }
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-sm text-muted-foreground">Received This Month</p>
-            <p className="text-2xl font-bold text-emerald-600">€{totalThisMonth.toFixed(2)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-sm text-muted-foreground">Total Received (All Time)</p>
-            <p className="text-2xl font-bold">€{totalAllTime.toFixed(2)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-sm text-muted-foreground">Total Payments Recorded</p>
-            <p className="text-2xl font-bold">{payments.length}</p>
-          </CardContent>
-        </Card>
-      </div>
+      <Tabs defaultValue="payments">
+        <TabsList>
+          <TabsTrigger value="payments" data-testid="tab-payments"><Banknote className="w-4 h-4 mr-1" /> Payments</TabsTrigger>
+          <TabsTrigger value="statements" data-testid="tab-statements"><FileText className="w-4 h-4 mr-1" /> Statements</TabsTrigger>
+        </TabsList>
 
-      <Card>
-        <CardContent className="p-4">
-          <DataTable
-            columns={columns}
-            data={payments}
-            isLoading={isLoading}
-            emptyMessage="No payments recorded yet"
-          />
-        </CardContent>
-      </Card>
+        <TabsContent value="payments" className="mt-4 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-sm text-muted-foreground">Received This Month</p>
+                <p className="text-2xl font-bold text-emerald-600">€{totalThisMonth.toFixed(2)}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-sm text-muted-foreground">Total Received (All Time)</p>
+                <p className="text-2xl font-bold">€{totalAllTime.toFixed(2)}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-sm text-muted-foreground">Total Payments Recorded</p>
+                <p className="text-2xl font-bold">{payments.length}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardContent className="p-4">
+              <DataTable
+                columns={columns}
+                data={payments}
+                isLoading={isLoading}
+                emptyMessage="No payments recorded yet"
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="statements" className="mt-4">
+          <Card>
+            <CardContent className="p-0 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Customer</TableHead>
+                    <TableHead className="text-right">Balance Due</TableHead>
+                    <TableHead className="text-right text-green-700 dark:text-green-400">Current</TableHead>
+                    <TableHead className="text-right text-yellow-600 dark:text-yellow-400">1–30 Days</TableHead>
+                    <TableHead className="text-right text-orange-600 dark:text-orange-400">31–60 Days</TableHead>
+                    <TableHead className="text-right text-red-600 dark:text-red-400">61–90 Days</TableHead>
+                    <TableHead className="text-right text-red-700 dark:text-red-500">90+ Days</TableHead>
+                    <TableHead className="w-[160px]" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {customerStatements.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No statement data available</TableCell>
+                    </TableRow>
+                  ) : (
+                    customerStatements.map((st) => {
+                      const ag = st.aging || { current: "0", days1_30: "0", days31_60: "0", days61_90: "0", days90plus: "0" };
+                      const hasOverdue = parseFloat(ag.days1_30) > 0 || parseFloat(ag.days31_60) > 0 || parseFloat(ag.days61_90) > 0 || parseFloat(ag.days90plus) > 0;
+                      return (
+                        <TableRow key={st.customerId} className={hasOverdue ? "bg-red-50/30 dark:bg-red-950/10" : ""}>
+                          <TableCell className="font-medium text-sm">{st.customerName}</TableCell>
+                          <TableCell className={`text-right font-semibold text-sm ${parseFloat(st.balance) > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+                            €{parseFloat(st.balance).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-green-700 dark:text-green-400">
+                            {parseFloat(ag.current) > 0 ? `€${parseFloat(ag.current).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-yellow-600 dark:text-yellow-400">
+                            {parseFloat(ag.days1_30) > 0 ? `€${parseFloat(ag.days1_30).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-orange-600 dark:text-orange-400">
+                            {parseFloat(ag.days31_60) > 0 ? `€${parseFloat(ag.days31_60).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-red-600 dark:text-red-400">
+                            {parseFloat(ag.days61_90) > 0 ? `€${parseFloat(ag.days61_90).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-sm font-semibold text-red-700 dark:text-red-500">
+                            {parseFloat(ag.days90plus) > 0 ? `€${parseFloat(ag.days90plus).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Button size="icon" variant="ghost" onClick={() => previewStatement(st.customerId)} title="Preview">
+                                <Eye className="w-4 h-4" />
+                              </Button>
+                              <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} title="Print">
+                                <Printer className="w-4 h-4" />
+                              </Button>
+                              <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} title="Download">
+                                <Download className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => sendStatementEmail(st.customerId)}
+                                disabled={sendingId === st.customerId}
+                                title="Send by Email"
+                              >
+                                {sendingId === st.customerId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       {/* Edit Dialog */}
       <Dialog open={!!editPayment} onOpenChange={(open) => !open && setEditPayment(null)}>
