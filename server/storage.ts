@@ -1003,11 +1003,16 @@ export class DatabaseStorage implements IStorage {
         paymentDate: supplierPayments.paymentDate,
         paymentMethod: supplierPayments.paymentMethod,
         reference: supplierPayments.reference,
+        notes: supplierPayments.notes,
         createdAt: supplierPayments.createdAt,
         supplierName: suppliers.name,
+        purchaseInvoiceNumber: purchaseInvoices.invoiceNumber,
+        purchaseInvoiceTotal: purchaseInvoices.total,
+        purchaseInvoiceRef: purchaseInvoices.supplierInvoiceRef,
       })
       .from(supplierPayments)
       .leftJoin(suppliers, eq(supplierPayments.supplierId, suppliers.id))
+      .leftJoin(purchaseInvoices, eq(supplierPayments.purchaseInvoiceId, purchaseInvoices.id))
       .orderBy(desc(supplierPayments.createdAt));
 
     if (supplierId) {
@@ -1015,7 +1020,13 @@ export class DatabaseStorage implements IStorage {
     }
 
     const result = await query;
-    return result.map(r => ({ ...r, supplierName: r.supplierName || undefined }));
+    return result.map(r => ({
+      ...r,
+      supplierName: r.supplierName || undefined,
+      purchaseInvoiceNumber: r.purchaseInvoiceNumber || undefined,
+      purchaseInvoiceTotal: r.purchaseInvoiceTotal || undefined,
+      purchaseInvoiceRef: r.purchaseInvoiceRef || undefined,
+    }));
   }
 
   async createSupplierPayment(data: InsertSupplierPayment) {
@@ -1025,6 +1036,18 @@ export class DatabaseStorage implements IStorage {
       if (supplier) {
         const newBalance = parseFloat(supplier.currentBalance) - parseFloat(String(data.amount));
         await this.updateSupplier(data.supplierId, { currentBalance: newBalance.toFixed(2) });
+      }
+    }
+    // If linked to a purchase invoice, check if fully paid and mark it "paid"
+    if (data.purchaseInvoiceId) {
+      const paymentsForPI = await db
+        .select()
+        .from(supplierPayments)
+        .where(eq(supplierPayments.purchaseInvoiceId, data.purchaseInvoiceId));
+      const totalPaid = paymentsForPI.reduce((s, p) => s + parseFloat(String(p.amount)), 0);
+      const [pi] = await db.select().from(purchaseInvoices).where(eq(purchaseInvoices.id, data.purchaseInvoiceId));
+      if (pi && totalPaid >= parseFloat(String(pi.total))) {
+        await db.update(purchaseInvoices).set({ status: "paid" }).where(eq(purchaseInvoices.id, data.purchaseInvoiceId));
       }
     }
     return payment;

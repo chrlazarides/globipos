@@ -264,6 +264,7 @@ export const supplierPayments = pgTable("supplier_payments", {
   paymentDate: date("payment_date").notNull(),
   paymentMethod: text("payment_method").notNull().default("bank_transfer"),
   reference: text("reference"),
+  notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
