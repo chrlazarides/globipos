@@ -61,7 +61,7 @@ const typeOrder = ["asset", "liability", "equity", "revenue", "expense"];
 
 const formatEUR = (val: string | number) => {
   const num = typeof val === "string" ? parseFloat(val) : val;
-  return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(num || 0);
+  return "€" + (num || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 const subtypeLabel = (subtype: string | null) => {

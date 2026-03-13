@@ -73,11 +73,10 @@ interface VatReturnData {
 
 function formatEUR(value: string | number): string {
   const num = typeof value === "string" ? parseFloat(value) : value;
-  return new Intl.NumberFormat("de-DE", {
-    style: "currency",
-    currency: "EUR",
+  return "€" + (num || 0).toLocaleString("en-US", {
     minimumFractionDigits: 2,
-  }).format(num || 0);
+    maximumFractionDigits: 2,
+  });
 }
 
 function getFirstDayOfMonth(): string {

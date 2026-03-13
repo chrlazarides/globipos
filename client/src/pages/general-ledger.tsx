@@ -21,11 +21,7 @@ import { ArrowLeft } from "lucide-react";
 import type { Account } from "@shared/schema";
 
 function formatEUR(value: number): string {
-  return new Intl.NumberFormat("de-DE", {
-    style: "currency",
-    currency: "EUR",
-    minimumFractionDigits: 2,
-  }).format(value);
+  return "€" + (value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 interface LedgerEntry {

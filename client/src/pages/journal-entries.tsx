@@ -58,7 +58,7 @@ const sourceTypeBadgeVariant: Record<string, string> = {
 
 function formatEUR(value: string | number): string {
   const num = typeof value === "string" ? parseFloat(value) : value;
-  return `€${num.toLocaleString("el-CY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return "€" + (num || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function SourceBadge({ type }: { type: string | null }) {
