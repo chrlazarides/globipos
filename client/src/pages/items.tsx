@@ -164,6 +164,15 @@ export default function Items() {
       cell: (row) => <span className="text-sm font-medium">€{parseFloat(row.price1).toFixed(2)}</span>,
     },
     {
+      key: "costPrice",
+      header: "Cost",
+      cell: (row) => (
+        <span className="text-sm text-muted-foreground tabular-nums">
+          €{parseFloat((row as any).costPrice || "0").toFixed(2)}
+        </span>
+      ),
+    },
+    {
       key: "stock",
       header: "Stock",
       cell: (row) => {
