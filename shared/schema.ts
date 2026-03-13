@@ -197,11 +197,13 @@ export const invoiceItems = pgTable("invoice_items", {
 
 export const payments = pgTable("payments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  invoiceId: varchar("invoice_id").notNull(),
+  customerId: varchar("customer_id"),
+  invoiceId: varchar("invoice_id"),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   paymentDate: date("payment_date").notNull(),
   paymentMethod: text("payment_method").notNull().default("cash"),
   reference: text("reference"),
+  notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
