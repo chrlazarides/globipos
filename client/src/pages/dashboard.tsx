@@ -15,12 +15,17 @@ import type { Invoice, Item, SystemSetting } from "@shared/schema";
 import { formatDate } from "@/lib/utils";
 
 const PIE_COLORS: Record<string, string> = {
-  paid: "#22c55e",
-  draft: "#a1a1aa",
-  sent: "#3b82f6",
-  overdue: "#ef4444",
-  cancelled: "#d4d4d8",
+  paid: "#10b981",
+  draft: "#94a3b8",
+  sent: "#6366f1",
+  overdue: "#f43f5e",
+  cancelled: "#cbd5e1",
 };
+
+const CUSTOMER_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#f43f5e", "#8b5cf6"];
+
+const REVENUE_COLOR = "#6366f1";
+const PROFIT_COLOR  = "#10b981";
 
 export default function Dashboard() {
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
@@ -101,8 +106,8 @@ export default function Dashboard() {
             <p className="text-xs text-muted-foreground mt-0.5">Gross profit margin (6-month avg): <span className="font-semibold">{avgMargin}%</span></p>
           </div>
           <div className="hidden sm:flex items-center gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-foreground inline-block" />Revenue</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-primary inline-block" />Profit</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: REVENUE_COLOR }} />Revenue</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: PROFIT_COLOR }} />Profit</span>
           </div>
         </CardHeader>
         <CardContent className="pt-2">
@@ -113,16 +118,26 @@ export default function Dashboard() {
           ) : (
             <ResponsiveContainer width="100%" height={230}>
               <BarChart data={c.monthlySales} barCategoryGap="30%" margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="gradRevenue" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#818cf8" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#6366f1" stopOpacity={0.85} />
+                  </linearGradient>
+                  <linearGradient id="gradProfit" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#34d399" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#10b981" stopOpacity={0.85} />
+                  </linearGradient>
+                </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                 <YAxis tickFormatter={v => `€${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={48} />
                 <Tooltip
                   formatter={(value: number, name: string) => [fmtEur(value), name === "revenue" ? "Revenue" : "Gross Profit"]}
-                  contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                  cursor={{ fill: "hsl(var(--muted))" }}
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
+                  cursor={{ fill: "rgba(99,102,241,0.06)" }}
                 />
-                <Bar dataKey="revenue" name="revenue" fill="hsl(var(--foreground))" radius={[4, 4, 0, 0]} opacity={0.85} />
-                <Bar dataKey="profit" name="profit" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="revenue" name="revenue" fill="url(#gradRevenue)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="profit" name="profit" fill="url(#gradProfit)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -150,8 +165,12 @@ export default function Dashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
                   <XAxis type="number" tickFormatter={v => `€${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={110} />
-                  <Tooltip formatter={(v: number) => [fmtEur(v), "Revenue"]} contentStyle={{ fontSize: 12, borderRadius: 8 }} cursor={{ fill: "hsl(var(--muted))" }} />
-                  <Bar dataKey="revenue" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
+                  <Tooltip formatter={(v: number) => [fmtEur(v), "Revenue"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} cursor={{ fill: "rgba(99,102,241,0.06)" }} />
+                  <Bar dataKey="revenue" radius={[0, 4, 4, 0]}>
+                    {c.topCustomers.map((_, i) => (
+                      <Cell key={i} fill={CUSTOMER_COLORS[i % CUSTOMER_COLORS.length]} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -175,12 +194,12 @@ export default function Dashboard() {
               <div className="flex items-center gap-4">
                 <ResponsiveContainer width="55%" height={180}>
                   <PieChart>
-                    <Pie data={c.invoiceStatus} dataKey="amount" nameKey="status" cx="50%" cy="50%" innerRadius={45} outerRadius={75} paddingAngle={2}>
+                    <Pie data={c.invoiceStatus} dataKey="amount" nameKey="status" cx="50%" cy="50%" innerRadius={45} outerRadius={75} paddingAngle={3} stroke="none">
                       {c.invoiceStatus.map((entry) => (
-                        <Cell key={entry.status} fill={PIE_COLORS[entry.status] || "#a1a1aa"} />
+                        <Cell key={entry.status} fill={PIE_COLORS[entry.status] || "#94a3b8"} opacity={0.9} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v: number, name: string) => [fmtEur(v), name]} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                    <Tooltip formatter={(v: number, name: string) => [fmtEur(v), name]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="flex flex-col gap-2 flex-1">
