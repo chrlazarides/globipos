@@ -877,14 +877,15 @@ export class DatabaseStorage implements IStorage {
 
     for (const cust of custs) {
       const allInvs = await db.select().from(invoices).where(eq(invoices.customerId, cust.id));
-      const invs = allInvs.filter(i => i.type === "invoice");
-      const cns = allInvs.filter(i => i.type === "credit_note");
+      // Exclude cancelled documents from all calculations
+      const invs = allInvs.filter(i => i.type === "invoice" && i.status !== "cancelled");
+      const cns = allInvs.filter(i => i.type === "credit_note" && i.status !== "cancelled");
 
       const totalInvoiced = invs.reduce((s, i) => s + parseFloat(i.total), 0);
       const totalCredits = cns.reduce((s, i) => s + parseFloat(i.total), 0);
       const totalPaid = invs.reduce((s, i) => s + getPaid(i), 0);
 
-      // Aging analysis: bucket outstanding invoice balances by days overdue
+      // Aging analysis: bucket outstanding invoice balances by days past due date
       const aging = { current: 0, days1_30: 0, days31_60: 0, days61_90: 0, days90plus: 0 };
       for (const inv of invs) {
         const paid = getPaid(inv);
@@ -898,6 +899,15 @@ export class DatabaseStorage implements IStorage {
         else if (daysOverdue <= 60) aging.days31_60 += balance;
         else if (daysOverdue <= 90) aging.days61_90 += balance;
         else aging.days90plus += balance;
+      }
+
+      // Apply credit notes to oldest buckets first so aging sum == balance due
+      let creditsRemaining = totalCredits;
+      for (const bucket of ["days90plus", "days61_90", "days31_60", "days1_30", "current"] as const) {
+        if (creditsRemaining <= 0) break;
+        const reduction = Math.min(creditsRemaining, aging[bucket]);
+        aging[bucket] = Math.max(0, aging[bucket] - reduction);
+        creditsRemaining -= reduction;
       }
 
       const invById = new Map(allInvs.map(i => [i.id, i]));
@@ -952,7 +962,7 @@ export class DatabaseStorage implements IStorage {
         totalInvoiced: totalInvoiced.toFixed(2),
         totalCredits: totalCredits.toFixed(2),
         totalPaid: totalPaid.toFixed(2),
-        balance: Math.max(0, totalInvoiced - totalCredits - totalPaid).toFixed(2),
+        balance: (aging.current + aging.days1_30 + aging.days31_60 + aging.days61_90 + aging.days90plus).toFixed(2),
         invoiceCount: allInvs.length,
         invoices: invoiceList,
         payments: paymentList,
