@@ -3249,30 +3249,60 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       const hasAging = parseFloat(ag.current) > 0 || parseFloat(ag.days1_30) > 0 || parseFloat(ag.days31_60) > 0 || parseFloat(ag.days61_90) > 0 || parseFloat(ag.days90plus) > 0;
       if (!hasAging) return "";
       const total = (parseFloat(ag.current) + parseFloat(ag.days1_30) + parseFloat(ag.days31_60) + parseFloat(ag.days61_90) + parseFloat(ag.days90plus)).toFixed(2);
+
+      // Assign each outstanding invoice to its aging bucket by invoice age (days since invoice date)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const outstandingInvoices = statementInvoices.filter((inv: any) => parseFloat(inv.balance || "0") > 0 && inv.type !== "credit_note");
+
+      const invRows = outstandingInvoices.map((inv: any, idx: number) => {
+        const invDate = new Date(inv.date);
+        invDate.setHours(0, 0, 0, 0);
+        const age = Math.floor((today.getTime() - invDate.getTime()) / 86400000);
+        const bal = parseFloat(inv.balance || "0");
+        const fmt = (v: number) => v > 0 ? `${currencySymbol}${v.toFixed(2)}` : `<span style="color:#ccc;">—</span>`;
+        const b0 = age <= 30 ? bal : 0;
+        const b1 = age > 30 && age <= 60 ? bal : 0;
+        const b2 = age > 60 && age <= 90 ? bal : 0;
+        const b3 = age > 90 && age <= 120 ? bal : 0;
+        const b4 = age > 120 ? bal : 0;
+        const rowBg = idx % 2 === 1 ? "background:#fdfcfb;" : "";
+        return `<tr style="${rowBg}">
+          <td class="aging-label" style="font-size:11px;">${inv.invoiceNumber || "—"}<br><span style="font-weight:400;color:#888;font-size:10px;">${new Date(inv.date).toLocaleDateString("en-GB")} &middot; ${age}d ago</span></td>
+          <td class="aging-amount" style="font-size:12px;color:${b0>0?'#27ae60':'#ccc'};">${fmt(b0)}</td>
+          <td class="aging-amount" style="font-size:12px;color:${b1>0?'#e67e22':'#ccc'};">${fmt(b1)}</td>
+          <td class="aging-amount" style="font-size:12px;color:${b2>0?'#c0392b':'#ccc'};">${fmt(b2)}</td>
+          <td class="aging-amount" style="font-size:12px;color:${b3>0?'#c0392b':'#ccc'};">${fmt(b3)}</td>
+          <td class="aging-amount" style="font-size:12px;color:${b4>0?'#8b0000':'#ccc'};">${fmt(b4)}</td>
+          <td class="aging-amount" style="font-size:12px;font-weight:700;">${currencySymbol}${bal.toFixed(2)}</td>
+        </tr>`;
+      }).join("");
+
       return `
     <div class="aging-section">
       <div class="aging-title">Aging Analysis — Outstanding Balances</div>
       <table class="aging-table">
         <thead>
           <tr>
-            <th style="text-align:left;">Customer</th>
-            <th>Current<br><span style="font-weight:400;font-size:9px;">(Not Yet Due)</span></th>
-            <th>1–30 Days</th>
+            <th style="text-align:left;">Invoice</th>
+            <th>0–30 Days</th>
             <th>31–60 Days</th>
             <th>61–90 Days</th>
-            <th>90+ Days</th>
-            <th>Total Outstanding</th>
+            <th>91–120 Days</th>
+            <th>120+ Days</th>
+            <th>Total</th>
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td class="aging-label">${customer.name}</td>
-            <td class="aging-amount aging-ok">${currencySymbol}${parseFloat(ag.current).toFixed(2)}</td>
-            <td class="aging-amount aging-warning">${currencySymbol}${parseFloat(ag.days1_30).toFixed(2)}</td>
-            <td class="aging-amount aging-overdue">${currencySymbol}${parseFloat(ag.days31_60).toFixed(2)}</td>
-            <td class="aging-amount aging-overdue">${currencySymbol}${parseFloat(ag.days61_90).toFixed(2)}</td>
-            <td class="aging-amount aging-overdue">${currencySymbol}${parseFloat(ag.days90plus).toFixed(2)}</td>
-            <td class="aging-amount" style="font-size:15px;">${currencySymbol}${total}</td>
+          ${invRows}
+          <tr style="background:#1a1a1a;">
+            <td style="padding:10px 12px;font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:0.5px;">TOTAL</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.current)>0?'#6ee897':'#555'};font-size:13px;">${parseFloat(ag.current)>0?currencySymbol+parseFloat(ag.current).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.days1_30)>0?'#ffd080':'#555'};font-size:13px;">${parseFloat(ag.days1_30)>0?currencySymbol+parseFloat(ag.days1_30).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.days31_60)>0?'#ff8a65':'#555'};font-size:13px;">${parseFloat(ag.days31_60)>0?currencySymbol+parseFloat(ag.days31_60).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.days61_90)>0?'#ff5252':'#555'};font-size:13px;">${parseFloat(ag.days61_90)>0?currencySymbol+parseFloat(ag.days61_90).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.days90plus)>0?'#ff1744':'#555'};font-size:13px;">${parseFloat(ag.days90plus)>0?currencySymbol+parseFloat(ag.days90plus).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:#fff;font-size:15px;">${currencySymbol}${total}</td>
           </tr>
         </tbody>
       </table>
