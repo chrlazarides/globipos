@@ -1,4 +1,4 @@
-import { useState, Fragment } from "react";
+import { useState, Fragment, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,10 +14,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
 import type { Customer, Invoice } from "@shared/schema";
 
 export default function Reports() {
   const { toast } = useToast();
+  const [location] = useLocation();
+  const defaultTab = useMemo(() => {
+    const params = new URLSearchParams(location.includes("?") ? location.split("?")[1] : "");
+    return params.get("tab") || "sales";
+  }, []);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [expandedStatement, setExpandedStatement] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<string>("all");
@@ -100,7 +106,7 @@ export default function Reports() {
     <div className="p-6 space-y-6">
       <PageHeader title="Reports & Statements" description="View sales reports and customer account statements" />
 
-      <Tabs defaultValue="sales">
+      <Tabs defaultValue={defaultTab}>
         <TabsList>
           <TabsTrigger value="sales" data-testid="tab-sales-report">
             <BarChart3 className="w-4 h-4 mr-1" /> Sales Report

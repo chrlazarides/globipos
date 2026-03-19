@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList } from "lucide-react";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import {
   Sidebar,
@@ -23,6 +23,7 @@ const mainNav = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Items", url: "/items", icon: Package },
   { title: "Customers", url: "/customers", icon: Users },
+  { title: "Customer Statements", url: "/reports?tab=statements", icon: ClipboardList },
   { title: "Email Log", url: "/email-logs", icon: Mail },
 ];
 
@@ -74,7 +75,12 @@ function NavSection({ label, items }: { label: string; items: { title: string; u
       <SidebarGroupContent>
         <SidebarMenu>
           {items.map((item) => {
-            const isActive = location === item.url || (item.url !== "/" && location.startsWith(item.url));
+            const itemPath = item.url.split("?")[0];
+            const itemQuery = item.url.includes("?") ? item.url.split("?")[1] : null;
+            const [locPath, locQuery] = [location.split("?")[0], location.includes("?") ? location.split("?")[1] : ""];
+            const isActive = itemQuery
+              ? locPath === itemPath && locQuery.includes(itemQuery)
+              : location === item.url || (item.url !== "/" && locPath.startsWith(itemPath));
             return (
               <SidebarMenuItem key={item.title}>
                 <SidebarMenuButton asChild data-active={isActive}>
