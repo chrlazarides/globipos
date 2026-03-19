@@ -382,7 +382,25 @@ export default function Reports() {
                             </TableCell>
                           </TableRow>
 
-                          {isExpanded && (
+                          {isExpanded && (() => {
+                            const today = new Date(); today.setHours(0,0,0,0);
+                            const getAgeBucket = (dateStr: string) => {
+                              const d = new Date(dateStr); d.setHours(0,0,0,0);
+                              const days = Math.floor((today.getTime() - d.getTime()) / 86400000);
+                              if (days <= 30) return 0;
+                              if (days <= 60) return 1;
+                              if (days <= 90) return 2;
+                              if (days <= 120) return 3;
+                              return 4;
+                            };
+                            const bucketColors = [
+                              "text-green-700 dark:text-green-400",
+                              "text-yellow-600 dark:text-yellow-400",
+                              "text-orange-600 dark:text-orange-400",
+                              "text-red-600 dark:text-red-400",
+                              "text-red-700 dark:text-red-500 font-bold",
+                            ];
+                            return (
                             <TableRow key={`${st.customerId}-detail`} className="bg-muted/20 dark:bg-muted/10">
                               <TableCell colSpan={9} className="p-0">
                                 <div className="mx-6 my-3 rounded-lg border border-border overflow-hidden text-xs">
@@ -394,12 +412,19 @@ export default function Reports() {
                                         <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Due Date</th>
                                         <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Details</th>
                                         <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Total</th>
-                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Paid</th>
-                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Balance</th>
+                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-green-700 dark:text-green-400">0–30d</th>
+                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-yellow-600 dark:text-yellow-400">31–60d</th>
+                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-orange-600 dark:text-orange-400">61–90d</th>
+                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-red-600 dark:text-red-400">91–120d</th>
+                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-red-700 dark:text-red-500">120+d</th>
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {stInvoices.map((inv: any, i: number) => (
+                                      {stInvoices.map((inv: any, i: number) => {
+                                        const bal = parseFloat(inv.balance || "0");
+                                        const bucket = inv.date ? getAgeBucket(inv.date) : -1;
+                                        const bucketAmounts = [0,1,2,3,4].map(b => (bal > 0 && bucket === b) ? bal : 0);
+                                        return (
                                         <tr key={`inv-${i}`} className="border-t border-border/50 hover:bg-muted/20">
                                           <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
                                           <td className="px-3 py-2 text-muted-foreground">{inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</td>
@@ -412,14 +437,14 @@ export default function Reports() {
                                             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{inv.status}</Badge>
                                           </td>
                                           <td className="px-3 py-2 text-right font-medium">€{parseFloat(inv.total || "0").toFixed(2)}</td>
-                                          <td className="px-3 py-2 text-right text-green-700 dark:text-green-400">
-                                            {parseFloat(inv.paid || "0") > 0 ? `€${parseFloat(inv.paid).toFixed(2)}` : "—"}
-                                          </td>
-                                          <td className={`px-3 py-2 text-right font-semibold ${parseFloat(inv.balance || "0") > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
-                                            €{parseFloat(inv.balance || "0").toFixed(2)}
-                                          </td>
+                                          {bucketAmounts.map((amt, b) => (
+                                            <td key={b} className={`px-3 py-2 text-right font-semibold ${amt > 0 ? bucketColors[b] : "text-muted-foreground"}`}>
+                                              {amt > 0 ? `€${amt.toFixed(2)}` : "—"}
+                                            </td>
+                                          ))}
                                         </tr>
-                                      ))}
+                                        );
+                                      })}
 
                                       {stPayments.map((pmt: any, i: number) => {
                                         const method = pmt.paymentMethod || "other";
@@ -440,17 +465,16 @@ export default function Reports() {
                                               {details && <span className="ml-2 text-muted-foreground">{details}</span>}
                                             </td>
                                             <td className="px-3 py-2" />
-                                            <td className="px-3 py-2 text-right font-semibold text-green-700 dark:text-green-400">
+                                            <td colSpan={5} className="px-3 py-2 text-right font-semibold text-green-700 dark:text-green-400">
                                               −€{parseFloat(pmt.amount || "0").toFixed(2)}
                                             </td>
-                                            <td className="px-3 py-2" />
                                           </tr>
                                         );
                                       })}
 
                                       {stInvoices.length === 0 && stPayments.length === 0 && (
                                         <tr>
-                                          <td colSpan={7} className="px-3 py-4 text-center text-muted-foreground">No transactions</td>
+                                          <td colSpan={10} className="px-3 py-4 text-center text-muted-foreground">No transactions</td>
                                         </tr>
                                       )}
                                     </tbody>
@@ -458,7 +482,8 @@ export default function Reports() {
                                 </div>
                               </TableCell>
                             </TableRow>
-                          )}
+                            );
+                          })()}
                         </Fragment>
                       );
                     })
