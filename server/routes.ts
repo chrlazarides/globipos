@@ -1372,7 +1372,13 @@ export async function registerRoutes(
       const { password } = req.body;
       const stored = await storage.getSetting("settings_password");
       if (!stored || !stored.value) return res.json({ valid: true, hasPassword: false });
-      const valid = stored.value === hashSettingsPassword(password || "");
+      const storedVal = stored.value;
+      let valid = false;
+      if (storedVal.startsWith("$2b$") || storedVal.startsWith("$2a$")) {
+        valid = verifyPassword(password || "", storedVal);
+      } else {
+        valid = storedVal === hashSettingsPassword(password || "");
+      }
       res.json({ valid, hasPassword: true });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -1384,11 +1390,31 @@ export async function registerRoutes(
       const { currentPassword, newPassword } = req.body;
       const stored = await storage.getSetting("settings_password");
       if (stored && stored.value) {
-        if (stored.value !== hashSettingsPassword(currentPassword || "")) {
+        const storedVal = stored.value;
+        let valid = false;
+        if (storedVal.startsWith("$2b$") || storedVal.startsWith("$2a$")) {
+          valid = verifyPassword(currentPassword || "", storedVal);
+        } else {
+          valid = storedVal === hashSettingsPassword(currentPassword || "");
+        }
+        if (!valid) {
           return res.status(403).json({ message: "Current password is incorrect" });
         }
       }
       const hash = newPassword ? hashPassword(newPassword) : "";
+      await storage.upsertSetting("settings_password", hash, "Settings Password Hash", "security");
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/settings/admin-reset-password", async (req, res) => {
+    try {
+      if (!req.user || req.user.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      const { newPassword } = req.body;
+      if (!newPassword) return res.status(400).json({ message: "newPassword required" });
+      const hash = hashPassword(newPassword);
       await storage.upsertSetting("settings_password", hash, "Settings Password Hash", "security");
       res.json({ success: true });
     } catch (e: any) {
