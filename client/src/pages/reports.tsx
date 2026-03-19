@@ -296,11 +296,11 @@ export default function Reports() {
                     <TableHead className="w-8" />
                     <TableHead>Customer</TableHead>
                     <TableHead className="text-right">Balance Due</TableHead>
-                    <TableHead className="text-right text-green-700 dark:text-green-400">Current</TableHead>
-                    <TableHead className="text-right text-yellow-600 dark:text-yellow-400">1–30 Days</TableHead>
-                    <TableHead className="text-right text-orange-600 dark:text-orange-400">31–60 Days</TableHead>
-                    <TableHead className="text-right text-red-600 dark:text-red-400">61–90 Days</TableHead>
-                    <TableHead className="text-right text-red-700 dark:text-red-500">90+ Days</TableHead>
+                    <TableHead className="text-right text-green-700 dark:text-green-400">0–30 Days</TableHead>
+                    <TableHead className="text-right text-yellow-600 dark:text-yellow-400">31–60 Days</TableHead>
+                    <TableHead className="text-right text-orange-600 dark:text-orange-400">61–90 Days</TableHead>
+                    <TableHead className="text-right text-red-600 dark:text-red-400">91–120 Days</TableHead>
+                    <TableHead className="text-right text-red-700 dark:text-red-500">120+ Days</TableHead>
                     <TableHead className="w-[160px]" />
                   </TableRow>
                 </TableHeader>

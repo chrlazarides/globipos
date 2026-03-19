@@ -885,19 +885,20 @@ export class DatabaseStorage implements IStorage {
       const totalCredits = cns.reduce((s, i) => s + parseFloat(i.total), 0);
       const totalPaid = invs.reduce((s, i) => s + getPaid(i), 0);
 
-      // Aging analysis: bucket outstanding invoice balances by days past due date
+      // Aging analysis: bucket outstanding invoice balances by invoice age (days since invoice date)
+      // Buckets: Current=0-30 days, 31-60 days, 61-90 days, 91-120 days, 120+ days
       const aging = { current: 0, days1_30: 0, days31_60: 0, days61_90: 0, days90plus: 0 };
       for (const inv of invs) {
         const paid = getPaid(inv);
         const balance = parseFloat(inv.total) - paid;
         if (balance <= 0) continue;
-        const refDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
-        refDate.setHours(0, 0, 0, 0);
-        const daysOverdue = Math.floor((today.getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24));
-        if (daysOverdue <= 0) aging.current += balance;
-        else if (daysOverdue <= 30) aging.days1_30 += balance;
-        else if (daysOverdue <= 60) aging.days31_60 += balance;
-        else if (daysOverdue <= 90) aging.days61_90 += balance;
+        const invDate = new Date(inv.date);
+        invDate.setHours(0, 0, 0, 0);
+        const daysSince = Math.floor((today.getTime() - invDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysSince <= 30) aging.current += balance;
+        else if (daysSince <= 60) aging.days1_30 += balance;
+        else if (daysSince <= 90) aging.days31_60 += balance;
+        else if (daysSince <= 120) aging.days61_90 += balance;
         else aging.days90plus += balance;
       }
 
