@@ -9,15 +9,15 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker
       .register("/sw.js")
       .then((registration) => {
+        // Force check for updates every time the page loads (no 24h throttle)
+        registration.update();
+
         registration.addEventListener("updatefound", () => {
           const newWorker = registration.installing;
           if (newWorker) {
             newWorker.addEventListener("statechange", () => {
-              if (
-                newWorker.state === "activated" &&
-                navigator.serviceWorker.controller
-              ) {
-                console.log("VinTrade PWA updated to latest version");
+              if (newWorker.state === "activated") {
+                window.location.reload();
               }
             });
           }
@@ -26,5 +26,10 @@ if ("serviceWorker" in navigator) {
       .catch((error) => {
         console.log("Service worker registration failed:", error);
       });
+
+    // Reload whenever a new SW takes control
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      window.location.reload();
+    });
   });
 }

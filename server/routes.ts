@@ -154,6 +154,13 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // Serve sw.js with no-cache headers so browsers always get the latest version
+  app.get("/sw.js", (req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
+    next();
+  });
+
   activityMiddleware(app);
 
   // ─── AUTH ───────────────────────────────────────────────────────────────────

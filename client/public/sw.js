@@ -1,11 +1,11 @@
-const CACHE_NAME = 'vintrade-v4';
+const CACHE_NAME = 'vintrade-v5';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
   '/favicon.png'
 ];
 
-const API_CACHE_NAME = 'vintrade-api-v4';
+const API_CACHE_NAME = 'vintrade-api-v5';
 const CACHEABLE_API_ROUTES = [
   '/api/items',
   '/api/customers',
