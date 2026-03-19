@@ -1,11 +1,11 @@
-const CACHE_NAME = 'vintrade-v3';
+const CACHE_NAME = 'vintrade-v4';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
   '/favicon.png'
 ];
 
-const API_CACHE_NAME = 'vintrade-api-v3';
+const API_CACHE_NAME = 'vintrade-api-v4';
 const CACHEABLE_API_ROUTES = [
   '/api/items',
   '/api/customers',
@@ -35,6 +35,10 @@ self.addEventListener('activate', (event) => {
           .filter((name) => name !== CACHE_NAME && name !== API_CACHE_NAME)
           .map((name) => caches.delete(name))
       );
+    }).then(() => {
+      return self.clients.matchAll({ type: 'window' });
+    }).then((clients) => {
+      clients.forEach((client) => client.navigate(client.url));
     })
   );
   self.clients.claim();
@@ -73,26 +77,19 @@ self.addEventListener('fetch', (event) => {
   }
 
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const fetchPromise = fetch(event.request)
-        .then((response) => {
-          if (response.ok) {
-            const cloned = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, cloned);
-            });
-          }
-          return response;
-        })
-        .catch(() => {
-          if (event.request.mode === 'navigate') {
-            return caches.match('/');
-          }
-          return cached;
-        });
-
-      return cached || fetchPromise;
-    })
+    fetch(event.request)
+      .then((response) => {
+        if (response.ok) {
+          const cloned = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, cloned);
+          });
+        }
+        return response;
+      })
+      .catch(() => {
+        return caches.match(event.request);
+      })
   );
 });
 
