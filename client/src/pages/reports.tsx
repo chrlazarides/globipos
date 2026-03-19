@@ -26,6 +26,24 @@ export default function Reports() {
   }, []);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [expandedStatement, setExpandedStatement] = useState<string | null>(null);
+
+  const getInvAgeBucket = (dateStr: string): number => {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const d = new Date(dateStr); d.setHours(0,0,0,0);
+    const days = Math.floor((today.getTime() - d.getTime()) / 86400000);
+    if (days <= 30) return 0;
+    if (days <= 60) return 1;
+    if (days <= 90) return 2;
+    if (days <= 120) return 3;
+    return 4;
+  };
+  const ageBucketColors = [
+    "text-green-700 dark:text-green-400",
+    "text-yellow-600 dark:text-yellow-400",
+    "text-orange-600 dark:text-orange-400",
+    "text-red-600 dark:text-red-400",
+    "text-red-700 dark:text-red-500 font-bold",
+  ];
   const [selectedCustomer, setSelectedCustomer] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date();
@@ -382,26 +400,8 @@ export default function Reports() {
                             </TableCell>
                           </TableRow>
 
-                          {isExpanded && (() => {
-                            const today = new Date(); today.setHours(0,0,0,0);
-                            const getAgeBucket = (dateStr: string) => {
-                              const d = new Date(dateStr); d.setHours(0,0,0,0);
-                              const days = Math.floor((today.getTime() - d.getTime()) / 86400000);
-                              if (days <= 30) return 0;
-                              if (days <= 60) return 1;
-                              if (days <= 90) return 2;
-                              if (days <= 120) return 3;
-                              return 4;
-                            };
-                            const bucketColors = [
-                              "text-green-700 dark:text-green-400",
-                              "text-yellow-600 dark:text-yellow-400",
-                              "text-orange-600 dark:text-orange-400",
-                              "text-red-600 dark:text-red-400",
-                              "text-red-700 dark:text-red-500 font-bold",
-                            ];
-                            return (
-                            <TableRow key={`${st.customerId}-detail`} className="bg-muted/20 dark:bg-muted/10">
+                          {isExpanded && (
+                            <TableRow className="bg-muted/20 dark:bg-muted/10">
                               <TableCell colSpan={9} className="p-0">
                                 <div className="mx-6 my-3 rounded-lg border border-border overflow-hidden text-xs">
                                   <table className="w-full border-collapse">
@@ -422,7 +422,7 @@ export default function Reports() {
                                     <tbody>
                                       {stInvoices.map((inv: any, i: number) => {
                                         const bal = parseFloat(inv.balance || "0");
-                                        const bucket = inv.date ? getAgeBucket(inv.date) : -1;
+                                        const bucket = inv.date ? getInvAgeBucket(inv.date) : -1;
                                         const bucketAmounts = [0,1,2,3,4].map(b => (bal > 0 && bucket === b) ? bal : 0);
                                         return (
                                         <tr key={`inv-${i}`} className="border-t border-border/50 hover:bg-muted/20">
@@ -438,7 +438,7 @@ export default function Reports() {
                                           </td>
                                           <td className="px-3 py-2 text-right font-medium">€{parseFloat(inv.total || "0").toFixed(2)}</td>
                                           {bucketAmounts.map((amt, b) => (
-                                            <td key={b} className={`px-3 py-2 text-right font-semibold ${amt > 0 ? bucketColors[b] : "text-muted-foreground"}`}>
+                                            <td key={b} className={`px-3 py-2 text-right font-semibold ${amt > 0 ? ageBucketColors[b] : "text-muted-foreground"}`}>
                                               {amt > 0 ? `€${amt.toFixed(2)}` : "—"}
                                             </td>
                                           ))}
@@ -482,8 +482,7 @@ export default function Reports() {
                                 </div>
                               </TableCell>
                             </TableRow>
-                            );
-                          })()}
+                          )}
                         </Fragment>
                       );
                     })
