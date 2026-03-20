@@ -419,6 +419,7 @@ export default function Reports() {
             };
             const endOfMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
             const currentMonthLabel = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+            const prevMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
 
             const getInvStatus = (daysOverdue: number | null) => {
               if (daysOverdue === null) return null;
@@ -499,7 +500,7 @@ export default function Reports() {
                                         )}
                                         {prev > 0 && (
                                           <div className="flex items-center gap-1.5">
-                                            <span className="text-[10px] text-foreground font-semibold">Prior month</span>
+                                            <span className="text-[10px] text-foreground font-semibold">Prior month ({prevMonthLabel})</span>
                                             <span className="font-semibold text-green-700 dark:text-green-400">€{prev.toFixed(2)}</span>
                                           </div>
                                         )}
@@ -569,7 +570,7 @@ export default function Reports() {
                                               )}
                                               {parseFloat(st.dueByEomPrevMonth || "0") > 0 && (
                                                 <div className="flex items-center gap-1.5 text-xs">
-                                                  <span className="text-foreground font-semibold">Prior month:</span>
+                                                  <span className="text-foreground font-semibold">Prior month ({prevMonthLabel}):</span>
                                                   <span className="font-semibold text-green-700 dark:text-green-400">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
                                                 </div>
                                               )}

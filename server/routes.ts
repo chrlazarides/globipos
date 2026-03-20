@@ -3476,6 +3476,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       const dueByEOM = (parseFloat(ag.dueThisMonth||"0") + parseFloat(ag.overdue1_30||"0") + parseFloat(ag.overdue31_60||"0") + parseFloat(ag.overdue60plus||"0")).toFixed(2);
       const endOfMonthDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
       const currentMonthLabel = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+      const prevMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
       const eomCur = parseFloat(statement.dueByEomCurrentMonth||"0");
       const eomPrev = parseFloat(statement.dueByEomPrevMonth||"0");
 
@@ -3531,7 +3532,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
         </div>
         ${(eomCur > 0 || eomPrev > 0) ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #ffe082;display:flex;gap:20px;">
           ${eomCur > 0 ? `<span style="font-size:11px;color:#1a1a1a;font-weight:600;">${currentMonthLabel}: <strong style="color:#2e7d32;">${currencySymbol}${eomCur.toFixed(2)}</strong></span>` : ""}
-          ${eomPrev > 0 ? `<span style="font-size:11px;color:#1a1a1a;font-weight:600;">Prior month: <strong style="color:#2e7d32;">${currencySymbol}${eomPrev.toFixed(2)}</strong></span>` : ""}
+          ${eomPrev > 0 ? `<span style="font-size:11px;color:#1a1a1a;font-weight:600;">Prior month (${prevMonthLabel}): <strong style="color:#2e7d32;">${currencySymbol}${eomPrev.toFixed(2)}</strong></span>` : ""}
         </div>` : ""}
       </div>` : ""}
       <table class="aging-table">
