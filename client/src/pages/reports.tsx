@@ -418,6 +418,9 @@ export default function Reports() {
               other: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
             };
             const endOfMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+            const currentMonthLabel = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+            const prevMonthDate = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
+            const prevMonthLabel = prevMonthDate.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
 
             const getInvStatus = (daysOverdue: number | null) => {
               if (daysOverdue === null) return null;
@@ -483,8 +486,28 @@ export default function Reports() {
                                 <TableCell className={`text-right font-semibold text-sm ${parseFloat(st.balance) > 0 ? "text-red-600 dark:text-red-400" : ""}`} data-testid={`text-balance-${st.customerId}`}>
                                   {parseFloat(st.balance) > 0 ? `€${parseFloat(st.balance).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
                                 </TableCell>
-                                <TableCell className={`text-right text-sm font-semibold ${parseFloat(st.dueByEndOfMonth || "0") > 0 ? "text-amber-600 dark:text-amber-400" : ""}`} data-testid={`text-due-eom-${st.customerId}`}>
-                                  {parseFloat(st.dueByEndOfMonth || "0") > 0 ? `€${parseFloat(st.dueByEndOfMonth).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
+                                <TableCell className="text-right text-sm" data-testid={`text-due-eom-${st.customerId}`}>
+                                  {(() => {
+                                    const cur = parseFloat(st.dueByEomCurrentMonth || "0");
+                                    const prev = parseFloat(st.dueByEomPrevMonth || "0");
+                                    if (cur <= 0 && prev <= 0) return <span className="text-muted-foreground font-normal">—</span>;
+                                    return (
+                                      <div className="flex flex-col items-end gap-0.5">
+                                        {cur > 0 && (
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="text-[10px] text-muted-foreground font-normal">{currentMonthLabel}</span>
+                                            <span className="font-semibold text-amber-600 dark:text-amber-400">€{cur.toFixed(2)}</span>
+                                          </div>
+                                        )}
+                                        {prev > 0 && (
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="text-[10px] text-muted-foreground font-normal">{prevMonthLabel}</span>
+                                            <span className="font-semibold text-amber-700 dark:text-amber-500">€{prev.toFixed(2)}</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
                                 </TableCell>
                                 <TableCell className="text-right text-sm text-green-700 dark:text-green-400" data-testid={`text-within-terms-${st.customerId}`}>
                                   {parseFloat(ag.withinTermsFuture) > 0 ? `€${parseFloat(ag.withinTermsFuture).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
@@ -530,11 +553,29 @@ export default function Reports() {
 
                                       {/* End-of-month summary banner */}
                                       {parseFloat(st.dueByEndOfMonth || "0") > 0 && (
-                                        <div className="flex items-center gap-3 rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-2 text-sm">
-                                          <span className="font-semibold text-amber-800 dark:text-amber-300">Due by {endOfMonthLabel}:</span>
-                                          <span className="font-bold text-amber-900 dark:text-amber-200">€{parseFloat(st.dueByEndOfMonth).toFixed(2)}</span>
-                                          {parseFloat(st.totalOverdue || "0") > 0 && (
-                                            <span className="text-xs text-red-600 dark:text-red-400 ml-2">(includes €{parseFloat(st.totalOverdue).toFixed(2)} overdue)</span>
+                                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-2.5 text-sm">
+                                          <div className="flex items-center gap-3 flex-wrap">
+                                            <span className="font-semibold text-amber-800 dark:text-amber-300">Due by {endOfMonthLabel}:</span>
+                                            <span className="font-bold text-amber-900 dark:text-amber-200">€{parseFloat(st.dueByEndOfMonth).toFixed(2)}</span>
+                                            {parseFloat(st.totalOverdue || "0") > 0 && (
+                                              <span className="text-xs text-red-600 dark:text-red-400">(includes €{parseFloat(st.totalOverdue).toFixed(2)} overdue)</span>
+                                            )}
+                                          </div>
+                                          {(parseFloat(st.dueByEomCurrentMonth || "0") > 0 || parseFloat(st.dueByEomPrevMonth || "0") > 0) && (
+                                            <div className="flex items-center gap-4 mt-1.5 pt-1.5 border-t border-amber-200/60 dark:border-amber-800/40">
+                                              {parseFloat(st.dueByEomCurrentMonth || "0") > 0 && (
+                                                <div className="flex items-center gap-1.5 text-xs">
+                                                  <span className="text-amber-700 dark:text-amber-400">{currentMonthLabel}:</span>
+                                                  <span className="font-semibold text-amber-800 dark:text-amber-300">€{parseFloat(st.dueByEomCurrentMonth).toFixed(2)}</span>
+                                                </div>
+                                              )}
+                                              {parseFloat(st.dueByEomPrevMonth || "0") > 0 && (
+                                                <div className="flex items-center gap-1.5 text-xs">
+                                                  <span className="text-amber-700 dark:text-amber-400">{prevMonthLabel}:</span>
+                                                  <span className="font-semibold text-amber-800 dark:text-amber-300">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
+                                                </div>
+                                              )}
+                                            </div>
                                           )}
                                         </div>
                                       )}
