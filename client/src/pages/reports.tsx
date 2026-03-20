@@ -26,6 +26,7 @@ export default function Reports() {
   }, []);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [expandedStatement, setExpandedStatement] = useState<string | null>(null);
+  const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
 
   const [selectedCustomer, setSelectedCustomer] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState(() => {
@@ -233,11 +234,13 @@ export default function Reports() {
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-base">Profit Margin by Customer</CardTitle>
+                    <p className="text-xs text-muted-foreground mt-0.5">Click a row to see individual invoices</p>
                   </CardHeader>
                   <CardContent className="p-0">
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead className="w-8" />
                           <TableHead>Customer</TableHead>
                           <TableHead className="text-center">Invoices</TableHead>
                           <TableHead className="text-right">Revenue (Ex-VAT)</TableHead>
@@ -247,22 +250,101 @@ export default function Reports() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {salesReport.customerProfits.map((cp) => (
-                          <TableRow key={cp.customerId}>
-                            <TableCell className="font-medium text-sm">{cp.customerName}</TableCell>
-                            <TableCell className="text-center text-sm">{cp.invoiceCount}</TableCell>
-                            <TableCell className="text-right text-sm">€{parseFloat(cp.revenue).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</TableCell>
-                            <TableCell className="text-right text-sm">€{parseFloat(cp.cost).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</TableCell>
-                            <TableCell className={`text-right text-sm font-medium ${parseFloat(cp.profit) >= 0 ? "text-green-600" : "text-red-500"}`}>
-                              €{parseFloat(cp.profit).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
-                            </TableCell>
-                            <TableCell className="text-right text-sm">
-                              <Badge variant={parseFloat(cp.marginPct) >= 20 ? "default" : parseFloat(cp.marginPct) >= 0 ? "secondary" : "destructive"} data-testid={`badge-margin-${cp.customerId}`}>
-                                {cp.marginPct}%
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                        {salesReport.customerProfits.map((cp) => {
+                          const isExpanded = expandedCustomer === cp.customerId;
+                          const custInvoices = salesReport.invoices.filter(inv => inv.customerId === cp.customerId);
+                          return (
+                            <Fragment key={cp.customerId}>
+                              <TableRow
+                                className="cursor-pointer select-none hover:bg-muted/40"
+                                onClick={() => setExpandedCustomer(isExpanded ? null : cp.customerId)}
+                                data-testid={`row-customer-profit-${cp.customerId}`}
+                              >
+                                <TableCell className="pr-0 pl-3">
+                                  {isExpanded
+                                    ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                                    : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                                </TableCell>
+                                <TableCell className="font-medium text-sm">{cp.customerName}</TableCell>
+                                <TableCell className="text-center text-sm">{cp.invoiceCount}</TableCell>
+                                <TableCell className="text-right text-sm">€{parseFloat(cp.revenue).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</TableCell>
+                                <TableCell className="text-right text-sm">€{parseFloat(cp.cost).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</TableCell>
+                                <TableCell className={`text-right text-sm font-medium ${parseFloat(cp.profit) >= 0 ? "text-green-600" : "text-red-500"}`}>
+                                  €{parseFloat(cp.profit).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
+                                </TableCell>
+                                <TableCell className="text-right text-sm">
+                                  <Badge variant={parseFloat(cp.marginPct) >= 20 ? "default" : parseFloat(cp.marginPct) >= 0 ? "secondary" : "destructive"} data-testid={`badge-margin-${cp.customerId}`}>
+                                    {cp.marginPct}%
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+
+                              {isExpanded && (
+                                <TableRow className="bg-muted/20 dark:bg-muted/10 hover:bg-muted/20">
+                                  <TableCell colSpan={7} className="p-0">
+                                    <div className="mx-6 my-2 rounded-lg border border-border overflow-hidden text-xs">
+                                      <table className="w-full border-collapse">
+                                        <thead>
+                                          <tr className="bg-muted/60 dark:bg-muted/30 text-muted-foreground">
+                                            <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Invoice</th>
+                                            <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Date</th>
+                                            <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Status</th>
+                                            <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Total (incl. VAT)</th>
+                                            <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Revenue (Ex-VAT)</th>
+                                            <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Cost</th>
+                                            <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Profit</th>
+                                            <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Margin</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {custInvoices.length === 0 ? (
+                                            <tr>
+                                              <td colSpan={8} className="px-3 py-3 text-center text-muted-foreground">No invoices in this period</td>
+                                            </tr>
+                                          ) : custInvoices.map((inv, i) => {
+                                            const exVatRev = parseFloat(inv.subtotal) - parseFloat(inv.discountAmount || "0");
+                                            return (
+                                              <tr key={inv.id} className={`border-t border-border/50 hover:bg-muted/20 ${i % 2 === 1 ? "bg-muted/5" : ""}`}>
+                                                <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
+                                                <td className="px-3 py-2 text-muted-foreground">{formatDate(inv.date)}</td>
+                                                <td className="px-3 py-2">
+                                                  <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                                    inv.status === "paid" ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                                                    : inv.status === "overdue" ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                                                    : "bg-muted text-muted-foreground"
+                                                  }`}>
+                                                    {inv.status}
+                                                  </span>
+                                                </td>
+                                                <td className="px-3 py-2 text-right font-medium">€{parseFloat(inv.total).toFixed(2)}</td>
+                                                <td className="px-3 py-2 text-right">€{exVatRev.toFixed(2)}</td>
+                                                <td className="px-3 py-2 text-right">€{parseFloat(inv.costTotal).toFixed(2)}</td>
+                                                <td className={`px-3 py-2 text-right font-semibold ${parseFloat(inv.profit) >= 0 ? "text-green-600" : "text-red-500"}`}>
+                                                  €{parseFloat(inv.profit).toFixed(2)}
+                                                </td>
+                                                <td className="px-3 py-2 text-right">{inv.marginPct}%</td>
+                                              </tr>
+                                            );
+                                          })}
+                                          {custInvoices.length > 0 && (
+                                            <tr className="border-t-2 border-border bg-muted/40 dark:bg-muted/20 font-semibold">
+                                              <td className="px-3 py-2 text-[10px] uppercase tracking-wide text-muted-foreground" colSpan={3}>Total</td>
+                                              <td className="px-3 py-2 text-right">€{custInvoices.reduce((s, i) => s + parseFloat(i.total), 0).toFixed(2)}</td>
+                                              <td className="px-3 py-2 text-right">€{parseFloat(cp.revenue).toFixed(2)}</td>
+                                              <td className="px-3 py-2 text-right">€{parseFloat(cp.cost).toFixed(2)}</td>
+                                              <td className={`px-3 py-2 text-right ${parseFloat(cp.profit) >= 0 ? "text-green-600" : "text-red-500"}`}>€{parseFloat(cp.profit).toFixed(2)}</td>
+                                              <td className="px-3 py-2 text-right">{cp.marginPct}%</td>
+                                            </tr>
+                                          )}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                            </Fragment>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </CardContent>
