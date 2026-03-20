@@ -3502,17 +3502,17 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
         const bOv60plus = !isWithinTerms && daysOverdue > 60 ? bal : 0;
 
         const statusLabel = isWithinTerms
-          ? (isDueThisMonth ? `<span style="color:#f39c12;font-size:9px;">DUE THIS MONTH</span>` : `<span style="color:#27ae60;font-size:9px;">WITHIN TERMS</span>`)
-          : `<span style="color:#e74c3c;font-size:9px;">OVERDUE ${daysOverdue}d</span>`;
+          ? (isDueThisMonth ? `<span style="color:#1976d2;font-size:9px;">DUE THIS MONTH</span>` : `<span style="color:#039be5;font-size:9px;">WITHIN TERMS</span>`)
+          : `<span style="color:#0d47a1;font-size:9px;font-weight:700;">OVERDUE ${daysOverdue}d</span>`;
 
         const rowBg = idx % 2 === 1 ? "background:#fdfcfb;" : "";
         return `<tr style="${rowBg}">
           <td class="aging-label" style="font-size:11px;">${inv.invoiceNumber || "—"}<br><span style="font-weight:400;color:#888;font-size:10px;">${new Date(inv.date).toLocaleDateString("en-GB")} &middot; Due: ${dueDateStr}</span><br>${statusLabel}</td>
-          <td class="aging-amount" style="font-size:12px;color:${bFuture>0?'#27ae60':'#ccc'};">${fmt(bFuture)}</td>
-          <td class="aging-amount" style="font-size:12px;color:${bThisMonth>0?'#f39c12':'#ccc'};">${fmt(bThisMonth)}</td>
-          <td class="aging-amount" style="font-size:12px;color:${bOv1_30>0?'#e67e22':'#ccc'};">${fmt(bOv1_30)}</td>
-          <td class="aging-amount" style="font-size:12px;color:${bOv31_60>0?'#c0392b':'#ccc'};">${fmt(bOv31_60)}</td>
-          <td class="aging-amount" style="font-size:12px;color:${bOv60plus>0?'#8b0000':'#ccc'};">${fmt(bOv60plus)}</td>
+          <td class="aging-amount" style="font-size:12px;color:${bFuture>0?'#039be5':'#ccc'};">${fmt(bFuture)}</td>
+          <td class="aging-amount" style="font-size:12px;color:${bThisMonth>0?'#1976d2':'#ccc'};">${fmt(bThisMonth)}</td>
+          <td class="aging-amount" style="font-size:12px;color:${bOv1_30>0?'#1565c0':'#ccc'};">${fmt(bOv1_30)}</td>
+          <td class="aging-amount" style="font-size:12px;color:${bOv31_60>0?'#0d47a1':'#ccc'};">${fmt(bOv31_60)}</td>
+          <td class="aging-amount" style="font-size:12px;font-weight:700;color:${bOv60plus>0?'#003c8f':'#ccc'};">${fmt(bOv60plus)}</td>
           <td class="aging-amount" style="font-size:12px;font-weight:700;">${currencySymbol}${bal.toFixed(2)}</td>
         </tr>`;
       }).join("");
@@ -3520,20 +3520,20 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       return `
     <div class="aging-section">
       <div class="aging-title">Aging Analysis — Outstanding Balances (by Payment Terms)</div>
-      ${parseFloat(dueByEOM) > 0 ? `<div style="background:#fff8e1;border:1px solid #ffe082;border-radius:4px;padding:8px 14px;margin-bottom:10px;font-size:12px;">
-        <strong style="color:#e65100;">Due by ${endOfMonthDate}:</strong>
-        <span style="font-size:14px;font-weight:700;color:#bf360c;margin-left:8px;">${currencySymbol}${dueByEOM}</span>
-        ${parseFloat(statement.totalOverdue||"0") > 0 ? `<span style="color:#c62828;font-size:11px;margin-left:8px;">(incl. ${currencySymbol}${parseFloat(statement.totalOverdue).toFixed(2)} overdue)</span>` : ""}
+      ${parseFloat(dueByEOM) > 0 ? `<div style="background:#e3f2fd;border:1px solid #90caf9;border-radius:4px;padding:8px 14px;margin-bottom:10px;font-size:12px;">
+        <strong style="color:#1565c0;">Due by ${endOfMonthDate}:</strong>
+        <span style="font-size:14px;font-weight:700;color:#0d47a1;margin-left:8px;">${currencySymbol}${dueByEOM}</span>
+        ${parseFloat(statement.totalOverdue||"0") > 0 ? `<span style="color:#1976d2;font-size:11px;margin-left:8px;">(incl. ${currencySymbol}${parseFloat(statement.totalOverdue).toFixed(2)} overdue)</span>` : ""}
       </div>` : ""}
       <table class="aging-table">
         <thead>
           <tr>
             <th style="text-align:left;">Invoice</th>
-            <th>Within Terms</th>
-            <th style="color:#f39c12;">Due This Month</th>
-            <th style="color:#e67e22;">Overdue 1–30d</th>
-            <th style="color:#c0392b;">Overdue 31–60d</th>
-            <th style="color:#8b0000;">Overdue 60+d</th>
+            <th style="color:#90caf9;">Within Terms</th>
+            <th style="color:#64b5f6;">Due This Month</th>
+            <th style="color:#42a5f5;">Overdue 1–30d</th>
+            <th style="color:#2196f3;">Overdue 31–60d</th>
+            <th style="color:#448aff;">Overdue 60+d</th>
             <th>Total</th>
           </tr>
         </thead>
@@ -3541,11 +3541,11 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
           ${invRows}
           <tr style="background:#1a1a1a;">
             <td style="padding:10px 12px;font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:0.5px;">TOTAL</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.withinTermsFuture||"0")>0?'#6ee897':'#555'};font-size:13px;">${parseFloat(ag.withinTermsFuture||"0")>0?currencySymbol+parseFloat(ag.withinTermsFuture).toFixed(2):'—'}</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.dueThisMonth||"0")>0?'#ffd080':'#555'};font-size:13px;">${parseFloat(ag.dueThisMonth||"0")>0?currencySymbol+parseFloat(ag.dueThisMonth).toFixed(2):'—'}</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.overdue1_30||"0")>0?'#ff8a65':'#555'};font-size:13px;">${parseFloat(ag.overdue1_30||"0")>0?currencySymbol+parseFloat(ag.overdue1_30).toFixed(2):'—'}</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.overdue31_60||"0")>0?'#ff5252':'#555'};font-size:13px;">${parseFloat(ag.overdue31_60||"0")>0?currencySymbol+parseFloat(ag.overdue31_60).toFixed(2):'—'}</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.overdue60plus||"0")>0?'#ff1744':'#555'};font-size:13px;">${parseFloat(ag.overdue60plus||"0")>0?currencySymbol+parseFloat(ag.overdue60plus).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.withinTermsFuture||"0")>0?'#90caf9':'#555'};font-size:13px;">${parseFloat(ag.withinTermsFuture||"0")>0?currencySymbol+parseFloat(ag.withinTermsFuture).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.dueThisMonth||"0")>0?'#64b5f6':'#555'};font-size:13px;">${parseFloat(ag.dueThisMonth||"0")>0?currencySymbol+parseFloat(ag.dueThisMonth).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.overdue1_30||"0")>0?'#42a5f5':'#555'};font-size:13px;">${parseFloat(ag.overdue1_30||"0")>0?currencySymbol+parseFloat(ag.overdue1_30).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.overdue31_60||"0")>0?'#2196f3':'#555'};font-size:13px;">${parseFloat(ag.overdue31_60||"0")>0?currencySymbol+parseFloat(ag.overdue31_60).toFixed(2):'—'}</td>
+            <td class="aging-amount" style="color:${parseFloat(ag.overdue60plus||"0")>0?'#448aff':'#555'};font-size:13px;font-weight:700;">${parseFloat(ag.overdue60plus||"0")>0?currencySymbol+parseFloat(ag.overdue60plus).toFixed(2):'—'}</td>
             <td class="aging-amount" style="color:#fff;font-size:15px;">${currencySymbol}${total}</td>
           </tr>
         </tbody>
