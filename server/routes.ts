@@ -538,11 +538,11 @@ export async function registerRoutes(
   app.post("/api/items/import", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      const sheetName = req.body.sheetName || workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
       if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
-      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const rows: any[] = worksheetToJson(sheet, "");
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
@@ -751,11 +751,11 @@ export async function registerRoutes(
   app.post("/api/customers/import", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      const sheetName = req.body.sheetName || workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
       if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
-      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const rows: any[] = worksheetToJson(sheet, "");
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
@@ -1527,11 +1527,11 @@ export async function registerRoutes(
   app.post("/api/suppliers/import", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      const sheetName = req.body.sheetName || workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
       if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
-      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const rows: any[] = worksheetToJson(sheet, "");
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
@@ -1587,11 +1587,11 @@ export async function registerRoutes(
   app.post("/api/categories/import", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      const sheetName = req.body.sheetName || workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
       if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
-      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const rows: any[] = worksheetToJson(sheet, "");
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};

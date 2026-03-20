@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 type FieldDef = {
   key: string;
@@ -72,12 +72,21 @@ export function ImportDialog({
     setFile(selectedFile);
 
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
-        const data = new Uint8Array(ev.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: "array" });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const json: any[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+        const fileExt = selectedFile.name.split(".").pop()?.toLowerCase();
+        let json: any[] = [];
+
+        if (fileExt === "csv") {
+          const text = new TextDecoder().decode(ev.target?.result as ArrayBuffer);
+          json = parseCSVText(text);
+        } else {
+          const arrayBuffer = ev.target?.result as ArrayBuffer;
+          const workbook = new ExcelJS.Workbook();
+          await workbook.xlsx.load(arrayBuffer);
+          const sheet = workbook.worksheets[0];
+          if (sheet) json = excelSheetToJson(sheet, "");
+        }
 
         if (!json.length) {
           toast({ title: "Empty file", description: "The file contains no data rows", variant: "destructive" });
