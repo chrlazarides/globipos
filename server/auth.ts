@@ -73,6 +73,7 @@ export function clearAuthCookie(res: Response) {
 const PUBLIC_PATHS = [
   "/api/auth/login",
   "/api/auth/2fa/verify",
+  "/api/auth/2fa/setup-initial",
   "/portal",
   "/api/portal",
 ];

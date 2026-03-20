@@ -308,9 +308,9 @@ export async function registerRoutes(
         return res.json({ requires2fa: true, tempToken });
       }
 
-      // No 2FA — complete login
-      await completeLogin(res, user, ip, ua, timestamp);
-      res.json({ id: user.id, username: user.username, email: user.email, role: user.role });
+      // No 2FA configured — force setup before completing login
+      const tempToken = signTempToken(user.id);
+      return res.json({ requires2faSetup: true, tempToken });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -392,6 +392,61 @@ export async function registerRoutes(
       if (!req.user) return res.status(401).json({ message: "Not authenticated" });
       const [user] = await db.select({ totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, req.user.id));
       res.json({ totpEnabled: user?.totpEnabled ?? false });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Initial forced setup (pre-login, using tempToken) ─────────────────
+  // In-memory store: tempToken → { secret, expiresAt }
+  const pendingSetupSecrets = new Map<string, { secret: string; expiresAt: number }>();
+
+  app.get("/api/auth/2fa/setup-initial", async (req: Request, res: Response) => {
+    try {
+      const { token } = req.query as { token: string };
+      const userId = verifyTempToken(token);
+      if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
+      const [user] = await db.select({ username: users.username }).from(users).where(eq(users.id, userId));
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const secret = totpGenerateSecret();
+      const otpauth = totpGenerateURI({ secret, label: user.username, issuer: "VinTrade" });
+      const qrDataUrl = await QRCode.toDataURL(String(otpauth));
+      pendingSetupSecrets.set(token, { secret, expiresAt: Date.now() + 10 * 60 * 1000 });
+      res.json({ secret, qrDataUrl });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/auth/2fa/setup-initial", async (req: Request, res: Response) => {
+    try {
+      const { tempToken, code } = req.body;
+      if (!tempToken || !code) return res.status(400).json({ message: "Token and code required" });
+      const userId = verifyTempToken(tempToken);
+      if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
+      const pending = pendingSetupSecrets.get(tempToken);
+      if (!pending || Date.now() > pending.expiresAt) return res.status(401).json({ message: "Setup session expired. Please log in again." });
+      const result = totpVerify({ token: code.replace(/\s/g, ""), secret: pending.secret, window: 1 });
+      if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.active) return res.status(401).json({ message: "Invalid session" });
+      await db.update(users).set({ totpSecret: pending.secret, totpEnabled: true }).where(eq(users.id, userId));
+      pendingSetupSecrets.delete(tempToken);
+      logActivity(userId, user.username, "update", "user", userId, "Two-factor authentication enabled (forced setup)", null, null);
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+      const ua = req.headers["user-agent"] || "unknown";
+      const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+      await completeLogin(res, user, ip, ua, timestamp);
+      res.json({ id: user.id, username: user.username, email: user.email, role: user.role });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Admin: Reset another user's 2FA ────────────────────────────────────────
+  app.post("/api/users/:id/reset-2fa", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (id === req.user!.id) return res.status(400).json({ message: "Use the 2FA settings to manage your own 2FA" });
+      const [target] = await db.select({ id: users.id, username: users.username }).from(users).where(eq(users.id, id));
+      if (!target) return res.status(404).json({ message: "User not found" });
+      await db.update(users).set({ totpSecret: null, totpEnabled: false }).where(eq(users.id, id));
+      logActivity(req.user!.id, req.user!.username, "update", "user", id, `Reset 2FA for user ${target.username}`, null, null);
+      res.json({ message: "2FA reset — user will be prompted to set it up on next login" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 

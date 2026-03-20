@@ -350,6 +350,22 @@ export default function UsersPage() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const reset2faMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/users/${id}/reset-2fa`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Failed" }));
+        throw new Error(err.message);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      toast({ title: "2FA reset", description: "User will be prompted to set up 2FA on next login." });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const currentUserData = users.find(u => u.id === currentUser?.id);
 
   return (
@@ -413,7 +429,10 @@ export default function UsersPage() {
                           Enabled
                         </Badge>
                       ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
+                        <Badge variant="outline" className="text-xs gap-1 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700">
+                          <AlertTriangle className="w-3 h-3" />
+                          Not set up
+                        </Badge>
                       )}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">
@@ -426,7 +445,7 @@ export default function UsersPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        {user.id === currentUser?.id && (
+                        {user.id === currentUser?.id ? (
                           <Button
                             size="sm"
                             variant="ghost"
@@ -435,6 +454,18 @@ export default function UsersPage() {
                             data-testid={`button-2fa-manage-${user.id}`}
                           >
                             <Smartphone className="w-4 h-4" />
+                          </Button>
+                        ) : currentUser?.role === "admin" && user.totpEnabled && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-amber-600 hover:text-amber-700"
+                            onClick={() => reset2faMutation.mutate(user.id)}
+                            disabled={reset2faMutation.isPending}
+                            title="Reset 2FA — user will be forced to set up again on next login"
+                            data-testid={`button-reset-2fa-${user.id}`}
+                          >
+                            <KeyRound className="w-4 h-4" />
                           </Button>
                         )}
                         <Button

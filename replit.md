@@ -21,7 +21,7 @@ VinTrade is built with a modern web stack:
     - **Accounting Module**: Implements double-entry bookkeeping with a chart of accounts, journal entries, expense tracking, and automated journal entry generation for transactions (invoices, payments, purchases). Provides financial reports: Trial Balance, Profit & Loss, Balance Sheet, General Ledger, and Cyprus VAT 4 Return.
     - **Offline Capability**: Supports offline invoicing by caching essential data (items, customers) in IndexedDB and queuing unsynced invoices. Automatically syncs when online.
     - **PWA Support**: Installable as a Progressive Web App on mobile devices, offering an app-like experience with offline asset caching via a service worker.
-    - **Security & User Management**: Role-based access control (admin/staff) with JWT-based authentication, httpOnly cookies, and an activity/audit log for all mutating API calls. Settings page access is password protected.
+    - **Security & User Management**: Role-based access control (admin/staff) with JWT-based authentication, httpOnly cookies, and an activity/audit log for all mutating API calls. Settings page access is password protected. TOTP-based two-factor authentication (2FA) is mandatory for all users — users without 2FA configured are forced through setup on first login before they can access the system. Admins can reset another user's 2FA from the Users page (which forces re-setup on next login).
     - **Reporting**: Comprehensive sales reports (including profit margin analysis), customer statements with aging analysis, and email functionality for documents and statements.
     - **Data Management**: Includes smart Excel import functionality for various entities and a scheduled daily backup feature.
 
