@@ -4,7 +4,8 @@ import { storage } from "./storage";
 import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
+import { Readable } from "stream";
 import { sendInvoiceEmail, sendBackupEmail } from "./email";
 import { db } from "./db";
 import { sql, and, eq, gte, lte, desc } from "drizzle-orm";
@@ -13,6 +14,37 @@ import { hashPassword, verifyPassword, signToken, setAuthCookie, clearAuthCookie
 
 function hashSettingsPassword(pw: string) {
   return crypto.createHash("sha256").update(pw).digest("hex");
+}
+
+async function readExcelWorkbook(buffer: Buffer, filename: string): Promise<ExcelJS.Workbook> {
+  const workbook = new ExcelJS.Workbook();
+  const ext = (filename || "").toLowerCase().split(".").pop();
+  if (ext === "csv") {
+    const stream = Readable.from(buffer.toString("utf-8"));
+    await workbook.csv.read(stream);
+  } else {
+    await workbook.xlsx.load(buffer);
+  }
+  return workbook;
+}
+
+function worksheetToJson(sheet: ExcelJS.Worksheet, defval: any = ""): any[] {
+  const rows: any[] = [];
+  let headers: string[] = [];
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const values = (row.values as any[]).slice(1);
+    if (rowNumber === 1) {
+      headers = values.map((v) => (v !== null && v !== undefined ? String(v) : ""));
+    } else {
+      const obj: any = {};
+      headers.forEach((h, i) => {
+        const v = values[i];
+        obj[h] = v !== undefined && v !== null ? v : defval;
+      });
+      rows.push(obj);
+    }
+  });
+  return rows;
 }
 
 async function logActivity(userId: string | null, username: string | null, action: string, entity: string | null, entityId: string | null, description: string | null, ipAddress: string | null, userAgent: string | null) {
