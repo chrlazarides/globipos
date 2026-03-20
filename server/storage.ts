@@ -867,18 +867,41 @@ export class DatabaseStorage implements IStorage {
     const getPaid = (inv: { id: string; total: string; status: string }) => {
       const pmtTotal = paymentsByInvoice.get(inv.id) || 0;
       if (pmtTotal > 0) return Math.min(pmtTotal, parseFloat(inv.total));
-      // Fallback for invoices marked paid with no payment records (legacy data)
       if (inv.status === "paid") return parseFloat(inv.total);
       return 0;
+    };
+
+    // Helper: days credit given for a payment terms string
+    const termDays = (terms: string | null): number => {
+      if (terms === "credit_30") return 30;
+      if (terms === "credit_60") return 60;
+      if (terms === "credit_90") return 90;
+      return 0;
+    };
+
+    // Helper: compute effective due date for an invoice given customer terms
+    const effectiveDueDate = (inv: { date: string; dueDate: string | null }, creditDays: number): Date => {
+      if (inv.dueDate) {
+        const d = new Date(inv.dueDate);
+        d.setHours(0, 0, 0, 0);
+        return d;
+      }
+      const d = new Date(inv.date);
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() + creditDays);
+      return d;
     };
 
     const statements = [];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // Last day of the current month
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    endOfMonth.setHours(23, 59, 59, 999);
+
     for (const cust of custs) {
       const allInvs = await db.select().from(invoices).where(eq(invoices.customerId, cust.id));
-      // Exclude cancelled documents from all calculations
       const invs = allInvs.filter(i => i.type === "invoice" && i.status !== "cancelled");
       const cns = allInvs.filter(i => i.type === "credit_note" && i.status !== "cancelled");
 
@@ -886,31 +909,50 @@ export class DatabaseStorage implements IStorage {
       const totalCredits = cns.reduce((s, i) => s + parseFloat(i.total), 0);
       const totalPaid = invs.reduce((s, i) => s + getPaid(i), 0);
 
-      // Aging analysis: bucket outstanding invoice balances by invoice age (days since invoice date)
-      // Buckets: Current=0-30 days, 31-60 days, 61-90 days, 91-120 days, 120+ days
-      const aging = { current: 0, days1_30: 0, days31_60: 0, days61_90: 0, days90plus: 0 };
+      const creditDays = termDays(cust.paymentTerms);
+
+      // Terms-aware aging buckets:
+      // withinTermsFuture: not yet due AND due date is after end of this month
+      // dueThisMonth:      not yet due AND due date falls within this calendar month
+      // overdue1_30:       1–30 days past due date
+      // overdue31_60:      31–60 days past due date
+      // overdue60plus:     60+ days past due date
+      const aging = { withinTermsFuture: 0, dueThisMonth: 0, overdue1_30: 0, overdue31_60: 0, overdue60plus: 0 };
+
       for (const inv of invs) {
         const paid = getPaid(inv);
         const balance = parseFloat(inv.total) - paid;
         if (balance <= 0) continue;
-        const invDate = new Date(inv.date);
-        invDate.setHours(0, 0, 0, 0);
-        const daysSince = Math.floor((today.getTime() - invDate.getTime()) / (1000 * 60 * 60 * 24));
-        if (daysSince <= 30) aging.current += balance;
-        else if (daysSince <= 60) aging.days1_30 += balance;
-        else if (daysSince <= 90) aging.days31_60 += balance;
-        else if (daysSince <= 120) aging.days61_90 += balance;
-        else aging.days90plus += balance;
+        const dueDate = effectiveDueDate(inv, creditDays);
+        if (dueDate >= today) {
+          // Not yet overdue
+          if (dueDate <= endOfMonth) {
+            aging.dueThisMonth += balance;
+          } else {
+            aging.withinTermsFuture += balance;
+          }
+        } else {
+          // Overdue
+          const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+          if (daysLate <= 30) aging.overdue1_30 += balance;
+          else if (daysLate <= 60) aging.overdue31_60 += balance;
+          else aging.overdue60plus += balance;
+        }
       }
 
-      // Apply credit notes to oldest buckets first so aging sum == balance due
+      // Apply credit notes to oldest overdue buckets first
       let creditsRemaining = totalCredits;
-      for (const bucket of ["days90plus", "days61_90", "days31_60", "days1_30", "current"] as const) {
+      for (const bucket of ["overdue60plus", "overdue31_60", "overdue1_30", "dueThisMonth", "withinTermsFuture"] as const) {
         if (creditsRemaining <= 0) break;
         const reduction = Math.min(creditsRemaining, aging[bucket]);
         aging[bucket] = Math.max(0, aging[bucket] - reduction);
         creditsRemaining -= reduction;
       }
+
+      // Total overdue = everything past due date
+      const totalOverdue = aging.overdue1_30 + aging.overdue31_60 + aging.overdue60plus;
+      // "Due by end of month" = what must be settled by month-end (overdue + due this month)
+      const dueByEndOfMonth = aging.dueThisMonth + totalOverdue;
 
       const invById = new Map(allInvs.map(i => [i.id, i]));
 
@@ -918,17 +960,20 @@ export class DatabaseStorage implements IStorage {
         const total = parseFloat(inv.total);
         const paid = getPaid(inv);
         const outstanding = Math.max(0, total - paid);
-        const refDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.date);
-        refDate.setHours(0, 0, 0, 0);
-        const daysOverdue = inv.type === "invoice" && outstanding > 0
-          ? Math.floor((today.getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24))
-          : null;
+        let daysOverdue: number | null = null;
+        let effectiveDue: string | null = null;
+        if (inv.type === "invoice" && outstanding > 0) {
+          const dueDate = effectiveDueDate(inv, creditDays);
+          effectiveDue = dueDate.toISOString().split("T")[0];
+          daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+        }
         return {
           invoiceNumber: inv.invoiceNumber,
           date: inv.date,
           type: inv.type,
           status: inv.status,
           dueDate: inv.dueDate,
+          effectiveDueDate: effectiveDue,
           total: total.toFixed(2),
           paid: paid.toFixed(2),
           balance: outstanding.toFixed(2),
@@ -939,8 +984,6 @@ export class DatabaseStorage implements IStorage {
       const custInvIds = new Set(allInvs.map(i => i.id));
       const paymentList = allPayments
         .filter(p => {
-          // Only include invoice-linked payments, OR customer-level payments that were NOT split into children
-          // (children have notes starting with "Applied from balance payment")
           if (p.invoiceId && custInvIds.has(p.invoiceId)) return true;
           if (!p.invoiceId && p.customerId === cust.id && !(p.notes || "").startsWith("Applied from balance payment")) return true;
           return false;
@@ -958,22 +1001,27 @@ export class DatabaseStorage implements IStorage {
           };
         });
 
+      const totalBalance = aging.withinTermsFuture + aging.dueThisMonth + aging.overdue1_30 + aging.overdue31_60 + aging.overdue60plus;
+
       statements.push({
         customerId: cust.id,
         customerName: cust.name,
+        paymentTerms: cust.paymentTerms || "cash",
         totalInvoiced: totalInvoiced.toFixed(2),
         totalCredits: totalCredits.toFixed(2),
         totalPaid: totalPaid.toFixed(2),
-        balance: (aging.current + aging.days1_30 + aging.days31_60 + aging.days61_90 + aging.days90plus).toFixed(2),
+        balance: totalBalance.toFixed(2),
+        dueByEndOfMonth: dueByEndOfMonth.toFixed(2),
+        totalOverdue: totalOverdue.toFixed(2),
         invoiceCount: allInvs.length,
         invoices: invoiceList,
         payments: paymentList,
         aging: {
-          current: aging.current.toFixed(2),
-          days1_30: aging.days1_30.toFixed(2),
-          days31_60: aging.days31_60.toFixed(2),
-          days61_90: aging.days61_90.toFixed(2),
-          days90plus: aging.days90plus.toFixed(2),
+          withinTermsFuture: aging.withinTermsFuture.toFixed(2),
+          dueThisMonth: aging.dueThisMonth.toFixed(2),
+          overdue1_30: aging.overdue1_30.toFixed(2),
+          overdue31_60: aging.overdue31_60.toFixed(2),
+          overdue60plus: aging.overdue60plus.toFixed(2),
         },
       });
     }

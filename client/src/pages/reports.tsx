@@ -27,23 +27,6 @@ export default function Reports() {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [expandedStatement, setExpandedStatement] = useState<string | null>(null);
 
-  const getInvAgeBucket = (dateStr: string): number => {
-    const today = new Date(); today.setHours(0,0,0,0);
-    const d = new Date(dateStr); d.setHours(0,0,0,0);
-    const days = Math.floor((today.getTime() - d.getTime()) / 86400000);
-    if (days <= 30) return 0;
-    if (days <= 60) return 1;
-    if (days <= 90) return 2;
-    if (days <= 120) return 3;
-    return 4;
-  };
-  const ageBucketColors = [
-    "text-green-700 dark:text-green-400",
-    "text-yellow-600 dark:text-yellow-400",
-    "text-orange-600 dark:text-orange-400",
-    "text-red-600 dark:text-red-400",
-    "text-red-700 dark:text-red-500 font-bold",
-  ];
   const [selectedCustomer, setSelectedCustomer] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date();
@@ -71,16 +54,40 @@ export default function Reports() {
   const { data: customerStatements = [] } = useQuery<{
     customerId: string;
     customerName: string;
+    paymentTerms: string;
     totalInvoiced: string;
     totalPaid: string;
+    totalCredits: string;
     balance: string;
+    dueByEndOfMonth: string;
+    totalOverdue: string;
     invoiceCount: number;
+    invoices: {
+      invoiceNumber: string;
+      date: string;
+      type: string;
+      status: string;
+      dueDate: string | null;
+      effectiveDueDate: string | null;
+      total: string;
+      paid: string;
+      balance: string;
+      daysOverdue: number | null;
+    }[];
+    payments: {
+      date: string;
+      amount: string;
+      paymentMethod: string;
+      reference: string | null;
+      notes: string | null;
+      invoiceNumber: string | null;
+    }[];
     aging: {
-      current: string;
-      days1_30: string;
-      days31_60: string;
-      days61_90: string;
-      days90plus: string;
+      withinTermsFuture: string;
+      dueThisMonth: string;
+      overdue1_30: string;
+      overdue31_60: string;
+      overdue60plus: string;
     };
   }[]>({
     queryKey: ["/api/reports/statements"],
@@ -311,191 +318,259 @@ export default function Reports() {
         </TabsContent>
 
         <TabsContent value="statements" className="mt-4 space-y-4">
-          <Card>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-8" />
-                    <TableHead>Customer</TableHead>
-                    <TableHead className="text-right">Balance Due</TableHead>
-                    <TableHead className="text-right text-green-700 dark:text-green-400">0–30 Days</TableHead>
-                    <TableHead className="text-right text-yellow-600 dark:text-yellow-400">31–60 Days</TableHead>
-                    <TableHead className="text-right text-orange-600 dark:text-orange-400">61–90 Days</TableHead>
-                    <TableHead className="text-right text-red-600 dark:text-red-400">91–120 Days</TableHead>
-                    <TableHead className="text-right text-red-700 dark:text-red-500">120+ Days</TableHead>
-                    <TableHead className="w-[160px]" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {customerStatements.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">No data available</TableCell>
-                    </TableRow>
-                  ) : (
-                    customerStatements.map((st) => {
-                      const ag = st.aging || { current: "0", days1_30: "0", days31_60: "0", days61_90: "0", days90plus: "0" };
-                      const hasOverdue = parseFloat(ag.days1_30) > 0 || parseFloat(ag.days31_60) > 0 || parseFloat(ag.days61_90) > 0 || parseFloat(ag.days90plus) > 0;
-                      const isExpanded = expandedStatement === st.customerId;
-                      const stInvoices: any[] = st.invoices || [];
-                      const stPayments: any[] = st.payments || [];
-                      const methodLabels: Record<string, string> = {
-                        cash: "Cash", bank_transfer: "Bank Transfer", cheque: "Cheque", card: "Card", other: "Other",
-                      };
-                      const methodColors: Record<string, string> = {
-                        cash: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
-                        bank_transfer: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
-                        cheque: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
-                        card: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
-                        other: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-                      };
-                      return (
-                        <Fragment key={st.customerId}>
-                          <TableRow
-                            className={`cursor-pointer select-none ${hasOverdue ? "bg-red-50/30 dark:bg-red-950/10" : ""} hover:bg-muted/40`}
-                            onClick={() => setExpandedStatement(isExpanded ? null : st.customerId)}
-                            data-testid={`row-statement-${st.customerId}`}
-                          >
-                            <TableCell className="pr-0">
-                              {isExpanded
-                                ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                                : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
-                            </TableCell>
-                            <TableCell className="font-medium text-sm">{st.customerName}</TableCell>
-                            <TableCell className={`text-right font-semibold text-sm ${parseFloat(st.balance) > 0 ? "text-red-600 dark:text-red-400" : ""}`} data-testid={`text-balance-${st.customerId}`}>
-                              €{parseFloat(st.balance).toFixed(2)}
-                            </TableCell>
-                            <TableCell className="text-right text-sm text-green-700 dark:text-green-400" data-testid={`text-aging-current-${st.customerId}`}>
-                              {parseFloat(ag.current) > 0 ? `€${parseFloat(ag.current).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                            </TableCell>
-                            <TableCell className="text-right text-sm text-yellow-600 dark:text-yellow-400" data-testid={`text-aging-1-30-${st.customerId}`}>
-                              {parseFloat(ag.days1_30) > 0 ? `€${parseFloat(ag.days1_30).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                            </TableCell>
-                            <TableCell className="text-right text-sm text-orange-600 dark:text-orange-400" data-testid={`text-aging-31-60-${st.customerId}`}>
-                              {parseFloat(ag.days31_60) > 0 ? `€${parseFloat(ag.days31_60).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                            </TableCell>
-                            <TableCell className="text-right text-sm text-red-600 dark:text-red-400" data-testid={`text-aging-61-90-${st.customerId}`}>
-                              {parseFloat(ag.days61_90) > 0 ? `€${parseFloat(ag.days61_90).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                            </TableCell>
-                            <TableCell className="text-right text-sm font-semibold text-red-700 dark:text-red-500" data-testid={`text-aging-90plus-${st.customerId}`}>
-                              {parseFloat(ag.days90plus) > 0 ? `€${parseFloat(ag.days90plus).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
-                            </TableCell>
-                            <TableCell onClick={e => e.stopPropagation()}>
-                              <div className="flex items-center gap-1">
-                                <Button size="icon" variant="ghost" onClick={() => previewStatement(st.customerId)} title="Preview" data-testid={`button-preview-statement-${st.customerId}`}>
-                                  <Eye className="w-4 h-4" />
-                                </Button>
-                                <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} title="Print" data-testid={`button-print-statement-${st.customerId}`}>
-                                  <Printer className="w-4 h-4" />
-                                </Button>
-                                <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} title="Download" data-testid={`button-download-statement-${st.customerId}`}>
-                                  <Download className="w-4 h-4" />
-                                </Button>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={() => sendStatementEmail(st.customerId)}
-                                  disabled={sendingId === st.customerId}
-                                  title="Send by Email"
-                                  data-testid={`button-email-statement-${st.customerId}`}
-                                >
-                                  {sendingId === st.customerId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
+          {(() => {
+            const termLabel = (t: string) => {
+              if (t === "credit_30") return "Net 30";
+              if (t === "credit_60") return "Net 60";
+              if (t === "credit_90") return "Net 90";
+              return "Cash";
+            };
+            const methodLabels: Record<string, string> = {
+              cash: "Cash", bank_transfer: "Bank Transfer", cheque: "Cheque", card: "Card", other: "Other",
+            };
+            const methodColors: Record<string, string> = {
+              cash: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
+              bank_transfer: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
+              cheque: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
+              card: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
+              other: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+            };
+            const endOfMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
-                          {isExpanded && (
-                            <TableRow className="bg-muted/20 dark:bg-muted/10">
-                              <TableCell colSpan={9} className="p-0">
-                                <div className="mx-6 my-3 rounded-lg border border-border overflow-hidden text-xs">
-                                  <table className="w-full border-collapse">
-                                    <thead>
-                                      <tr className="bg-muted/60 dark:bg-muted/30 text-muted-foreground">
-                                        <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Document</th>
-                                        <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Date</th>
-                                        <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Due Date</th>
-                                        <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Details</th>
-                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Total</th>
-                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-green-700 dark:text-green-400">0–30d</th>
-                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-yellow-600 dark:text-yellow-400">31–60d</th>
-                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-orange-600 dark:text-orange-400">61–90d</th>
-                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-red-600 dark:text-red-400">91–120d</th>
-                                        <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-red-700 dark:text-red-500">120+d</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {stInvoices.map((inv: any, i: number) => {
-                                        const bal = parseFloat(inv.balance || "0");
-                                        const bucket = inv.date ? getInvAgeBucket(inv.date) : -1;
-                                        const bucketAmounts = [0,1,2,3,4].map(b => (bal > 0 && bucket === b) ? bal : 0);
-                                        return (
-                                        <tr key={`inv-${i}`} className="border-t border-border/50 hover:bg-muted/20">
-                                          <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
-                                          <td className="px-3 py-2 text-muted-foreground">{inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</td>
-                                          <td className="px-3 py-2 text-muted-foreground">{inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—"}</td>
-                                          <td className="px-3 py-2">
-                                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                                              {inv.type === "credit_note" ? "Credit Note" : inv.type === "invoice" ? "Invoice" : inv.type}
-                                            </Badge>
-                                            {" "}
-                                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{inv.status}</Badge>
-                                          </td>
-                                          <td className="px-3 py-2 text-right font-medium">€{parseFloat(inv.total || "0").toFixed(2)}</td>
-                                          {bucketAmounts.map((amt, b) => (
-                                            <td key={b} className={`px-3 py-2 text-right font-semibold ${amt > 0 ? ageBucketColors[b] : "text-muted-foreground"}`}>
-                                              {amt > 0 ? `€${amt.toFixed(2)}` : "—"}
-                                            </td>
-                                          ))}
-                                        </tr>
-                                        );
-                                      })}
+            const getInvStatus = (daysOverdue: number | null) => {
+              if (daysOverdue === null) return null;
+              if (daysOverdue <= 0) {
+                return { label: "Within Terms", color: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300", overdue: false };
+              }
+              return {
+                label: `Overdue ${daysOverdue}d`,
+                color: daysOverdue <= 30 ? "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300"
+                  : daysOverdue <= 60 ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                  : "bg-red-200 text-red-900 dark:bg-red-950/60 dark:text-red-300 font-bold",
+                overdue: true,
+              };
+            };
 
-                                      {stPayments.map((pmt: any, i: number) => {
-                                        const method = pmt.paymentMethod || "other";
-                                        const label = methodLabels[method] || method;
-                                        const colorClass = methodColors[method] || methodColors.other;
-                                        const details = [
-                                          pmt.reference ? `Ref: ${pmt.reference}` : null,
-                                          pmt.invoiceNumber ? `Invoice: ${pmt.invoiceNumber}` : null,
-                                          pmt.notes && !pmt.notes.startsWith("Applied from balance") ? pmt.notes : null,
-                                        ].filter(Boolean).join(" · ");
-                                        return (
-                                          <tr key={`pmt-${i}`} className="border-t border-border/50 bg-green-50/30 dark:bg-green-950/10 hover:bg-green-50/50">
-                                            <td className="px-3 py-2 font-medium text-green-700 dark:text-green-400">Payment</td>
-                                            <td className="px-3 py-2 text-muted-foreground">{pmt.date ? new Date(pmt.date).toLocaleDateString("en-GB") : "—"}</td>
-                                            <td className="px-3 py-2" />
-                                            <td className="px-3 py-2">
-                                              <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${colorClass}`}>{label}</span>
-                                              {details && <span className="ml-2 text-muted-foreground">{details}</span>}
-                                            </td>
-                                            <td className="px-3 py-2" />
-                                            <td colSpan={5} className="px-3 py-2 text-right font-semibold text-green-700 dark:text-green-400">
-                                              −€{parseFloat(pmt.amount || "0").toFixed(2)}
-                                            </td>
-                                          </tr>
-                                        );
-                                      })}
+            return (
+              <Card>
+                <CardContent className="p-0 overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-8" />
+                        <TableHead>Customer</TableHead>
+                        <TableHead className="text-center">Terms</TableHead>
+                        <TableHead className="text-right">Balance Due</TableHead>
+                        <TableHead className="text-right text-amber-600 dark:text-amber-400">Due by {endOfMonthLabel}</TableHead>
+                        <TableHead className="text-right text-green-700 dark:text-green-400">Within Terms</TableHead>
+                        <TableHead className="text-right text-orange-500 dark:text-orange-400">Overdue 1–30d</TableHead>
+                        <TableHead className="text-right text-red-600 dark:text-red-400">Overdue 31–60d</TableHead>
+                        <TableHead className="text-right text-red-700 dark:text-red-500">Overdue 60+d</TableHead>
+                        <TableHead className="w-[160px]" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {customerStatements.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">No data available</TableCell>
+                        </TableRow>
+                      ) : (
+                        customerStatements.map((st) => {
+                          const ag = st.aging || { withinTermsFuture: "0", dueThisMonth: "0", overdue1_30: "0", overdue31_60: "0", overdue60plus: "0" };
+                          const hasOverdue = parseFloat(st.totalOverdue || "0") > 0;
+                          const isExpanded = expandedStatement === st.customerId;
+                          const stInvoices = st.invoices || [];
+                          const stPayments = st.payments || [];
 
-                                      {stInvoices.length === 0 && stPayments.length === 0 && (
-                                        <tr>
-                                          <td colSpan={10} className="px-3 py-4 text-center text-muted-foreground">No transactions</td>
-                                        </tr>
+                          return (
+                            <Fragment key={st.customerId}>
+                              <TableRow
+                                className={`cursor-pointer select-none ${hasOverdue ? "bg-red-50/30 dark:bg-red-950/10" : ""} hover:bg-muted/40`}
+                                onClick={() => setExpandedStatement(isExpanded ? null : st.customerId)}
+                                data-testid={`row-statement-${st.customerId}`}
+                              >
+                                <TableCell className="pr-0">
+                                  {isExpanded
+                                    ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                                    : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                                </TableCell>
+                                <TableCell className="font-medium text-sm">{st.customerName}</TableCell>
+                                <TableCell className="text-center">
+                                  <span className="text-xs text-muted-foreground font-medium">{termLabel(st.paymentTerms)}</span>
+                                </TableCell>
+                                <TableCell className={`text-right font-semibold text-sm ${parseFloat(st.balance) > 0 ? "text-red-600 dark:text-red-400" : ""}`} data-testid={`text-balance-${st.customerId}`}>
+                                  {parseFloat(st.balance) > 0 ? `€${parseFloat(st.balance).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
+                                </TableCell>
+                                <TableCell className={`text-right text-sm font-semibold ${parseFloat(st.dueByEndOfMonth || "0") > 0 ? "text-amber-600 dark:text-amber-400" : ""}`} data-testid={`text-due-eom-${st.customerId}`}>
+                                  {parseFloat(st.dueByEndOfMonth || "0") > 0 ? `€${parseFloat(st.dueByEndOfMonth).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
+                                </TableCell>
+                                <TableCell className="text-right text-sm text-green-700 dark:text-green-400" data-testid={`text-within-terms-${st.customerId}`}>
+                                  {parseFloat(ag.withinTermsFuture) > 0 ? `€${parseFloat(ag.withinTermsFuture).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                                </TableCell>
+                                <TableCell className="text-right text-sm text-orange-500 dark:text-orange-400" data-testid={`text-overdue-1-30-${st.customerId}`}>
+                                  {parseFloat(ag.overdue1_30) > 0 ? `€${parseFloat(ag.overdue1_30).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                                </TableCell>
+                                <TableCell className="text-right text-sm text-red-600 dark:text-red-400" data-testid={`text-overdue-31-60-${st.customerId}`}>
+                                  {parseFloat(ag.overdue31_60) > 0 ? `€${parseFloat(ag.overdue31_60).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                                </TableCell>
+                                <TableCell className="text-right text-sm font-semibold text-red-700 dark:text-red-500" data-testid={`text-overdue-60plus-${st.customerId}`}>
+                                  {parseFloat(ag.overdue60plus) > 0 ? `€${parseFloat(ag.overdue60plus).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
+                                </TableCell>
+                                <TableCell onClick={e => e.stopPropagation()}>
+                                  <div className="flex items-center gap-1">
+                                    <Button size="icon" variant="ghost" onClick={() => previewStatement(st.customerId)} title="Preview" data-testid={`button-preview-statement-${st.customerId}`}>
+                                      <Eye className="w-4 h-4" />
+                                    </Button>
+                                    <Button size="icon" variant="ghost" onClick={() => printStatement(st.customerId)} title="Print" data-testid={`button-print-statement-${st.customerId}`}>
+                                      <Printer className="w-4 h-4" />
+                                    </Button>
+                                    <Button size="icon" variant="ghost" onClick={() => downloadStatement(st.customerId)} title="Download" data-testid={`button-download-statement-${st.customerId}`}>
+                                      <Download className="w-4 h-4" />
+                                    </Button>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      onClick={() => sendStatementEmail(st.customerId)}
+                                      disabled={sendingId === st.customerId}
+                                      title="Send by Email"
+                                      data-testid={`button-email-statement-${st.customerId}`}
+                                    >
+                                      {sendingId === st.customerId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                                    </Button>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+
+                              {isExpanded && (
+                                <TableRow className="bg-muted/20 dark:bg-muted/10">
+                                  <TableCell colSpan={10} className="p-0">
+                                    <div className="mx-6 my-3 space-y-2">
+
+                                      {/* End-of-month summary banner */}
+                                      {parseFloat(st.dueByEndOfMonth || "0") > 0 && (
+                                        <div className="flex items-center gap-3 rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-2 text-sm">
+                                          <span className="font-semibold text-amber-800 dark:text-amber-300">Due by {endOfMonthLabel}:</span>
+                                          <span className="font-bold text-amber-900 dark:text-amber-200">€{parseFloat(st.dueByEndOfMonth).toFixed(2)}</span>
+                                          {parseFloat(st.totalOverdue || "0") > 0 && (
+                                            <span className="text-xs text-red-600 dark:text-red-400 ml-2">(includes €{parseFloat(st.totalOverdue).toFixed(2)} overdue)</span>
+                                          )}
+                                        </div>
                                       )}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </Fragment>
-                      );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+
+                                      <div className="rounded-lg border border-border overflow-hidden text-xs">
+                                        <table className="w-full border-collapse">
+                                          <thead>
+                                            <tr className="bg-muted/60 dark:bg-muted/30 text-muted-foreground">
+                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Document</th>
+                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Inv. Date</th>
+                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Due Date</th>
+                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Status</th>
+                                              <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Total</th>
+                                              <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Paid</th>
+                                              <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Balance</th>
+                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Standing</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {stInvoices.map((inv, i) => {
+                                              const bal = parseFloat(inv.balance || "0");
+                                              const standing = inv.type === "invoice" ? getInvStatus(inv.daysOverdue) : null;
+                                              const isDueThisMonth = inv.effectiveDueDate
+                                                ? new Date(inv.effectiveDueDate) <= new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0)
+                                                  && new Date(inv.effectiveDueDate) >= new Date()
+                                                : false;
+                                              return (
+                                                <tr key={`inv-${i}`} className={`border-t border-border/50 hover:bg-muted/20 ${standing?.overdue ? "bg-red-50/20 dark:bg-red-950/10" : ""}`}>
+                                                  <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
+                                                  <td className="px-3 py-2 text-muted-foreground">{inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</td>
+                                                  <td className={`px-3 py-2 font-medium ${standing?.overdue ? "text-red-600 dark:text-red-400" : isDueThisMonth ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}>
+                                                    {inv.effectiveDueDate ? new Date(inv.effectiveDueDate).toLocaleDateString("en-GB") : inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—"}
+                                                    {!inv.dueDate && inv.effectiveDueDate && <span className="ml-1 text-[9px] text-muted-foreground">(calc.)</span>}
+                                                  </td>
+                                                  <td className="px-3 py-2">
+                                                    <span className="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground">
+                                                      {inv.type === "credit_note" ? "Credit Note" : "Invoice"}
+                                                    </span>
+                                                    {" "}
+                                                    <span className="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-muted/50 text-muted-foreground">{inv.status}</span>
+                                                  </td>
+                                                  <td className="px-3 py-2 text-right font-medium">€{parseFloat(inv.total || "0").toFixed(2)}</td>
+                                                  <td className="px-3 py-2 text-right text-green-700 dark:text-green-400">
+                                                    {parseFloat(inv.paid || "0") > 0 ? `€${parseFloat(inv.paid).toFixed(2)}` : "—"}
+                                                  </td>
+                                                  <td className={`px-3 py-2 text-right font-semibold ${bal > 0 ? (standing?.overdue ? "text-red-600 dark:text-red-400" : "text-foreground") : "text-muted-foreground"}`}>
+                                                    {bal > 0 ? `€${bal.toFixed(2)}` : "—"}
+                                                  </td>
+                                                  <td className="px-3 py-2">
+                                                    {standing && bal > 0 ? (
+                                                      standing.overdue ? (
+                                                        <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${standing.color}`}>
+                                                          {standing.label}
+                                                        </span>
+                                                      ) : isDueThisMonth ? (
+                                                        <span className="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                                          Due This Month
+                                                        </span>
+                                                      ) : (
+                                                        <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${standing.color}`}>
+                                                          {standing.label}
+                                                        </span>
+                                                      )
+                                                    ) : null}
+                                                  </td>
+                                                </tr>
+                                              );
+                                            })}
+
+                                            {stPayments.map((pmt, i) => {
+                                              const method = pmt.paymentMethod || "other";
+                                              const label = methodLabels[method] || method;
+                                              const colorClass = methodColors[method] || methodColors.other;
+                                              const details = [
+                                                pmt.reference ? `Ref: ${pmt.reference}` : null,
+                                                pmt.invoiceNumber ? `Inv: ${pmt.invoiceNumber}` : null,
+                                                pmt.notes && !pmt.notes.startsWith("Applied from balance") ? pmt.notes : null,
+                                              ].filter(Boolean).join(" · ");
+                                              return (
+                                                <tr key={`pmt-${i}`} className="border-t border-border/50 bg-green-50/30 dark:bg-green-950/10 hover:bg-green-50/50">
+                                                  <td className="px-3 py-2 font-medium text-green-700 dark:text-green-400">Payment</td>
+                                                  <td className="px-3 py-2 text-muted-foreground">{pmt.date ? new Date(pmt.date).toLocaleDateString("en-GB") : "—"}</td>
+                                                  <td className="px-3 py-2" />
+                                                  <td className="px-3 py-2">
+                                                    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${colorClass}`}>{label}</span>
+                                                    {details && <span className="ml-2 text-muted-foreground">{details}</span>}
+                                                  </td>
+                                                  <td className="px-3 py-2" />
+                                                  <td className="px-3 py-2 text-right font-semibold text-green-700 dark:text-green-400" colSpan={2}>
+                                                    −€{parseFloat(pmt.amount || "0").toFixed(2)}
+                                                  </td>
+                                                  <td className="px-3 py-2" />
+                                                </tr>
+                                              );
+                                            })}
+
+                                            {stInvoices.length === 0 && stPayments.length === 0 && (
+                                              <tr>
+                                                <td colSpan={8} className="px-3 py-4 text-center text-muted-foreground">No transactions</td>
+                                              </tr>
+                                            )}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                            </Fragment>
+                          );
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            );
+          })()}
         </TabsContent>
       </Tabs>
     </div>
