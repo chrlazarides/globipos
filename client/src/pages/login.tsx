@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -24,6 +25,7 @@ interface LoginPageProps {
 
 export default function LoginPage({ onLogin }: LoginPageProps) {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [showPassword, setShowPassword] = useState(false);
   const [tempToken, setTempToken] = useState<string | null>(null);
   const [pendingUsername, setPendingUsername] = useState("");
@@ -46,6 +48,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         setTotpCode("");
       } else {
         onLogin(data);
+        setLocation("/");
       }
     },
     onError: (err: Error) => {
@@ -63,6 +66,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     },
     onSuccess: (user) => {
       onLogin(user);
+      setLocation("/");
     },
     onError: (err: Error) => {
       toast({ title: "Verification failed", description: err.message, variant: "destructive" });
