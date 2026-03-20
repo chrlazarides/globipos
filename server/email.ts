@@ -78,3 +78,108 @@ export async function sendBackupEmail(toEmail: string, companyName: string, back
     return { success: false, error: error?.message || 'Failed to send backup email' };
   }
 }
+
+export async function sendLoginAlertEmail(
+  adminEmails: string[],
+  username: string,
+  ip: string,
+  userAgent: string,
+  timestamp: string
+): Promise<void> {
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:#dc2626;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">⚠️ New Login Location Detected</h2>
+        </div>
+        <p style="color:#374151;">A user has logged in from a <strong>new IP address</strong> that has not been seen before.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${username}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">IP Address</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${ip}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${timestamp}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Browser</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${userAgent}</td></tr>
+        </table>
+        <p style="color:#374151;">If this was not you, log in immediately and deactivate this account.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Vineria Di Mare.</p>
+      </div>`;
+    await client.emails.send({
+      to: adminEmails,
+      from: fromEmail,
+      subject: `🔐 Security Alert: ${username} logged in from new location`,
+      html,
+    });
+  } catch (error: any) {
+    console.error('Login alert email error:', error?.message || error);
+  }
+}
+
+export async function sendFailedLoginAlertEmail(
+  adminEmails: string[],
+  attemptedUsername: string,
+  ip: string,
+  failCount: number,
+  timestamp: string
+): Promise<void> {
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:#b45309;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">🚨 Multiple Failed Login Attempts</h2>
+        </div>
+        <p style="color:#374151;">There have been <strong>${failCount} failed login attempts</strong> in a short period. This may indicate a brute-force attack.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">Target User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${attemptedUsername || '(unknown)'}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Attack IP</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${ip}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Attempts</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${failCount} failed attempts</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${timestamp}</td></tr>
+        </table>
+        <p style="color:#374151;">The IP has been temporarily blocked. Review your system if this activity is unexpected.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Vineria Di Mare.</p>
+      </div>`;
+    await client.emails.send({
+      to: adminEmails,
+      from: fromEmail,
+      subject: `🚨 Security Alert: ${failCount} failed login attempts from ${ip}`,
+      html,
+    });
+  } catch (error: any) {
+    console.error('Failed login alert email error:', error?.message || error);
+  }
+}
+
+export async function sendNewAdminAlertEmail(
+  adminEmails: string[],
+  newUsername: string,
+  createdBy: string,
+  ip: string,
+  timestamp: string
+): Promise<void> {
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:#7c3aed;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">👤 New Admin User Created</h2>
+        </div>
+        <p style="color:#374151;">A new <strong>admin user</strong> has been created on the system.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">New User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${newUsername}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Created By</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${createdBy}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">From IP</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${ip}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${timestamp}</td></tr>
+        </table>
+        <p style="color:#374151;">If you did not create this user, log in immediately and deactivate them.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Vineria Di Mare.</p>
+      </div>`;
+    await client.emails.send({
+      to: adminEmails,
+      from: fromEmail,
+      subject: `👤 Security Alert: New admin user "${newUsername}" created`,
+      html,
+    });
+  } catch (error: any) {
+    console.error('New admin alert email error:', error?.message || error);
+  }
+}

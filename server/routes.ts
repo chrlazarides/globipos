@@ -6,11 +6,48 @@ import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
 import { Readable } from "stream";
-import { sendInvoiceEmail, sendBackupEmail } from "./email";
+import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail } from "./email";
 import { db } from "./db";
 import { sql, and, eq, gte, lte, desc } from "drizzle-orm";
 import crypto from "crypto";
 import { hashPassword, verifyPassword, signToken, setAuthCookie, clearAuthCookie, requireAdmin } from "./auth";
+
+// ─── RATE LIMITER (in-memory, per IP) ────────────────────────────────────────
+const RATE_WINDOW_MS = 15 * 60 * 1000;
+const RATE_MAX_ATTEMPTS = 10;
+const failedAttempts = new Map<string, { count: number; windowStart: number; alerted: boolean }>();
+
+function checkRateLimit(ip: string): { blocked: boolean; count: number } {
+  const now = Date.now();
+  const entry = failedAttempts.get(ip);
+  if (!entry || now - entry.windowStart > RATE_WINDOW_MS) {
+    return { blocked: false, count: 0 };
+  }
+  return { blocked: entry.count >= RATE_MAX_ATTEMPTS, count: entry.count };
+}
+
+function recordFailedAttempt(ip: string): number {
+  const now = Date.now();
+  const entry = failedAttempts.get(ip);
+  if (!entry || now - entry.windowStart > RATE_WINDOW_MS) {
+    failedAttempts.set(ip, { count: 1, windowStart: now, alerted: false });
+    return 1;
+  }
+  entry.count++;
+  return entry.count;
+}
+
+function clearFailedAttempts(ip: string) {
+  failedAttempts.delete(ip);
+}
+
+async function getAdminEmails(): Promise<string[]> {
+  try {
+    const admins = await db.select({ email: users.email }).from(users)
+      .where(and(eq(users.role, "admin"), eq(users.active, true)));
+    return admins.map(a => a.email).filter(Boolean) as string[];
+  } catch { return []; }
+}
 
 function hashSettingsPassword(pw: string) {
   return crypto.createHash("sha256").update(pw).digest("hex");
@@ -195,34 +232,74 @@ export async function registerRoutes(
 
   activityMiddleware(app);
 
-  // ─── EMERGENCY RECOVERY (temporary) ─────────────────────────────────────────
-  app.post("/api/emergency-recover", async (req: Request, res: Response) => {
-    const { token } = req.body;
-    if (token !== "VINERIA-RECOVER-2026-XQ9") return res.status(403).json({ message: "Forbidden" });
-    try {
-      await db.update(users).set({ active: true }).where(eq(users.username, "george"));
-      await db.update(users).set({ active: true }).where(eq(users.username, "sokratis"));
-      await db.update(users).set({ active: true }).where(eq(users.username, "admin"));
-      await db.delete(users).where(eq(users.username, "kostya"));
-      res.json({ message: "Recovery complete: george, sokratis, admin restored; kostya deleted." });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
-  });
-  // ─── END EMERGENCY RECOVERY ──────────────────────────────────────────────────
-
   // ─── AUTH ───────────────────────────────────────────────────────────────────
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+      const ua = req.headers["user-agent"] || "unknown";
+      const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+
+      // Rate limiting — block after 10 failed attempts in 15 minutes
+      const { blocked } = checkRateLimit(ip);
+      if (blocked) {
+        return res.status(429).json({ message: "Too many failed attempts. Please try again in 15 minutes." });
+      }
+
       const { username, password } = req.body;
       if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+
       const [user] = await db.select().from(users).where(eq(users.username, username.toLowerCase().trim()));
-      if (!user || !user.active) return res.status(401).json({ message: "Invalid credentials" });
-      if (!verifyPassword(password, user.password)) return res.status(401).json({ message: "Invalid credentials" });
+
+      if (!user || !user.active || !verifyPassword(password, user.password)) {
+        // Record failed attempt
+        const failCount = recordFailedAttempt(ip);
+        logActivity(null, username || null, "login_failed", "auth", null, `Failed login attempt for "${username}" from ${ip}`, ip, ua);
+
+        // Send alert after 3 failures, then every 5 thereafter
+        if (failCount === 3 || (failCount > 3 && failCount % 5 === 0)) {
+          const entry = failedAttempts.get(ip);
+          if (entry && !entry.alerted) {
+            entry.alerted = true;
+            getAdminEmails().then(emails => {
+              if (emails.length) sendFailedLoginAlertEmail(emails, username, ip, failCount, timestamp);
+            });
+          } else if (entry && failCount % 5 === 0) {
+            getAdminEmails().then(emails => {
+              if (emails.length) sendFailedLoginAlertEmail(emails, username, ip, failCount, timestamp);
+            });
+          }
+        }
+
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      // Successful login — clear any failed attempt counter
+      clearFailedAttempts(ip);
+
+      // Check if this IP has been seen before for this user (last 60 days)
+      const recentLogins = await db.select({ ipAddress: activityLogs.ipAddress })
+        .from(activityLogs)
+        .where(and(
+          eq(activityLogs.userId, user.id),
+          eq(activityLogs.action, "login"),
+          gte(activityLogs.createdAt, new Date(Date.now() - 60 * 24 * 60 * 60 * 1000))
+        ))
+        .limit(100);
+
+      const knownIps = new Set(recentLogins.map(r => r.ipAddress).filter(Boolean));
+      const isNewIp = !knownIps.has(ip);
+
       await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
       const token = signToken({ id: user.id, username: user.username, email: user.email, role: user.role });
       setAuthCookie(res, token);
-      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.ip || null;
-      const ua = req.headers["user-agent"] || null;
       logActivity(user.id, user.username, "login", "auth", null, `Login from ${ip}`, ip, ua);
+
+      if (isNewIp) {
+        getAdminEmails().then(emails => {
+          if (emails.length) sendLoginAlertEmail(emails, user.username, ip, ua, timestamp);
+        });
+      }
+
       res.json({ id: user.id, username: user.username, email: user.email, role: user.role });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -257,6 +334,16 @@ export async function registerRoutes(
       const existing = await db.select({ id: users.id }).from(users).where(eq(users.username, username.toLowerCase().trim()));
       if (existing.length > 0) return res.status(409).json({ message: "Username already exists" });
       const [user] = await db.insert(users).values({ username: username.toLowerCase().trim(), email: email || null, password: hashPassword(password), role: role || "staff", active: true }).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt });
+
+      // Alert all admins when a new admin user is created
+      if ((role || "staff") === "admin" && req.user) {
+        const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+        const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+        getAdminEmails().then(emails => {
+          if (emails.length) sendNewAdminAlertEmail(emails, username.toLowerCase().trim(), req.user!.username, ip, timestamp);
+        });
+      }
+
       res.status(201).json(user);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
