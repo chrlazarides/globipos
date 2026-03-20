@@ -3475,6 +3475,10 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       const total = (parseFloat(ag.withinTermsFuture||"0") + parseFloat(ag.dueThisMonth||"0") + parseFloat(ag.overdue1_30||"0") + parseFloat(ag.overdue31_60||"0") + parseFloat(ag.overdue60plus||"0")).toFixed(2);
       const dueByEOM = (parseFloat(ag.dueThisMonth||"0") + parseFloat(ag.overdue1_30||"0") + parseFloat(ag.overdue31_60||"0") + parseFloat(ag.overdue60plus||"0")).toFixed(2);
       const endOfMonthDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+      const currentMonthLabel = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+      const prevMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+      const eomCur = parseFloat(statement.dueByEomCurrentMonth||"0");
+      const eomPrev = parseFloat(statement.dueByEomPrevMonth||"0");
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -3520,10 +3524,16 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       return `
     <div class="aging-section">
       <div class="aging-title">Aging Analysis — Outstanding Balances (by Payment Terms)</div>
-      ${parseFloat(dueByEOM) > 0 ? `<div style="background:#fff8e1;border:1px solid #ffca28;border-radius:4px;padding:8px 14px;margin-bottom:10px;font-size:12px;">
-        <strong style="color:#e65100;">Due by ${endOfMonthDate}:</strong>
-        <span style="font-size:14px;font-weight:800;color:#b71c1c;margin-left:8px;">${currencySymbol}${dueByEOM}</span>
-        ${parseFloat(statement.totalOverdue||"0") > 0 ? `<span style="color:#c62828;font-size:11px;font-weight:600;margin-left:8px;">(incl. ${currencySymbol}${parseFloat(statement.totalOverdue).toFixed(2)} overdue)</span>` : ""}
+      ${parseFloat(dueByEOM) > 0 ? `<div style="background:#fff8e1;border:1px solid #ffca28;border-radius:4px;padding:10px 14px;margin-bottom:10px;font-size:12px;">
+        <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+          <strong style="color:#e65100;">Due by ${endOfMonthDate}:</strong>
+          <span style="font-size:14px;font-weight:800;color:#b71c1c;">${currencySymbol}${dueByEOM}</span>
+          ${parseFloat(statement.totalOverdue||"0") > 0 ? `<span style="color:#c62828;font-size:11px;font-weight:600;">(incl. ${currencySymbol}${parseFloat(statement.totalOverdue).toFixed(2)} overdue)</span>` : ""}
+        </div>
+        ${(eomCur > 0 || eomPrev > 0) ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #ffe082;display:flex;gap:20px;">
+          ${eomCur > 0 ? `<span style="font-size:11px;color:#555;">${currentMonthLabel}: <strong style="color:#e65100;">${currencySymbol}${eomCur.toFixed(2)}</strong></span>` : ""}
+          ${eomPrev > 0 ? `<span style="font-size:11px;color:#555;">${prevMonthLabel}: <strong style="color:#c62828;">${currencySymbol}${eomPrev.toFixed(2)}</strong></span>` : ""}
+        </div>` : ""}
       </div>` : ""}
       <table class="aging-table">
         <thead>
