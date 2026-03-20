@@ -35,7 +35,23 @@ export function signToken(user: AuthUser): string {
 
 export function verifyToken(token: string): AuthUser | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as AuthUser;
+    const payload = jwt.verify(token, JWT_SECRET) as any;
+    if (payload.temp) return null;
+    return payload as AuthUser;
+  } catch {
+    return null;
+  }
+}
+
+export function signTempToken(userId: string): string {
+  return jwt.sign({ temp: true, id: userId }, JWT_SECRET, { expiresIn: "5m" });
+}
+
+export function verifyTempToken(token: string): string | null {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as any;
+    if (!payload.temp || !payload.id) return null;
+    return payload.id as string;
   } catch {
     return null;
   }
@@ -56,6 +72,7 @@ export function clearAuthCookie(res: Response) {
 
 const PUBLIC_PATHS = [
   "/api/auth/login",
+  "/api/auth/2fa/verify",
   "/portal",
   "/api/portal",
 ];

@@ -10,7 +10,9 @@ import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLogin
 import { db } from "./db";
 import { sql, and, eq, gte, lte, desc } from "drizzle-orm";
 import crypto from "crypto";
-import { hashPassword, verifyPassword, signToken, setAuthCookie, clearAuthCookie, requireAdmin } from "./auth";
+import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin } from "./auth";
+import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
+import QRCode from "qrcode";
 
 // ─── RATE LIMITER (in-memory, per IP) ────────────────────────────────────────
 const RATE_WINDOW_MS = 15 * 60 * 1000;
@@ -233,6 +235,30 @@ export async function registerRoutes(
   activityMiddleware(app);
 
   // ─── AUTH ───────────────────────────────────────────────────────────────────
+  async function completeLogin(res: Response, user: any, ip: string, ua: string, timestamp: string) {
+    await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+    const token = signToken({ id: user.id, username: user.username, email: user.email, role: user.role });
+    setAuthCookie(res, token);
+    logActivity(user.id, user.username, "login", "auth", null, `Login from ${ip}`, ip, ua);
+
+    const recentLogins = await db.select({ ipAddress: activityLogs.ipAddress })
+      .from(activityLogs)
+      .where(and(
+        eq(activityLogs.userId, user.id),
+        eq(activityLogs.action, "login"),
+        gte(activityLogs.createdAt, new Date(Date.now() - 60 * 24 * 60 * 60 * 1000))
+      ))
+      .limit(100);
+
+    const knownIps = new Set(recentLogins.map((r: any) => r.ipAddress).filter(Boolean));
+    knownIps.delete(ip);
+    if (!knownIps.has(ip)) {
+      getAdminEmails().then(emails => {
+        if (emails.length) sendLoginAlertEmail(emails, user.username, ip, ua, timestamp);
+      });
+    }
+  }
+
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
       const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
@@ -273,34 +299,95 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
-      // Successful login — clear any failed attempt counter
+      // Successful password check — clear any failed attempt counter
       clearFailedAttempts(ip);
 
-      // Check if this IP has been seen before for this user (last 60 days)
-      const recentLogins = await db.select({ ipAddress: activityLogs.ipAddress })
-        .from(activityLogs)
-        .where(and(
-          eq(activityLogs.userId, user.id),
-          eq(activityLogs.action, "login"),
-          gte(activityLogs.createdAt, new Date(Date.now() - 60 * 24 * 60 * 60 * 1000))
-        ))
-        .limit(100);
-
-      const knownIps = new Set(recentLogins.map(r => r.ipAddress).filter(Boolean));
-      const isNewIp = !knownIps.has(ip);
-
-      await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
-      const token = signToken({ id: user.id, username: user.username, email: user.email, role: user.role });
-      setAuthCookie(res, token);
-      logActivity(user.id, user.username, "login", "auth", null, `Login from ${ip}`, ip, ua);
-
-      if (isNewIp) {
-        getAdminEmails().then(emails => {
-          if (emails.length) sendLoginAlertEmail(emails, user.username, ip, ua, timestamp);
-        });
+      // If 2FA is enabled, issue a temp token and require TOTP verification
+      if (user.totpEnabled && user.totpSecret) {
+        const tempToken = signTempToken(user.id);
+        return res.json({ requires2fa: true, tempToken });
       }
 
+      // No 2FA — complete login
+      await completeLogin(res, user, ip, ua, timestamp);
       res.json({ id: user.id, username: user.username, email: user.email, role: user.role });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Verify TOTP during login ──────────────────────────────────────────
+  app.post("/api/auth/2fa/verify", async (req: Request, res: Response) => {
+    try {
+      const { tempToken, code } = req.body;
+      if (!tempToken || !code) return res.status(400).json({ message: "Token and code required" });
+
+      const userId = verifyTempToken(tempToken);
+      if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
+
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.active || !user.totpSecret) return res.status(401).json({ message: "Invalid session" });
+
+      const result = totpVerify({ token: code.replace(/\s/g, ""), secret: user.totpSecret });
+      if (!result.valid) return res.status(401).json({ message: "Invalid authentication code" });
+
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+      const ua = req.headers["user-agent"] || "unknown";
+      const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+
+      await completeLogin(res, user, ip, ua, timestamp);
+      res.json({ id: user.id, username: user.username, email: user.email, role: user.role });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Generate setup QR code ────────────────────────────────────────────
+  app.get("/api/auth/2fa/setup", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const secret = totpGenerateSecret();
+      const otpauth = totpGenerateURI({ secret, label: req.user.username, issuer: "VinTrade" });
+      const qrDataUrl = await QRCode.toDataURL(String(otpauth));
+      res.json({ secret, qrDataUrl });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Enable TOTP (confirm with code) ───────────────────────────────────
+  app.post("/api/auth/2fa/enable", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const { secret, code } = req.body;
+      if (!secret || !code) return res.status(400).json({ message: "Secret and code required" });
+
+      const result = totpVerify({ token: code.replace(/\s/g, ""), secret });
+      if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
+
+      await db.update(users).set({ totpSecret: secret, totpEnabled: true }).where(eq(users.id, req.user.id));
+      logActivity(req.user.id, req.user.username, "update", "user", req.user.id, "Two-factor authentication enabled", null, null);
+      res.json({ message: "Two-factor authentication enabled" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Disable TOTP ──────────────────────────────────────────────────────
+  app.post("/api/auth/2fa/disable", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const { code } = req.body;
+      const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
+      if (!user || !user.totpSecret || !user.totpEnabled) return res.status(400).json({ message: "2FA is not enabled" });
+
+      const result = totpVerify({ token: (code || "").replace(/\s/g, ""), secret: user.totpSecret });
+      if (!result.valid) return res.status(400).json({ message: "Invalid authentication code" });
+
+      await db.update(users).set({ totpSecret: null, totpEnabled: false }).where(eq(users.id, req.user.id));
+      logActivity(req.user.id, req.user.username, "update", "user", req.user.id, "Two-factor authentication disabled", null, null);
+      res.json({ message: "Two-factor authentication disabled" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Status ────────────────────────────────────────────────────────────
+  app.get("/api/auth/2fa/status", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const [user] = await db.select({ totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, req.user.id));
+      res.json({ totpEnabled: user?.totpEnabled ?? false });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -322,7 +409,7 @@ export async function registerRoutes(
   // ─── USERS (admin only) ──────────────────────────────────────────────────────
   app.get("/api/users", requireAdmin, async (_req: Request, res: Response) => {
     try {
-      const rows = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt }).from(users).orderBy(users.createdAt);
+      const rows = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt, totpEnabled: users.totpEnabled }).from(users).orderBy(users.createdAt);
       res.json(rows);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

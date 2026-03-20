@@ -9,14 +9,19 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Wine, Lock, Loader2, Eye, EyeOff } from "lucide-react";
+import { Wine, Lock, Loader2, Eye, EyeOff, ShieldCheck, ArrowLeft } from "lucide-react";
 
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
 });
 
+const totpSchema = z.object({
+  code: z.string().min(6, "Enter the 6-digit code").max(6, "Code must be 6 digits"),
+});
+
 type LoginForm = z.infer<typeof loginSchema>;
+type TotpForm = z.infer<typeof totpSchema>;
 
 interface LoginPageProps {
   onLogin: (user: { id: string; username: string; role: string }) => void;
@@ -25,44 +30,141 @@ interface LoginPageProps {
 export default function LoginPage({ onLogin }: LoginPageProps) {
   const { toast } = useToast();
   const [showPassword, setShowPassword] = useState(false);
+  const [tempToken, setTempToken] = useState<string | null>(null);
+  const [pendingUsername, setPendingUsername] = useState("");
 
-  const form = useForm<LoginForm>({
+  const loginForm = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: { username: "", password: "" },
+  });
+
+  const totpForm = useForm<TotpForm>({
+    resolver: zodResolver(totpSchema),
+    defaultValues: { code: "" },
   });
 
   const loginMutation = useMutation({
     mutationFn: async (data: LoginForm) => {
       const res = await apiRequest("POST", "/api/auth/login", data);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: "Login failed" }));
-        throw new Error(err.message || "Login failed");
-      }
       return res.json();
     },
-    onSuccess: (user) => {
-      onLogin(user);
+    onSuccess: (data) => {
+      if (data.requires2fa) {
+        setTempToken(data.tempToken);
+        setPendingUsername(loginForm.getValues("username"));
+        totpForm.reset();
+      } else {
+        onLogin(data);
+      }
     },
     onError: (err: Error) => {
       toast({ title: "Login failed", description: err.message, variant: "destructive" });
     },
   });
 
+  const totpMutation = useMutation({
+    mutationFn: async (data: TotpForm) => {
+      const res = await apiRequest("POST", "/api/auth/2fa/verify", {
+        tempToken,
+        code: data.code.replace(/\s/g, ""),
+      });
+      return res.json();
+    },
+    onSuccess: (user) => {
+      onLogin(user);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Verification failed", description: err.message, variant: "destructive" });
+      totpForm.reset();
+    },
+  });
+
+  const logo = (
+    <div className="flex justify-center mb-8">
+      <div className="flex items-center gap-3">
+        <div className="w-12 h-12 flex items-center justify-center rounded-xl bg-primary text-primary-foreground">
+          <Wine className="w-6 h-6" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-foreground">VinTrade</h1>
+          <p className="text-xs text-muted-foreground">Wholesale Management</p>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (tempToken) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background px-4">
+        <div className="w-full max-w-sm">
+          {logo}
+          <Card>
+            <CardHeader className="text-center pb-2">
+              <CardTitle className="text-lg flex items-center justify-center gap-2">
+                <ShieldCheck className="w-4 h-4" />
+                Two-Factor Authentication
+              </CardTitle>
+              <CardDescription>
+                Open your authenticator app and enter the 6-digit code for <strong>{pendingUsername}</strong>
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <Form {...totpForm}>
+                <form onSubmit={totpForm.handleSubmit((d) => totpMutation.mutate(d))} className="space-y-4">
+                  <FormField
+                    control={totpForm.control}
+                    name="code"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Authentication Code</FormLabel>
+                        <FormControl>
+                          <Input
+                            {...field}
+                            autoFocus
+                            autoComplete="one-time-code"
+                            inputMode="numeric"
+                            maxLength={6}
+                            placeholder="000000"
+                            className="text-center text-2xl tracking-widest font-mono"
+                            data-testid="input-totp-code"
+                            onChange={e => field.onChange(e.target.value.replace(/\D/g, ""))}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <Button type="submit" className="w-full" disabled={totpMutation.isPending} data-testid="button-verify-2fa">
+                    {totpMutation.isPending ? (
+                      <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying...</>
+                    ) : "Verify"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="w-full text-muted-foreground"
+                    onClick={() => { setTempToken(null); loginForm.reset(); }}
+                    data-testid="button-back-to-login"
+                  >
+                    <ArrowLeft className="w-4 h-4 mr-2" />
+                    Back to login
+                  </Button>
+                </form>
+              </Form>
+            </CardContent>
+          </Card>
+          <p className="text-center text-xs text-muted-foreground mt-6">
+            Private system — unauthorised access is prohibited
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
-        <div className="flex justify-center mb-8">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 flex items-center justify-center rounded-xl bg-primary text-primary-foreground">
-              <Wine className="w-6 h-6" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-foreground">VinTrade</h1>
-              <p className="text-xs text-muted-foreground">Wholesale Management</p>
-            </div>
-          </div>
-        </div>
-
+        {logo}
         <Card>
           <CardHeader className="text-center pb-2">
             <CardTitle className="text-lg flex items-center justify-center gap-2">
@@ -72,10 +174,10 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             <CardDescription>Enter your credentials to access the system</CardDescription>
           </CardHeader>
           <CardContent className="pt-4">
-            <Form {...form}>
-              <form onSubmit={form.handleSubmit((d) => loginMutation.mutate(d))} className="space-y-4">
+            <Form {...loginForm}>
+              <form onSubmit={loginForm.handleSubmit((d) => loginMutation.mutate(d))} className="space-y-4">
                 <FormField
-                  control={form.control}
+                  control={loginForm.control}
                   name="username"
                   render={({ field }) => (
                     <FormItem>
@@ -94,7 +196,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                   )}
                 />
                 <FormField
-                  control={form.control}
+                  control={loginForm.control}
                   name="password"
                   render={({ field }) => (
                     <FormItem>
