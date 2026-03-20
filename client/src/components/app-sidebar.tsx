@@ -191,6 +191,7 @@ export function AppSidebar() {
                 title="Sign out"
               >
                 <LogOut className="w-3.5 h-3.5" />
+                <span>Sign out</span>
               </button>
             </div>
           </div>
