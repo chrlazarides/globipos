@@ -499,8 +499,8 @@ export default function Reports() {
                                         )}
                                         {prev > 0 && (
                                           <div className="flex items-center gap-1.5">
-                                            <span className="text-[10px] text-muted-foreground font-normal">Prior months</span>
-                                            <span className="font-semibold text-violet-700 dark:text-violet-500">€{prev.toFixed(2)}</span>
+                                            <span className="text-[10px] text-foreground font-semibold">Prior month</span>
+                                            <span className="font-semibold text-green-700 dark:text-green-400">€{prev.toFixed(2)}</span>
                                           </div>
                                         )}
                                       </div>
@@ -569,8 +569,8 @@ export default function Reports() {
                                               )}
                                               {parseFloat(st.dueByEomPrevMonth || "0") > 0 && (
                                                 <div className="flex items-center gap-1.5 text-xs">
-                                                  <span className="text-violet-700 dark:text-violet-400">Prior months:</span>
-                                                  <span className="font-semibold text-violet-800 dark:text-violet-300">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
+                                                  <span className="text-foreground font-semibold">Prior month:</span>
+                                                  <span className="font-semibold text-green-700 dark:text-green-400">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
                                                 </div>
                                               )}
                                             </div>

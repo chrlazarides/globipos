@@ -957,20 +957,19 @@ export class DatabaseStorage implements IStorage {
       // "Due by end of month" = what must be settled by month-end (overdue + due this month)
       const dueByEndOfMonth = aging.dueThisMonth + totalOverdue;
 
-      // Break dueByEndOfMonth into current-month and prior-months invoice totals
+      // Break dueByEndOfMonth into current-month and previous-month invoice totals
       const currentMonthYM = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+      const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const prevMonthYM = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, "0")}`;
       let dueByEomCurrentMonth = 0;
       let dueByEomPrevMonth = 0;
       for (const inv of invs) {
         const paid = getPaid(inv);
         const balance = parseFloat(inv.total) - paid;
         if (balance <= 0) continue;
-        const dueDate = effectiveDueDate(inv, creditDays);
-        if (dueDate <= endOfMonth) {
-          const invYM = inv.date.substring(0, 7);
-          if (invYM === currentMonthYM) dueByEomCurrentMonth += balance;
-          else dueByEomPrevMonth += balance;
-        }
+        const invYM = inv.date.substring(0, 7);
+        if (invYM === currentMonthYM) dueByEomCurrentMonth += balance;
+        else if (invYM === prevMonthYM) dueByEomPrevMonth += balance;
       }
 
       const invById = new Map(allInvs.map(i => [i.id, i]));
