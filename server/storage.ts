@@ -841,6 +841,7 @@ export class DatabaseStorage implements IStorage {
 
     return {
       invoices: invoicesWithCost,
+      totalRevenue: totalRevenue.toFixed(2),
       totalSales: totalSales.toFixed(2),
       totalTax: totalTax.toFixed(2),
       totalCost: totalCost.toFixed(2),

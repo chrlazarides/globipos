@@ -55,6 +55,7 @@ export default function Reports() {
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: salesReport, isLoading: salesLoading } = useQuery<{
     invoices: (Invoice & { customerName: string; costTotal: string; profit: string; marginPct: string })[];
+    totalRevenue: string;
     totalSales: string;
     totalTax: string;
     totalCost: string;
@@ -171,10 +172,20 @@ export default function Reports() {
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
                 <Card>
                   <CardContent className="p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Sales (incl. VAT)</p>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Revenue (Ex-VAT)</p>
+                    <p className="text-xl font-bold mt-1" data-testid="stat-total-revenue">
+                      €{parseFloat(salesReport.totalRevenue).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">After discounts, excl. tax</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Incl. VAT</p>
                     <p className="text-xl font-bold mt-1" data-testid="stat-total-sales">
                       €{parseFloat(salesReport.totalSales).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">VAT: €{parseFloat(salesReport.totalTax).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</p>
                   </CardContent>
                 </Card>
                 <Card>
@@ -191,6 +202,7 @@ export default function Reports() {
                     <p className={`text-xl font-bold mt-1 ${parseFloat(salesReport.totalProfit) >= 0 ? "text-green-600" : "text-red-500"}`} data-testid="stat-total-profit">
                       €{parseFloat(salesReport.totalProfit).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">On ex-VAT revenue</p>
                   </CardContent>
                 </Card>
                 <Card>
@@ -199,14 +211,7 @@ export default function Reports() {
                     <p className={`text-xl font-bold mt-1 ${parseFloat(salesReport.overallMargin) >= 0 ? "text-green-600" : "text-red-500"}`} data-testid="stat-overall-margin">
                       {salesReport.overallMargin}%
                     </p>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Tax</p>
-                    <p className="text-xl font-bold mt-1">
-                      €{parseFloat(salesReport.totalTax).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
-                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Profit / Revenue</p>
                   </CardContent>
                 </Card>
                 <Card>
@@ -228,7 +233,7 @@ export default function Reports() {
                         <TableRow>
                           <TableHead>Customer</TableHead>
                           <TableHead className="text-center">Invoices</TableHead>
-                          <TableHead className="text-right">Revenue</TableHead>
+                          <TableHead className="text-right">Revenue (Ex-VAT)</TableHead>
                           <TableHead className="text-right">Cost</TableHead>
                           <TableHead className="text-right">Profit</TableHead>
                           <TableHead className="text-right">Margin</TableHead>
@@ -266,7 +271,7 @@ export default function Reports() {
                         <TableHead>Customer</TableHead>
                         <TableHead>Date</TableHead>
                         <TableHead>Status</TableHead>
-                        <TableHead className="text-right">Total</TableHead>
+                        <TableHead className="text-right">Total (incl. VAT)</TableHead>
                         <TableHead className="text-right">Cost</TableHead>
                         <TableHead className="text-right">Profit</TableHead>
                         <TableHead className="text-right">Margin</TableHead>
