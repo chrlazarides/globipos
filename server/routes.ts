@@ -326,7 +326,9 @@ export async function registerRoutes(
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user || !user.active || !user.totpSecret) return res.status(401).json({ message: "Invalid session" });
 
-      const result = totpVerify({ token: code.replace(/\s/g, ""), secret: user.totpSecret });
+      const cleanToken2fa = code.replace(/\s/g, "");
+      const result = totpVerify({ token: cleanToken2fa, secret: user.totpSecret, window: 1 });
+      console.log(`[2FA login] user=${user.username} token=${cleanToken2fa} result=`, result);
       if (!result.valid) return res.status(401).json({ message: "Invalid authentication code" });
 
       const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
@@ -356,7 +358,9 @@ export async function registerRoutes(
       const { secret, code } = req.body;
       if (!secret || !code) return res.status(400).json({ message: "Secret and code required" });
 
-      const result = totpVerify({ token: code.replace(/\s/g, ""), secret });
+      const cleanToken = code.replace(/\s/g, "");
+      const result = totpVerify({ token: cleanToken, secret, window: 1 });
+      console.log(`[2FA enable] user=${req.user.username} token=${cleanToken} secret=${secret} result=`, result);
       if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
 
       await db.update(users).set({ totpSecret: secret, totpEnabled: true }).where(eq(users.id, req.user.id));
@@ -373,7 +377,7 @@ export async function registerRoutes(
       const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
       if (!user || !user.totpSecret || !user.totpEnabled) return res.status(400).json({ message: "2FA is not enabled" });
 
-      const result = totpVerify({ token: (code || "").replace(/\s/g, ""), secret: user.totpSecret });
+      const result = totpVerify({ token: (code || "").replace(/\s/g, ""), secret: user.totpSecret, window: 1 });
       if (!result.valid) return res.status(400).json({ message: "Invalid authentication code" });
 
       await db.update(users).set({ totpSecret: null, totpEnabled: false }).where(eq(users.id, req.user.id));

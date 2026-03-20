@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Users, Plus, Pencil, Trash2, ShieldCheck, Shield, Clock, Loader2, Smartphone, KeyRound, CheckCircle2, XCircle } from "lucide-react";
+import { Users, Plus, Pencil, Trash2, ShieldCheck, Shield, Clock, Loader2, Smartphone, KeyRound, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 import { formatDateTime } from "@/lib/utils";
 
 interface User {
@@ -242,16 +242,17 @@ function TwoFactorDialog({ open, onClose, currentlyEnabled }: { open: boolean; o
         {/* Setup: scan QR and confirm code */}
         {step === "setup" && (
           <div className="space-y-4 pt-2">
-            <p className="text-sm text-muted-foreground">
-              Scan this QR code with your authenticator app, then enter the 6-digit code to confirm.
-            </p>
+            <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>Scan the QR code below, then enter the 6-digit code from your app. Do not close this dialog — if you do, you will need to scan a new QR code.</span>
+            </div>
             {qrDataUrl && (
               <div className="flex justify-center">
                 <img src={qrDataUrl} alt="2FA QR Code" className="w-48 h-48 rounded-lg border" data-testid="img-2fa-qr" />
               </div>
             )}
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Or enter manually:</Label>
+              <Label className="text-xs text-muted-foreground">Or enter manually into your app:</Label>
               <code className="block text-xs bg-muted rounded p-2 break-all font-mono select-all" data-testid="text-2fa-secret">
                 {secret}
               </code>
@@ -271,7 +272,7 @@ function TwoFactorDialog({ open, onClose, currentlyEnabled }: { open: boolean; o
               />
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setStep("start")}>Back</Button>
+              <Button variant="outline" onClick={handleClose} data-testid="button-2fa-cancel">Cancel</Button>
               <Button
                 onClick={() => enableMutation.mutate()}
                 disabled={code.length !== 6 || enableMutation.isPending}
