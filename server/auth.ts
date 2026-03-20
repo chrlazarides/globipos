@@ -56,6 +56,7 @@ export function clearAuthCookie(res: Response) {
 
 const PUBLIC_PATHS = [
   "/api/auth/login",
+  "/api/emergency-recover",
   "/portal",
   "/api/portal",
 ];
