@@ -16,12 +16,7 @@ const loginSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
-const totpSchema = z.object({
-  code: z.string().min(6, "Enter the 6-digit code").max(6, "Code must be 6 digits"),
-});
-
 type LoginForm = z.infer<typeof loginSchema>;
-type TotpForm = z.infer<typeof totpSchema>;
 
 interface LoginPageProps {
   onLogin: (user: { id: string; username: string; role: string }) => void;
@@ -32,15 +27,11 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [tempToken, setTempToken] = useState<string | null>(null);
   const [pendingUsername, setPendingUsername] = useState("");
+  const [totpCode, setTotpCode] = useState("");
 
   const loginForm = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: { username: "", password: "" },
-  });
-
-  const totpForm = useForm<TotpForm>({
-    resolver: zodResolver(totpSchema),
-    defaultValues: { code: "" },
   });
 
   const loginMutation = useMutation({
@@ -52,7 +43,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
       if (data.requires2fa) {
         setTempToken(data.tempToken);
         setPendingUsername(loginForm.getValues("username"));
-        totpForm.reset();
+        setTotpCode("");
       } else {
         onLogin(data);
       }
@@ -63,10 +54,10 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   });
 
   const totpMutation = useMutation({
-    mutationFn: async (data: TotpForm) => {
+    mutationFn: async () => {
       const res = await apiRequest("POST", "/api/auth/2fa/verify", {
         tempToken,
-        code: data.code.replace(/\s/g, ""),
+        code: totpCode.replace(/\s/g, ""),
       });
       return res.json();
     },
@@ -75,7 +66,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     },
     onError: (err: Error) => {
       toast({ title: "Verification failed", description: err.message, variant: "destructive" });
-      totpForm.reset();
+      setTotpCode("");
     },
   });
 
@@ -109,48 +100,43 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-4">
-              <Form {...totpForm}>
-                <form onSubmit={totpForm.handleSubmit((d) => totpMutation.mutate(d))} className="space-y-4">
-                  <FormField
-                    control={totpForm.control}
-                    name="code"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Authentication Code</FormLabel>
-                        <FormControl>
-                          <Input
-                            {...field}
-                            autoFocus
-                            autoComplete="one-time-code"
-                            inputMode="numeric"
-                            maxLength={6}
-                            placeholder="000000"
-                            className="text-center text-2xl tracking-widest font-mono"
-                            data-testid="input-totp-code"
-                            onChange={e => field.onChange(e.target.value.replace(/\D/g, ""))}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
+              <form onSubmit={e => { e.preventDefault(); totpMutation.mutate(); }} className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="totp-login-code">Authentication Code</label>
+                  <Input
+                    id="totp-login-code"
+                    value={totpCode}
+                    onChange={e => setTotpCode(e.target.value.replace(/\D/g, ""))}
+                    autoFocus
+                    autoComplete="one-time-code"
+                    inputMode="numeric"
+                    maxLength={6}
+                    placeholder="000000"
+                    className="text-center text-2xl tracking-widest font-mono"
+                    data-testid="input-totp-code"
                   />
-                  <Button type="submit" className="w-full" disabled={totpMutation.isPending} data-testid="button-verify-2fa">
-                    {totpMutation.isPending ? (
-                      <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying...</>
-                    ) : "Verify"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="w-full text-muted-foreground"
-                    onClick={() => { setTempToken(null); loginForm.reset(); }}
-                    data-testid="button-back-to-login"
-                  >
-                    <ArrowLeft className="w-4 h-4 mr-2" />
-                    Back to login
-                  </Button>
-                </form>
-              </Form>
+                </div>
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={totpCode.length !== 6 || totpMutation.isPending}
+                  data-testid="button-verify-2fa"
+                >
+                  {totpMutation.isPending ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying...</>
+                  ) : "Verify"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full text-muted-foreground"
+                  onClick={() => { setTempToken(null); setTotpCode(""); loginForm.reset(); }}
+                  data-testid="button-back-to-login"
+                >
+                  <ArrowLeft className="w-4 h-4 mr-2" />
+                  Back to login
+                </Button>
+              </form>
             </CardContent>
           </Card>
           <p className="text-center text-xs text-muted-foreground mt-6">
