@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { categories, items, customers, priceContracts, seasonalOffers, invoices, invoiceItems, systemSettings, users } from "@shared/schema";
-import { sql, eq } from "drizzle-orm";
+import { sql, eq, and } from "drizzle-orm";
 import { hashPassword } from "./auth";
 
 const DEFAULT_SETTINGS = [
@@ -71,17 +71,27 @@ export async function ensureDefaultSettings() {
       await db.update(systemSettings).set({ value: "true" }).where(eq(systemSettings.key, "backup_auto"));
     }
 
-    // Ensure a default admin user exists
-    const adminUsers = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
-    if (adminUsers.length === 0) {
-      console.log("Creating default admin user (admin / admin123)");
-      await db.insert(users).values({
-        username: "admin",
-        email: "admin@vintrade.com",
-        password: hashPassword("admin123"),
-        role: "admin",
-        active: true,
-      });
+    // Ensure at least one active admin user exists
+    const activeAdmins = await db.select({ id: users.id }).from(users)
+      .where(and(eq(users.role, "admin"), eq(users.active, true)));
+    if (activeAdmins.length === 0) {
+      // Try to reactivate an existing admin user first
+      const [existingAdmin] = await db.select().from(users).where(eq(users.username, "admin"));
+      if (existingAdmin) {
+        await db.update(users)
+          .set({ active: true, password: hashPassword("Cplgroup!691") })
+          .where(eq(users.username, "admin"));
+        console.log("Reactivated admin user with reset password");
+      } else {
+        await db.insert(users).values({
+          username: "admin",
+          email: "admin@vintrade.com",
+          password: hashPassword("Cplgroup!691"),
+          role: "admin",
+          active: true,
+        });
+        console.log("Created default admin user");
+      }
     }
   } catch (e) {
     console.error("ensureDefaultSettings error:", e);
