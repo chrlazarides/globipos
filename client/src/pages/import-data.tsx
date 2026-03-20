@@ -24,7 +24,56 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
+
+type CellGrid = (string | number | null)[][];
+
+function worksheetTo2DArray(ws: ExcelJS.Worksheet): CellGrid {
+  const data: CellGrid = [];
+  const colCount = ws.columnCount || 1;
+  ws.eachRow({ includeEmpty: true }, (row) => {
+    const rowData: (string | number | null)[] = [];
+    for (let c = 1; c <= colCount; c++) {
+      const cell = row.getCell(c);
+      let val: any = cell.value;
+      if (val === null || val === undefined) {
+        rowData.push(null);
+      } else if (typeof val === "object" && val !== null && "result" in val) {
+        rowData.push((val as any).result ?? null);
+      } else if (typeof val === "object" && val !== null && "richText" in val) {
+        rowData.push((val as any).richText.map((r: any) => r.text).join(""));
+      } else {
+        rowData.push(val as string | number);
+      }
+    }
+    data.push(rowData);
+  });
+  return data;
+}
+
+function parseCSVToGrid(text: string): CellGrid {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return [];
+  const parseRow = (line: string): string[] => {
+    const result: string[] = [];
+    let field = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = !inQuotes; }
+      } else if (ch === "," && !inQuotes) {
+        result.push(field); field = "";
+      } else {
+        field += ch;
+      }
+    }
+    result.push(field);
+    return result;
+  };
+  return lines.map(parseRow);
+}
 
 type EntityType = "items" | "customers" | "suppliers" | "categories" | "skip";
 
@@ -146,15 +195,16 @@ function colLetter(c: number): string {
   return s;
 }
 
-function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] } {
-  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-  if (range.e.r < 0 || range.e.c < 0) return { headers: [], rows: [] };
+function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[] } {
+  if (!data.length) return { headers: [], rows: [] };
+  const maxR = data.length - 1;
+  const maxC = Math.max(...data.map((r) => r.length), 1) - 1;
+  if (maxR < 0 || maxC < 0) return { headers: [], rows: [] };
 
   const getCellVal = (r: number, c: number): string => {
-    const addr = XLSX.utils.encode_cell({ r, c });
-    const cell = ws[addr];
-    if (!cell) return "";
-    return String(cell.v ?? "").trim();
+    const v = data[r]?.[c];
+    if (v === null || v === undefined) return "";
+    return String(v).trim();
   };
 
   const HEADER_KEYWORDS = [
@@ -170,12 +220,12 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
   let headerRowIdx = -1;
   let bestScore = 0;
 
-  for (let r = 0; r <= Math.min(10, range.e.r); r++) {
+  for (let r = 0; r <= Math.min(10, maxR); r++) {
     let nonEmpty = 0;
     let hasText = 0;
     let keywordHits = 0;
     let hasNumericOnly = 0;
-    for (let c = 0; c <= range.e.c; c++) {
+    for (let c = 0; c <= maxC; c++) {
       const v = getCellVal(r, c);
       if (v) {
         nonEmpty++;
@@ -205,7 +255,7 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
 
   const headers: string[] = [];
   const seen = new Set<string>();
-  for (let c = 0; c <= range.e.c; c++) {
+  for (let c = 0; c <= maxC; c++) {
     let hdr: string;
     if (useGenericHeaders) {
       hdr = `Col ${colLetter(c)}`;
@@ -225,10 +275,10 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
   }
 
   const rows: any[] = [];
-  for (let r = dataStartRow; r <= range.e.r; r++) {
+  for (let r = dataStartRow; r <= maxR; r++) {
     const row: Record<string, any> = {};
     let hasData = false;
-    for (let c = 0; c <= range.e.c; c++) {
+    for (let c = 0; c <= maxC; c++) {
       const v = getCellVal(r, c);
       row[headers[c]] = v;
       if (v) hasData = true;
@@ -239,18 +289,18 @@ function smartSheetParse(ws: XLSX.WorkSheet): { headers: string[]; rows: any[] }
   return { headers, rows };
 }
 
-function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; brand: string; origin: string; rows: any[]; headers: string[] } | null {
-  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1");
-  const totalRows = range.e.r + 1;
-  const totalCols = range.e.c + 1;
+function tryParseWinePriceList(data: CellGrid): { detected: boolean; brand: string; origin: string; rows: any[]; headers: string[] } | null {
+  const totalRows = data.length;
+  const totalCols = Math.max(...data.map((r) => r.length), 0);
+  const maxR = totalRows - 1;
+  const maxC = totalCols - 1;
 
   if (totalRows < 3 || totalCols < 2) return null;
 
   const getCellVal = (r: number, c: number): string => {
-    const addr = XLSX.utils.encode_cell({ r, c });
-    const cell = sheet[addr];
-    if (!cell) return "";
-    return String(cell.v ?? "").trim();
+    const v = data[r]?.[c];
+    if (v === null || v === undefined) return "";
+    return String(v).trim();
   };
 
   const STANDARD_HEADER_WORDS = [
@@ -258,9 +308,9 @@ function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; bran
     "packsize", "unittype", "reorderlevel", "pricelevel", "creditlimit",
     "paymentterms", "contactperson", "taxid",
   ];
-  for (let r = 0; r <= Math.min(3, range.e.r); r++) {
+  for (let r = 0; r <= Math.min(3, maxR); r++) {
     let headerHits = 0;
-    for (let c = 0; c <= range.e.c; c++) {
+    for (let c = 0; c <= maxC; c++) {
       const v = getCellVal(r, c).toLowerCase().replace(/[\s_\-./]/g, "");
       for (const kw of STANDARD_HEADER_WORDS) {
         if (v === kw || v.includes(kw)) { headerHits++; break; }
@@ -289,8 +339,8 @@ function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; bran
   let costColIdx = -1;
   let retailColIdx = -1;
 
-  for (let r = 0; r <= Math.min(5, range.e.r); r++) {
-    for (let c = 0; c <= range.e.c; c++) {
+  for (let r = 0; r <= Math.min(5, maxR); r++) {
+    for (let c = 0; c <= maxC; c++) {
       const val = getCellVal(r, c).toLowerCase().replace(/[\s_-]/g, "");
       if (val.includes("cost") || val.includes("κοστ")) costColIdx = c;
       if (val.includes("final") || val.includes("retail") || val.includes("sell") || val.includes("τιμή") || val.includes("price")) {
@@ -300,8 +350,8 @@ function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; bran
   }
 
   if (costColIdx < 0 && retailColIdx < 0) {
-    for (let c = 1; c <= range.e.c; c++) {
-      for (let r = 2; r <= Math.min(8, range.e.r); r++) {
+    for (let c = 1; c <= maxC; c++) {
+      for (let r = 2; r <= Math.min(8, maxR); r++) {
         const val = getCellVal(r, c);
         const numVal = val.replace(/[€$£,\s]/g, "");
         if (numVal && !isNaN(Number(numVal)) && Number(numVal) > 0) {
@@ -317,8 +367,8 @@ function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; bran
   }
 
   if (retailColIdx < 0 && costColIdx >= 0) {
-    for (let c = costColIdx + 1; c <= range.e.c; c++) {
-      for (let r = 2; r <= Math.min(8, range.e.r); r++) {
+    for (let c = costColIdx + 1; c <= maxC; c++) {
+      for (let r = 2; r <= Math.min(8, maxR); r++) {
         const val = getCellVal(r, c).replace(/[€$£,\s]/g, "");
         if (val && !isNaN(Number(val)) && Number(val) > 0) {
           retailColIdx = c;
@@ -332,7 +382,7 @@ function tryParseWinePriceList(sheet: XLSX.WorkSheet): { detected: boolean; bran
   const flatRows: any[] = [];
   let currentCategory = "";
 
-  for (let r = 1; r <= range.e.r; r++) {
+  for (let r = 1; r <= maxR; r++) {
     const nameVal = getCellVal(r, 0);
     if (!nameVal) continue;
 
@@ -515,20 +565,31 @@ export default function ImportData() {
     setStep("analyze");
 
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
-        const data = new Uint8Array(ev.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: "array" });
+        const buffer = ev.target?.result as ArrayBuffer;
 
-        const analyzed: SheetAnalysis[] = workbook.SheetNames.map((sheetName) => {
-          const ws = workbook.Sheets[sheetName];
+        let sheetList: { name: string; grid: CellGrid }[];
 
-          const wineParsed = tryParseWinePriceList(ws);
+        if (ext === "csv") {
+          const text = new TextDecoder().decode(buffer);
+          sheetList = [{ name: "Sheet1", grid: parseCSVToGrid(text) }];
+        } else {
+          const workbook = new ExcelJS.Workbook();
+          await workbook.xlsx.load(buffer);
+          sheetList = workbook.worksheets.map((ws) => ({
+            name: ws.name,
+            grid: worksheetTo2DArray(ws),
+          }));
+        }
+
+        const analyzed: SheetAnalysis[] = sheetList.map(({ name, grid }) => {
+          const wineParsed = tryParseWinePriceList(grid);
           if (wineParsed && wineParsed.rows.length > 0) {
             const fields = ENTITY_CONFIG.items.fields;
             const columnMap = autoMapColumns(wineParsed.headers, fields);
             return {
-              sheetName,
+              sheetName: name,
               headers: wineParsed.headers,
               rows: wineParsed.rows.slice(0, 10),
               totalRows: wineParsed.rows.length,
@@ -540,13 +601,13 @@ export default function ImportData() {
             };
           }
 
-          const parsed = smartSheetParse(ws);
+          const parsed = smartSheetParse(grid);
           const { entity, confidence } = detectEntity(parsed.headers);
           const config = entity !== "skip" ? ENTITY_CONFIG[entity] : null;
           const columnMap = config ? autoMapColumns(parsed.headers, config.fields) : {};
 
           return {
-            sheetName,
+            sheetName: name,
             headers: parsed.headers,
             rows: parsed.rows.slice(0, 10),
             totalRows: parsed.rows.length,
@@ -557,7 +618,7 @@ export default function ImportData() {
         }).filter((s) => s.totalRows > 0);
 
         if (!analyzed.length) {
-          toast({ title: "No data", description: "The Excel file contains no data rows in any sheet", variant: "destructive" });
+          toast({ title: "No data", description: "The file contains no data rows", variant: "destructive" });
           setStep("upload");
           return;
         }
@@ -566,7 +627,7 @@ export default function ImportData() {
         setActiveSheet(analyzed[0].sheetName);
         setStep("verify");
       } catch {
-        toast({ title: "Error reading file", description: "Could not parse the Excel file", variant: "destructive" });
+        toast({ title: "Error reading file", description: "Could not parse the file", variant: "destructive" });
         setStep("upload");
       }
     };

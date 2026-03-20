@@ -19,6 +19,56 @@ type ImportResult = {
   errors: { row: number; message: string }[];
 };
 
+function excelSheetToJson(sheet: ExcelJS.Worksheet, defval: any = ""): any[] {
+  const rows: any[] = [];
+  let headers: string[] = [];
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const values = (row.values as any[]).slice(1);
+    if (rowNumber === 1) {
+      headers = values.map((v) => (v !== null && v !== undefined ? String(v) : ""));
+    } else {
+      const obj: any = {};
+      headers.forEach((h, i) => {
+        const v = values[i];
+        obj[h] = v !== undefined && v !== null ? v : defval;
+      });
+      rows.push(obj);
+    }
+  });
+  return rows;
+}
+
+function parseCSVText(text: string): any[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return [];
+  const parseRow = (line: string): string[] => {
+    const result: string[] = [];
+    let field = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = !inQuotes; }
+      } else if (ch === "," && !inQuotes) {
+        result.push(field.trim());
+        field = "";
+      } else {
+        field += ch;
+      }
+    }
+    result.push(field.trim());
+    return result;
+  };
+  const headers = parseRow(lines[0]);
+  return lines.slice(1).map((line) => {
+    const values = parseRow(line);
+    const obj: any = {};
+    headers.forEach((h, i) => { obj[h] = values[i] ?? ""; });
+    return obj;
+  });
+}
+
 export function ImportDialog({
   open,
   onOpenChange,
