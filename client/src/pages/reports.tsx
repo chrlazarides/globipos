@@ -425,13 +425,13 @@ export default function Reports() {
             const getInvStatus = (daysOverdue: number | null) => {
               if (daysOverdue === null) return null;
               if (daysOverdue <= 0) {
-                return { label: "Within Terms", color: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300", overdue: false };
+                return { label: "Within Terms", color: "bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300", overdue: false };
               }
               return {
                 label: `Overdue ${daysOverdue}d`,
-                color: daysOverdue <= 30 ? "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300"
-                  : daysOverdue <= 60 ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
-                  : "bg-red-200 text-red-900 dark:bg-red-950/60 dark:text-red-300 font-bold",
+                color: daysOverdue <= 30 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                  : daysOverdue <= 60 ? "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300"
+                  : "bg-rose-200 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 font-bold",
                 overdue: true,
               };
             };
@@ -446,11 +446,11 @@ export default function Reports() {
                         <TableHead>Customer</TableHead>
                         <TableHead className="text-center">Terms</TableHead>
                         <TableHead className="text-right">Balance Due</TableHead>
-                        <TableHead className="text-right text-amber-600 dark:text-amber-400">Due by {endOfMonthLabel}</TableHead>
-                        <TableHead className="text-right text-green-700 dark:text-green-400">Within Terms</TableHead>
-                        <TableHead className="text-right text-orange-500 dark:text-orange-400">Overdue 1–30d</TableHead>
-                        <TableHead className="text-right text-red-600 dark:text-red-400">Overdue 31–60d</TableHead>
-                        <TableHead className="text-right text-red-700 dark:text-red-500">Overdue 60+d</TableHead>
+                        <TableHead className="text-right text-violet-600 dark:text-violet-400">Due by {endOfMonthLabel}</TableHead>
+                        <TableHead className="text-right text-teal-600 dark:text-teal-400">Within Terms</TableHead>
+                        <TableHead className="text-right text-amber-600 dark:text-amber-400">Overdue 1–30d</TableHead>
+                        <TableHead className="text-right text-orange-600 dark:text-orange-400">Overdue 31–60d</TableHead>
+                        <TableHead className="text-right text-rose-700 dark:text-rose-500">Overdue 60+d</TableHead>
                         <TableHead className="w-[160px]" />
                       </TableRow>
                     </TableHeader>
@@ -496,29 +496,29 @@ export default function Reports() {
                                         {cur > 0 && (
                                           <div className="flex items-center gap-1.5">
                                             <span className="text-[10px] text-muted-foreground font-normal">{currentMonthLabel}</span>
-                                            <span className="font-semibold text-amber-600 dark:text-amber-400">€{cur.toFixed(2)}</span>
+                                            <span className="font-semibold text-violet-600 dark:text-violet-400">€{cur.toFixed(2)}</span>
                                           </div>
                                         )}
                                         {prev > 0 && (
                                           <div className="flex items-center gap-1.5">
                                             <span className="text-[10px] text-muted-foreground font-normal">{prevMonthLabel}</span>
-                                            <span className="font-semibold text-amber-700 dark:text-amber-500">€{prev.toFixed(2)}</span>
+                                            <span className="font-semibold text-violet-700 dark:text-violet-500">€{prev.toFixed(2)}</span>
                                           </div>
                                         )}
                                       </div>
                                     );
                                   })()}
                                 </TableCell>
-                                <TableCell className="text-right text-sm text-green-700 dark:text-green-400" data-testid={`text-within-terms-${st.customerId}`}>
+                                <TableCell className="text-right text-sm text-teal-600 dark:text-teal-400" data-testid={`text-within-terms-${st.customerId}`}>
                                   {parseFloat(ag.withinTermsFuture) > 0 ? `€${parseFloat(ag.withinTermsFuture).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
                                 </TableCell>
-                                <TableCell className="text-right text-sm text-orange-500 dark:text-orange-400" data-testid={`text-overdue-1-30-${st.customerId}`}>
+                                <TableCell className="text-right text-sm text-amber-600 dark:text-amber-400" data-testid={`text-overdue-1-30-${st.customerId}`}>
                                   {parseFloat(ag.overdue1_30) > 0 ? `€${parseFloat(ag.overdue1_30).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
                                 </TableCell>
-                                <TableCell className="text-right text-sm text-red-600 dark:text-red-400" data-testid={`text-overdue-31-60-${st.customerId}`}>
+                                <TableCell className="text-right text-sm text-orange-600 dark:text-orange-400" data-testid={`text-overdue-31-60-${st.customerId}`}>
                                   {parseFloat(ag.overdue31_60) > 0 ? `€${parseFloat(ag.overdue31_60).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
                                 </TableCell>
-                                <TableCell className="text-right text-sm font-semibold text-red-700 dark:text-red-500" data-testid={`text-overdue-60plus-${st.customerId}`}>
+                                <TableCell className="text-right text-sm font-semibold text-rose-700 dark:text-rose-500" data-testid={`text-overdue-60plus-${st.customerId}`}>
                                   {parseFloat(ag.overdue60plus) > 0 ? `€${parseFloat(ag.overdue60plus).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
                                 </TableCell>
                                 <TableCell onClick={e => e.stopPropagation()}>
@@ -565,14 +565,14 @@ export default function Reports() {
                                             <div className="flex items-center gap-4 mt-1.5 pt-1.5 border-t border-amber-200/60 dark:border-amber-800/40">
                                               {parseFloat(st.dueByEomCurrentMonth || "0") > 0 && (
                                                 <div className="flex items-center gap-1.5 text-xs">
-                                                  <span className="text-amber-700 dark:text-amber-400">{currentMonthLabel}:</span>
-                                                  <span className="font-semibold text-amber-800 dark:text-amber-300">€{parseFloat(st.dueByEomCurrentMonth).toFixed(2)}</span>
+                                                  <span className="text-violet-700 dark:text-violet-400">{currentMonthLabel}:</span>
+                                                  <span className="font-semibold text-violet-800 dark:text-violet-300">€{parseFloat(st.dueByEomCurrentMonth).toFixed(2)}</span>
                                                 </div>
                                               )}
                                               {parseFloat(st.dueByEomPrevMonth || "0") > 0 && (
                                                 <div className="flex items-center gap-1.5 text-xs">
-                                                  <span className="text-amber-700 dark:text-amber-400">{prevMonthLabel}:</span>
-                                                  <span className="font-semibold text-amber-800 dark:text-amber-300">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
+                                                  <span className="text-violet-700 dark:text-violet-400">{prevMonthLabel}:</span>
+                                                  <span className="font-semibold text-violet-800 dark:text-violet-300">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
                                                 </div>
                                               )}
                                             </div>
