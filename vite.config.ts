@@ -32,7 +32,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   optimizeDeps: {
-    include: ["xlsx"],
+    include: ["exceljs"],
   },
   server: {
     fs: {
