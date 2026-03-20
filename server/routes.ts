@@ -195,6 +195,20 @@ export async function registerRoutes(
 
   activityMiddleware(app);
 
+  // ─── EMERGENCY RECOVERY (temporary) ─────────────────────────────────────────
+  app.post("/api/emergency-recover", async (req: Request, res: Response) => {
+    const { token } = req.body;
+    if (token !== "VINERIA-RECOVER-2026-XQ9") return res.status(403).json({ message: "Forbidden" });
+    try {
+      await db.update(users).set({ active: true }).where(eq(users.username, "george"));
+      await db.update(users).set({ active: true }).where(eq(users.username, "sokratis"));
+      await db.update(users).set({ active: true }).where(eq(users.username, "admin"));
+      await db.delete(users).where(eq(users.username, "kostya"));
+      res.json({ message: "Recovery complete: george, sokratis, admin restored; kostya deleted." });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  // ─── END EMERGENCY RECOVERY ──────────────────────────────────────────────────
+
   // ─── AUTH ───────────────────────────────────────────────────────────────────
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
