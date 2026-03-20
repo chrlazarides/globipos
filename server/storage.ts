@@ -879,15 +879,18 @@ export class DatabaseStorage implements IStorage {
       return 0;
     };
 
+    // Helper: parse a YYYY-MM-DD string as a LOCAL midnight Date (avoids UTC-offset day shift)
+    const parseLocalDate = (s: string): Date => {
+      const [y, m, d] = s.split("-").map(Number);
+      return new Date(y, m - 1, d, 0, 0, 0, 0);
+    };
+
     // Helper: compute effective due date for an invoice given customer terms
     const effectiveDueDate = (inv: { date: string; dueDate: string | null }, creditDays: number): Date => {
       if (inv.dueDate) {
-        const d = new Date(inv.dueDate);
-        d.setHours(0, 0, 0, 0);
-        return d;
+        return parseLocalDate(inv.dueDate);
       }
-      const d = new Date(inv.date);
-      d.setHours(0, 0, 0, 0);
+      const d = parseLocalDate(inv.date);
       d.setDate(d.getDate() + creditDays);
       return d;
     };
@@ -964,7 +967,7 @@ export class DatabaseStorage implements IStorage {
         let effectiveDue: string | null = null;
         if (inv.type === "invoice" && outstanding > 0) {
           const dueDate = effectiveDueDate(inv, creditDays);
-          effectiveDue = dueDate.toISOString().split("T")[0];
+          effectiveDue = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")}`;
           daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
         }
         return {
