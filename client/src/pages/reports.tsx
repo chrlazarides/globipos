@@ -99,11 +99,11 @@ export default function Reports() {
   });
 
   const previewStatement = (customerId: string) => {
-    window.open(`/api/reports/statement/${customerId}/pdf`, "_blank");
+    window.open(`/api/reports/statement/${customerId}/pdf?t=${Date.now()}`, "_blank");
   };
 
   const printStatement = (customerId: string) => {
-    window.open(`/api/reports/statement/${customerId}/pdf?print=1`, "_blank");
+    window.open(`/api/reports/statement/${customerId}/pdf?print=1&t=${Date.now()}`, "_blank");
   };
 
   const downloadStatement = async (customerId: string) => {
