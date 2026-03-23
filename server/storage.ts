@@ -954,13 +954,12 @@ export class DatabaseStorage implements IStorage {
 
       // Total overdue = everything past due date
       const totalOverdue = aging.overdue1_30 + aging.overdue31_60 + aging.overdue60plus;
-      // "Due by end of month" = what must be settled by month-end (overdue + due this month)
-      const dueByEndOfMonth = aging.dueThisMonth + totalOverdue;
 
-      // Break dueByEndOfMonth into current-month and previous-month invoice totals
-      const currentMonthYM = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+      // Break outstanding balances into last-month (prevMonth) and month-before-last invoice totals
       const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
       const prevMonthYM = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, "0")}`;
+      const prevPrevMonthDate = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+      const prevPrevMonthYM = `${prevPrevMonthDate.getFullYear()}-${String(prevPrevMonthDate.getMonth() + 1).padStart(2, "0")}`;
       let dueByEomCurrentMonth = 0;
       let dueByEomPrevMonth = 0;
       for (const inv of invs) {
@@ -968,9 +967,11 @@ export class DatabaseStorage implements IStorage {
         const balance = parseFloat(inv.total) - paid;
         if (balance <= 0) continue;
         const invYM = inv.date.substring(0, 7);
-        if (invYM === currentMonthYM) dueByEomCurrentMonth += balance;
-        else if (invYM === prevMonthYM) dueByEomPrevMonth += balance;
+        if (invYM === prevMonthYM) dueByEomCurrentMonth += balance;
+        else if (invYM === prevPrevMonthYM) dueByEomPrevMonth += balance;
       }
+      // "Due by" = outstanding from last month + month before last
+      const dueByEndOfMonth = dueByEomCurrentMonth + dueByEomPrevMonth;
 
       const invById = new Map(allInvs.map(i => [i.id, i]));
 

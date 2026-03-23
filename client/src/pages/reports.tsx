@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight } from "lucide-react";
+import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -27,6 +27,7 @@ export default function Reports() {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [expandedStatement, setExpandedStatement] = useState<string | null>(null);
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
+  const [showAgingColumns, setShowAgingColumns] = useState(false);
 
   const [selectedCustomer, setSelectedCustomer] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState(() => {
@@ -61,6 +62,8 @@ export default function Reports() {
     totalCredits: string;
     balance: string;
     dueByEndOfMonth: string;
+    dueByEomCurrentMonth: string;
+    dueByEomPrevMonth: string;
     totalOverdue: string;
     invoiceCount: number;
     invoices: {
@@ -417,9 +420,9 @@ export default function Reports() {
               card: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
               other: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
             };
-            const endOfMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-            const currentMonthLabel = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" });
-            const prevMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+            const endOfMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth(), 0).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+            const currentMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+            const prevMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
 
             const getInvStatus = (daysOverdue: number | null) => {
               if (daysOverdue === null) return null;
@@ -435,8 +438,24 @@ export default function Reports() {
               };
             };
 
+            const colCount = showAgingColumns ? 10 : 6;
             return (
               <Card>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    {customerStatements.length} customer{customerStatements.length !== 1 ? "s" : ""}
+                  </CardTitle>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowAgingColumns(!showAgingColumns)}
+                    className={`gap-1.5 text-xs h-7 ${showAgingColumns ? "bg-violet-50 border-violet-200 text-violet-700 dark:bg-violet-950/30 dark:border-violet-800 dark:text-violet-400" : ""}`}
+                    data-testid="button-toggle-aging"
+                  >
+                    <BarChart2 className="w-3.5 h-3.5" />
+                    {showAgingColumns ? "Hide aging" : "Aging analysis"}
+                  </Button>
+                </CardHeader>
                 <CardContent className="p-0 overflow-x-auto">
                   <Table>
                     <TableHeader>
@@ -445,18 +464,20 @@ export default function Reports() {
                         <TableHead>Customer</TableHead>
                         <TableHead className="text-center">Terms</TableHead>
                         <TableHead className="text-right">Balance Due</TableHead>
-                        <TableHead className="text-right text-violet-600 dark:text-violet-400">Due by {endOfMonthLabel}</TableHead>
-                        <TableHead className="text-right text-teal-600 dark:text-teal-400">Within Terms</TableHead>
-                        <TableHead className="text-right text-amber-600 dark:text-amber-400">Overdue 1–30d</TableHead>
-                        <TableHead className="text-right text-orange-600 dark:text-orange-400">Overdue 31–60d</TableHead>
-                        <TableHead className="text-right text-rose-700 dark:text-rose-500">Overdue 60+d</TableHead>
+                        <TableHead className="text-right text-amber-600 dark:text-amber-400">Due by {endOfMonthLabel}</TableHead>
+                        {showAgingColumns && <>
+                          <TableHead className="text-right text-teal-600 dark:text-teal-400">Within Terms</TableHead>
+                          <TableHead className="text-right text-amber-600 dark:text-amber-400">Overdue 1–30d</TableHead>
+                          <TableHead className="text-right text-orange-600 dark:text-orange-400">Overdue 31–60d</TableHead>
+                          <TableHead className="text-right text-rose-700 dark:text-rose-500">Overdue 60+d</TableHead>
+                        </>}
                         <TableHead className="w-[160px]" />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {customerStatements.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">No data available</TableCell>
+                          <TableCell colSpan={colCount} className="text-center py-8 text-muted-foreground">No data available</TableCell>
                         </TableRow>
                       ) : (
                         customerStatements.map((st) => {
@@ -495,31 +516,33 @@ export default function Reports() {
                                         {cur > 0 && (
                                           <div className="flex items-center gap-1.5">
                                             <span className="text-[10px] text-muted-foreground font-normal">{currentMonthLabel}</span>
-                                            <span className="font-semibold text-violet-600 dark:text-violet-400">€{cur.toFixed(2)}</span>
+                                            <span className="font-semibold text-amber-700 dark:text-amber-400">€{cur.toFixed(2)}</span>
                                           </div>
                                         )}
                                         {prev > 0 && (
                                           <div className="flex items-center gap-1.5">
-                                            <span className="text-[10px] text-foreground font-semibold">Prior month ({prevMonthLabel})</span>
-                                            <span className="font-semibold text-green-700 dark:text-green-400">€{prev.toFixed(2)}</span>
+                                            <span className="text-[10px] text-muted-foreground font-normal">{prevMonthLabel}</span>
+                                            <span className="font-semibold text-orange-700 dark:text-orange-400">€{prev.toFixed(2)}</span>
                                           </div>
                                         )}
                                       </div>
                                     );
                                   })()}
                                 </TableCell>
-                                <TableCell className="text-right text-sm text-teal-600 dark:text-teal-400" data-testid={`text-within-terms-${st.customerId}`}>
-                                  {parseFloat(ag.withinTermsFuture) > 0 ? `€${parseFloat(ag.withinTermsFuture).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                                </TableCell>
-                                <TableCell className="text-right text-sm text-amber-600 dark:text-amber-400" data-testid={`text-overdue-1-30-${st.customerId}`}>
-                                  {parseFloat(ag.overdue1_30) > 0 ? `€${parseFloat(ag.overdue1_30).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                                </TableCell>
-                                <TableCell className="text-right text-sm text-orange-600 dark:text-orange-400" data-testid={`text-overdue-31-60-${st.customerId}`}>
-                                  {parseFloat(ag.overdue31_60) > 0 ? `€${parseFloat(ag.overdue31_60).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
-                                </TableCell>
-                                <TableCell className="text-right text-sm font-semibold text-rose-700 dark:text-rose-500" data-testid={`text-overdue-60plus-${st.customerId}`}>
-                                  {parseFloat(ag.overdue60plus) > 0 ? `€${parseFloat(ag.overdue60plus).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
-                                </TableCell>
+                                {showAgingColumns && <>
+                                  <TableCell className="text-right text-sm text-teal-600 dark:text-teal-400" data-testid={`text-within-terms-${st.customerId}`}>
+                                    {parseFloat(ag.withinTermsFuture) > 0 ? `€${parseFloat(ag.withinTermsFuture).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                                  </TableCell>
+                                  <TableCell className="text-right text-sm text-amber-600 dark:text-amber-400" data-testid={`text-overdue-1-30-${st.customerId}`}>
+                                    {parseFloat(ag.overdue1_30) > 0 ? `€${parseFloat(ag.overdue1_30).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                                  </TableCell>
+                                  <TableCell className="text-right text-sm text-orange-600 dark:text-orange-400" data-testid={`text-overdue-31-60-${st.customerId}`}>
+                                    {parseFloat(ag.overdue31_60) > 0 ? `€${parseFloat(ag.overdue31_60).toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+                                  </TableCell>
+                                  <TableCell className="text-right text-sm font-semibold text-rose-700 dark:text-rose-500" data-testid={`text-overdue-60plus-${st.customerId}`}>
+                                    {parseFloat(ag.overdue60plus) > 0 ? `€${parseFloat(ag.overdue60plus).toFixed(2)}` : <span className="text-muted-foreground font-normal">—</span>}
+                                  </TableCell>
+                                </>}
                                 <TableCell onClick={e => e.stopPropagation()}>
                                   <div className="flex items-center gap-1">
                                     <Button size="icon" variant="ghost" onClick={() => previewStatement(st.customerId)} title="Preview" data-testid={`button-preview-statement-${st.customerId}`}>
@@ -547,7 +570,7 @@ export default function Reports() {
 
                               {isExpanded && (
                                 <TableRow className="bg-muted/20 dark:bg-muted/10">
-                                  <TableCell colSpan={10} className="p-0">
+                                  <TableCell colSpan={colCount} className="p-0">
                                     <div className="mx-6 my-3 space-y-2">
 
                                       {/* End-of-month summary banner */}
@@ -564,14 +587,14 @@ export default function Reports() {
                                             <div className="flex items-center gap-4 mt-1.5 pt-1.5 border-t border-amber-200/60 dark:border-amber-800/40">
                                               {parseFloat(st.dueByEomCurrentMonth || "0") > 0 && (
                                                 <div className="flex items-center gap-1.5 text-xs">
-                                                  <span className="text-violet-700 dark:text-violet-400">{currentMonthLabel}:</span>
-                                                  <span className="font-semibold text-violet-800 dark:text-violet-300">€{parseFloat(st.dueByEomCurrentMonth).toFixed(2)}</span>
+                                                  <span className="text-amber-700 dark:text-amber-400">{currentMonthLabel}:</span>
+                                                  <span className="font-semibold text-amber-800 dark:text-amber-300">€{parseFloat(st.dueByEomCurrentMonth).toFixed(2)}</span>
                                                 </div>
                                               )}
                                               {parseFloat(st.dueByEomPrevMonth || "0") > 0 && (
                                                 <div className="flex items-center gap-1.5 text-xs">
-                                                  <span className="text-foreground font-semibold">Prior month ({prevMonthLabel}):</span>
-                                                  <span className="font-semibold text-green-700 dark:text-green-400">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
+                                                  <span className="text-orange-700 dark:text-orange-400">{prevMonthLabel}:</span>
+                                                  <span className="font-semibold text-orange-800 dark:text-orange-300">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
                                                 </div>
                                               )}
                                             </div>
