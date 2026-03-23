@@ -3399,16 +3399,6 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   .summary-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; }
   .summary-value { font-size: 22px; font-weight: 800; margin-top: 4px; }
   .summary-value.due { color: #1a1a1a; }
-  .aging-section { margin-top: 32px; margin-bottom: 24px; }
-  .aging-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #333; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 2px solid #1a1a1a; }
-  .aging-table { width: 100%; border-collapse: collapse; }
-  .aging-table th { background: #1a1a1a; color: #fff; padding: 8px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: center; }
-  .aging-table td { padding: 12px; font-size: 12px; text-align: center; border-bottom: 1px solid #f0f0f0; }
-  .aging-table .aging-label { text-align: left; font-weight: 600; color: #333; }
-  .aging-table .aging-amount { font-weight: 700; font-size: 14px; }
-  .aging-overdue { color: #c0392b; }
-  .aging-warning { color: #e67e22; }
-  .aging-ok { color: #27ae60; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
   thead th { background: #1a1a1a; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
   thead th.right { text-align: right; }
@@ -3433,7 +3423,6 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
     thead th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .summary-card { background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .aging-table th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
 </style>
 </head>
@@ -3523,100 +3512,6 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       <tbody>${paymentRows}</tbody>
     </table>` : ""}
 
-    ${statement?.aging ? (() => {
-      const ag = statement.aging;
-      const hasAging = parseFloat(ag.withinTermsFuture||"0") > 0 || parseFloat(ag.dueThisMonth||"0") > 0 || parseFloat(ag.overdue1_30||"0") > 0 || parseFloat(ag.overdue31_60||"0") > 0 || parseFloat(ag.overdue60plus||"0") > 0;
-      if (!hasAging) return "";
-      const total = (parseFloat(ag.withinTermsFuture||"0") + parseFloat(ag.dueThisMonth||"0") + parseFloat(ag.overdue1_30||"0") + parseFloat(ag.overdue31_60||"0") + parseFloat(ag.overdue60plus||"0")).toFixed(2);
-      const dueByEOM = (parseFloat(ag.dueThisMonth||"0") + parseFloat(ag.overdue1_30||"0") + parseFloat(ag.overdue31_60||"0") + parseFloat(ag.overdue60plus||"0")).toFixed(2);
-      const endOfMonthDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-      const currentMonthLabel = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" });
-      const prevMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
-      const eomCur = parseFloat(statement.dueByEomCurrentMonth||"0");
-      const eomPrev = parseFloat(statement.dueByEomPrevMonth||"0");
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-      endOfMonth.setHours(23, 59, 59, 999);
-
-      const outstandingInvoices = statementInvoices.filter((inv: any) => parseFloat(inv.balance || "0") > 0 && inv.type !== "credit_note");
-
-      const invRows = outstandingInvoices.map((inv: any, idx: number) => {
-        const bal = parseFloat(inv.balance || "0");
-        const fmt = (v: number) => v > 0 ? `${currencySymbol}${v.toFixed(2)}` : `<span style="color:#ccc;">—</span>`;
-        const daysOverdue = inv.daysOverdue ?? 0;
-        const dueDateStr = inv.effectiveDueDate
-          ? new Date(inv.effectiveDueDate).toLocaleDateString("en-GB")
-          : inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—";
-        const effectiveDue = inv.effectiveDueDate ? new Date(inv.effectiveDueDate) : null;
-        const isWithinTerms = bal > 0 && daysOverdue <= 0;
-        const isDueThisMonth = effectiveDue ? effectiveDue >= today && effectiveDue <= endOfMonth : false;
-
-        // Assign to columns: withinFuture, dueThisMonth, ov1_30, ov31_60, ov60plus
-        const bFuture = isWithinTerms && !isDueThisMonth ? bal : 0;
-        const bThisMonth = isWithinTerms && isDueThisMonth ? bal : 0;
-        const bOv1_30 = !isWithinTerms && daysOverdue <= 30 ? bal : 0;
-        const bOv31_60 = !isWithinTerms && daysOverdue > 30 && daysOverdue <= 60 ? bal : 0;
-        const bOv60plus = !isWithinTerms && daysOverdue > 60 ? bal : 0;
-
-        const statusLabel = isWithinTerms
-          ? (isDueThisMonth ? `<span style="color:#f57f17;font-size:9px;font-weight:700;">DUE THIS MONTH</span>` : `<span style="color:#2e7d32;font-size:9px;font-weight:700;">WITHIN TERMS</span>`)
-          : `<span style="color:#c62828;font-size:9px;font-weight:700;">OVERDUE ${daysOverdue}d</span>`;
-
-        const rowBg = idx % 2 === 1 ? "background:#fdfcfb;" : "";
-        return `<tr style="${rowBg}">
-          <td class="aging-label" style="font-size:11px;">${inv.invoiceNumber || "—"}<br><span style="font-weight:400;color:#888;font-size:10px;">${new Date(inv.date).toLocaleDateString("en-GB")} &middot; Due: ${dueDateStr}</span><br>${statusLabel}</td>
-          <td class="aging-amount" style="font-size:12px;font-weight:700;color:${bFuture>0?'#2e7d32':'#ccc'};">${fmt(bFuture)}</td>
-          <td class="aging-amount" style="font-size:12px;font-weight:700;color:${bThisMonth>0?'#f9a825':'#ccc'};">${fmt(bThisMonth)}</td>
-          <td class="aging-amount" style="font-size:12px;font-weight:700;color:${bOv1_30>0?'#e65100':'#ccc'};">${fmt(bOv1_30)}</td>
-          <td class="aging-amount" style="font-size:12px;font-weight:700;color:${bOv31_60>0?'#c62828':'#ccc'};">${fmt(bOv31_60)}</td>
-          <td class="aging-amount" style="font-size:13px;font-weight:800;color:${bOv60plus>0?'#7f0000':'#ccc'};">${fmt(bOv60plus)}</td>
-          <td class="aging-amount" style="font-size:12px;font-weight:700;">${currencySymbol}${bal.toFixed(2)}</td>
-        </tr>`;
-      }).join("");
-
-      return `
-    <div class="aging-section">
-      <div class="aging-title">Aging Analysis — Outstanding Balances (by Payment Terms)</div>
-      ${parseFloat(dueByEOM) > 0 ? `<div style="background:#fff8e1;border:1px solid #ffca28;border-radius:4px;padding:10px 14px;margin-bottom:10px;font-size:12px;">
-        <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-          <strong style="color:#e65100;">Due by ${endOfMonthDate}:</strong>
-          <span style="font-size:14px;font-weight:800;color:#b71c1c;">${currencySymbol}${dueByEOM}</span>
-          ${parseFloat(statement.totalOverdue||"0") > 0 ? `<span style="color:#c62828;font-size:11px;font-weight:600;">(incl. ${currencySymbol}${parseFloat(statement.totalOverdue).toFixed(2)} overdue)</span>` : ""}
-        </div>
-        ${(eomCur > 0 || eomPrev > 0) ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #ffe082;display:flex;gap:20px;">
-          ${eomCur > 0 ? `<span style="font-size:11px;color:#1a1a1a;font-weight:600;">${currentMonthLabel}: <strong style="color:#2e7d32;">${currencySymbol}${eomCur.toFixed(2)}</strong></span>` : ""}
-          ${eomPrev > 0 ? `<span style="font-size:11px;color:#1a1a1a;font-weight:600;">Prior month (${prevMonthLabel}): <strong style="color:#2e7d32;">${currencySymbol}${eomPrev.toFixed(2)}</strong></span>` : ""}
-        </div>` : ""}
-      </div>` : ""}
-      <table class="aging-table">
-        <thead>
-          <tr>
-            <th style="text-align:left;">Invoice</th>
-            <th style="color:#69f0ae;">Within Terms</th>
-            <th style="color:#ffd740;">Due This Month</th>
-            <th style="color:#ffa726;">Overdue 1–30d</th>
-            <th style="color:#ef5350;">Overdue 31–60d</th>
-            <th style="color:#ff1744;">Overdue 60+d</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${invRows}
-          <tr style="background:#1a1a1a;">
-            <td style="padding:10px 12px;font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:0.5px;">TOTAL</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.withinTermsFuture||"0")>0?'#69f0ae':'#555'};font-size:13px;font-weight:700;">${parseFloat(ag.withinTermsFuture||"0")>0?currencySymbol+parseFloat(ag.withinTermsFuture).toFixed(2):'—'}</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.dueThisMonth||"0")>0?'#ffd740':'#555'};font-size:13px;font-weight:700;">${parseFloat(ag.dueThisMonth||"0")>0?currencySymbol+parseFloat(ag.dueThisMonth).toFixed(2):'—'}</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.overdue1_30||"0")>0?'#ffa726':'#555'};font-size:13px;font-weight:700;">${parseFloat(ag.overdue1_30||"0")>0?currencySymbol+parseFloat(ag.overdue1_30).toFixed(2):'—'}</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.overdue31_60||"0")>0?'#ef5350':'#555'};font-size:13px;font-weight:700;">${parseFloat(ag.overdue31_60||"0")>0?currencySymbol+parseFloat(ag.overdue31_60).toFixed(2):'—'}</td>
-            <td class="aging-amount" style="color:${parseFloat(ag.overdue60plus||"0")>0?'#ff1744':'#555'};font-size:14px;font-weight:800;">${parseFloat(ag.overdue60plus||"0")>0?currencySymbol+parseFloat(ag.overdue60plus).toFixed(2):'—'}</td>
-            <td class="aging-amount" style="color:#fff;font-size:15px;">${currencySymbol}${total}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>`;
-    })() : ""}
 
     ${companyIban ? `
     <div style="margin-top:28px;padding:18px 20px;background:#f5f5f5;border-radius:6px;border:1px solid #e5e5e5;">
