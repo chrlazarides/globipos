@@ -3512,6 +3512,27 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       <tbody>${paymentRows}</tbody>
     </table>` : ""}
 
+    ${statement?.aging ? (() => {
+      const ag = statement.aging;
+      const hasAging = parseFloat(ag.withinTermsFuture||"0") > 0 || parseFloat(ag.overdue1_30||"0") > 0 || parseFloat(ag.overdue31_60||"0") > 0 || parseFloat(ag.overdue60plus||"0") > 0;
+      if (!hasAging) return "";
+      const buckets = [
+        { label: "Within Terms", value: parseFloat(ag.withinTermsFuture||"0"), color: "#2e7d32", bg: "#e8f5e9", border: "#a5d6a7" },
+        { label: "Overdue 1–30d", value: parseFloat(ag.overdue1_30||"0"), color: "#e65100", bg: "#fff3e0", border: "#ffcc80" },
+        { label: "Overdue 31–60d", value: parseFloat(ag.overdue31_60||"0"), color: "#c62828", bg: "#fce4ec", border: "#ef9a9a" },
+        { label: "Overdue 60+d", value: parseFloat(ag.overdue60plus||"0"), color: "#7f0000", bg: "#fce4ec", border: "#e57373" },
+      ].filter(b => b.value > 0);
+      const cards = buckets.map(b => `
+        <div style="flex:1;min-width:100px;padding:12px 14px;background:${b.bg};border:1px solid ${b.border};border-radius:5px;text-align:center;">
+          <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#666;font-weight:700;margin-bottom:4px;">${b.label}</div>
+          <div style="font-size:15px;font-weight:800;color:${b.color};">${currencySymbol}${b.value.toFixed(2)}</div>
+        </div>`).join("");
+      return `
+    <div style="margin-top:28px;margin-bottom:4px;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#333;padding-bottom:6px;border-bottom:2px solid #1a1a1a;margin-bottom:12px;">Aging Summary</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">${cards}</div>
+    </div>`;
+    })() : ""}
 
     ${companyIban ? `
     <div style="margin-top:28px;padding:18px 20px;background:#f5f5f5;border-radius:6px;border:1px solid #e5e5e5;">
