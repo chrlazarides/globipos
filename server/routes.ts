@@ -1530,6 +1530,8 @@ export async function registerRoutes(
 
       const html = generateStatementHtml(customer, st, autoPrint, settingsMap);
       res.setHeader("Content-Type", "text/html");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
       if (req.query.download === "1") {
         res.setHeader("Content-Disposition", `attachment; filename="statement-${customer.code}.html"`);
       }
