@@ -3320,59 +3320,108 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";
+  const companyRegNo = settings.company_reg_no || "";
   const companyTaxId = settings.company_tax_id || "";
   const companyIban = settings.company_iban || "";
   const companyBankName = settings.company_bank_name || "";
   const companySwift = settings.company_swift || "";
   const currencySymbol = settings.currency_symbol || "\u20AC";
+  const fmt = (v: number | string) => `${currencySymbol}${parseFloat(String(v) || "0").toFixed(2)}`;
 
   const paymentTermsLabel: Record<string, string> = {
     cash: "Cash on Delivery", credit_7: "Net 7 Days", credit_14: "Net 14 Days",
     credit_30: "Net 30 Days", credit_60: "Net 60 Days", credit_90: "Net 90 Days",
   };
-
-  const statementInvoices = statement?.invoices || [];
-  const statementPayments = statement?.payments || [];
-  const typeLabels: Record<string, string> = { invoice: "Invoice", credit_note: "Credit Note", proforma: "Proforma", quotation: "Quotation" };
   const methodLabels: Record<string, string> = {
-    cash: "Cash", bank_transfer: "Bank Transfer", cheque: "Cheque",
-    card: "Card", other: "Other",
+    cash: "Cash", bank_transfer: "Bank Transfer", cheque: "Cheque", card: "Card", other: "Other",
   };
-  const invoiceRows = statementInvoices.map((inv: any, idx: number) => `
-    <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
-      <td class="cell">${inv.invoiceNumber || ""}</td>
-      <td class="cell">${new Date(inv.date).toLocaleDateString("en-GB")}</td>
-      <td class="cell">${inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "-"}</td>
-      <td class="cell">${typeLabels[inv.type] || inv.type}</td>
-      <td class="cell">${inv.status || ""}</td>
-      <td class="cell right">${currencySymbol}${parseFloat(inv.total || "0").toFixed(2)}</td>
-      <td class="cell right">${currencySymbol}${parseFloat(inv.paid || "0").toFixed(2)}</td>
-      <td class="cell right bold">${currencySymbol}${parseFloat(inv.balance || "0").toFixed(2)}</td>
-    </tr>
-  `).join("");
+  const typeLabels: Record<string, string> = {
+    invoice: "Invoice", credit_note: "Credit Note", proforma: "Proforma", quotation: "Quotation",
+  };
 
-  const paymentRows = statementPayments.map((pmt: any, idx: number) => {
-    const methodLabel = methodLabels[pmt.paymentMethod] || pmt.paymentMethod || "—";
-    const details: string[] = [];
-    if (pmt.reference) details.push(`Ref: ${pmt.reference}`);
-    if (pmt.invoiceNumber) details.push(`Invoice: ${pmt.invoiceNumber}`);
-    if (pmt.notes) details.push(pmt.notes);
-    const detailStr = details.join(" &nbsp;·&nbsp; ");
-    return `
-    <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
-      <td class="cell" colspan="4">
-        <div style="font-weight:600;color:#1a1a1a;">Payment Received</div>
-        <div style="font-size:11px;color:#666;margin-top:2px;">
-          <span style="display:inline-block;background:#e8f5e9;color:#2e7d32;padding:1px 7px;border-radius:10px;font-weight:600;font-size:10px;">${methodLabel}</span>
-          ${detailStr ? `&nbsp;&nbsp;${detailStr}` : ""}
-        </div>
-      </td>
-      <td class="cell" style="color:#2e7d32;font-weight:600;">${new Date(pmt.date).toLocaleDateString("en-GB")}</td>
-      <td class="cell right" style="color:#2e7d32;font-weight:700;">−${currencySymbol}${parseFloat(pmt.amount || "0").toFixed(2)}</td>
-      <td class="cell"></td>
-      <td class="cell"></td>
-    </tr>
-  `}).join("");
+  const statementInvoices: any[] = statement?.invoices || [];
+  const statementPayments: any[] = statement?.payments || [];
+  const stmtDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
+  const balanceDue = parseFloat(statement?.balance || "0");
+  const ag = statement?.aging || {};
+
+  // Build a single chronological activity list (invoices + payments merged, sorted by date)
+  type Activity = { date: Date; dateStr: string; type: "invoice" | "payment"; ref: string; description: string; dueDate: string; amount: number; isCredit: boolean; };
+  const activities: Activity[] = [];
+
+  for (const inv of statementInvoices) {
+    const d = inv.date ? new Date(inv.date) : new Date();
+    const dueStr = inv.effectiveDueDate
+      ? new Date(inv.effectiveDueDate).toLocaleDateString("en-GB")
+      : inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—";
+    activities.push({
+      date: d,
+      dateStr: d.toLocaleDateString("en-GB"),
+      type: "invoice",
+      ref: inv.invoiceNumber || "—",
+      description: typeLabels[inv.type] || inv.type,
+      dueDate: dueStr,
+      amount: parseFloat(inv.total || "0"),
+      isCredit: inv.type === "credit_note",
+    });
+  }
+  for (const pmt of statementPayments) {
+    const d = pmt.date ? new Date(pmt.date) : new Date();
+    const method = methodLabels[pmt.paymentMethod] || pmt.paymentMethod || "Other";
+    const ref = [pmt.reference, pmt.invoiceNumber].filter(Boolean).join(" / ") || "—";
+    activities.push({
+      date: d,
+      dateStr: d.toLocaleDateString("en-GB"),
+      type: "payment",
+      ref,
+      description: `Payment Received (${method})`,
+      dueDate: "—",
+      amount: parseFloat(pmt.amount || "0"),
+      isCredit: false,
+    });
+  }
+  activities.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  // Running balance
+  let runningBalance = 0;
+  const activityRows = activities.map((a, idx) => {
+    if (a.type === "payment") {
+      runningBalance -= a.amount;
+    } else if (a.isCredit) {
+      runningBalance -= a.amount;
+    } else {
+      runningBalance += a.amount;
+    }
+    const isPayment = a.type === "payment" || a.isCredit;
+    const bg = idx % 2 === 1 ? "background:#f9f9f9;" : "";
+    return `<tr style="${bg}">
+      <td style="padding:8px 10px;font-size:11px;color:#555;white-space:nowrap;">${a.dateStr}</td>
+      <td style="padding:8px 10px;font-size:11px;font-weight:600;color:#1a1a1a;">${a.ref}</td>
+      <td style="padding:8px 10px;font-size:11px;color:#555;">${a.description}</td>
+      <td style="padding:8px 10px;font-size:11px;color:#555;text-align:center;white-space:nowrap;">${a.dueDate}</td>
+      <td style="padding:8px 10px;font-size:11px;text-align:right;font-weight:600;color:${isPayment ? "#2e7d32" : "#1a1a1a"};">${isPayment ? `(${fmt(a.amount)})` : fmt(a.amount)}</td>
+      <td style="padding:8px 10px;font-size:12px;text-align:right;font-weight:700;color:${runningBalance > 0 ? "#1a1a1a" : "#2e7d32"};">${fmt(Math.abs(runningBalance))}${runningBalance < 0 ? "&nbsp;CR" : ""}</td>
+    </tr>`;
+  }).join("");
+
+  // Aging grid columns: Current | 1-30 | 31-60 | 61-90 | >90 | Amount Due
+  const agCurrent = parseFloat(ag.withinTermsFuture || "0") + parseFloat(ag.dueThisMonth || "0");
+  const ag1_30 = parseFloat(ag.overdue1_30 || "0");
+  const ag31_60 = parseFloat(ag.overdue31_60 || "0");
+  const ag60plus = parseFloat(ag.overdue60plus || "0");
+  // Split 60+ into 61-90 and >90 (we only have combined; show as one column for now)
+  const agingCols = [
+    { label: "Current", value: agCurrent },
+    { label: "1-30 Days\nPast Due", value: ag1_30 },
+    { label: "31-60 Days\nPast Due", value: ag31_60 },
+    { label: "Over 60 Days\nPast Due", value: ag60plus },
+    { label: "Amount Due", value: balanceDue, highlight: true },
+  ];
+  const agingCells = agingCols.map(col => `
+    <td style="padding:10px 8px;text-align:center;border-right:1px solid #ddd;${col.highlight ? "background:#1a1a1a;" : ""}">
+      <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:${col.highlight ? "#aaa" : "#888"};font-weight:600;margin-bottom:4px;white-space:pre-line;">${col.label}</div>
+      <div style="font-size:13px;font-weight:800;color:${col.highlight ? "#fff" : col.value > 0 ? "#1a1a1a" : "#999"};">${col.value > 0 ? fmt(col.value) : "—"}</div>
+    </td>`).join("");
 
   const printScript = autoPrint ? `<script>window.onload = function() { window.print(); }</script>` : "";
 
@@ -3383,187 +3432,131 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
 <title>Statement - ${customer.name}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; padding: 0; background: #f5f5f5; }
-  .page { max-width: 800px; margin: 0 auto; background: #fff; padding: 48px; min-height: 100vh; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #1a1a1a; }
-  .brand-top { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
-  .brand-logo { height: 48px; width: auto; object-fit: contain; }
-  .brand-name { font-size: 22px; font-weight: 800; color: #1a1a1a; }
-  .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
-  .brand-detail { font-size: 11px; color: #666; line-height: 1.6; margin-top: 4px; }
-  .doc-type { font-size: 22px; font-weight: 700; color: #333; text-transform: uppercase; letter-spacing: 1px; }
-  .doc-date { font-size: 13px; color: #666; margin-top: 4px; }
-  .customer-info { margin-bottom: 28px; }
-  .customer-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
-  .customer-detail { font-size: 12px; color: #555; line-height: 1.6; }
-  .summary { display: flex; gap: 16px; margin-bottom: 32px; flex-wrap: wrap; }
-  .summary-card { flex: 1; min-width: 120px; background: #f5f5f5; padding: 18px 20px; border-radius: 6px; border: 1px solid #f0ebe6; }
-  .summary-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; }
-  .summary-value { font-size: 22px; font-weight: 800; margin-top: 4px; }
-  .summary-value.due { color: #1a1a1a; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-  thead th { background: #1a1a1a; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
-  thead th.right { text-align: right; }
-  .cell { padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #f0f0f0; }
-  .right { text-align: right; }
-  .bold { font-weight: 600; }
-  .alt-row { background: #fdfcfb; }
-  .footer { text-align: center; padding-top: 24px; border-top: 1px solid #eee; margin-top: 40px; }
-  .footer p { font-size: 11px; color: #aaa; line-height: 1.8; }
-  .no-print { text-align: center; margin-bottom: 16px; padding: 12px; }
-  .no-print button { padding: 10px 28px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; margin: 0 6px; }
-  .btn-print { background: #1a1a1a; color: #fff; }
-  .btn-print:hover { background: #5a2530; }
-  .btn-close { background: #e5e5e5; color: #333; }
-  .btn-close:hover { background: #d5d5d5; }
-  @page { margin: 0; size: A4; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; background: #e8e8e8; }
+  .page { max-width: 820px; margin: 0 auto; background: #fff; padding: 36px 40px; min-height: 100vh; }
+  .no-print { text-align:center; padding:12px; background:#fff; border-bottom:1px solid #ddd; }
+  .no-print button { padding:8px 24px; font-size:13px; font-weight:600; border:none; border-radius:5px; cursor:pointer; margin:0 5px; }
+  .btn-print { background:#1a1a1a; color:#fff; }
+  .btn-close { background:#e0e0e0; color:#333; }
+  @page { size: A4; margin: 12mm 12mm; }
   @media print {
-    body { background: #fff; padding: 0; margin: 15mm; }
-    .page { padding: 0; max-width: 100%; min-height: auto !important; }
-    .no-print { display: none !important; }
-    .header { border-bottom-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    thead th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .summary-card { background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { background:#fff; }
+    .no-print { display:none !important; }
+    .page { padding:0; max-width:100%; }
+    .aging-highlight { background:#1a1a1a !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    thead tr { background:#1a1a1a !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
 </style>
 </head>
 <body>
-  <div class="no-print">
-    <button class="btn-print" onclick="window.print()">Print Statement</button>
-    <button class="btn-close" onclick="window.close()">Close</button>
-  </div>
-  <div class="page">
-    <div class="header">
-      <div>
-        <div class="brand-top">
-          <img src="/logo.png" alt="Logo" class="brand-logo" />
-          <div class="brand-name">${companyName}</div>
+<div class="no-print">
+  <button class="btn-print" onclick="window.print()">&#128438; Print Statement</button>
+  <button class="btn-close" onclick="window.close()">Close</button>
+</div>
+<div class="page">
+
+  <!-- TOP HEADER -->
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+    <tr>
+      <td style="width:55%;vertical-align:top;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+          <img src="/logo.png" alt="" style="height:44px;width:auto;object-fit:contain;" />
+          <div>
+            <div style="font-size:18px;font-weight:800;color:#1a1a1a;line-height:1.1;">${companyName}</div>
+            ${companyRegNo ? `<div style="font-size:10px;color:#888;margin-top:2px;">Reg. No: ${companyRegNo}</div>` : ""}
+          </div>
         </div>
-        <div class="brand-detail">
-          ${companyAddress ? companyAddress : ""}
-          ${companyPhone ? " | Tel: " + companyPhone : ""}
+        <div style="font-size:10px;color:#555;line-height:1.7;">
+          ${companyAddress ? `${companyAddress.replace(/\n/g,"<br>")}<br>` : ""}
+          ${companyPhone ? `Tel: ${companyPhone}` : ""}${companyPhone && companyEmail ? " &nbsp;|&nbsp; " : ""}${companyEmail ? companyEmail : ""}
+          ${companyTaxId ? `<br>VAT/Tax ID: ${companyTaxId}` : ""}
         </div>
-      </div>
-      <div style="text-align:right;">
-        <div class="doc-type">Account Statement</div>
-        <div class="doc-date">${new Date().toLocaleDateString("en-GB")}</div>
-      </div>
-    </div>
+      </td>
+      <td style="width:45%;vertical-align:top;text-align:right;">
+        <div style="font-size:26px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:#1a1a1a;line-height:1;">Statement</div>
+        <div style="font-size:11px;color:#666;margin-top:6px;">Date: <strong>${stmtDate}</strong></div>
+        <div style="font-size:11px;color:#666;margin-top:2px;">Account No: <strong>${customer.code}</strong></div>
+        <div style="font-size:11px;color:#666;margin-top:2px;">Terms: <strong>${paymentTermsLabel[customer.paymentTerms] || customer.paymentTerms}</strong></div>
+      </td>
+    </tr>
+  </table>
 
-    <div class="customer-info">
-      <div class="customer-name">${customer.name} (${customer.code})</div>
-      <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;">Payment Terms: ${paymentTermsLabel[customer.paymentTerms] || customer.paymentTerms}</div>
-      <div class="customer-detail">
-        ${customer.address ? customer.address + "<br>" : ""}
-        ${customer.city || ""}
-        ${customer.taxId ? "<br>Tax ID: " + customer.taxId : ""}
-      </div>
-    </div>
+  <!-- BILL TO + AMOUNT DUE -->
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+    <tr>
+      <td style="width:55%;vertical-align:top;padding:16px 20px;background:#f7f7f7;border:1px solid #ddd;border-radius:4px;">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#999;font-weight:700;margin-bottom:6px;">Bill To</div>
+        <div style="font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:3px;">${customer.name}</div>
+        ${customer.address ? `<div style="font-size:11px;color:#555;line-height:1.6;">${customer.address.replace(/\n/g,"<br>")}</div>` : ""}
+        ${customer.city ? `<div style="font-size:11px;color:#555;">${customer.city}</div>` : ""}
+        ${customer.taxId ? `<div style="font-size:11px;color:#777;margin-top:3px;">Tax ID: ${customer.taxId}</div>` : ""}
+      </td>
+      <td style="width:10%;"></td>
+      <td style="width:35%;vertical-align:top;text-align:center;padding:16px 20px;background:#1a1a1a;border-radius:4px;">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#aaa;font-weight:700;margin-bottom:8px;">Amount Due</div>
+        <div style="font-size:28px;font-weight:900;color:#fff;letter-spacing:-0.5px;">${fmt(balanceDue)}</div>
+        <div style="font-size:9px;color:#888;margin-top:8px;text-transform:uppercase;letter-spacing:0.5px;">As of ${stmtDate}</div>
+      </td>
+    </tr>
+  </table>
 
-    <div class="summary">
-      <div class="summary-card">
-        <div class="summary-label">Total Invoiced</div>
-        <div class="summary-value">${currencySymbol}${parseFloat(statement?.totalInvoiced || "0").toFixed(2)}</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Credit Notes</div>
-        <div class="summary-value">${currencySymbol}${parseFloat(statement?.totalCredits || "0").toFixed(2)}</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Total Paid</div>
-        <div class="summary-value">${currencySymbol}${parseFloat(statement?.totalPaid || "0").toFixed(2)}</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Balance Due</div>
-        <div class="summary-value due">${currencySymbol}${parseFloat(statement?.balance || "0").toFixed(2)}</div>
-      </div>
-    </div>
+  <!-- ACTIVITY TABLE -->
+  <table style="width:100%;border-collapse:collapse;margin-bottom:0;">
+    <thead>
+      <tr style="background:#1a1a1a;">
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:left;">Date</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:left;">Reference</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:left;">Description</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:center;">Due Date</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:right;">Amount</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:right;">Balance</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${activityRows || `<tr><td colspan="6" style="padding:16px;text-align:center;color:#999;font-size:12px;">No activity</td></tr>`}
+      <!-- Total row -->
+      <tr style="border-top:2px solid #1a1a1a;">
+        <td colspan="4" style="padding:10px;font-size:11px;font-weight:700;text-align:right;text-transform:uppercase;letter-spacing:0.5px;color:#555;">Amount Due</td>
+        <td colspan="2" style="padding:10px;font-size:14px;font-weight:900;text-align:right;color:#1a1a1a;">${fmt(balanceDue)}</td>
+      </tr>
+    </tbody>
+  </table>
 
-    ${invoiceRows ? `
-    <table>
-      <thead>
-        <tr>
-          <th>Document</th>
-          <th>Date</th>
-          <th>Due Date</th>
-          <th>Type</th>
-          <th>Status</th>
-          <th class="right">Total</th>
-          <th class="right">Paid</th>
-          <th class="right">Balance</th>
-        </tr>
-      </thead>
-      <tbody>${invoiceRows}</tbody>
-    </table>` : ""}
+  <!-- AGING GRID -->
+  <table style="width:100%;border-collapse:collapse;border:1px solid #ddd;margin-top:24px;">
+    <thead>
+      <tr style="background:#f0f0f0;">
+        <th colspan="5" style="padding:7px 10px;font-size:9px;text-transform:uppercase;letter-spacing:1px;font-weight:700;color:#555;text-align:left;border-bottom:1px solid #ddd;">Aging Summary</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>${agingCells}</tr>
+    </tbody>
+  </table>
 
-    ${paymentRows ? `
-    <div style="margin-top:8px;margin-bottom:4px;">
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#333;padding-bottom:6px;border-bottom:2px solid #1a1a1a;margin-bottom:0;">Payments Received</div>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th colspan="4">Description</th>
-          <th>Date</th>
-          <th class="right">Amount</th>
-          <th></th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>${paymentRows}</tbody>
-    </table>` : ""}
+  ${companyIban ? `
+  <!-- REMIT TO -->
+  <table style="width:100%;border-collapse:collapse;margin-top:24px;">
+    <tr>
+      <td style="padding:16px 20px;background:#f7f7f7;border:1px solid #ddd;border-radius:4px;vertical-align:top;">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#999;font-weight:700;margin-bottom:8px;">Remit To / Payment Details</div>
+        <table style="border-collapse:collapse;width:100%;">
+          ${companyBankName ? `<tr><td style="font-size:10px;color:#888;padding:2px 0;width:100px;">Bank</td><td style="font-size:11px;font-weight:600;color:#1a1a1a;padding:2px 0;">${companyBankName}</td></tr>` : ""}
+          <tr><td style="font-size:10px;color:#888;padding:2px 0;">IBAN</td><td style="font-size:11px;font-weight:700;color:#1a1a1a;padding:2px 0;letter-spacing:0.5px;">${companyIban}</td></tr>
+          ${companySwift ? `<tr><td style="font-size:10px;color:#888;padding:2px 0;">SWIFT/BIC</td><td style="font-size:11px;font-weight:600;color:#1a1a1a;padding:2px 0;">${companySwift}</td></tr>` : ""}
+          <tr><td style="font-size:10px;color:#888;padding:2px 0;">Reference</td><td style="font-size:11px;color:#555;padding:2px 0;">Please quote: <strong>${customer.code}</strong></td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>` : ""}
 
-    ${statement?.aging ? (() => {
-      const ag = statement.aging;
-      const hasAging = parseFloat(ag.withinTermsFuture||"0") > 0 || parseFloat(ag.overdue1_30||"0") > 0 || parseFloat(ag.overdue31_60||"0") > 0 || parseFloat(ag.overdue60plus||"0") > 0;
-      if (!hasAging) return "";
-      const buckets = [
-        { label: "Within Terms", value: parseFloat(ag.withinTermsFuture||"0"), color: "#2e7d32", bg: "#e8f5e9", border: "#a5d6a7" },
-        { label: "Overdue 1–30d", value: parseFloat(ag.overdue1_30||"0"), color: "#e65100", bg: "#fff3e0", border: "#ffcc80" },
-        { label: "Overdue 31–60d", value: parseFloat(ag.overdue31_60||"0"), color: "#c62828", bg: "#fce4ec", border: "#ef9a9a" },
-        { label: "Overdue 60+d", value: parseFloat(ag.overdue60plus||"0"), color: "#7f0000", bg: "#fce4ec", border: "#e57373" },
-      ].filter(b => b.value > 0);
-      const cards = buckets.map(b => `
-        <div style="flex:1;min-width:100px;padding:12px 14px;background:${b.bg};border:1px solid ${b.border};border-radius:5px;text-align:center;">
-          <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#666;font-weight:700;margin-bottom:4px;">${b.label}</div>
-          <div style="font-size:15px;font-weight:800;color:${b.color};">${currencySymbol}${b.value.toFixed(2)}</div>
-        </div>`).join("");
-      return `
-    <div style="margin-top:28px;margin-bottom:4px;">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#333;padding-bottom:6px;border-bottom:2px solid #1a1a1a;margin-bottom:12px;">Aging Summary</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">${cards}</div>
-    </div>`;
-    })() : ""}
-
-    ${companyIban ? `
-    <div style="margin-top:28px;padding:18px 20px;background:#f5f5f5;border-radius:6px;border:1px solid #e5e5e5;">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#555;margin-bottom:10px;">Payment Details</div>
-      <table style="border-collapse:collapse;width:100%;">
-        <tr>
-          <td style="font-size:11px;color:#888;padding:3px 0;width:120px;">Bank Name</td>
-          <td style="font-size:12px;font-weight:600;color:#1a1a1a;padding:3px 0;">${companyBankName}</td>
-        </tr>
-        <tr>
-          <td style="font-size:11px;color:#888;padding:3px 0;">IBAN</td>
-          <td style="font-size:12px;font-weight:700;color:#1a1a1a;padding:3px 0;letter-spacing:0.5px;">${companyIban}</td>
-        </tr>
-        ${companySwift ? `<tr>
-          <td style="font-size:11px;color:#888;padding:3px 0;">SWIFT/BIC</td>
-          <td style="font-size:12px;font-weight:600;color:#1a1a1a;padding:3px 0;">${companySwift}</td>
-        </tr>` : ""}
-        <tr>
-          <td style="font-size:11px;color:#888;padding:3px 0;">Reference</td>
-          <td style="font-size:12px;color:#555;padding:3px 0;">Please quote customer code: <strong>${customer.code}</strong></td>
-        </tr>
-      </table>
-    </div>` : ""}
-
-    <div class="footer">
-      <p>${companyName} - Wholesale Wine & Spirits</p>
-    </div>
+  <!-- FOOTER -->
+  <div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;text-align:center;">
+    <p style="font-size:10px;color:#aaa;">${companyName} &mdash; Thank you for your business</p>
   </div>
-  ${printScript}
+
+</div>
+${printScript}
 </body>
 </html>`;
 }
