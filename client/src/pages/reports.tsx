@@ -28,6 +28,7 @@ export default function Reports() {
   const [expandedStatement, setExpandedStatement] = useState<string | null>(null);
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
   const [showAgingColumns, setShowAgingColumns] = useState(false);
+  const [expandedDetail, setExpandedDetail] = useState<string | null>(null);
 
   const [selectedCustomer, setSelectedCustomer] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState(() => {
@@ -568,144 +569,192 @@ export default function Reports() {
                                 </TableCell>
                               </TableRow>
 
-                              {isExpanded && (
-                                <TableRow className="bg-muted/20 dark:bg-muted/10">
-                                  <TableCell colSpan={colCount} className="p-0">
-                                    <div className="mx-6 my-3 space-y-2">
+                              {isExpanded && (() => {
+                                const isDetailExpanded = expandedDetail === st.customerId;
+                                return (
+                                  <TableRow className="bg-muted/20 dark:bg-muted/10">
+                                    <TableCell colSpan={colCount} className="p-0">
+                                      <div className="mx-6 my-3 space-y-2">
 
-                                      {/* End-of-month summary banner */}
-                                      {parseFloat(st.dueByEndOfMonth || "0") > 0 && (
-                                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-2.5 text-sm">
-                                          <div className="flex items-center gap-3 flex-wrap">
-                                            <span className="font-semibold text-amber-800 dark:text-amber-300">Due by {endOfMonthLabel}:</span>
-                                            <span className="font-bold text-amber-900 dark:text-amber-200">€{parseFloat(st.dueByEndOfMonth).toFixed(2)}</span>
-                                            {parseFloat(st.totalOverdue || "0") > 0 && (
-                                              <span className="text-xs text-red-600 dark:text-red-400">(includes €{parseFloat(st.totalOverdue).toFixed(2)} overdue)</span>
-                                            )}
-                                          </div>
-                                          {(parseFloat(st.dueByEomCurrentMonth || "0") > 0 || parseFloat(st.dueByEomPrevMonth || "0") > 0) && (
-                                            <div className="flex items-center gap-4 mt-1.5 pt-1.5 border-t border-amber-200/60 dark:border-amber-800/40">
-                                              {parseFloat(st.dueByEomCurrentMonth || "0") > 0 && (
-                                                <div className="flex items-center gap-1.5 text-xs">
-                                                  <span className="text-amber-700 dark:text-amber-400">{currentMonthLabel}:</span>
-                                                  <span className="font-semibold text-amber-800 dark:text-amber-300">€{parseFloat(st.dueByEomCurrentMonth).toFixed(2)}</span>
-                                                </div>
-                                              )}
-                                              {parseFloat(st.dueByEomPrevMonth || "0") > 0 && (
-                                                <div className="flex items-center gap-1.5 text-xs">
-                                                  <span className="text-orange-700 dark:text-orange-400">{prevMonthLabel}:</span>
-                                                  <span className="font-semibold text-orange-800 dark:text-orange-300">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
-                                                </div>
+                                        {/* Due by banner */}
+                                        {parseFloat(st.dueByEndOfMonth || "0") > 0 && (
+                                          <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-2.5 text-sm">
+                                            <div className="flex items-center gap-3 flex-wrap">
+                                              <span className="font-semibold text-amber-800 dark:text-amber-300">Due by {endOfMonthLabel}:</span>
+                                              <span className="font-bold text-amber-900 dark:text-amber-200">€{parseFloat(st.dueByEndOfMonth).toFixed(2)}</span>
+                                              {parseFloat(st.totalOverdue || "0") > 0 && (
+                                                <span className="text-xs text-red-600 dark:text-red-400">(includes €{parseFloat(st.totalOverdue).toFixed(2)} overdue)</span>
                                               )}
                                             </div>
+                                            {(parseFloat(st.dueByEomCurrentMonth || "0") > 0 || parseFloat(st.dueByEomPrevMonth || "0") > 0) && (
+                                              <div className="flex items-center gap-4 mt-1.5 pt-1.5 border-t border-amber-200/60 dark:border-amber-800/40">
+                                                {parseFloat(st.dueByEomCurrentMonth || "0") > 0 && (
+                                                  <div className="flex items-center gap-1.5 text-xs">
+                                                    <span className="text-amber-700 dark:text-amber-400">{currentMonthLabel}:</span>
+                                                    <span className="font-semibold text-amber-800 dark:text-amber-300">€{parseFloat(st.dueByEomCurrentMonth).toFixed(2)}</span>
+                                                  </div>
+                                                )}
+                                                {parseFloat(st.dueByEomPrevMonth || "0") > 0 && (
+                                                  <div className="flex items-center gap-1.5 text-xs">
+                                                    <span className="text-orange-700 dark:text-orange-400">{prevMonthLabel}:</span>
+                                                    <span className="font-semibold text-orange-800 dark:text-orange-300">€{parseFloat(st.dueByEomPrevMonth).toFixed(2)}</span>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )}
+                                          </div>
+                                        )}
+
+                                        {/* Aging analysis totals — compact summary */}
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          {parseFloat(ag.withinTermsFuture) > 0 && (
+                                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium bg-teal-50 text-teal-800 border border-teal-200 dark:bg-teal-950/30 dark:text-teal-300 dark:border-teal-800">
+                                              Within terms: €{parseFloat(ag.withinTermsFuture).toFixed(2)}
+                                            </span>
+                                          )}
+                                          {parseFloat(ag.overdue1_30) > 0 && (
+                                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-800">
+                                              Overdue 1–30d: €{parseFloat(ag.overdue1_30).toFixed(2)}
+                                            </span>
+                                          )}
+                                          {parseFloat(ag.overdue31_60) > 0 && (
+                                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium bg-orange-50 text-orange-800 border border-orange-200 dark:bg-orange-950/30 dark:text-orange-300 dark:border-orange-800">
+                                              Overdue 31–60d: €{parseFloat(ag.overdue31_60).toFixed(2)}
+                                            </span>
+                                          )}
+                                          {parseFloat(ag.overdue60plus) > 0 && (
+                                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-rose-50 text-rose-800 border border-rose-200 dark:bg-rose-950/30 dark:text-rose-300 dark:border-rose-800">
+                                              Overdue 60+d: €{parseFloat(ag.overdue60plus).toFixed(2)}
+                                            </span>
+                                          )}
+                                          {parseFloat(ag.withinTermsFuture) <= 0 && parseFloat(ag.overdue1_30) <= 0 && parseFloat(ag.overdue31_60) <= 0 && parseFloat(ag.overdue60plus) <= 0 && (
+                                            <span className="text-xs text-muted-foreground italic">No outstanding balance</span>
                                           )}
                                         </div>
-                                      )}
 
-                                      <div className="rounded-lg border border-border overflow-hidden text-xs">
-                                        <table className="w-full border-collapse">
-                                          <thead>
-                                            <tr className="bg-muted/60 dark:bg-muted/30 text-muted-foreground">
-                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Document</th>
-                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Inv. Date</th>
-                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Due Date</th>
-                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Status</th>
-                                              <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Total</th>
-                                              <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Paid</th>
-                                              <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Balance</th>
-                                              <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Standing</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {stInvoices.map((inv, i) => {
-                                              const bal = parseFloat(inv.balance || "0");
-                                              const standing = inv.type === "invoice" ? getInvStatus(inv.daysOverdue) : null;
-                                              const isDueThisMonth = inv.effectiveDueDate
-                                                ? new Date(inv.effectiveDueDate) <= new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0)
-                                                  && new Date(inv.effectiveDueDate) >= new Date()
-                                                : false;
-                                              return (
-                                                <tr key={`inv-${i}`} className={`border-t border-border/50 hover:bg-muted/20 ${standing?.overdue ? "bg-red-50/20 dark:bg-red-950/10" : ""}`}>
-                                                  <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
-                                                  <td className="px-3 py-2 text-muted-foreground">{inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</td>
-                                                  <td className={`px-3 py-2 font-medium ${standing?.overdue ? "text-red-600 dark:text-red-400" : isDueThisMonth ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}>
-                                                    {inv.effectiveDueDate ? new Date(inv.effectiveDueDate).toLocaleDateString("en-GB") : inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—"}
-                                                    {!inv.dueDate && inv.effectiveDueDate && <span className="ml-1 text-[9px] text-muted-foreground">(calc.)</span>}
-                                                  </td>
-                                                  <td className="px-3 py-2">
-                                                    <span className="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground">
-                                                      {inv.type === "credit_note" ? "Credit Note" : "Invoice"}
-                                                    </span>
-                                                    {" "}
-                                                    <span className="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-muted/50 text-muted-foreground">{inv.status}</span>
-                                                  </td>
-                                                  <td className="px-3 py-2 text-right font-medium">€{parseFloat(inv.total || "0").toFixed(2)}</td>
-                                                  <td className="px-3 py-2 text-right text-green-700 dark:text-green-400">
-                                                    {parseFloat(inv.paid || "0") > 0 ? `€${parseFloat(inv.paid).toFixed(2)}` : "—"}
-                                                  </td>
-                                                  <td className={`px-3 py-2 text-right font-semibold ${bal > 0 ? (standing?.overdue ? "text-red-600 dark:text-red-400" : "text-foreground") : "text-muted-foreground"}`}>
-                                                    {bal > 0 ? `€${bal.toFixed(2)}` : "—"}
-                                                  </td>
-                                                  <td className="px-3 py-2">
-                                                    {standing && bal > 0 ? (
-                                                      standing.overdue ? (
-                                                        <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${standing.color}`}>
-                                                          {standing.label}
-                                                        </span>
-                                                      ) : isDueThisMonth ? (
-                                                        <span className="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
-                                                          Due This Month
-                                                        </span>
-                                                      ) : (
-                                                        <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${standing.color}`}>
-                                                          {standing.label}
-                                                        </span>
-                                                      )
-                                                    ) : null}
-                                                  </td>
+                                        {/* Transaction drill-down toggle */}
+                                        <div>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-7 px-2 text-xs text-muted-foreground gap-1"
+                                            onClick={() => setExpandedDetail(isDetailExpanded ? null : st.customerId)}
+                                            data-testid={`button-toggle-detail-${st.customerId}`}
+                                          >
+                                            {isDetailExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                            {isDetailExpanded ? "Hide" : "View"} transactions ({stInvoices.length + stPayments.length})
+                                          </Button>
+                                        </div>
+
+                                        {/* Transaction detail — second-level drill-down */}
+                                        {isDetailExpanded && (
+                                          <div className="rounded-lg border border-border overflow-hidden text-xs">
+                                            <table className="w-full border-collapse">
+                                              <thead>
+                                                <tr className="bg-muted/60 dark:bg-muted/30 text-muted-foreground">
+                                                  <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Document</th>
+                                                  <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Inv. Date</th>
+                                                  <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Due Date</th>
+                                                  <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Status</th>
+                                                  <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Total</th>
+                                                  <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Paid</th>
+                                                  <th className="text-right px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Balance</th>
+                                                  <th className="text-left px-3 py-2 font-semibold uppercase tracking-wide text-[10px]">Standing</th>
                                                 </tr>
-                                              );
-                                            })}
+                                              </thead>
+                                              <tbody>
+                                                {stInvoices.map((inv, i) => {
+                                                  const bal = parseFloat(inv.balance || "0");
+                                                  const standing = inv.type === "invoice" ? getInvStatus(inv.daysOverdue) : null;
+                                                  const isDueThisMonth = inv.effectiveDueDate
+                                                    ? new Date(inv.effectiveDueDate) <= new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0)
+                                                      && new Date(inv.effectiveDueDate) >= new Date()
+                                                    : false;
+                                                  return (
+                                                    <tr key={`inv-${i}`} className={`border-t border-border/50 hover:bg-muted/20 ${standing?.overdue ? "bg-red-50/20 dark:bg-red-950/10" : ""}`}>
+                                                      <td className="px-3 py-2 font-medium">{inv.invoiceNumber}</td>
+                                                      <td className="px-3 py-2 text-muted-foreground">{inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</td>
+                                                      <td className={`px-3 py-2 font-medium ${standing?.overdue ? "text-red-600 dark:text-red-400" : isDueThisMonth ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`}>
+                                                        {inv.effectiveDueDate ? new Date(inv.effectiveDueDate).toLocaleDateString("en-GB") : inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—"}
+                                                        {!inv.dueDate && inv.effectiveDueDate && <span className="ml-1 text-[9px] text-muted-foreground">(calc.)</span>}
+                                                      </td>
+                                                      <td className="px-3 py-2">
+                                                        <span className="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground">
+                                                          {inv.type === "credit_note" ? "Credit Note" : "Invoice"}
+                                                        </span>
+                                                        {" "}
+                                                        <span className="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-muted/50 text-muted-foreground">{inv.status}</span>
+                                                      </td>
+                                                      <td className="px-3 py-2 text-right font-medium">€{parseFloat(inv.total || "0").toFixed(2)}</td>
+                                                      <td className="px-3 py-2 text-right text-green-700 dark:text-green-400">
+                                                        {parseFloat(inv.paid || "0") > 0 ? `€${parseFloat(inv.paid).toFixed(2)}` : "—"}
+                                                      </td>
+                                                      <td className={`px-3 py-2 text-right font-semibold ${bal > 0 ? (standing?.overdue ? "text-red-600 dark:text-red-400" : "text-foreground") : "text-muted-foreground"}`}>
+                                                        {bal > 0 ? `€${bal.toFixed(2)}` : "—"}
+                                                      </td>
+                                                      <td className="px-3 py-2">
+                                                        {standing && bal > 0 ? (
+                                                          standing.overdue ? (
+                                                            <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${standing.color}`}>
+                                                              {standing.label}
+                                                            </span>
+                                                          ) : isDueThisMonth ? (
+                                                            <span className="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                                              Due This Month
+                                                            </span>
+                                                          ) : (
+                                                            <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${standing.color}`}>
+                                                              {standing.label}
+                                                            </span>
+                                                          )
+                                                        ) : null}
+                                                      </td>
+                                                    </tr>
+                                                  );
+                                                })}
 
-                                            {stPayments.map((pmt, i) => {
-                                              const method = pmt.paymentMethod || "other";
-                                              const label = methodLabels[method] || method;
-                                              const colorClass = methodColors[method] || methodColors.other;
-                                              const details = [
-                                                pmt.reference ? `Ref: ${pmt.reference}` : null,
-                                                pmt.invoiceNumber ? `Inv: ${pmt.invoiceNumber}` : null,
-                                                pmt.notes && !pmt.notes.startsWith("Applied from balance") ? pmt.notes : null,
-                                              ].filter(Boolean).join(" · ");
-                                              return (
-                                                <tr key={`pmt-${i}`} className="border-t border-border/50 bg-green-50/30 dark:bg-green-950/10 hover:bg-green-50/50">
-                                                  <td className="px-3 py-2 font-medium text-green-700 dark:text-green-400">Payment</td>
-                                                  <td className="px-3 py-2 text-muted-foreground">{pmt.date ? new Date(pmt.date).toLocaleDateString("en-GB") : "—"}</td>
-                                                  <td className="px-3 py-2" />
-                                                  <td className="px-3 py-2">
-                                                    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${colorClass}`}>{label}</span>
-                                                    {details && <span className="ml-2 text-muted-foreground">{details}</span>}
-                                                  </td>
-                                                  <td className="px-3 py-2" />
-                                                  <td className="px-3 py-2 text-right font-semibold text-green-700 dark:text-green-400" colSpan={2}>
-                                                    −€{parseFloat(pmt.amount || "0").toFixed(2)}
-                                                  </td>
-                                                  <td className="px-3 py-2" />
-                                                </tr>
-                                              );
-                                            })}
+                                                {stPayments.map((pmt, i) => {
+                                                  const method = pmt.paymentMethod || "other";
+                                                  const label = methodLabels[method] || method;
+                                                  const colorClass = methodColors[method] || methodColors.other;
+                                                  const details = [
+                                                    pmt.reference ? `Ref: ${pmt.reference}` : null,
+                                                    pmt.invoiceNumber ? `Inv: ${pmt.invoiceNumber}` : null,
+                                                    pmt.notes && !pmt.notes.startsWith("Applied from balance") ? pmt.notes : null,
+                                                  ].filter(Boolean).join(" · ");
+                                                  return (
+                                                    <tr key={`pmt-${i}`} className="border-t border-border/50 bg-green-50/30 dark:bg-green-950/10 hover:bg-green-50/50">
+                                                      <td className="px-3 py-2 font-medium text-green-700 dark:text-green-400">Payment</td>
+                                                      <td className="px-3 py-2 text-muted-foreground">{pmt.date ? new Date(pmt.date).toLocaleDateString("en-GB") : "—"}</td>
+                                                      <td className="px-3 py-2" />
+                                                      <td className="px-3 py-2">
+                                                        <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${colorClass}`}>{label}</span>
+                                                        {details && <span className="ml-2 text-muted-foreground">{details}</span>}
+                                                      </td>
+                                                      <td className="px-3 py-2" />
+                                                      <td className="px-3 py-2 text-right font-semibold text-green-700 dark:text-green-400" colSpan={2}>
+                                                        −€{parseFloat(pmt.amount || "0").toFixed(2)}
+                                                      </td>
+                                                      <td className="px-3 py-2" />
+                                                    </tr>
+                                                  );
+                                                })}
 
-                                            {stInvoices.length === 0 && stPayments.length === 0 && (
-                                              <tr>
-                                                <td colSpan={8} className="px-3 py-4 text-center text-muted-foreground">No transactions</td>
-                                              </tr>
-                                            )}
-                                          </tbody>
-                                        </table>
+                                                {stInvoices.length === 0 && stPayments.length === 0 && (
+                                                  <tr>
+                                                    <td colSpan={8} className="px-3 py-4 text-center text-muted-foreground">No transactions</td>
+                                                  </tr>
+                                                )}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        )}
+
                                       </div>
-                                    </div>
-                                  </TableCell>
-                                </TableRow>
-                              )}
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })()}
                             </Fragment>
                           );
                         })
