@@ -3343,6 +3343,8 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   const statementPayments: any[] = statement?.payments || [];
   const stmtDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
   const balanceDue = parseFloat(statement?.balance || "0");
+  const balanceAsOfPrevMonthEnd = parseFloat(statement?.balanceAsOfPrevMonthEnd ?? statement?.balance ?? "0");
+  const prevMonthEndLabel: string = statement?.prevMonthEndLabel || stmtDate;
   const ag = statement?.aging || {};
 
   // Build a single chronological activity list (invoices + payments merged, sorted by date)
@@ -3415,7 +3417,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
     { label: "1-30 Days\nPast Due", value: ag1_30 },
     { label: "31-60 Days\nPast Due", value: ag31_60 },
     { label: "Over 60 Days\nPast Due", value: ag60plus },
-    { label: "Amount Due", value: balanceDue, highlight: true },
+    { label: "Amount Due", value: balanceAsOfPrevMonthEnd, highlight: true },
   ];
   const agingCells = agingCols.map(col => `
     <td style="padding:10px 8px;text-align:center;border-right:1px solid #ddd;${col.highlight ? "background:#1a1a1a;" : ""}">
@@ -3494,8 +3496,8 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       <td style="width:10%;"></td>
       <td style="width:35%;vertical-align:top;text-align:center;padding:16px 20px;background:#1a1a1a;border-radius:4px;">
         <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#aaa;font-weight:700;margin-bottom:8px;">Amount Due</div>
-        <div style="font-size:28px;font-weight:900;color:#fff;letter-spacing:-0.5px;">${fmt(balanceDue)}</div>
-        <div style="font-size:9px;color:#888;margin-top:8px;text-transform:uppercase;letter-spacing:0.5px;">As of ${stmtDate}</div>
+        <div style="font-size:28px;font-weight:900;color:#fff;letter-spacing:-0.5px;">${fmt(balanceAsOfPrevMonthEnd)}</div>
+        <div style="font-size:9px;color:#888;margin-top:8px;text-transform:uppercase;letter-spacing:0.5px;">As of ${prevMonthEndLabel}</div>
       </td>
     </tr>
   </table>
@@ -3516,8 +3518,8 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       ${activityRows || `<tr><td colspan="6" style="padding:16px;text-align:center;color:#999;font-size:12px;">No activity</td></tr>`}
       <!-- Total row -->
       <tr style="border-top:2px solid #1a1a1a;">
-        <td colspan="4" style="padding:10px;font-size:11px;font-weight:700;text-align:right;text-transform:uppercase;letter-spacing:0.5px;color:#555;">Amount Due</td>
-        <td colspan="2" style="padding:10px;font-size:14px;font-weight:900;text-align:right;color:#1a1a1a;">${fmt(balanceDue)}</td>
+        <td colspan="4" style="padding:10px;font-size:11px;font-weight:700;text-align:right;text-transform:uppercase;letter-spacing:0.5px;color:#555;">Amount Due as of ${prevMonthEndLabel}</td>
+        <td colspan="2" style="padding:10px;font-size:14px;font-weight:900;text-align:right;color:#1a1a1a;">${fmt(balanceAsOfPrevMonthEnd)}</td>
       </tr>
     </tbody>
   </table>

@@ -62,6 +62,8 @@ export default function Reports() {
     totalPaid: string;
     totalCredits: string;
     balance: string;
+    balanceAsOfPrevMonthEnd: string;
+    prevMonthEndLabel: string;
     dueByEndOfMonth: string;
     dueByEomCurrentMonth: string;
     dueByEomPrevMonth: string;

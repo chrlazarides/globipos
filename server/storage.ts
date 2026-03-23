@@ -973,6 +973,34 @@ export class DatabaseStorage implements IStorage {
       // "Due by" = outstanding from last month + month before last
       const dueByEndOfMonth = dueByEomCurrentMonth + dueByEomPrevMonth;
 
+      // Balance as of the last day of the previous month:
+      // Sum all invoices (and credit notes) whose invoice date falls on or before prevMonthEnd,
+      // minus all payments received on or before prevMonthEnd.
+      const prevMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0); // last day of prev month
+      prevMonthEnd.setHours(23, 59, 59, 999);
+      const prevMonthEndStr = `${prevMonthEnd.getFullYear()}-${String(prevMonthEnd.getMonth() + 1).padStart(2, "0")}-${String(prevMonthEnd.getDate()).padStart(2, "0")}`;
+      const prevMonthEndLabel = prevMonthEnd.toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
+
+      let balanceAsOfPrevMonthEnd = 0;
+      for (const inv of allInvs) {
+        if (inv.status === "cancelled") continue;
+        if (String(inv.date) > prevMonthEndStr) continue;
+        const total = parseFloat(inv.total);
+        if (inv.type === "invoice") balanceAsOfPrevMonthEnd += total;
+        else if (inv.type === "credit_note") balanceAsOfPrevMonthEnd -= total;
+      }
+      // Subtract payments received on or before prevMonthEnd
+      const custInvIdsSet = new Set(allInvs.map(i => i.id));
+      for (const pmt of allPayments) {
+        const belongsToCust = (pmt.invoiceId && custInvIdsSet.has(pmt.invoiceId)) ||
+          (!pmt.invoiceId && pmt.customerId === cust.id && !(pmt.notes || "").startsWith("Applied from balance payment"));
+        if (!belongsToCust) continue;
+        const pmtDate = String(pmt.paymentDate || "");
+        if (pmtDate > prevMonthEndStr) continue;
+        balanceAsOfPrevMonthEnd -= parseFloat(String(pmt.amount));
+      }
+      balanceAsOfPrevMonthEnd = Math.max(0, balanceAsOfPrevMonthEnd);
+
       const invById = new Map(allInvs.map(i => [i.id, i]));
 
       const invoiceList = allInvs.map(inv => {
@@ -1030,6 +1058,8 @@ export class DatabaseStorage implements IStorage {
         totalCredits: totalCredits.toFixed(2),
         totalPaid: totalPaid.toFixed(2),
         balance: totalBalance.toFixed(2),
+        balanceAsOfPrevMonthEnd: balanceAsOfPrevMonthEnd.toFixed(2),
+        prevMonthEndLabel,
         dueByEndOfMonth: dueByEndOfMonth.toFixed(2),
         dueByEomCurrentMonth: dueByEomCurrentMonth.toFixed(2),
         dueByEomPrevMonth: dueByEomPrevMonth.toFixed(2),
