@@ -3518,8 +3518,8 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       ${activityRows || `<tr><td colspan="6" style="padding:16px;text-align:center;color:#999;font-size:12px;">No activity</td></tr>`}
       <!-- Total row -->
       <tr style="border-top:2px solid #1a1a1a;">
-        <td colspan="4" style="padding:10px;font-size:11px;font-weight:700;text-align:right;text-transform:uppercase;letter-spacing:0.5px;color:#555;">Amount Due as of ${prevMonthEndLabel}</td>
-        <td colspan="2" style="padding:10px;font-size:14px;font-weight:900;text-align:right;color:#1a1a1a;">${fmt(balanceAsOfPrevMonthEnd)}</td>
+        <td colspan="4" style="padding:10px;font-size:11px;font-weight:700;text-align:right;text-transform:uppercase;letter-spacing:0.5px;color:#555;">Total Balance Due</td>
+        <td colspan="2" style="padding:10px;font-size:14px;font-weight:900;text-align:right;color:#1a1a1a;">${fmt(balanceDue)}</td>
       </tr>
     </tbody>
   </table>
