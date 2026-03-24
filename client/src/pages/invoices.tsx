@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, FileText, WifiOff, Wifi, Loader2, Trash2 } from "lucide-react";
+import { Plus, Search, FileText, WifiOff, Wifi, Loader2, Trash2, RefreshCw } from "lucide-react";
 import { StatusBadge } from "./dashboard";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { offlineStore } from "@/lib/offline-store";
@@ -35,7 +35,7 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
     await refreshPendingCount();
   };
 
-  const { data: invoices = [], isLoading } = useQuery<InvoiceWithCustomer[]>({
+  const { data: invoices = [], isLoading, isFetching, refetch } = useQuery<InvoiceWithCustomer[]>({
     queryKey: ["/api/invoices/type", docType],
   });
 
@@ -168,6 +168,16 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
                 <SelectItem value="cancelled">Cancelled</SelectItem>
               </SelectContent>
             </Select>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              data-testid="button-refresh-invoices"
+              title="Refresh"
+            >
+              <RefreshCw className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`} />
+            </Button>
           </div>
           <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No invoices found" onRowClick={(inv) => navigate(`/invoices/${inv.id}`)} />
         </CardContent>
