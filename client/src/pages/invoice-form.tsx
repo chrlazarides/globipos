@@ -785,8 +785,10 @@ export default function InvoiceForm() {
                           <Input
                             type="text"
                             inputMode="numeric"
-                            value={line.quantity == null ? "" : String(line.quantity)}
+                            className="text-foreground"
+                            value={line.quantity > 0 ? String(line.quantity) : ""}
                             onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
+                            onFocus={(e) => e.target.select()}
                             onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                             disabled={isViewMode}
                             data-testid={`input-line-qty-${idx}`}
@@ -928,8 +930,10 @@ export default function InvoiceForm() {
                         <Input
                           type="text"
                           inputMode="numeric"
-                          value={line.quantity == null ? "" : String(line.quantity)}
+                          className="text-foreground"
+                          value={line.quantity > 0 ? String(line.quantity) : ""}
                           onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
+                          onFocus={(e) => e.target.select()}
                           onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                           disabled={isViewMode}
                         />
