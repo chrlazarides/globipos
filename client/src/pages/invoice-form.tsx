@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { useToast } from "@/hooks/use-toast";
@@ -443,6 +443,13 @@ export default function InvoiceForm() {
   const taxAmount = isViewMode ? displayTaxAmount : subtotal * (parseFloat(taxRate) / 100);
   const total = isViewMode ? displayTotal : subtotal + taxAmount;
 
+  // Determine which list to return to based on document type
+  const resolvedDocType = existingInvoice?.type || docType;
+  const backUrl = resolvedDocType === "credit_note" ? "/credit-notes"
+    : resolvedDocType === "proforma" ? "/proforma"
+    : resolvedDocType === "quotation" ? "/quotations"
+    : "/invoices";
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       const payload = {
@@ -493,7 +500,7 @@ export default function InvoiceForm() {
     onSuccess: (data) => {
       if (data.offline) {
         toast({ title: "Saved offline", description: "Invoice queued for sync when internet returns" });
-        navigate("/invoices");
+        navigate(backUrl);
         return;
       }
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
@@ -578,6 +585,9 @@ export default function InvoiceForm() {
         description={isViewMode ? "View document details" : "Fill in the document details"}
         action={
           <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="ghost" size="sm" onClick={() => navigate(backUrl)} data-testid="button-back-to-list">
+              <ChevronLeft className="w-4 h-4 mr-1" /> Back
+            </Button>
             {isViewMode && (
               <>
                 {(existingInvoice?.type === "proforma" || existingInvoice?.type === "quotation") && (
