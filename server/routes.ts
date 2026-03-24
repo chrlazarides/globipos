@@ -3440,11 +3440,11 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   .no-print button { padding:8px 24px; font-size:13px; font-weight:600; border:none; border-radius:5px; cursor:pointer; margin:0 5px; }
   .btn-print { background:#1a1a1a; color:#fff; }
   .btn-close { background:#e0e0e0; color:#333; }
-  @page { size: A4; margin: 12mm 12mm; }
+  @page { size: A4; margin: 0; }
   @media print {
     body { background:#fff; }
     .no-print { display:none !important; }
-    .page { padding:0; max-width:100%; }
+    .page { padding:14mm 12mm; max-width:100%; }
     .aging-highlight { background:#1a1a1a !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     thead tr { background:#1a1a1a !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
