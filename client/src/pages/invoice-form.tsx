@@ -500,14 +500,14 @@ export default function InvoiceForm() {
     onSuccess: (data) => {
       if (data.offline) {
         toast({ title: "Saved offline", description: "Invoice queued for sync when internet returns" });
-        navigate(backUrl);
+        window.location.href = backUrl;
         return;
       }
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/items"] });
       toast({ title: "Invoice saved successfully" });
-      navigate(`/invoices/${data.id}`);
+      window.location.href = backUrl;
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -585,15 +585,15 @@ export default function InvoiceForm() {
         description={isViewMode ? "View document details" : "Fill in the document details"}
         action={
           <div className="flex items-center gap-2 flex-wrap">
-            <Button variant="ghost" size="sm" onClick={() => { window.location.href = backUrl; }} data-testid="button-back-to-list">
-              <ChevronLeft className="w-4 h-4 mr-1" /> Back
-            </Button>
+            <a href={backUrl} data-testid="button-back-to-list" className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md hover:bg-accent transition-colors">
+              <ChevronLeft className="w-4 h-4" /> Back
+            </a>
             {isViewMode && (
               <>
                 {(existingInvoice?.type === "proforma" || existingInvoice?.type === "quotation") && (
-                  <Button variant="outline" onClick={() => navigate(`/invoices/new?type=invoice&from=${invoiceId}`)} data-testid="button-create-invoice">
-                    <FileOutput className="w-4 h-4 mr-1" /> <span className="hidden sm:inline">Create</span> Invoice
-                  </Button>
+                  <a href={`/invoices/new?type=invoice&from=${invoiceId}`} data-testid="button-create-invoice" className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium rounded-md border border-input bg-background hover:bg-accent transition-colors">
+                    <FileOutput className="w-4 h-4" /> <span className="hidden sm:inline">Create</span> Invoice
+                  </a>
                 )}
                 <Button variant="outline" onClick={() => openDocument("print")} data-testid="button-print-invoice">
                   <Printer className="w-4 h-4 sm:mr-1" /> <span className="hidden sm:inline">Print</span>
@@ -610,7 +610,7 @@ export default function InvoiceForm() {
                   {sendEmail.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Send className="w-4 h-4 sm:mr-1" />}
                   <span className="hidden sm:inline">{sendEmail.isPending ? "Sending..." : "Send"}</span>
                 </Button>
-                <Button onClick={() => navigate(`/invoices/${invoiceId}/edit`)} data-testid="button-edit-invoice">Edit</Button>
+                <a href={`/invoices/${invoiceId}/edit`} data-testid="button-edit-invoice" className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">Edit</a>
               </>
             )}
           </div>
@@ -1083,7 +1083,7 @@ export default function InvoiceForm() {
               <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !customerId} data-testid="button-save-invoice">
                 {saveMutation.isPending ? "Saving..." : "Save Document"}
               </Button>
-              <Button variant="outline" onClick={() => navigate("/invoices")} data-testid="button-cancel">Cancel</Button>
+              <a href={backUrl} data-testid="button-cancel" className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md border border-input bg-background hover:bg-accent transition-colors">Cancel</a>
             </div>
           )}
 

@@ -190,7 +190,7 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
             </Button>
           </div>
-          <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No invoices found" onRowClick={(inv) => navigate(`/invoices/${inv.id}`)} />
+          <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No invoices found" onRowClick={(inv) => { window.location.href = `/invoices/${inv.id}/edit`; }} />
         </CardContent>
       </Card>
     </div>
