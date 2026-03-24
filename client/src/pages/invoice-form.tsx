@@ -57,11 +57,12 @@ function getPaymentDays(terms: string): number {
 }
 
 export default function InvoiceForm() {
-  const [location, navigate] = useLocation();
-  // Parse routing from the raw URL path — reliable in wouter v3 regardless of Switch nesting.
-  const _editMatch = /^\/invoices\/([^/?]+)\/edit/.exec(location);
-  const _viewMatch = /^\/invoices\/([^/?]+)$/.exec(location);
-  const isNew = location === "/invoices/new" || location.startsWith("/invoices/new?");
+  const [, navigate] = useLocation();
+  // Always read from the real browser URL — immune to wouter's internal location state.
+  const _path = typeof window !== "undefined" ? window.location.pathname : "";
+  const _editMatch = /^\/invoices\/([^/?]+)\/edit/.exec(_path);
+  const _viewMatch = /^\/invoices\/([^/?]+)$/.exec(_path);
+  const isNew = _path === "/invoices/new" || _path.startsWith("/invoices/new");
   const invoiceId = isNew ? undefined : (_editMatch?.[1] ?? (_viewMatch ? _viewMatch[1] : undefined));
   const isViewMode = !!_viewMatch && !_editMatch && !isNew;
   const { toast } = useToast();
