@@ -13,7 +13,8 @@ import { Plus, Search, FileText, WifiOff, Wifi, Loader2, Trash2, RefreshCw } fro
 import { StatusBadge } from "./dashboard";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { offlineStore } from "@/lib/offline-store";
-import type { Invoice, Customer } from "@shared/schema";
+import { queryClient } from "@/lib/queryClient";
+import type { Invoice } from "@shared/schema";
 
 interface InvoiceWithCustomer extends Invoice {
   customerName: string;
@@ -22,6 +23,7 @@ interface InvoiceWithCustomer extends Invoice {
 export default function Invoices({ docType = "invoice" }: { docType?: string }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [, navigate] = useLocation();
   const { isOnline, pendingCount, syncing, syncPending, refreshPendingCount } = useOnlineStatus();
   const [pendingInvoices, setPendingInvoices] = useState<any[]>([]);
@@ -35,9 +37,18 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
     await refreshPendingCount();
   };
 
-  const { data: invoices = [], isLoading, isFetching, refetch } = useQuery<InvoiceWithCustomer[]>({
+  const { data: invoices = [], isLoading } = useQuery<InvoiceWithCustomer[]>({
     queryKey: ["/api/invoices/type", docType],
   });
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await queryClient.refetchQueries({ queryKey: ["/api/invoices/type", docType] });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const typeLabel: Record<string, string> = {
     invoice: "Invoices",
@@ -171,12 +182,12 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
             <Button
               variant="outline"
               size="icon"
-              onClick={() => refetch()}
-              disabled={isFetching}
+              onClick={handleRefresh}
+              disabled={isRefreshing}
               data-testid="button-refresh-invoices"
-              title="Refresh"
+              title="Refresh list"
             >
-              <RefreshCw className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`} />
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
             </Button>
           </div>
           <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No invoices found" onRowClick={(inv) => navigate(`/invoices/${inv.id}`)} />
