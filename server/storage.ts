@@ -1428,8 +1428,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getNextJournalEntryNumber() {
-    const [result] = await db.select({ count: sql<number>`count(*)` }).from(journalEntries);
-    const num = (result?.count || 0) + 1;
+    const [result] = await db.select({
+      maxNum: sql<number>`COALESCE(MAX(CAST(SUBSTRING(entry_number FROM 4) AS INTEGER)), 0)`
+    }).from(journalEntries);
+    const num = (result?.maxNum || 0) + 1;
     return `JE-${String(num).padStart(5, "0")}`;
   }
 
