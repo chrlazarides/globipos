@@ -1,4 +1,5 @@
-import { useState, useEffect, createContext, useContext } from "react";
+import { useState, useEffect, createContext, useContext, Component } from "react";
+import type { ReactNode } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -36,6 +37,26 @@ import UsersPage from "@/pages/users";
 import ActivityLogsPage from "@/pages/activity-logs";
 import type { Customer } from "@shared/schema";
 import { Loader2 } from "lucide-react";
+
+// ─── Error Boundary ──────────────────────────────────────────────────────────
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-8 text-center">
+          <p className="text-lg font-semibold text-destructive">Something went wrong</p>
+          <p className="text-sm text-muted-foreground max-w-md">{(this.state.error as Error).message}</p>
+          <a href="/" className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+            Return to Dashboard
+          </a>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ─── Auth Context ────────────────────────────────────────────────────────────
 interface AuthUser { id: string; username: string; email: string | null; role: string; }
@@ -114,7 +135,9 @@ function AdminLayout() {
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-y-auto">
-            <AdminRouter />
+            <ErrorBoundary>
+              <AdminRouter />
+            </ErrorBoundary>
           </main>
         </div>
       </div>

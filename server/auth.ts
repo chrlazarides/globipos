@@ -4,7 +4,7 @@ import type { Request, Response, NextFunction } from "express";
 
 const JWT_SECRET = process.env.SESSION_SECRET || "vintrade-secret-key-2024";
 const TOKEN_COOKIE = "vt_auth";
-const TOKEN_EXPIRY = "8h";
+const TOKEN_EXPIRY = "30d";
 
 export interface AuthUser {
   id: string;
@@ -62,7 +62,7 @@ export function setAuthCookie(res: Response, token: string) {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
-    maxAge: 8 * 60 * 60 * 1000,
+    maxAge: 30 * 24 * 60 * 60 * 1000,
   });
 }
 

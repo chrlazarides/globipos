@@ -28,7 +28,7 @@ export async function apiRequest(
   return res;
 }
 
-type UnauthorizedBehavior = "returnNull" | "throw";
+type UnauthorizedBehavior = "returnNull" | "throw" | "redirect";
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
@@ -38,7 +38,11 @@ export const getQueryFn: <T>(options: {
       credentials: "include",
     });
 
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+    if (res.status === 401) {
+      if (unauthorizedBehavior === "returnNull") return null;
+      // For any 401, reload the page so the user gets the login screen
+      // instead of a blank/crashed page.
+      window.location.href = "/";
       return null;
     }
 
@@ -49,7 +53,7 @@ export const getQueryFn: <T>(options: {
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      queryFn: getQueryFn({ on401: "throw" }),
+      queryFn: getQueryFn({ on401: "redirect" }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
       staleTime: Infinity,
