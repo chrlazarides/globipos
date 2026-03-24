@@ -68,7 +68,7 @@ const adminNav = [
 ];
 
 function NavSection({ label, items }: { label: string; items: { title: string; url: string; icon: any }[] }) {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   return (
     <SidebarGroup>
       <SidebarGroupLabel>{label}</SidebarGroupLabel>
@@ -83,11 +83,16 @@ function NavSection({ label, items }: { label: string; items: { title: string; u
               : location === item.url || (item.url !== "/" && locPath.startsWith(itemPath));
             return (
               <SidebarMenuItem key={item.title}>
-                <SidebarMenuButton asChild data-active={isActive}>
-                  <Link href={item.url} data-testid={`nav-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
-                    <item.icon className="w-4 h-4" />
-                    <span>{item.title}</span>
-                  </Link>
+                <SidebarMenuButton
+                  data-active={isActive}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(item.url);
+                  }}
+                  data-testid={`nav-${item.title.toLowerCase().replace(/\s+/g, "-")}`}
+                >
+                  <item.icon className="w-4 h-4" />
+                  <span>{item.title}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             );
