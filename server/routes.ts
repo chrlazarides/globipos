@@ -3101,10 +3101,12 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   const currencySymbol = settings.currency_symbol || "\u20AC";
   const invoiceFooter = settings.invoice_footer || "Thank you for your business";
 
+  const unitDisplayLabels: Record<string, string> = { pc: "pc", bottle: "btl", pack: "pk", "6-pack": "6pk", "12-pack": "12pk" };
+
   const itemRows = items.map((li: any, idx: number) => {
-    const qty = li.quantity || 0;
+    const qty = li.quantity != null && Number(li.quantity) > 0 ? Number(li.quantity) : (li.quantity != null ? li.quantity : "—");
     const unit = li.saleUnit || "pc";
-    const unitLabel = unit === "pc" ? "" : ` (${unit})`;
+    const unitLabel = unitDisplayLabels[unit] || unit;
     const discPercent = parseFloat(li.discountPercent || "0");
     const discAmount = parseFloat(li.discount || "0");
 
@@ -3112,7 +3114,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
       <td class="cell">${li.description || ""}</td>
       ${hasBarcodes ? `<td class="cell barcode-cell">${li.barcode || "-"}</td>` : ""}
-      <td class="cell center">${qty}${unitLabel}</td>
+      <td class="cell center">${qty} ${unitLabel}</td>
       <td class="cell right">${currencySymbol}${parseFloat(li.unitPrice).toFixed(2)}</td>
       ${hasDiscountPercent ? `<td class="cell right">${discPercent > 0 ? discPercent.toFixed(1) + "%" : "-"}</td>` : ""}
       ${hasDiscount ? `<td class="cell right">${discAmount > 0 ? currencySymbol + discAmount.toFixed(2) : "-"}</td>` : ""}
