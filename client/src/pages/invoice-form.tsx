@@ -783,11 +783,12 @@ export default function InvoiceForm() {
                         </TableCell>
                         <TableCell>
                           <Input
-                            type="text"
-                            inputMode="numeric"
-                            className="text-foreground"
-                            value={line.quantity > 0 ? String(line.quantity) : ""}
-                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
+                            type="number"
+                            min="1"
+                            step="1"
+                            style={{ color: 'hsl(var(--foreground))', WebkitTextFillColor: 'hsl(var(--foreground))' }}
+                            value={line.quantity > 0 ? line.quantity : ""}
+                            onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) || v < 1 ? 1 : v); }}
                             onFocus={(e) => e.target.select()}
                             onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                             disabled={isViewMode}
@@ -928,11 +929,12 @@ export default function InvoiceForm() {
                       <div>
                         <Label className="text-xs text-muted-foreground">Qty</Label>
                         <Input
-                          type="text"
-                          inputMode="numeric"
-                          className="text-foreground"
-                          value={line.quantity > 0 ? String(line.quantity) : ""}
-                          onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
+                          type="number"
+                          min="1"
+                          step="1"
+                          style={{ color: 'hsl(var(--foreground))', WebkitTextFillColor: 'hsl(var(--foreground))' }}
+                          value={line.quantity > 0 ? line.quantity : ""}
+                          onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) || v < 1 ? 1 : v); }}
                           onFocus={(e) => e.target.select()}
                           onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                           disabled={isViewMode}
