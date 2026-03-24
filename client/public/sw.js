@@ -1,11 +1,11 @@
-const CACHE_NAME = 'vintrade-v5';
+const CACHE_NAME = 'vintrade-v6';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
   '/favicon.png'
 ];
 
-const API_CACHE_NAME = 'vintrade-api-v5';
+const API_CACHE_NAME = 'vintrade-api-v6';
 const CACHEABLE_API_ROUTES = [
   '/api/items',
   '/api/customers',
@@ -35,10 +35,6 @@ self.addEventListener('activate', (event) => {
           .filter((name) => name !== CACHE_NAME && name !== API_CACHE_NAME)
           .map((name) => caches.delete(name))
       );
-    }).then(() => {
-      return self.clients.matchAll({ type: 'window' });
-    }).then((clients) => {
-      clients.forEach((client) => client.navigate(client.url));
     })
   );
   self.clients.claim();
