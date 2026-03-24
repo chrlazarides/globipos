@@ -738,11 +738,11 @@ export default function InvoiceForm() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="min-w-[200px]">Item</TableHead>
-                      <TableHead className="w-[100px]">Qty</TableHead>
+                      <TableHead className="w-[120px]">Qty</TableHead>
                       <TableHead className="w-[150px]">Unit</TableHead>
-                      <TableHead className="w-[160px]">Price</TableHead>
-                      <TableHead className="w-[140px]">Discount</TableHead>
-                      <TableHead className="w-[100px] text-right">Total</TableHead>
+                      <TableHead className="w-[190px]">Price</TableHead>
+                      <TableHead className="w-[160px]">Discount</TableHead>
+                      <TableHead className="w-[110px] text-right">Total</TableHead>
                       {!isViewMode && <TableHead className="w-[50px]" />}
                     </TableRow>
                   </TableHeader>
@@ -786,6 +786,7 @@ export default function InvoiceForm() {
                             type="number"
                             min="1"
                             step="1"
+                            className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             style={{ color: 'hsl(var(--foreground))', WebkitTextFillColor: 'hsl(var(--foreground))' }}
                             value={line.quantity > 0 ? line.quantity : ""}
                             onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) || v < 1 ? 1 : v); }}
@@ -932,6 +933,7 @@ export default function InvoiceForm() {
                           type="number"
                           min="1"
                           step="1"
+                          className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           style={{ color: 'hsl(var(--foreground))', WebkitTextFillColor: 'hsl(var(--foreground))' }}
                           value={line.quantity > 0 ? line.quantity : ""}
                           onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) || v < 1 ? 1 : v); }}
