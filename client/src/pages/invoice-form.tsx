@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation, useRoute } from "wouter";
+import { useLocation } from "wouter";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,13 +57,13 @@ function getPaymentDays(terms: string): number {
 }
 
 export default function InvoiceForm() {
-  const [, navigate] = useLocation();
-  const [matchEdit, paramsEdit] = useRoute("/invoices/:id/edit");
-  const [matchView, paramsView] = useRoute("/invoices/:id");
-  const [matchNew] = useRoute("/invoices/new");
-  const isNew = matchNew || (!matchEdit && !matchView);
-  const invoiceId = matchNew ? undefined : (paramsEdit?.id || paramsView?.id);
-  const isViewMode = matchView && !matchEdit && !matchNew;
+  const [location, navigate] = useLocation();
+  // Parse routing from the raw URL path — reliable in wouter v3 regardless of Switch nesting.
+  const _editMatch = /^\/invoices\/([^/?]+)\/edit/.exec(location);
+  const _viewMatch = /^\/invoices\/([^/?]+)$/.exec(location);
+  const isNew = location === "/invoices/new" || location.startsWith("/invoices/new?");
+  const invoiceId = isNew ? undefined : (_editMatch?.[1] ?? (_viewMatch ? _viewMatch[1] : undefined));
+  const isViewMode = !!_viewMatch && !_editMatch && !isNew;
   const { toast } = useToast();
   const { isOnline, pendingCount, syncing, syncPending, refreshPendingCount } = useOnlineStatus();
 
