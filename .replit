@@ -45,3 +45,7 @@ waitForPort = 5000
 
 [agent]
 integrations = ["sendgrid:1.0.0", "resend:1.0.0"]
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
