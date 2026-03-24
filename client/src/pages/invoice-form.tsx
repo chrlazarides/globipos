@@ -143,13 +143,13 @@ export default function InvoiceForm() {
       if (existingInvoice.items?.length) {
         setLines(existingInvoice.items.map((li) => ({
           itemId: li.itemId || "",
-          description: li.description,
-          quantity: li.quantity,
+          description: li.description || "",
+          quantity: li.quantity != null ? Number(li.quantity) : 1,
           saleUnit: (li as any).saleUnit || "pc",
-          unitPrice: li.unitPrice,
-          discountPercent: (li as any).discountPercent || "0",
-          discount: li.discount,
-          total: li.total,
+          unitPrice: String(li.unitPrice ?? "0"),
+          discountPercent: String((li as any).discountPercent ?? "0"),
+          discount: String(li.discount ?? "0"),
+          total: String(li.total ?? "0"),
         })));
       }
     }
@@ -163,13 +163,13 @@ export default function InvoiceForm() {
       if (sourceInvoice.items?.length) {
         setLines(sourceInvoice.items.map((li) => ({
           itemId: li.itemId || "",
-          description: li.description,
-          quantity: li.quantity,
+          description: li.description || "",
+          quantity: li.quantity != null ? Number(li.quantity) : 1,
           saleUnit: (li as any).saleUnit || "pc",
-          unitPrice: li.unitPrice,
-          discountPercent: (li as any).discountPercent || "0",
-          discount: li.discount,
-          total: li.total,
+          unitPrice: String(li.unitPrice ?? "0"),
+          discountPercent: String((li as any).discountPercent ?? "0"),
+          discount: String(li.discount ?? "0"),
+          total: String(li.total ?? "0"),
         })));
       }
     }
@@ -785,7 +785,7 @@ export default function InvoiceForm() {
                           <Input
                             type="text"
                             inputMode="numeric"
-                            value={line.quantity === 0 ? "" : line.quantity}
+                            value={!line.quantity ? "" : String(line.quantity)}
                             onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
                             onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                             disabled={isViewMode}
@@ -928,7 +928,7 @@ export default function InvoiceForm() {
                         <Input
                           type="text"
                           inputMode="numeric"
-                          value={line.quantity === 0 ? "" : line.quantity}
+                          value={!line.quantity ? "" : String(line.quantity)}
                           onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
                           onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                           disabled={isViewMode}
