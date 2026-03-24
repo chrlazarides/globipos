@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useRoute } from "wouter";
 import { PageHeader } from "@/components/page-header";
@@ -121,8 +121,16 @@ export default function InvoiceForm() {
   const [overallDiscountAmount, setOverallDiscountAmount] = useState("0");
   const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discountPercent: "0", discount: "0", total: "0" }]);
 
+  // Track which customer was loaded from an existing invoice so the
+  // contract-price effect does NOT overwrite the saved line amounts
+  // just because items/contracts finish loading after the invoice data.
+  const loadedInvoiceCustomerId = useRef<string | null>(null);
+
   useEffect(() => {
     if (existingInvoice) {
+      // Remember this customer ID so the contract-price effect doesn't
+      // overwrite the saved line amounts on initial load.
+      loadedInvoiceCustomerId.current = existingInvoice.customerId;
       setCustomerId(existingInvoice.customerId);
       setInvoiceDate(existingInvoice.date);
       setDueDate(existingInvoice.dueDate || "");
@@ -245,6 +253,9 @@ export default function InvoiceForm() {
 
   useEffect(() => {
     if (!customerId || isViewMode) return;
+    // When editing an existing invoice, only re-apply contract prices if
+    // the user has actively changed the customer (not on initial data load).
+    if (loadedInvoiceCustomerId.current === customerId) return;
     const customer = customers.find(c => c.id === customerId);
     if (!customer) return;
     setLines((prev) => {
@@ -342,8 +353,6 @@ export default function InvoiceForm() {
       return updated;
     });
   };
-
-  const [scannerOpen, setScannerOpen] = useState(false);
 
   const handleBarcodeScan = async (barcode: string) => {
     try {
@@ -696,11 +705,11 @@ export default function InvoiceForm() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="min-w-[200px]">Item</TableHead>
-                      <TableHead className="w-[80px]">Qty</TableHead>
+                      <TableHead className="w-[100px]">Qty</TableHead>
                       <TableHead className="w-[150px]">Unit</TableHead>
-                      <TableHead className="w-[130px]">Price</TableHead>
+                      <TableHead className="w-[160px]">Price</TableHead>
                       <TableHead className="w-[140px]">Discount</TableHead>
-                      <TableHead className="w-[90px] text-right">Total</TableHead>
+                      <TableHead className="w-[100px] text-right">Total</TableHead>
                       {!isViewMode && <TableHead className="w-[50px]" />}
                     </TableRow>
                   </TableHeader>
@@ -880,7 +889,7 @@ export default function InvoiceForm() {
                       )}
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-4 gap-2">
                       <div>
                         <Label className="text-xs text-muted-foreground">Qty</Label>
                         <Input
@@ -911,8 +920,8 @@ export default function InvoiceForm() {
                           </Select>
                         )}
                       </div>
-                      <div>
-                        <Label className="text-xs text-muted-foreground">Price</Label>
+                      <div className="col-span-2">
+                        <Label className="text-xs text-muted-foreground">Unit Price</Label>
                         <Input
                           type="text"
                           inputMode="decimal"
