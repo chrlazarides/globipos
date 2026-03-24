@@ -1,5 +1,5 @@
-const CACHE_NAME = 'vintrade-v7';
-const API_CACHE_NAME = 'vintrade-api-v7';
+const CACHE_NAME = 'vintrade-v8';
+const API_CACHE_NAME = 'vintrade-api-v8';
 
 // Only cache versioned static assets (JS/CSS bundles with content hashes).
 // NEVER cache HTML — it must always be fetched fresh so new deployments work.
