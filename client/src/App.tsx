@@ -72,13 +72,13 @@ function AdminRouter() {
       <Route path="/" component={Dashboard} />
       <Route path="/items" component={Items} />
       <Route path="/customers" component={Customers} />
+      <Route path="/invoices/new" component={InvoiceForm} />
+      <Route path="/invoices/:id/edit" component={InvoiceForm} />
+      <Route path="/invoices/:id" component={InvoiceForm} />
       <Route path="/invoices" component={() => <Invoices docType="invoice" />} />
       <Route path="/credit-notes" component={() => <Invoices docType="credit_note" />} />
       <Route path="/proforma" component={() => <Invoices docType="proforma" />} />
       <Route path="/quotations" component={() => <Invoices docType="quotation" />} />
-      <Route path="/invoices/new" component={InvoiceForm} />
-      <Route path="/invoices/:id/edit" component={InvoiceForm} />
-      <Route path="/invoices/:id" component={InvoiceForm} />
       <Route path="/suppliers" component={Suppliers} />
       <Route path="/purchase-invoices" component={PurchaseInvoices} />
       <Route path="/supplier-payments" component={SupplierPaymentsPage} />
