@@ -612,7 +612,7 @@ export default function InvoiceForm() {
             <a href={backUrl} data-testid="button-back-to-list" className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md hover:bg-accent transition-colors">
               <ChevronLeft className="w-4 h-4" /> Back
             </a>
-            {isViewMode && (
+            {!isNew && invoiceId && (
               <>
                 {(existingInvoice?.type === "proforma" || existingInvoice?.type === "quotation") && (
                   <a href={`/invoices/new?type=invoice&from=${invoiceId}`} data-testid="button-create-invoice" className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium rounded-md border border-input bg-background hover:bg-accent transition-colors">
@@ -634,7 +634,6 @@ export default function InvoiceForm() {
                   {sendEmail.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Send className="w-4 h-4 sm:mr-1" />}
                   <span className="hidden sm:inline">{sendEmail.isPending ? "Sending..." : "Send"}</span>
                 </Button>
-                <a href={`/invoices/${invoiceId}/edit`} data-testid="button-edit-invoice" className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">Edit</a>
               </>
             )}
           </div>
