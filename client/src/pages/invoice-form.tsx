@@ -144,7 +144,7 @@ export default function InvoiceForm() {
         setLines(existingInvoice.items.map((li) => ({
           itemId: li.itemId || "",
           description: li.description || "",
-          quantity: li.quantity != null ? Number(li.quantity) : 1,
+          quantity: Number(li.quantity) > 0 ? Number(li.quantity) : 1,
           saleUnit: (li as any).saleUnit || "pc",
           unitPrice: String(li.unitPrice ?? "0"),
           discountPercent: String((li as any).discountPercent ?? "0"),
@@ -164,7 +164,7 @@ export default function InvoiceForm() {
         setLines(sourceInvoice.items.map((li) => ({
           itemId: li.itemId || "",
           description: li.description || "",
-          quantity: li.quantity != null ? Number(li.quantity) : 1,
+          quantity: Number(li.quantity) > 0 ? Number(li.quantity) : 1,
           saleUnit: (li as any).saleUnit || "pc",
           unitPrice: String(li.unitPrice ?? "0"),
           discountPercent: String((li as any).discountPercent ?? "0"),
@@ -785,7 +785,7 @@ export default function InvoiceForm() {
                           <Input
                             type="text"
                             inputMode="numeric"
-                            value={!line.quantity ? "" : String(line.quantity)}
+                            value={line.quantity == null ? "" : String(line.quantity)}
                             onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
                             onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                             disabled={isViewMode}
@@ -928,7 +928,7 @@ export default function InvoiceForm() {
                         <Input
                           type="text"
                           inputMode="numeric"
-                          value={!line.quantity ? "" : String(line.quantity)}
+                          value={line.quantity == null ? "" : String(line.quantity)}
                           onChange={(e) => { const v = e.target.value; if (v === "" || /^\d+$/.test(v)) updateLine(idx, "quantity", v === "" ? 0 : parseInt(v)); }}
                           onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
                           disabled={isViewMode}
