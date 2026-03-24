@@ -585,7 +585,7 @@ export default function InvoiceForm() {
         description={isViewMode ? "View document details" : "Fill in the document details"}
         action={
           <div className="flex items-center gap-2 flex-wrap">
-            <Button variant="ghost" size="sm" onClick={() => navigate(backUrl)} data-testid="button-back-to-list">
+            <Button variant="ghost" size="sm" onClick={() => { window.location.href = backUrl; }} data-testid="button-back-to-list">
               <ChevronLeft className="w-4 h-4 mr-1" /> Back
             </Button>
             {isViewMode && (

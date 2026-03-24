@@ -68,7 +68,7 @@ const adminNav = [
 ];
 
 function NavSection({ label, items }: { label: string; items: { title: string; url: string; icon: any }[] }) {
-  const [location, navigate] = useLocation();
+  const [location] = useLocation();
   return (
     <SidebarGroup>
       <SidebarGroupLabel>{label}</SidebarGroupLabel>
@@ -87,7 +87,7 @@ function NavSection({ label, items }: { label: string; items: { title: string; u
                   data-active={isActive}
                   onClick={(e) => {
                     e.preventDefault();
-                    navigate(item.url);
+                    window.location.href = item.url;
                   }}
                   data-testid={`nav-${item.title.toLowerCase().replace(/\s+/g, "-")}`}
                 >
