@@ -1,11 +1,10 @@
-const CACHE_NAME = 'vintrade-v6';
-const STATIC_ASSETS = [
-  '/',
-  '/manifest.json',
-  '/favicon.png'
-];
+const CACHE_NAME = 'vintrade-v7';
+const API_CACHE_NAME = 'vintrade-api-v7';
 
-const API_CACHE_NAME = 'vintrade-api-v6';
+// Only cache versioned static assets (JS/CSS bundles with content hashes).
+// NEVER cache HTML — it must always be fetched fresh so new deployments work.
+const ASSET_PATTERN = /\/assets\/.+\.(js|css|woff2?|ttf|png|svg|ico)(\?.*)?$/;
+
 const CACHEABLE_API_ROUTES = [
   '/api/items',
   '/api/customers',
@@ -19,11 +18,6 @@ const CACHEABLE_API_ROUTES = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS);
-    })
-  );
   self.skipWaiting();
 });
 
@@ -47,45 +41,49 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Cacheable API routes: network-first, fall back to cache
   const isCacheableApi = CACHEABLE_API_ROUTES.some((route) =>
     url.pathname === route || url.pathname.startsWith(route + '/')
   );
-
   if (isCacheableApi) {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
           const cloned = response.clone();
-          caches.open(API_CACHE_NAME).then((cache) => {
-            cache.put(event.request, cloned);
-          });
+          caches.open(API_CACHE_NAME).then((cache) => cache.put(event.request, cloned));
           return response;
         })
-        .catch(() => {
-          return caches.match(event.request);
-        })
+        .catch(() => caches.match(event.request))
     );
     return;
   }
 
+  // All other API routes: always network, never cache
   if (url.pathname.startsWith('/api/')) {
     return;
   }
 
+  // Versioned static assets (JS/CSS bundles): cache-first (they have content hashes)
+  if (ASSET_PATTERN.test(url.pathname)) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        return fetch(event.request).then((response) => {
+          if (response.ok) {
+            const cloned = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, cloned));
+          }
+          return response;
+        });
+      })
+    );
+    return;
+  }
+
+  // HTML pages (index.html and all routes): ALWAYS network, never serve from cache.
+  // This ensures new deployments reach users immediately.
   event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (response.ok) {
-          const cloned = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, cloned);
-          });
-        }
-        return response;
-      })
-      .catch(() => {
-        return caches.match(event.request);
-      })
+    fetch(event.request).catch(() => caches.match('/'))
   );
 });
 

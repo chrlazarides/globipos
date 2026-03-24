@@ -81,7 +81,7 @@ export default function InvoiceForm() {
   const { data: onlineItems = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   const { data: contracts = [] } = useQuery<(PriceContract & { rules?: PriceContractRule[]; priceLevel?: number })[]>({ queryKey: ["/api/price-contracts"] });
   const priceLevelNames = usePriceLevels();
-  const { data: existingInvoice } = useQuery<Invoice & { items: InvoiceItem[] }>({
+  const { data: existingInvoice, isLoading: invoiceLoading, isError: invoiceError } = useQuery<Invoice & { items: InvoiceItem[] }>({
     queryKey: ["/api/invoices", invoiceId],
     enabled: !!invoiceId,
   });
@@ -552,6 +552,28 @@ export default function InvoiceForm() {
 
   const selectedCustomer = customers.find(c => c.id === customerId);
   const activeContracts = customerId ? getActiveContracts(customerId) : [];
+
+  // Show loading spinner while fetching an existing invoice
+  if (invoiceId && invoiceLoading) {
+    return (
+      <div className="p-4 sm:p-6 flex flex-col items-center justify-center gap-4 min-h-[300px]">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">Loading invoice...</p>
+      </div>
+    );
+  }
+
+  // Show error if invoice failed to load
+  if (invoiceId && invoiceError) {
+    return (
+      <div className="p-4 sm:p-6 flex flex-col items-center justify-center gap-4 min-h-[300px]">
+        <p className="text-sm text-destructive font-medium">Could not load invoice. It may have been deleted or you may not have access.</p>
+        <a href={backUrl} className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium rounded-md border border-input bg-background hover:bg-accent transition-colors">
+          <ChevronLeft className="w-4 h-4" /> Back to list
+        </a>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
