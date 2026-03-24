@@ -121,6 +121,7 @@ export default function InvoiceForm() {
   const [overallDiscountPercent, setOverallDiscountPercent] = useState("0");
   const [overallDiscountAmount, setOverallDiscountAmount] = useState("0");
   const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discountPercent: "0", discount: "0", total: "0" }]);
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   // Track which customer was loaded from an existing invoice so the
   // contract-price effect does NOT overwrite the saved line amounts
