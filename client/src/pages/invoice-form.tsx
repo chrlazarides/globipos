@@ -737,12 +737,10 @@ export default function InvoiceForm() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="min-w-[200px]">Item</TableHead>
-                      <TableHead className="w-[120px]">Qty</TableHead>
-                      <TableHead className="w-[150px]">Unit</TableHead>
-                      <TableHead className="w-[190px]">Price</TableHead>
-                      <TableHead className="w-[160px]">Discount</TableHead>
-                      <TableHead className="w-[110px] text-right">Total</TableHead>
+                      <TableHead>Item · Qty · Unit</TableHead>
+                      <TableHead className="w-[200px]">Unit Price</TableHead>
+                      <TableHead className="w-[180px]">Discount</TableHead>
+                      <TableHead className="w-[130px] text-right">Total</TableHead>
                       {!isViewMode && <TableHead className="w-[50px]" />}
                     </TableRow>
                   </TableHeader>
@@ -751,9 +749,12 @@ export default function InvoiceForm() {
                       <TableRow key={idx}>
                         <TableCell>
                           {isViewMode ? (
-                            <span className="text-sm">{line.description}</span>
+                            <div>
+                              <span className="text-sm">{line.description}</span>
+                              <p className="text-xs text-muted-foreground mt-0.5">{line.quantity} × {saleUnitLabel(line.saleUnit)}</p>
+                            </div>
                           ) : (
-                            <div className="space-y-1">
+                            <div className="space-y-1.5">
                               <Select value={line.itemId || "custom"} onValueChange={(v) => updateLine(idx, "itemId", v === "custom" ? "" : v)}>
                                 <SelectTrigger data-testid={`select-line-item-${idx}`}>
                                   <SelectValue placeholder="Select item" />
@@ -778,40 +779,33 @@ export default function InvoiceForm() {
                                   data-testid={`input-line-desc-${idx}`}
                                 />
                               )}
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground shrink-0">Qty</span>
+                                <Input
+                                  type="number"
+                                  min="1"
+                                  step="1"
+                                  className="w-20 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                  value={line.quantity > 0 ? line.quantity : ""}
+                                  onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) || v < 1 ? 1 : v); }}
+                                  onFocus={(e) => e.target.select()}
+                                  onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
+                                  data-testid={`input-line-qty-${idx}`}
+                                />
+                                <Select value={line.saleUnit} onValueChange={(v) => updateLine(idx, "saleUnit", v)}>
+                                  <SelectTrigger className="flex-1" data-testid={`select-line-unit-${idx}`}>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="pc">Piece</SelectItem>
+                                    <SelectItem value="bottle">Bottle</SelectItem>
+                                    <SelectItem value="pack">Pack</SelectItem>
+                                    <SelectItem value="6-pack">6-Pack</SelectItem>
+                                    <SelectItem value="12-pack">12-Pack</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
                             </div>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            min="1"
-                            step="1"
-                            className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                            style={{ color: 'hsl(var(--foreground))', WebkitTextFillColor: 'hsl(var(--foreground))' }}
-                            value={line.quantity > 0 ? line.quantity : ""}
-                            onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) || v < 1 ? 1 : v); }}
-                            onFocus={(e) => e.target.select()}
-                            onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
-                            disabled={isViewMode}
-                            data-testid={`input-line-qty-${idx}`}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          {isViewMode ? (
-                            <span className="text-sm">{saleUnitLabel(line.saleUnit)}</span>
-                          ) : (
-                            <Select value={line.saleUnit} onValueChange={(v) => updateLine(idx, "saleUnit", v)}>
-                              <SelectTrigger data-testid={`select-line-unit-${idx}`}>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="pc">Piece</SelectItem>
-                                <SelectItem value="bottle">Bottle</SelectItem>
-                                <SelectItem value="pack">Pack</SelectItem>
-                                <SelectItem value="6-pack">6-Pack</SelectItem>
-                                <SelectItem value="12-pack">12-Pack</SelectItem>
-                              </SelectContent>
-                            </Select>
                           )}
                         </TableCell>
                         <TableCell>
