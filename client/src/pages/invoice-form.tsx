@@ -491,7 +491,7 @@ export default function InvoiceForm() {
         return { id: offlineInvoice.offlineId, offline: true };
       }
 
-      if (invoiceId && matchEdit) {
+      if (invoiceId && _editMatch) {
         const res = await apiRequest("PATCH", `/api/invoices/${invoiceId}`, payload);
         return res.json();
       } else {
