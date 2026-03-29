@@ -49,6 +49,47 @@ async function getUncachableResendClient() {
   };
 }
 
+export async function getEmailStatus(): Promise<{
+  connected: boolean;
+  configuredFrom: string;
+  actualFrom: string;
+  usingFallback: boolean;
+  error?: string;
+}> {
+  try {
+    const { fromEmail } = await getCredentials();
+    const usable = isSendableFromAddress(fromEmail);
+    return {
+      connected: true,
+      configuredFrom: fromEmail || '',
+      actualFrom: usable ? fromEmail : 'onboarding@resend.dev',
+      usingFallback: !usable,
+    };
+  } catch (e: any) {
+    return { connected: false, configuredFrom: '', actualFrom: '', usingFallback: false, error: e.message };
+  }
+}
+
+export async function sendTestEmail(toEmail: string): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    await client.emails.send({
+      to: toEmail,
+      from: fromEmail,
+      subject: 'VinTrade — Email Test',
+      html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <h2 style="color:#374151;margin-top:0;">Email Test Successful</h2>
+        <p style="color:#374151;">This is a test email sent from your <strong>VinTrade</strong> system to confirm email delivery is working correctly.</p>
+        <p style="color:#6b7280;font-size:13px;">Sent via Resend · From: ${fromEmail}</p>
+      </div>`,
+    });
+    return { success: true, fromEmail };
+  } catch (error: any) {
+    console.error('Test email error:', error?.message || error);
+    return { success: false, fromEmail: '', error: error?.message || 'Failed to send test email' };
+  }
+}
+
 export async function sendInvoiceEmail(toEmail: string, subject: string, htmlContent: string): Promise<{ success: boolean; fromEmail: string; error?: string }> {
   try {
     const { client, fromEmail } = await getUncachableResendClient();

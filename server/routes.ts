@@ -6,7 +6,7 @@ import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
 import { Readable } from "stream";
-import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail } from "./email";
+import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail } from "./email";
 import { db } from "./db";
 import { sql, and, eq, gte, lte, desc } from "drizzle-orm";
 import crypto from "crypto";
@@ -1398,6 +1398,27 @@ export async function registerRoutes(
     try {
       const logs = await storage.getEmailLogsByCustomer(req.params.customerId);
       res.json(logs);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/email-status", async (_req, res) => {
+    try {
+      const status = await getEmailStatus();
+      res.json(status);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/email/send-test", async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) return res.status(400).json({ message: "Email address required" });
+      const result = await sendTestEmail(email);
+      if (!result.success) return res.status(500).json({ message: result.error || "Failed to send test email" });
+      res.json({ success: true, fromEmail: result.fromEmail, sentTo: email });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

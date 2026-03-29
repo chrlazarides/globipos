@@ -12,8 +12,9 @@ import { PageHeader } from "@/components/page-header";
 import {
   Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags,
   Database, Lock, Unlock, Shield, Download, Upload,
-  Mail, Eye, EyeOff, CheckCircle2,
+  Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import type { SystemSetting } from "@shared/schema";
 
 const groupIcons: Record<string, any> = {
@@ -68,8 +69,22 @@ export default function SettingsPage() {
   // Data migration (dev → production)
   const [importing, setImporting] = useState(false);
 
+  // Email section
+  const [testEmailAddr, setTestEmailAddr] = useState("");
+  const [sendingTest, setSendingTest] = useState(false);
+
   const { data: settings, isLoading } = useQuery<SystemSetting[]>({
     queryKey: ["/api/settings"],
+  });
+
+  const { data: emailStatus, isLoading: emailStatusLoading } = useQuery<{
+    connected: boolean;
+    configuredFrom: string;
+    actualFrom: string;
+    usingFallback: boolean;
+    error?: string;
+  }>({
+    queryKey: ["/api/email-status"],
   });
 
   // Check session auth on mount
@@ -262,6 +277,21 @@ export default function SettingsPage() {
       toast({ title: "Failed to send backup", description: err.message, variant: "destructive" });
     } finally {
       setEmailingBackup(false);
+    }
+  };
+
+  const handleSendTestEmail = async () => {
+    if (!testEmailAddr) return;
+    setSendingTest(true);
+    try {
+      const res = await apiRequest("POST", "/api/email/send-test", { email: testEmailAddr });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to send test email");
+      toast({ title: "Test email sent", description: `Delivered from ${data.fromEmail} → ${data.sentTo}` });
+    } catch (err: any) {
+      toast({ title: "Send failed", description: err.message, variant: "destructive" });
+    } finally {
+      setSendingTest(false);
     }
   };
 
@@ -656,6 +686,111 @@ export default function SettingsPage() {
               {backupLoading ? "Saving..." : "Save Backup Settings"}
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Email Card */}
+      <Card className="mt-6 border-violet-200 dark:border-violet-800">
+        <CardHeader className="flex flex-row items-center gap-2 p-4 pb-2">
+          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-violet-100 dark:bg-violet-900/50">
+            <Mail className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">Email (Resend)</h3>
+            <p className="text-xs text-muted-foreground">Email delivery status and configuration</p>
+          </div>
+        </CardHeader>
+        <CardContent className="p-4 pt-0 space-y-4">
+          {emailStatusLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-5 w-48" />
+              <Skeleton className="h-5 w-64" />
+            </div>
+          ) : emailStatus ? (
+            <div className="space-y-3">
+              {/* Connection status */}
+              <div className="flex items-center gap-2">
+                {emailStatus.connected ? (
+                  <>
+                    <Wifi className="w-4 h-4 text-green-600 dark:text-green-400" />
+                    <span className="text-sm text-green-600 dark:text-green-400 font-medium">Connected to Resend</span>
+                    <Badge variant="outline" className="text-xs border-green-300 text-green-700 dark:border-green-700 dark:text-green-400">Active</Badge>
+                  </>
+                ) : (
+                  <>
+                    <WifiOff className="w-4 h-4 text-destructive" />
+                    <span className="text-sm text-destructive font-medium">Not connected</span>
+                  </>
+                )}
+              </div>
+
+              {emailStatus.connected && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Configured From</p>
+                    <p className="font-mono text-xs bg-muted px-2 py-1.5 rounded border" data-testid="text-email-configured-from">
+                      {emailStatus.configuredFrom || <span className="text-muted-foreground italic">not set</span>}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Actual Sender</p>
+                    <p className="font-mono text-xs bg-muted px-2 py-1.5 rounded border" data-testid="text-email-actual-from">
+                      {emailStatus.actualFrom}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {emailStatus.usingFallback && (
+                <div className="flex items-start gap-2 text-xs p-3 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>
+                    The configured sender address (<strong>{emailStatus.configuredFrom}</strong>) is a personal email domain and cannot be used as a mail sender.
+                    Emails are being sent from <strong>onboarding@resend.dev</strong> instead.
+                    To use a custom sender, add and verify a business domain in your Resend account.
+                  </span>
+                </div>
+              )}
+
+              {!emailStatus.connected && emailStatus.error && (
+                <div className="flex items-start gap-2 text-xs p-3 rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{emailStatus.error}</span>
+                </div>
+              )}
+
+              {/* Test email */}
+              {emailStatus.connected && (
+                <div className="border-t pt-4 space-y-2">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Send Test Email</h4>
+                  <div className="flex items-center gap-2 max-w-md">
+                    <Input
+                      type="email"
+                      placeholder="recipient@example.com"
+                      value={testEmailAddr}
+                      onChange={(e) => setTestEmailAddr(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleSendTestEmail()}
+                      data-testid="input-test-email"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={handleSendTestEmail}
+                      disabled={sendingTest || !testEmailAddr}
+                      data-testid="button-send-test-email"
+                    >
+                      <Send className={`w-4 h-4 mr-2 ${sendingTest ? "animate-pulse" : ""}`} />
+                      {sendingTest ? "Sending..." : "Send"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Sends a test email to confirm delivery is working. Will be sent from <strong>{emailStatus.actualFrom}</strong>.
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Could not load email status.</p>
+          )}
         </CardContent>
       </Card>
 
