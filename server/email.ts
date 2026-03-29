@@ -32,11 +32,20 @@ async function getCredentials() {
 }
 
 // WARNING: Never cache this client - always get fresh credentials
+const PERSONAL_EMAIL_DOMAINS = ['gmail.com','yahoo.com','yahoo.co.uk','hotmail.com','outlook.com','live.com','icloud.com','me.com','aol.com','protonmail.com','cytanet.com.cy'];
+
+function isSendableFromAddress(email: string): boolean {
+  if (!email) return false;
+  const domain = email.split('@')[1]?.toLowerCase();
+  return !!domain && !PERSONAL_EMAIL_DOMAINS.includes(domain);
+}
+
 async function getUncachableResendClient() {
   const { apiKey, fromEmail } = await getCredentials();
+  const resolvedFrom = isSendableFromAddress(fromEmail) ? fromEmail : 'onboarding@resend.dev';
   return {
     client: new Resend(apiKey),
-    fromEmail: fromEmail || 'onboarding@resend.dev'
+    fromEmail: resolvedFrom
   };
 }
 
