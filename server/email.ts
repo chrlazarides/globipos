@@ -1,9 +1,27 @@
 // Resend integration for sending emails
 import { Resend } from 'resend';
+import { db } from './db';
+import { systemSettings } from '@shared/schema';
+import { eq } from 'drizzle-orm';
 
-let connectionSettings: any;
+async function getSettingValue(key: string): Promise<string | null> {
+  try {
+    const rows = await db.select().from(systemSettings).where(eq(systemSettings.key, key));
+    return rows[0]?.value ?? null;
+  } catch {
+    return null;
+  }
+}
 
-async function getCredentials() {
+async function getCredentials(): Promise<{ apiKey: string; fromEmail: string; source: 'db' | 'connector' }> {
+  // Priority 1: settings stored in the database by admin
+  const dbApiKey = await getSettingValue('resend_api_key');
+  const dbFromEmail = await getSettingValue('resend_from_email');
+  if (dbApiKey && dbApiKey.startsWith('re_')) {
+    return { apiKey: dbApiKey, fromEmail: dbFromEmail || '', source: 'db' };
+  }
+
+  // Priority 2: Replit integration connector
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY
     ? 'repl ' + process.env.REPL_IDENTITY
@@ -11,11 +29,11 @@ async function getCredentials() {
     ? 'depl ' + process.env.WEB_REPL_RENEWAL
     : null;
 
-  if (!xReplitToken) {
-    throw new Error('X-Replit-Token not found for repl/depl');
+  if (!xReplitToken || !hostname) {
+    throw new Error('Resend not configured. Please add your API key in Settings → Email.');
   }
 
-  connectionSettings = await fetch(
+  const connectionSettings = await fetch(
     'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=resend',
     {
       headers: {
@@ -26,9 +44,9 @@ async function getCredentials() {
   ).then(res => res.json()).then(data => data.items?.[0]);
 
   if (!connectionSettings || !connectionSettings.settings.api_key) {
-    throw new Error('Resend not connected');
+    throw new Error('Resend not configured. Please add your API key in Settings → Email.');
   }
-  return { apiKey: connectionSettings.settings.api_key, fromEmail: connectionSettings.settings.from_email };
+  return { apiKey: connectionSettings.settings.api_key, fromEmail: connectionSettings.settings.from_email, source: 'connector' };
 }
 
 // WARNING: Never cache this client - always get fresh credentials
@@ -54,19 +72,31 @@ export async function getEmailStatus(): Promise<{
   configuredFrom: string;
   actualFrom: string;
   usingFallback: boolean;
+  source: 'db' | 'connector' | 'none';
+  hasDbApiKey: boolean;
+  dbFromEmail: string;
   error?: string;
 }> {
+  const dbApiKey = await getSettingValue('resend_api_key');
+  const dbFromEmail = await getSettingValue('resend_from_email');
   try {
-    const { fromEmail } = await getCredentials();
+    const { fromEmail, source } = await getCredentials();
     const usable = isSendableFromAddress(fromEmail);
     return {
       connected: true,
       configuredFrom: fromEmail || '',
       actualFrom: usable ? fromEmail : 'onboarding@resend.dev',
       usingFallback: !usable,
+      source,
+      hasDbApiKey: !!(dbApiKey && dbApiKey.startsWith('re_')),
+      dbFromEmail: dbFromEmail || '',
     };
   } catch (e: any) {
-    return { connected: false, configuredFrom: '', actualFrom: '', usingFallback: false, error: e.message };
+    return {
+      connected: false, configuredFrom: '', actualFrom: '', usingFallback: false,
+      source: 'none', hasDbApiKey: !!(dbApiKey && dbApiKey.startsWith('re_')),
+      dbFromEmail: dbFromEmail || '', error: e.message,
+    };
   }
 }
 

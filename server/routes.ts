@@ -1424,6 +1424,24 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/email/save-config", requireAdmin, async (req, res) => {
+    try {
+      const { apiKey, fromEmail } = req.body;
+      if (apiKey !== undefined) {
+        if (apiKey && !apiKey.startsWith('re_')) {
+          return res.status(400).json({ message: "Invalid Resend API key — it must start with 're_'" });
+        }
+        await storage.upsertSetting('resend_api_key', apiKey || '', 'Resend API Key', 'email');
+      }
+      if (fromEmail !== undefined) {
+        await storage.upsertSetting('resend_from_email', fromEmail || '', 'Resend From Email', 'email');
+      }
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   // Payments
   app.get("/api/payments", async (req, res) => {
     if (!req.user) return res.status(401).json({ message: "Not authenticated" });

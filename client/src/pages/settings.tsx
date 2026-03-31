@@ -72,6 +72,10 @@ export default function SettingsPage() {
   // Email section
   const [testEmailAddr, setTestEmailAddr] = useState("");
   const [sendingTest, setSendingTest] = useState(false);
+  const [configApiKey, setConfigApiKey] = useState("");
+  const [configFromEmail, setConfigFromEmail] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [savingEmailConfig, setSavingEmailConfig] = useState(false);
 
   const { data: settings, isLoading } = useQuery<SystemSetting[]>({
     queryKey: ["/api/settings"],
@@ -277,6 +281,31 @@ export default function SettingsPage() {
       toast({ title: "Failed to send backup", description: err.message, variant: "destructive" });
     } finally {
       setEmailingBackup(false);
+    }
+  };
+
+  useEffect(() => {
+    if (emailStatus) {
+      setConfigFromEmail(emailStatus.dbFromEmail || "");
+    }
+  }, [emailStatus]);
+
+  const handleSaveEmailConfig = async () => {
+    setSavingEmailConfig(true);
+    try {
+      const res = await apiRequest("POST", "/api/email/save-config", {
+        apiKey: configApiKey || undefined,
+        fromEmail: configFromEmail,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to save");
+      queryClient.invalidateQueries({ queryKey: ["/api/email-status"] });
+      setConfigApiKey("");
+      toast({ title: "Email settings saved", description: "Resend configuration has been updated." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSavingEmailConfig(false);
     }
   };
 
@@ -705,62 +734,117 @@ export default function SettingsPage() {
             <div className="space-y-2">
               <Skeleton className="h-5 w-48" />
               <Skeleton className="h-5 w-64" />
+              <Skeleton className="h-10 w-full max-w-md" />
             </div>
-          ) : emailStatus ? (
-            <div className="space-y-3">
-              {/* Connection status */}
-              <div className="flex items-center gap-2">
-                {emailStatus.connected ? (
-                  <>
-                    <Wifi className="w-4 h-4 text-green-600 dark:text-green-400" />
-                    <span className="text-sm text-green-600 dark:text-green-400 font-medium">Connected to Resend</span>
-                    <Badge variant="outline" className="text-xs border-green-300 text-green-700 dark:border-green-700 dark:text-green-400">Active</Badge>
-                  </>
-                ) : (
-                  <>
-                    <WifiOff className="w-4 h-4 text-destructive" />
-                    <span className="text-sm text-destructive font-medium">Not connected</span>
-                  </>
+          ) : (
+            <div className="space-y-5">
+
+              {/* ── Configuration ── */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Resend Configuration</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">API Key</Label>
+                    <div className="relative">
+                      <Input
+                        type={showApiKey ? "text" : "password"}
+                        placeholder={emailStatus?.hasDbApiKey ? "re_••••••••• (saved)" : "re_xxxxxxxxxxxx"}
+                        value={configApiKey}
+                        onChange={(e) => setConfigApiKey(e.target.value)}
+                        className="pr-9 font-mono text-xs"
+                        data-testid="input-resend-api-key"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey(v => !v)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Get your key from resend.com/api-keys</p>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">From Email Address</Label>
+                    <Input
+                      type="email"
+                      placeholder="invoices@yourdomain.com"
+                      value={configFromEmail}
+                      onChange={(e) => setConfigFromEmail(e.target.value)}
+                      data-testid="input-resend-from-email"
+                    />
+                    <p className="text-xs text-muted-foreground">Must be a verified domain in Resend</p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={handleSaveEmailConfig}
+                  disabled={savingEmailConfig}
+                  data-testid="button-save-email-config"
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  {savingEmailConfig ? "Saving..." : "Save Email Settings"}
+                </Button>
+              </div>
+
+              {/* ── Status ── */}
+              <div className="border-t pt-4 space-y-3">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Connection Status</h4>
+                <div className="flex items-center gap-2">
+                  {emailStatus?.connected ? (
+                    <>
+                      <Wifi className="w-4 h-4 text-green-600 dark:text-green-400" />
+                      <span className="text-sm text-green-600 dark:text-green-400 font-medium">Connected to Resend</span>
+                      <Badge variant="outline" className="text-xs border-green-300 text-green-700 dark:border-green-700 dark:text-green-400">
+                        {emailStatus.source === 'db' ? 'Using saved key' : 'Using integration'}
+                      </Badge>
+                    </>
+                  ) : (
+                    <>
+                      <WifiOff className="w-4 h-4 text-destructive" />
+                      <span className="text-sm text-destructive font-medium">Not connected</span>
+                    </>
+                  )}
+                </div>
+
+                {emailStatus?.connected && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Configured From</p>
+                      <p className="font-mono text-xs bg-muted px-2 py-1.5 rounded border" data-testid="text-email-configured-from">
+                        {emailStatus.configuredFrom || <span className="text-muted-foreground italic">not set</span>}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Actual Sender</p>
+                      <p className="font-mono text-xs bg-muted px-2 py-1.5 rounded border" data-testid="text-email-actual-from">
+                        {emailStatus.actualFrom}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {emailStatus?.usingFallback && (
+                  <div className="flex items-start gap-2 text-xs p-3 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span>
+                      The from address <strong>{emailStatus.configuredFrom}</strong> is a personal email domain.
+                      Emails are sent from <strong>onboarding@resend.dev</strong> instead.
+                      Set a verified business domain above to send from your own address.
+                    </span>
+                  </div>
+                )}
+
+                {emailStatus && !emailStatus.connected && emailStatus.error && (
+                  <div className="flex items-start gap-2 text-xs p-3 rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span>{emailStatus.error}</span>
+                  </div>
                 )}
               </div>
 
-              {emailStatus.connected && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Configured From</p>
-                    <p className="font-mono text-xs bg-muted px-2 py-1.5 rounded border" data-testid="text-email-configured-from">
-                      {emailStatus.configuredFrom || <span className="text-muted-foreground italic">not set</span>}
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Actual Sender</p>
-                    <p className="font-mono text-xs bg-muted px-2 py-1.5 rounded border" data-testid="text-email-actual-from">
-                      {emailStatus.actualFrom}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {emailStatus.usingFallback && (
-                <div className="flex items-start gap-2 text-xs p-3 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>
-                    The configured sender address (<strong>{emailStatus.configuredFrom}</strong>) is a personal email domain and cannot be used as a mail sender.
-                    Emails are being sent from <strong>onboarding@resend.dev</strong> instead.
-                    To use a custom sender, add and verify a business domain in your Resend account.
-                  </span>
-                </div>
-              )}
-
-              {!emailStatus.connected && emailStatus.error && (
-                <div className="flex items-start gap-2 text-xs p-3 rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{emailStatus.error}</span>
-                </div>
-              )}
-
-              {/* Test email */}
-              {emailStatus.connected && (
+              {/* ── Test email ── */}
+              {emailStatus?.connected && (
                 <div className="border-t pt-4 space-y-2">
                   <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Send Test Email</h4>
                   <div className="flex items-center gap-2 max-w-md">
@@ -783,13 +867,12 @@ export default function SettingsPage() {
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Sends a test email to confirm delivery is working. Will be sent from <strong>{emailStatus.actualFrom}</strong>.
+                    Confirm delivery is working — will be sent from <strong>{emailStatus.actualFrom}</strong>.
                   </p>
                 </div>
               )}
+
             </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Could not load email status.</p>
           )}
         </CardContent>
       </Card>
