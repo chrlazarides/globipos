@@ -11,7 +11,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard } from "lucide-react";
+import { StatusBadge } from "./dashboard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { useToast } from "@/hooks/use-toast";
@@ -522,8 +523,26 @@ export default function InvoiceForm() {
     onSuccess: (data) => {
       toast({ title: "Email Sent", description: data.message });
       queryClient.invalidateQueries({ queryKey: ["/api/email-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices", invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
     },
     onError: (e: Error) => toast({ title: "Email Failed", description: e.message, variant: "destructive" }),
+  });
+
+  const changeStatus = useMutation({
+    mutationFn: async (newStatus: string) => {
+      const res = await apiRequest("PATCH", `/api/invoices/${invoiceId}/status`, { status: newStatus });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+      return res.json();
+    },
+    onSuccess: (_, newStatus) => {
+      const labels: Record<string, string> = { sent: "Sent", paid: "Paid", cancelled: "Cancelled", draft: "Reopened", overdue: "Overdue" };
+      toast({ title: `Marked as ${labels[newStatus] || newStatus}` });
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices", invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const openDocument = (mode: "view" | "print") => {
@@ -634,6 +653,64 @@ export default function InvoiceForm() {
                   {sendEmail.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Send className="w-4 h-4 sm:mr-1" />}
                   <span className="hidden sm:inline">{sendEmail.isPending ? "Sending..." : "Send"}</span>
                 </Button>
+
+                {/* Status action buttons — only for invoice/credit_note */}
+                {(existingInvoice?.type === "invoice" || existingInvoice?.type === "credit_note") && (
+                  <>
+                    {(status === "draft") && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => changeStatus.mutate("sent")}
+                        disabled={changeStatus.isPending}
+                        data-testid="button-mark-sent"
+                        className="border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-900/30"
+                      >
+                        <CheckCircle className="w-4 h-4 sm:mr-1" />
+                        <span className="hidden sm:inline">Mark Sent</span>
+                      </Button>
+                    )}
+                    {(status === "draft" || status === "sent" || status === "overdue") && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => changeStatus.mutate("paid")}
+                        disabled={changeStatus.isPending}
+                        data-testid="button-mark-paid"
+                        className="border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+                      >
+                        <CreditCard className="w-4 h-4 sm:mr-1" />
+                        <span className="hidden sm:inline">Mark Paid</span>
+                      </Button>
+                    )}
+                    {(status === "draft" || status === "sent" || status === "overdue") && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => changeStatus.mutate("cancelled")}
+                        disabled={changeStatus.isPending}
+                        data-testid="button-mark-cancelled"
+                        className="border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800"
+                      >
+                        <XCircle className="w-4 h-4 sm:mr-1" />
+                        <span className="hidden sm:inline">Cancel</span>
+                      </Button>
+                    )}
+                    {(status === "paid" || status === "cancelled") && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => changeStatus.mutate("draft")}
+                        disabled={changeStatus.isPending}
+                        data-testid="button-reopen"
+                        className="border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                      >
+                        <RotateCcw className="w-4 h-4 sm:mr-1" />
+                        <span className="hidden sm:inline">Reopen</span>
+                      </Button>
+                    )}
+                  </>
+                )}
               </>
             )}
           </div>
@@ -663,18 +740,10 @@ export default function InvoiceForm() {
                 </div>
                 <div>
                   <Label>Status</Label>
-                  <Select value={status} onValueChange={setStatus} disabled={isViewMode}>
-                    <SelectTrigger data-testid="select-invoice-status">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="draft">Draft</SelectItem>
-                      <SelectItem value="sent">Sent</SelectItem>
-                      <SelectItem value="paid">Paid</SelectItem>
-                      <SelectItem value="overdue">Overdue</SelectItem>
-                      <SelectItem value="cancelled">Cancelled</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="flex items-center h-9 px-3 rounded-md border bg-muted/30" data-testid="display-invoice-status">
+                    <StatusBadge status={status} />
+                    {isNew && <span className="text-xs text-muted-foreground ml-2">New invoices start as Draft</span>}
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

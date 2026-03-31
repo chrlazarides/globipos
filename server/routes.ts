@@ -1375,10 +1375,44 @@ export async function registerRoutes(
       });
 
       if (result.success) {
+        // Auto-advance status to "sent" if currently draft
+        if (inv.status === "draft") {
+          await storage.updateInvoice(inv.id, { status: "sent" });
+        }
         res.json({ message: `Email sent successfully to ${toEmail}` });
       } else {
         res.status(500).json({ message: `Failed to send email: ${result.error}` });
       }
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Explicit status transition — only allowed moves enforced server-side
+  app.patch("/api/invoices/:id/status", async (req, res) => {
+    try {
+      const { status: newStatus } = req.body;
+      const allowed = ["draft", "sent", "paid", "overdue", "cancelled"];
+      if (!allowed.includes(newStatus)) {
+        return res.status(400).json({ message: "Invalid status value" });
+      }
+      const inv = await storage.getInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+
+      // Enforce valid transitions
+      const transitions: Record<string, string[]> = {
+        draft:     ["sent", "paid", "cancelled"],
+        sent:      ["paid", "cancelled", "overdue"],
+        overdue:   ["paid", "cancelled", "sent"],
+        paid:      ["draft"],          // reopen
+        cancelled: ["draft"],          // reopen
+      };
+      if (!(transitions[inv.status] || []).includes(newStatus)) {
+        return res.status(400).json({ message: `Cannot move from "${inv.status}" to "${newStatus}"` });
+      }
+
+      const updated = await storage.updateInvoice(inv.id, { status: newStatus });
+      res.json(updated);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
