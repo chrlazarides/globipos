@@ -647,18 +647,31 @@ export class DatabaseStorage implements IStorage {
 
     // Fetch all sales invoices (non-cancelled) with their items + item cost prices in date range
     const sixMonthsAgo = months[0].from;
+    const lastMonthEnd = months[months.length - 1].to;
     const allInvs = await db
       .select({
         id: invoices.id,
         date: invoices.date,
         subtotal: invoices.subtotal,
         discountAmount: invoices.discountAmount,
+        status: invoices.status,
+        total: invoices.total,
       })
       .from(invoices)
       .where(and(
         eq(invoices.type, "invoice"),
         gte(invoices.date, sixMonthsAgo),
         sql`${invoices.status} != 'cancelled'`,
+      ));
+
+    // Fetch purchase invoices in the same date range (confirmed only)
+    const allPurchInvs = await db
+      .select({ date: purchaseInvoices.date, total: purchaseInvoices.total })
+      .from(purchaseInvoices)
+      .where(and(
+        gte(purchaseInvoices.date, sixMonthsAgo),
+        lte(purchaseInvoices.date, lastMonthEnd),
+        eq(purchaseInvoices.status, "confirmed"),
       ));
 
     const allInvIds = allInvs.map(i => i.id);
@@ -705,7 +718,23 @@ export class DatabaseStorage implements IStorage {
       const revenue = monthInvs.reduce((s, i) => s + parseFloat(i.subtotal) - parseFloat(i.discountAmount || "0"), 0);
       const cost = monthInvs.reduce((s, i) => s + (invItemCosts[i.id] || 0), 0);
       const profit = revenue - cost;
-      return { month: m.label, endDate: m.to, revenue: Math.round(revenue * 100) / 100, profit: Math.round(profit * 100) / 100, invoices: monthInvs.length };
+      // Cash flow: cash in = paid/partial invoices (inc VAT); cash out = confirmed purchase invoices
+      const cashIn = monthInvs
+        .filter(i => i.status === "paid" || i.status === "partial")
+        .reduce((s, i) => s + parseFloat(i.total || "0"), 0);
+      const cashOut = allPurchInvs
+        .filter(i => i.date >= m.from && i.date <= m.to)
+        .reduce((s, i) => s + parseFloat(i.total || "0"), 0);
+      const netCash = cashIn - cashOut;
+      return {
+        month: m.label, endDate: m.to,
+        revenue: Math.round(revenue * 100) / 100,
+        profit: Math.round(profit * 100) / 100,
+        invoices: monthInvs.length,
+        cashIn: Math.round(cashIn * 100) / 100,
+        cashOut: Math.round(cashOut * 100) / 100,
+        netCash: Math.round(netCash * 100) / 100,
+      };
     });
 
     // Top 5 customers by net revenue ex-VAT (all time, non-cancelled)

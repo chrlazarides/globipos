@@ -26,6 +26,7 @@ const CUSTOMER_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#f43f5e", "#8b5cf6"];
 
 const REVENUE_COLOR = "#6366f1";
 const PROFIT_COLOR  = "#10b981";
+const CASH_COLOR    = "#0ea5e9";
 
 const EOMDot = (props: any) => {
   const { cx, cy, value } = props;
@@ -46,17 +47,19 @@ const MonthlyTooltip = ({ active, payload, label }: any) => {
   const rev = payload.find((p: any) => p.dataKey === "revenue")?.value ?? 0;
   const profit = payload.find((p: any) => p.dataKey === "profit")?.value ?? 0;
   const inv = payload.find((p: any) => p.dataKey === "invoices")?.value ?? 0;
+  const netCash = payload.find((p: any) => p.dataKey === "netCash")?.value ?? 0;
   const margin = rev > 0 ? ((profit / rev) * 100).toFixed(1) : "—";
   const avgInv = rev > 0 && inv > 0 ? (rev / inv).toFixed(0) : "—";
   const fmt = (v: number) => `€${v.toLocaleString("el-CY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   return (
-    <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3 shadow-lg text-xs space-y-1.5 min-w-[175px]">
+    <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3 shadow-lg text-xs space-y-1.5 min-w-[190px]">
       <p className="font-semibold text-sm border-b border-slate-100 dark:border-slate-700 pb-1.5 mb-1.5 flex items-center gap-1.5">
         <span className="inline-block w-2 h-2 rounded-full bg-slate-400" />
         {label} · End of Month
       </p>
       <div className="flex justify-between gap-4"><span className="flex items-center gap-1.5 text-muted-foreground"><span className="w-2 h-2 rounded-full inline-block" style={{ background: REVENUE_COLOR }} />Revenue</span><span className="font-mono font-semibold">{fmt(rev)}</span></div>
       <div className="flex justify-between gap-4"><span className="flex items-center gap-1.5 text-muted-foreground"><span className="w-2 h-2 rounded-full inline-block" style={{ background: PROFIT_COLOR }} />Profit</span><span className={`font-mono font-semibold ${profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-500"}`}>{fmt(profit)}</span></div>
+      <div className="flex justify-between gap-4"><span className="flex items-center gap-1.5 text-muted-foreground"><span className="w-2 h-2 rounded-full inline-block" style={{ background: CASH_COLOR }} />Net Cash</span><span className={`font-mono font-semibold ${netCash >= 0 ? "text-sky-600 dark:text-sky-400" : "text-red-500"}`}>{fmt(netCash)}</span></div>
       <div className="flex justify-between gap-4"><span className="flex items-center gap-1.5 text-muted-foreground"><span className="w-2 h-2 rounded-full inline-block bg-amber-400" />Invoices</span><span className="font-mono font-semibold">{inv}</span></div>
       <div className="border-t border-slate-100 dark:border-slate-700 pt-1.5 mt-1 space-y-1">
         <div className="flex justify-between gap-4"><span className="text-muted-foreground">Margin</span><span className={`font-semibold ${parseFloat(margin) >= 15 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>{margin !== "—" ? `${margin}%` : "—"}</span></div>
@@ -81,7 +84,7 @@ export default function Dashboard() {
   }>({ queryKey: ["/api/dashboard/stats"] });
 
   const { data: charts, isLoading: chartsLoading } = useQuery<{
-    monthlySales: { month: string; endDate: string; revenue: number; profit: number; invoices: number }[];
+    monthlySales: { month: string; endDate: string; revenue: number; profit: number; invoices: number; cashIn: number; cashOut: number; netCash: number }[];
     topCustomers: { name: string; revenue: number }[];
     invoiceStatus: { status: string; count: number; amount: number }[];
     paretoCustomers: { name: string; revenue: number; cumPct: number }[];
@@ -175,6 +178,7 @@ export default function Dashboard() {
                 <div className="hidden sm:flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: REVENUE_COLOR, opacity: 0.4 }} />Revenue</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-0.5 inline-block rounded-full" style={{ background: PROFIT_COLOR }} />Gross Profit</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-0.5 inline-block rounded-full" style={{ background: CASH_COLOR }} />Net Cash</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block bg-amber-400" />Invoice Count</span>
                 </div>
               </div>
@@ -277,6 +281,19 @@ export default function Dashboard() {
                       strokeWidth={2}
                       dot={{ r: 3.5, fill: PROFIT_COLOR, stroke: "white", strokeWidth: 1.5 }}
                       activeDot={{ r: 6, fill: PROFIT_COLOR, stroke: "white", strokeWidth: 2 }}
+                    />
+
+                    {/* Net Cash Flow — sky blue line */}
+                    <Line
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="netCash"
+                      name="Net Cash"
+                      stroke={CASH_COLOR}
+                      strokeWidth={2}
+                      strokeDasharray="6 2"
+                      dot={{ r: 3.5, fill: CASH_COLOR, stroke: "white", strokeWidth: 1.5 }}
+                      activeDot={{ r: 6, fill: CASH_COLOR, stroke: "white", strokeWidth: 2 }}
                     />
 
                     {/* Invoice count — secondary line */}
