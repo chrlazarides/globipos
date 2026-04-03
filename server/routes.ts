@@ -2845,6 +2845,307 @@ export async function registerRoutes(
     }
   });
 
+  // ── Transaction Trace (Simulation) ──────────────────────────────────────────
+  app.get("/api/accounting/trace", async (req, res) => {
+    const { type, id } = req.query as { type: string; id: string };
+    if (!type || !id) return res.status(400).json({ message: "type and id are required" });
+
+    try {
+      // 1. Find journal entry for this source
+      const [je] = await db.select().from(journalEntries)
+        .where(and(eq(journalEntries.sourceType, type), eq(journalEntries.sourceId, id)));
+
+      let journalEntry: any = null;
+      if (je) {
+        const lines = await db.select({
+          id: journalEntryLines.id,
+          journalEntryId: journalEntryLines.journalEntryId,
+          accountId: journalEntryLines.accountId,
+          accountCode: accounts.code,
+          accountName: accounts.name,
+          accountType: accounts.type,
+          accountSubtype: accounts.subtype,
+          debit: journalEntryLines.debit,
+          credit: journalEntryLines.credit,
+          description: journalEntryLines.description,
+        }).from(journalEntryLines)
+          .leftJoin(accounts, eq(journalEntryLines.accountId, accounts.id))
+          .where(eq(journalEntryLines.journalEntryId, je.id));
+
+        const totalDebit = lines.reduce((s, l) => s + parseFloat(String(l.debit || "0")), 0);
+        const totalCredit = lines.reduce((s, l) => s + parseFloat(String(l.credit || "0")), 0);
+        journalEntry = {
+          ...je,
+          lines,
+          totalDebit: totalDebit.toFixed(2),
+          totalCredit: totalCredit.toFixed(2),
+          balanced: Math.abs(totalDebit - totalCredit) < 0.01,
+        };
+      }
+
+      // 2. Load source transaction
+      let source: any = null;
+      let sourceLabel = type;
+
+      if (type === "invoice" || type === "credit_note" || type === "proforma" || type === "quotation") {
+        const rows = await db.execute(sql`
+          SELECT i.*, c.name as customer_name, c.code as customer_code, c.tax_id as customer_tax_id,
+                 c.payment_terms, c.current_balance
+          FROM invoices i
+          LEFT JOIN customers c ON i.customer_id = c.id
+          WHERE i.id = ${id}
+        `);
+        const inv = (rows.rows as any[])[0];
+        if (inv) {
+          const itemRows = await db.execute(sql`
+            SELECT ii.*, it.sku, it.name as item_name
+            FROM invoice_items ii
+            LEFT JOIN items it ON ii.item_id = it.id
+            WHERE ii.invoice_id = ${id}
+            ORDER BY ii.id
+          `);
+          source = { ...inv, lines: itemRows.rows };
+          sourceLabel = inv.type || type;
+        }
+      } else if (type === "payment") {
+        const rows = await db.execute(sql`
+          SELECT p.*, c.name as customer_name, c.code as customer_code,
+                 i.invoice_number, i.total as invoice_total, i.status as invoice_status
+          FROM payments p
+          LEFT JOIN customers c ON p.customer_id = c.id
+          LEFT JOIN invoices i ON p.invoice_id = i.id
+          WHERE p.id = ${id}
+        `);
+        source = (rows.rows as any[])[0] ?? null;
+      } else if (type === "purchase") {
+        const rows = await db.execute(sql`
+          SELECT pi.*, s.name as supplier_name, s.code as supplier_code
+          FROM purchase_invoices pi
+          LEFT JOIN suppliers s ON pi.supplier_id = s.id
+          WHERE pi.id = ${id}
+        `);
+        const pur = (rows.rows as any[])[0];
+        if (pur) {
+          const itemRows = await db.execute(sql`
+            SELECT pii.*, it.sku, it.name as item_name
+            FROM purchase_invoice_items pii
+            LEFT JOIN items it ON pii.item_id = it.id
+            WHERE pii.purchase_invoice_id = ${id}
+            ORDER BY pii.id
+          `);
+          source = { ...pur, lines: itemRows.rows };
+        }
+      } else if (type === "supplier_payment") {
+        const rows = await db.execute(sql`
+          SELECT sp.*, s.name as supplier_name, s.code as supplier_code,
+                 pi.invoice_number as purchase_invoice_number, pi.total as purchase_invoice_total
+          FROM supplier_payments sp
+          LEFT JOIN suppliers s ON sp.supplier_id = s.id
+          LEFT JOIN purchase_invoices pi ON sp.purchase_invoice_id = pi.id
+          WHERE sp.id = ${id}
+        `);
+        source = (rows.rows as any[])[0] ?? null;
+      } else if (type === "expense") {
+        const rows = await db.execute(sql`
+          SELECT e.*, 
+                 ea.code as expense_acct_code, ea.name as expense_acct_name,
+                 pa.code as payment_acct_code, pa.name as payment_acct_name
+          FROM expenses e
+          LEFT JOIN accounts ea ON e.expense_account_id = ea.id
+          LEFT JOIN accounts pa ON e.payment_account_id = pa.id
+          WHERE e.id = ${id}
+        `);
+        source = (rows.rows as any[])[0] ?? null;
+      }
+
+      // 3. Integrity checks
+      const checks: Array<{ name: string; pass: boolean; severity: string; detail: string; expected?: string; actual?: string }> = [];
+
+      // Check: journal entry exists
+      checks.push({
+        name: "Journal entry generated",
+        pass: !!journalEntry,
+        severity: "error",
+        detail: journalEntry
+          ? `Entry ${journalEntry.entryNumber} found (${journalEntry.status})`
+          : "No journal entry linked to this transaction. If status is draft/cancelled, this is expected.",
+      });
+
+      if (journalEntry) {
+        // Check: balanced
+        checks.push({
+          name: "Entry is balanced (DR = CR)",
+          pass: journalEntry.balanced,
+          severity: "error",
+          detail: journalEntry.balanced
+            ? `DR €${journalEntry.totalDebit} = CR €${journalEntry.totalCredit} ✓`
+            : `Imbalance detected`,
+          expected: journalEntry.balanced ? undefined : journalEntry.totalDebit,
+          actual: journalEntry.balanced ? undefined : journalEntry.totalCredit,
+        });
+
+        // Check: entry is posted
+        checks.push({
+          name: "Entry status is posted",
+          pass: journalEntry.status === "posted",
+          severity: "warning",
+          detail: journalEntry.status === "posted" ? "Status: posted ✓" : `Status: ${journalEntry.status}`,
+        });
+
+        // Source-specific checks
+        if (source && (type === "invoice" || type === "credit_note")) {
+          const total = parseFloat(source.total || "0");
+          const jeTotal = parseFloat(journalEntry.totalDebit);
+          const diff = Math.abs(total - jeTotal);
+          checks.push({
+            name: "Journal total matches transaction total",
+            pass: diff < 0.02,
+            severity: "error",
+            detail: diff < 0.02
+              ? `Both = €${total.toFixed(2)} ✓`
+              : `Mismatch detected`,
+            expected: total.toFixed(2),
+            actual: jeTotal.toFixed(2),
+          });
+
+          // VAT check
+          const vatRate = parseFloat(source.tax_rate || "0");
+          const subtotal = parseFloat(source.subtotal || "0");
+          const expectedVat = parseFloat((subtotal * vatRate / 100).toFixed(2));
+          const actualVat = parseFloat(source.tax_amount || "0");
+          checks.push({
+            name: "VAT calculation correct",
+            pass: Math.abs(expectedVat - actualVat) < 0.02,
+            severity: "warning",
+            detail: Math.abs(expectedVat - actualVat) < 0.02
+              ? `€${subtotal.toFixed(2)} × ${vatRate}% = €${actualVat.toFixed(2)} ✓`
+              : `VAT mismatch`,
+            expected: expectedVat.toFixed(2),
+            actual: actualVat.toFixed(2),
+          });
+
+          // Check AR line exists
+          const arLine = journalEntry.lines.find((l: any) => l.accountCode === "1100" || (l.accountName || "").toLowerCase().includes("receivable"));
+          checks.push({
+            name: "Accounts Receivable line exists",
+            pass: !!arLine,
+            severity: "error",
+            detail: arLine
+              ? `${arLine.accountCode} – ${arLine.accountName}: DR €${arLine.debit} ✓`
+              : "No AR (1100) line found in journal entry.",
+          });
+
+          // Check revenue line exists
+          const revLine = journalEntry.lines.find((l: any) => l.accountType === "revenue" || (l.accountName || "").toLowerCase().includes("revenue") || l.accountCode === "4000");
+          checks.push({
+            name: "Revenue account line exists",
+            pass: !!revLine,
+            severity: "error",
+            detail: revLine
+              ? `${revLine.accountCode} – ${revLine.accountName}: CR €${revLine.credit} ✓`
+              : "No revenue account line found.",
+          });
+        }
+
+        if (source && type === "payment") {
+          const total = parseFloat(source.amount || "0");
+          const jeTotal = parseFloat(journalEntry.totalDebit);
+          checks.push({
+            name: "Journal total matches payment amount",
+            pass: Math.abs(total - jeTotal) < 0.02,
+            severity: "error",
+            detail: Math.abs(total - jeTotal) < 0.02
+              ? `Both = €${total.toFixed(2)} ✓`
+              : `Mismatch`,
+            expected: total.toFixed(2),
+            actual: jeTotal.toFixed(2),
+          });
+          const bankLine = journalEntry.lines.find((l: any) => l.accountType === "asset" && parseFloat(l.debit) > 0 && l.accountCode !== "1100");
+          checks.push({
+            name: "Bank/Cash account debited",
+            pass: !!bankLine,
+            severity: "error",
+            detail: bankLine ? `${bankLine.accountCode} – ${bankLine.accountName}: DR €${bankLine.debit} ✓` : "No cash/bank debit line found.",
+          });
+        }
+
+        if (source && type === "purchase") {
+          const total = parseFloat(source.total || "0");
+          const jeTotal = parseFloat(journalEntry.totalCredit);
+          checks.push({
+            name: "Journal total matches purchase total",
+            pass: Math.abs(total - jeTotal) < 0.02,
+            severity: "error",
+            detail: Math.abs(total - jeTotal) < 0.02
+              ? `Both = €${total.toFixed(2)} ✓`
+              : `Mismatch`,
+            expected: total.toFixed(2),
+            actual: jeTotal.toFixed(2),
+          });
+          const apLine = journalEntry.lines.find((l: any) => l.accountCode === "2000" || (l.accountName || "").toLowerCase().includes("payable"));
+          checks.push({
+            name: "Accounts Payable line exists",
+            pass: !!apLine,
+            severity: "error",
+            detail: apLine ? `${apLine.accountCode} – ${apLine.accountName}: CR €${apLine.credit} ✓` : "No AP line found.",
+          });
+        }
+
+        if (source && type === "expense") {
+          const total = parseFloat(source.amount || "0");
+          const jeTotal = parseFloat(journalEntry.totalDebit);
+          checks.push({
+            name: "Journal total matches expense amount",
+            pass: Math.abs(total - jeTotal) < 0.02,
+            severity: "error",
+            detail: Math.abs(total - jeTotal) < 0.02
+              ? `Both = €${total.toFixed(2)} ✓`
+              : `Mismatch`,
+            expected: total.toFixed(2),
+            actual: jeTotal.toFixed(2),
+          });
+        }
+
+        // Check all lines have valid accounts
+        const missingAccounts = journalEntry.lines.filter((l: any) => !l.accountCode);
+        checks.push({
+          name: "All lines linked to valid accounts",
+          pass: missingAccounts.length === 0,
+          severity: "error",
+          detail: missingAccounts.length === 0
+            ? `All ${journalEntry.lines.length} lines have valid accounts ✓`
+            : `${missingAccounts.length} line(s) reference missing/deleted accounts`,
+        });
+
+        // Check all lines have correct normal balance direction
+        const wrongDirection = journalEntry.lines.filter((l: any) => {
+          const dr = parseFloat(l.debit || "0");
+          const cr = parseFloat(l.credit || "0");
+          if (dr > 0 && cr > 0) return true; // Line has both DR and CR
+          return false;
+        });
+        checks.push({
+          name: "No lines have both debit and credit",
+          pass: wrongDirection.length === 0,
+          severity: "error",
+          detail: wrongDirection.length === 0
+            ? "All lines are properly single-sided ✓"
+            : `${wrongDirection.length} line(s) have both DR and CR values`,
+        });
+      }
+
+      res.json({
+        sourceType: type,
+        sourceLabel,
+        source: source || null,
+        journalEntry,
+        integrityChecks: checks,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.get("/api/journal-entries/:id", async (req, res) => {
     const entry = await storage.getJournalEntry(req.params.id);
     if (!entry) return res.status(404).json({ message: "Journal entry not found" });
