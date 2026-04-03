@@ -10,15 +10,21 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Users, Upload, Printer } from "lucide-react";
+import { Plus, Search, Users, Upload, Printer, TrendingUp, FileText, AlertTriangle, Euro, BarChart3 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertCustomerSchema, type Customer } from "@shared/schema";
 import { ImportDialog } from "@/components/import-dialog";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { z } from "zod";
+import {
+  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+  ResponsiveContainer, Tooltip as RechartTooltip,
+} from "recharts";
 
 const customerImportFields = [
   { key: "name", label: "Business Name", required: true },
@@ -45,8 +51,8 @@ const customerFormSchema = insertCustomerSchema.extend({
 export default function Customers() {
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileCustomer, setProfileCustomer] = useState<Customer | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const { toast } = useToast();
 
@@ -69,22 +75,22 @@ export default function Customers() {
 
   const updateCustomer = useMutation({
     mutationFn: async (data: z.infer<typeof customerFormSchema>) => {
-      if (!editingCustomer) return;
-      const res = await apiRequest("PATCH", `/api/customers/${editingCustomer.id}`, data);
+      if (!profileCustomer) return;
+      const res = await apiRequest("PATCH", `/api/customers/${profileCustomer.id}`, data);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
-      setEditDialogOpen(false);
-      setEditingCustomer(null);
+      setProfileOpen(false);
+      setProfileCustomer(null);
       toast({ title: "Customer updated successfully" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const handleRowClick = (customer: Customer) => {
-    setEditingCustomer(customer);
-    setEditDialogOpen(true);
+    setProfileCustomer(customer);
+    setProfileOpen(true);
   };
 
   const filtered = customers.filter((c) =>
@@ -245,38 +251,190 @@ export default function Customers() {
         onSuccess={handleImportSuccess}
       />
 
-      <Dialog open={editDialogOpen} onOpenChange={(open) => { setEditDialogOpen(open); if (!open) setEditingCustomer(null); }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Edit Customer</DialogTitle>
-          </DialogHeader>
-          {editingCustomer && (
+      {profileCustomer && (
+        <CustomerProfileDialog
+          customer={profileCustomer}
+          open={profileOpen}
+          onOpenChange={(open) => { setProfileOpen(open); if (!open) setProfileCustomer(null); }}
+          onSave={(d) => updateCustomer.mutate(d)}
+          isPending={updateCustomer.isPending}
+          priceLevelNames={priceLevelNames}
+        />
+      )}
+    </div>
+  );
+}
+
+interface CustomerAnalytics {
+  revenue: number;
+  profit: number;
+  invoiceCount: number;
+  overdueCount: number;
+  avgInvoiceValue: number;
+  marginPct: number;
+  creditUtilization: number;
+  scores: { revenue: number; margin: number; activity: number; payment: number; creditHealth: number };
+}
+
+const RADAR_COLOR = "#6366f1";
+
+function CustomerProfileDialog({
+  customer, open, onOpenChange, onSave, isPending, priceLevelNames,
+}: {
+  customer: Customer;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSave: (d: any) => void;
+  isPending: boolean;
+  priceLevelNames: string[];
+}) {
+  const { data: analytics, isLoading: analyticsLoading } = useQuery<CustomerAnalytics>({
+    queryKey: ["/api/customers", customer.id, "analytics"],
+    queryFn: () => fetch(`/api/customers/${customer.id}/analytics`).then(r => r.json()),
+    enabled: open,
+  });
+
+  const paymentTermsLabel: Record<string, string> = {
+    cash: "Cash", credit_7: "7 Days", credit_14: "14 Days", credit_30: "30 Days", credit_60: "60 Days", credit_90: "90 Days",
+  };
+
+  const radarData = analytics ? [
+    { axis: "Revenue", value: analytics.scores.revenue },
+    { axis: "Margin", value: analytics.scores.margin },
+    { axis: "Activity", value: analytics.scores.activity },
+    { axis: "Payment", value: analytics.scores.payment },
+    { axis: "Credit Health", value: analytics.scores.creditHealth },
+  ] : [];
+
+  const fmt = (n: number) => `€${n.toLocaleString("el-CY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-primary" />
+            {customer.name}
+            <Badge variant="outline" className="ml-1 text-xs font-mono">{customer.code}</Badge>
+            <Badge variant={customer.active ? "default" : "secondary"} className="text-xs">{customer.active ? "Active" : "Inactive"}</Badge>
+          </DialogTitle>
+        </DialogHeader>
+
+        <Tabs defaultValue="performance">
+          <TabsList className="mb-4">
+            <TabsTrigger value="performance" data-testid="tab-customer-performance">
+              <BarChart3 className="w-3.5 h-3.5 mr-1.5" />Performance
+            </TabsTrigger>
+            <TabsTrigger value="details" data-testid="tab-customer-details">
+              <FileText className="w-3.5 h-3.5 mr-1.5" />Details
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="performance" className="space-y-4">
+            {analyticsLoading ? (
+              <Skeleton className="h-64 w-full" />
+            ) : analytics ? (
+              <>
+                {/* KPI strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { label: "Total Revenue", value: fmt(analytics.revenue), icon: Euro, color: "text-indigo-500" },
+                    { label: "Gross Profit", value: fmt(analytics.profit), icon: TrendingUp, color: analytics.profit >= 0 ? "text-emerald-600" : "text-red-500" },
+                    { label: "Invoices", value: String(analytics.invoiceCount), icon: FileText, color: "text-blue-500" },
+                    { label: "Overdue", value: String(analytics.overdueCount), icon: AlertTriangle, color: analytics.overdueCount > 0 ? "text-red-500" : "text-muted-foreground" },
+                  ].map(({ label, value, icon: Icon, color }) => (
+                    <div key={label} className="rounded-lg border bg-card p-3">
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+                        <Icon className={`w-3.5 h-3.5 ${color}`} />{label}
+                      </div>
+                      <p className={`text-base font-bold ${color}`}>{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Radar + side stats */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+                  <div className="h-56">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RadarChart data={radarData} margin={{ top: 10, right: 20, bottom: 10, left: 20 }}>
+                        <PolarGrid stroke="#e2e8f0" />
+                        <PolarAngleAxis
+                          dataKey="axis"
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                        />
+                        <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+                        <RechartTooltip
+                          formatter={(v: any) => [`${v}/100`, ""]}
+                          contentStyle={{ fontSize: 12, borderRadius: 6, border: "1px solid #e2e8f0" }}
+                        />
+                        <Radar
+                          dataKey="value"
+                          stroke={RADAR_COLOR}
+                          fill={RADAR_COLOR}
+                          fillOpacity={0.18}
+                          strokeWidth={2}
+                          dot={{ r: 4, fill: RADAR_COLOR, strokeWidth: 0 }}
+                        />
+                      </RadarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="space-y-2.5 text-sm">
+                    {[
+                      { label: "Margin", score: analytics.scores.margin, display: `${analytics.marginPct}%` },
+                      { label: "Avg Invoice", score: analytics.scores.activity, display: fmt(analytics.avgInvoiceValue) },
+                      { label: "Payment Terms", score: analytics.scores.payment, display: paymentTermsLabel[customer.paymentTerms] || customer.paymentTerms },
+                      { label: "Credit Used", score: analytics.scores.creditHealth, display: `${analytics.creditUtilization}%` },
+                    ].map(({ label, score, display }) => (
+                      <div key={label} className="flex items-center gap-2">
+                        <span className="w-24 text-xs text-muted-foreground shrink-0">{label}</span>
+                        <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{ width: `${score}%`, background: score >= 70 ? "#10b981" : score >= 40 ? "#f59e0b" : "#ef4444" }}
+                          />
+                        </div>
+                        <span className="text-xs font-mono w-16 text-right text-muted-foreground">{display}</span>
+                      </div>
+                    ))}
+                    <div className="pt-1 border-t text-xs text-muted-foreground">
+                      Scores are normalized (0–100). Revenue vs €25k, margin vs 40%, activity vs 50 invoices.
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-8">No data available.</p>
+            )}
+          </TabsContent>
+
+          <TabsContent value="details">
             <CustomerForm
-              onSubmit={(d) => updateCustomer.mutate(d)}
-              isPending={updateCustomer.isPending}
+              onSubmit={onSave}
+              isPending={isPending}
               priceLevelNames={priceLevelNames}
               defaultValues={{
-                name: editingCustomer.name,
-                code: editingCustomer.code,
-                contactFirstName: editingCustomer.contactFirstName || "",
-                contactLastName: editingCustomer.contactLastName || "",
-                email: editingCustomer.email || "",
-                phone: editingCustomer.phone || "",
-                address: editingCustomer.address || "",
-                city: editingCustomer.city || "",
-                taxId: editingCustomer.taxId || "",
-                paymentTerms: editingCustomer.paymentTerms,
-                creditLimit: editingCustomer.creditLimit || "0",
-                currentBalance: editingCustomer.currentBalance || "0",
-                priceLevel: editingCustomer.priceLevel,
-                notes: editingCustomer.notes || "",
-                active: editingCustomer.active,
+                name: customer.name,
+                code: customer.code,
+                contactFirstName: customer.contactFirstName || "",
+                contactLastName: customer.contactLastName || "",
+                email: customer.email || "",
+                phone: customer.phone || "",
+                address: customer.address || "",
+                city: customer.city || "",
+                taxId: customer.taxId || "",
+                paymentTerms: customer.paymentTerms,
+                creditLimit: customer.creditLimit || "0",
+                currentBalance: customer.currentBalance || "0",
+                priceLevel: customer.priceLevel,
+                notes: customer.notes || "",
+                active: customer.active,
               }}
             />
-          )}
-        </DialogContent>
-      </Dialog>
-    </div>
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
   );
 }
 

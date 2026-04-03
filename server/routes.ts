@@ -1008,6 +1008,74 @@ export async function registerRoutes(
     res.json(cust);
   });
 
+  app.get("/api/customers/:id/analytics", async (req, res) => {
+    try {
+      const customerId = req.params.id;
+      const cust = await storage.getCustomer(customerId);
+      if (!cust) return res.status(404).json({ message: "Customer not found" });
+
+      const custInvoices = await db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.customerId, customerId), eq(invoices.type, "invoice"), sql`${invoices.status} != 'cancelled'`));
+
+      let totalRevenue = 0;
+      let totalCost = 0;
+      let overdueCount = 0;
+      for (const inv of custInvoices) {
+        const rev = parseFloat(inv.subtotal) - parseFloat(inv.discountAmount || "0");
+        totalRevenue += rev;
+        if (inv.status === "overdue") overdueCount++;
+        const lineItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
+        for (const li of lineItems) {
+          if (li.itemId) {
+            const itm = await db.select({ costPrice: items.costPrice, packSize: items.packSize }).from(items).where(eq(items.id, li.itemId)).limit(1);
+            if (itm.length > 0) {
+              const units = li.saleUnit === "pack" ? li.quantity * (itm[0].packSize || 1) : li.quantity;
+              totalCost += parseFloat(itm[0].costPrice) * units;
+            }
+          }
+        }
+      }
+
+      const invoiceCount = custInvoices.length;
+      const totalProfit = totalRevenue - totalCost;
+      const marginPct = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+      const avgInvoiceValue = invoiceCount > 0 ? totalRevenue / invoiceCount : 0;
+      const creditLimit = parseFloat(cust.creditLimit || "0");
+      const currentBalance = parseFloat(cust.currentBalance || "0");
+      const creditUtilization = creditLimit > 0 ? Math.min(currentBalance / creditLimit, 1) : 0;
+
+      const termsScore: Record<string, number> = { cash: 100, credit_7: 85, credit_14: 75, credit_30: 60, credit_60: 45, credit_90: 30 };
+      const basePayment = termsScore[cust.paymentTerms] ?? 50;
+      const paymentScore = Math.max(0, Math.min(100, basePayment - overdueCount * 15));
+
+      const revenueScore = Math.min(100, Math.round(Math.log1p(totalRevenue) / Math.log1p(25000) * 100));
+      const marginScore = Math.min(100, Math.max(0, Math.round(marginPct / 40 * 100)));
+      const activityScore = Math.min(100, Math.round(invoiceCount / 50 * 100));
+      const creditHealthScore = Math.round((1 - creditUtilization) * 100);
+
+      res.json({
+        revenue: Math.round(totalRevenue * 100) / 100,
+        profit: Math.round(totalProfit * 100) / 100,
+        invoiceCount,
+        overdueCount,
+        avgInvoiceValue: Math.round(avgInvoiceValue * 100) / 100,
+        marginPct: Math.round(marginPct * 10) / 10,
+        creditUtilization: Math.round(creditUtilization * 1000) / 10,
+        scores: {
+          revenue: revenueScore,
+          margin: marginScore,
+          activity: activityScore,
+          payment: paymentScore,
+          creditHealth: creditHealthScore,
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/customers", async (req, res) => {
     try {
       const data = insertCustomerSchema.parse(req.body);
