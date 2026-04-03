@@ -2973,10 +2973,9 @@ export async function registerRoutes(
 
   app.get("/api/accounting/snapshots/logs", async (_req, res) => {
     try {
-      const { activityLogs: alTable } = await import("@shared/schema");
-      const logs = await db.select().from(alTable)
-        .where(eq(alTable.entity, "accounting_snapshot"))
-        .orderBy(desc(alTable.createdAt))
+      const logs = await db.select().from(activityLogs)
+        .where(eq(activityLogs.entity, "accounting_snapshot"))
+        .orderBy(desc(activityLogs.createdAt))
         .limit(200);
       res.json(logs);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
