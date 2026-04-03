@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard, FileText } from "lucide-react";
 import { StatusBadge } from "./dashboard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
@@ -160,7 +160,11 @@ export default function InvoiceForm() {
     if (sourceInvoice && isNew) {
       setCustomerId(sourceInvoice.customerId);
       setTaxRate(sourceInvoice.taxRate);
-      setNotes(sourceInvoice.notes ? `From ${sourceInvoice.type === "proforma" ? "Proforma" : "Quotation"} ${sourceInvoice.invoiceNumber}\n${sourceInvoice.notes}` : `From ${sourceInvoice.type === "proforma" ? "Proforma" : "Quotation"} ${sourceInvoice.invoiceNumber}`);
+      if (docType === "credit_note") {
+        setNotes(`Credit note against ${sourceInvoice.invoiceNumber}${sourceInvoice.notes ? `\n${sourceInvoice.notes}` : ""}`);
+      } else {
+        setNotes(sourceInvoice.notes ? `From ${sourceInvoice.type === "proforma" ? "Proforma" : "Quotation"} ${sourceInvoice.invoiceNumber}\n${sourceInvoice.notes}` : `From ${sourceInvoice.type === "proforma" ? "Proforma" : "Quotation"} ${sourceInvoice.invoiceNumber}`);
+      }
       if (sourceInvoice.items?.length) {
         setLines(sourceInvoice.items.map((li) => ({
           itemId: li.itemId || "",
@@ -174,7 +178,7 @@ export default function InvoiceForm() {
         })));
       }
     }
-  }, [sourceInvoice, isNew]);
+  }, [sourceInvoice, isNew, docType]);
 
   const getActiveContracts = useCallback((custId: string) => {
     const today = new Date().toISOString().split("T")[0];
@@ -467,6 +471,7 @@ export default function InvoiceForm() {
         total: total.toFixed(2),
         status,
         notes: notes || null,
+        linkedInvoiceId: fromId || null,
         items: lines.filter((l) => l.description).map((l) => ({
           itemId: l.itemId || null,
           description: l.description,
@@ -683,18 +688,28 @@ export default function InvoiceForm() {
                         <span className="hidden sm:inline">Mark Paid</span>
                       </Button>
                     )}
-                    {(status === "draft" || status === "sent" || status === "overdue") && (
+                    {status === "draft" && (
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => changeStatus.mutate("cancelled")}
                         disabled={changeStatus.isPending}
                         data-testid="button-mark-cancelled"
-                        className="border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800"
+                        className="border-orange-300 text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-300 dark:hover:bg-orange-900/30"
                       >
                         <XCircle className="w-4 h-4 sm:mr-1" />
                         <span className="hidden sm:inline">Cancel</span>
                       </Button>
+                    )}
+                    {(status === "sent" || status === "paid" || status === "overdue") && invoiceId && (
+                      <a
+                        href={`/invoices/new?type=credit_note&from=${invoiceId}`}
+                        data-testid="button-issue-credit-note"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md border border-violet-300 text-violet-700 bg-transparent hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-900/30 transition-colors"
+                      >
+                        <FileText className="w-4 h-4 sm:mr-1" />
+                        <span className="hidden sm:inline">Credit Note</span>
+                      </a>
                     )}
                     {(status === "paid" || status === "cancelled") && (
                       <Button

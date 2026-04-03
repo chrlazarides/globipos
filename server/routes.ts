@@ -1409,12 +1409,13 @@ export async function registerRoutes(
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
 
       // Enforce valid transitions
+      // Cancel is only available from draft; posted invoices use Credit Notes instead
       const transitions: Record<string, string[]> = {
         draft:     ["sent", "paid", "cancelled"],
-        sent:      ["paid", "cancelled", "overdue"],
-        overdue:   ["paid", "cancelled", "sent"],
-        paid:      ["draft"],          // reopen
-        cancelled: ["draft"],          // reopen
+        sent:      ["paid", "overdue"],
+        overdue:   ["paid", "sent"],
+        paid:      ["draft"],
+        cancelled: ["draft"],
       };
       if (!(transitions[inv.status] || []).includes(newStatus)) {
         return res.status(400).json({ message: `Cannot move from "${inv.status}" to "${newStatus}"` });
