@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -2843,6 +2843,125 @@ export async function registerRoutes(
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
+  });
+
+  // ── Accounting Snapshots (Version Control) ──────────────────────────────────
+  app.get("/api/accounting/snapshots", async (_req, res) => {
+    try {
+      const snaps = await db.select().from(accountingSnapshots).orderBy(desc(accountingSnapshots.createdAt));
+      res.json(snaps);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/accounting/snapshots", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const { name, description, notes } = req.body;
+      if (!name?.trim()) return res.status(400).json({ message: "Snapshot name is required" });
+
+      const allAccounts = await db.select().from(accounts);
+      const allJEs = await db.select().from(journalEntries).orderBy(desc(journalEntries.entryNumber));
+
+      const totalDebitVolume = allJEs.reduce((s, je) => s + parseFloat(String(je.totalAmount || "0")), 0);
+      const lastEntry = allJEs[0];
+
+      const snap = await db.insert(accountingSnapshots).values({
+        name: name.trim(),
+        description: description?.trim() || null,
+        notes: notes?.trim() || null,
+        createdByUsername: req.user.username,
+        accountBalances: JSON.stringify(allAccounts.map(a => ({
+          id: a.id, code: a.code, name: a.name, type: a.type, subtype: a.subtype, balance: a.balance,
+        }))),
+        journalEntryCount: allJEs.length,
+        lastEntryNumber: lastEntry?.entryNumber ?? null,
+        totalDebitVolume: totalDebitVolume.toFixed(2),
+      }).returning();
+
+      res.json(snap[0]);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/accounting/snapshots/:id", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      await db.delete(accountingSnapshots).where(eq(accountingSnapshots.id, req.params.id));
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/accounting/snapshots/diff", async (req, res) => {
+    try {
+      const { from: fromId, to: toId } = req.query as { from: string; to: string };
+      if (!fromId || !toId) return res.status(400).json({ message: "from and to snapshot IDs required" });
+
+      const [snapFrom] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, fromId));
+      const [snapTo]   = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, toId));
+      if (!snapFrom || !snapTo) return res.status(404).json({ message: "Snapshot not found" });
+
+      const fromAccounts: any[] = JSON.parse(snapFrom.accountBalances);
+      const toAccounts:   any[] = JSON.parse(snapTo.accountBalances);
+
+      const fromMap = Object.fromEntries(fromAccounts.map(a => [a.id, a]));
+      const toMap   = Object.fromEntries(toAccounts.map(a => [a.id, a]));
+
+      const allIds = [...new Set([...fromAccounts.map(a => a.id), ...toAccounts.map(a => a.id)])];
+      const changes = allIds.map(id => {
+        const before = fromMap[id];
+        const after  = toMap[id];
+        const balBefore = parseFloat(before?.balance ?? "0");
+        const balAfter  = parseFloat(after?.balance ?? "0");
+        const delta = balAfter - balBefore;
+        return {
+          id,
+          code:    (after ?? before).code,
+          name:    (after ?? before).name,
+          type:    (after ?? before).type,
+          before:  balBefore.toFixed(2),
+          after:   balAfter.toFixed(2),
+          delta:   delta.toFixed(2),
+          added:   !before && !!after,
+          removed: !!before && !after,
+          changed: Math.abs(delta) >= 0.01,
+        };
+      }).filter(r => r.changed || r.added || r.removed);
+
+      res.json({
+        from: { id: snapFrom.id, name: snapFrom.name, createdAt: snapFrom.createdAt, journalEntryCount: snapFrom.journalEntryCount, lastEntryNumber: snapFrom.lastEntryNumber, totalDebitVolume: snapFrom.totalDebitVolume },
+        to:   { id: snapTo.id,   name: snapTo.name,   createdAt: snapTo.createdAt,   journalEntryCount: snapTo.journalEntryCount,   lastEntryNumber: snapTo.lastEntryNumber,   totalDebitVolume: snapTo.totalDebitVolume },
+        changes,
+        summary: {
+          totalChanges: changes.length,
+          accountsAdded: changes.filter(c => c.added).length,
+          accountsRemoved: changes.filter(c => c.removed).length,
+          entriesAdded: (snapTo.journalEntryCount ?? 0) - (snapFrom.journalEntryCount ?? 0),
+          volumeChange: (parseFloat(String(snapTo.totalDebitVolume)) - parseFloat(String(snapFrom.totalDebitVolume))).toFixed(2),
+        },
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/accounting/snapshots/:id/rollback", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const [snap] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, req.params.id));
+      if (!snap) return res.status(404).json({ message: "Snapshot not found" });
+
+      const savedBalances: any[] = JSON.parse(snap.accountBalances);
+
+      // Reset all accounts to 0, then restore from snapshot
+      await db.update(accounts).set({ balance: "0.00" });
+      for (const saved of savedBalances) {
+        await db.update(accounts).set({ balance: saved.balance }).where(eq(accounts.id, saved.id));
+      }
+
+      res.json({
+        success: true,
+        message: `Rolled back ${savedBalances.length} account balances to snapshot "${snap.name}" (${new Date(snap.createdAt).toLocaleDateString()}).`,
+        accountsRestored: savedBalances.length,
+        snapshotName: snap.name,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // ── Transaction Trace (Simulation) ──────────────────────────────────────────

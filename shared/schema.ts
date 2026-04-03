@@ -337,7 +337,24 @@ export const expenses = pgTable("expenses", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const accountingSnapshots = pgTable("accounting_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdByUsername: text("created_by_username"),
+  accountBalances: text("account_balances").notNull(), // JSON: [{id,code,name,type,balance}]
+  journalEntryCount: integer("journal_entry_count").notNull().default(0),
+  lastEntryNumber: text("last_entry_number"),
+  totalDebitVolume: numeric("total_debit_volume", { precision: 12, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+});
+
 // Insert schemas
+export const insertAccountingSnapshotSchema = createInsertSchema(accountingSnapshots).omit({ id: true, createdAt: true });
+export type InsertAccountingSnapshot = z.infer<typeof insertAccountingSnapshotSchema>;
+export type AccountingSnapshot = typeof accountingSnapshots.$inferSelect;
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, lastLoginAt: true });
 export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
 export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });

@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +10,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -31,6 +37,17 @@ import {
   Wallet,
   Info,
   CircleDot,
+  Camera,
+  GitCompare,
+  RotateCcw,
+  Clock,
+  Plus,
+  Trash2,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  User,
+  DatabaseBackup,
 } from "lucide-react";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -378,6 +395,10 @@ export default function AccountingAudit() {
             <FlaskConical className="w-4 h-4 mr-1.5" />
             Simulation
           </TabsTrigger>
+          <TabsTrigger value="snapshots" data-testid="tab-snapshots">
+            <DatabaseBackup className="w-4 h-4 mr-1.5" />
+            Snapshots
+          </TabsTrigger>
         </TabsList>
 
         {/* ── Transaction Audit Tab ─────────────────────────────────────── */}
@@ -660,6 +681,11 @@ export default function AccountingAudit() {
         {/* ── Simulation Tab ────────────────────────────────────────────── */}
         <TabsContent value="simulation" className="mt-3">
           <TransactionSimulator />
+        </TabsContent>
+
+        {/* ── Snapshots Tab ─────────────────────────────────────────────── */}
+        <TabsContent value="snapshots" className="mt-3">
+          <SnapshotManager />
         </TabsContent>
       </Tabs>
     </div>
@@ -1216,6 +1242,523 @@ function TransactionSimulator() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Snapshot Types ─────────────────────────────────────────────────────────
+interface Snapshot {
+  id: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  createdByUsername: string | null;
+  accountBalances: string;
+  journalEntryCount: number;
+  lastEntryNumber: string | null;
+  totalDebitVolume: string;
+  notes: string | null;
+}
+
+interface DiffChange {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+  before: string;
+  after: string;
+  delta: string;
+  added: boolean;
+  removed: boolean;
+  changed: boolean;
+}
+
+interface DiffResult {
+  from: { id: string; name: string; createdAt: string; journalEntryCount: number; lastEntryNumber: string | null; totalDebitVolume: string };
+  to:   { id: string; name: string; createdAt: string; journalEntryCount: number; lastEntryNumber: string | null; totalDebitVolume: string };
+  changes: DiffChange[];
+  summary: { totalChanges: number; accountsAdded: number; accountsRemoved: number; entriesAdded: number; volumeChange: string };
+}
+
+// ─── SnapshotManager ────────────────────────────────────────────────────────
+function SnapshotManager() {
+  const { toast } = useToast();
+  const [createOpen, setCreateOpen]     = useState(false);
+  const [rollbackId, setRollbackId]     = useState<string | null>(null);
+  const [deleteId, setDeleteId]         = useState<string | null>(null);
+  const [newName, setNewName]           = useState("");
+  const [newDesc, setNewDesc]           = useState("");
+  const [newNotes, setNewNotes]         = useState("");
+  const [diffFrom, setDiffFrom]         = useState("none");
+  const [diffTo,   setDiffTo]           = useState("none");
+  const [detailId, setDetailId]         = useState<string | null>(null);
+
+  const { data: snapshots = [], isLoading } = useQuery<Snapshot[]>({ queryKey: ["/api/accounting/snapshots"] });
+
+  const diffEnabled = diffFrom !== "none" && diffTo !== "none" && diffFrom !== diffTo;
+
+  const { data: diff, isFetching: diffLoading, refetch: fetchDiff } = useQuery<DiffResult>({
+    queryKey: ["/api/accounting/snapshots/diff", diffFrom, diffTo],
+    queryFn: async () => {
+      const r = await fetch(`/api/accounting/snapshots/diff?from=${diffFrom}&to=${diffTo}`, { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    enabled: false,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/accounting/snapshots", { name: newName, description: newDesc, notes: newNotes }),
+    onSuccess: () => {
+      toast({ title: "Snapshot created", description: `"${newName}" saved successfully.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounting/snapshots"] });
+      setCreateOpen(false);
+      setNewName(""); setNewDesc(""); setNewNotes("");
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/accounting/snapshots/${id}`),
+    onSuccess: () => {
+      toast({ title: "Snapshot deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounting/snapshots"] });
+      setDeleteId(null);
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const rollbackMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/accounting/snapshots/${id}/rollback`);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({ title: "Rollback complete", description: data.message });
+      setRollbackId(null);
+    },
+    onError: (e: any) => toast({ title: "Rollback failed", description: e.message, variant: "destructive" }),
+  });
+
+  const rollbackSnap = snapshots.find(s => s.id === rollbackId);
+  const deleteSnap   = snapshots.find(s => s.id === deleteId);
+  const detailSnap   = snapshots.find(s => s.id === detailId);
+
+  const fmt = (d: string) => {
+    const dt = new Date(d);
+    return dt.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) + " " +
+      dt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  const deltaColor = (d: string) => {
+    const v = parseFloat(d);
+    if (v > 0) return "text-green-500";
+    if (v < 0) return "text-red-500";
+    return "text-muted-foreground";
+  };
+
+  const DeltaIcon = ({ d }: { d: string }) => {
+    const v = parseFloat(d);
+    if (v > 0) return <TrendingUp className="w-3.5 h-3.5 text-green-500" />;
+    if (v < 0) return <TrendingDown className="w-3.5 h-3.5 text-red-500" />;
+    return <Minus className="w-3.5 h-3.5 text-muted-foreground" />;
+  };
+
+  const typeColor: Record<string, string> = {
+    asset: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+    liability: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
+    equity: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+    revenue: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+    expense: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* ── Header row ── */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <DatabaseBackup className="w-4 h-4 text-violet-500" />
+            Accounting Snapshots
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Capture named checkpoints of account balances and journal entry state. Compare any two snapshots to view differential changes, or roll back balances to a prior checkpoint.
+          </p>
+        </div>
+        <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="button-create-snapshot">
+          <Plus className="w-4 h-4 mr-1.5" />
+          New Snapshot
+        </Button>
+      </div>
+
+      {/* ── Stats bar ── */}
+      {snapshots.length > 0 && (
+        <div className="grid grid-cols-3 gap-3">
+          <Card className="py-3">
+            <CardContent className="px-4 flex items-center gap-3">
+              <Camera className="w-5 h-5 text-violet-500" />
+              <div><p className="text-lg font-bold">{snapshots.length}</p><p className="text-xs text-muted-foreground">Total Snapshots</p></div>
+            </CardContent>
+          </Card>
+          <Card className="py-3">
+            <CardContent className="px-4 flex items-center gap-3">
+              <Clock className="w-5 h-5 text-blue-500" />
+              <div><p className="text-sm font-semibold">{fmt(snapshots[0].createdAt)}</p><p className="text-xs text-muted-foreground">Latest Snapshot</p></div>
+            </CardContent>
+          </Card>
+          <Card className="py-3">
+            <CardContent className="px-4 flex items-center gap-3">
+              <FileText className="w-5 h-5 text-green-500" />
+              <div><p className="text-lg font-bold">{snapshots[0].journalEntryCount}</p><p className="text-xs text-muted-foreground">JEs at Latest</p></div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* ── Left: Snapshot Timeline ── */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Clock className="w-4 h-4" />
+              Snapshot Timeline
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            {isLoading ? (
+              <div className="p-4 space-y-2">{[0,1,2].map(i => <Skeleton key={i} className="h-14 w-full" />)}</div>
+            ) : snapshots.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground">
+                <Camera className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                <p className="text-sm">No snapshots yet.</p>
+                <p className="text-xs mt-1">Create one to begin version tracking.</p>
+              </div>
+            ) : (
+              <ScrollArea className="h-[420px]">
+                <div className="p-3 space-y-2">
+                  {snapshots.map((snap, i) => (
+                    <div
+                      key={snap.id}
+                      className={`p-3 rounded-lg border cursor-pointer transition-colors ${detailId === snap.id ? "border-violet-500 bg-violet-50 dark:bg-violet-950/30" : "hover:bg-muted/50"}`}
+                      onClick={() => setDetailId(detailId === snap.id ? null : snap.id)}
+                      data-testid={`snapshot-row-${snap.id}`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-2 min-w-0">
+                          <div className="mt-0.5 flex-shrink-0">
+                            {i === 0 ? (
+                              <div className="w-2 h-2 rounded-full bg-violet-500 mt-1" />
+                            ) : (
+                              <div className="w-2 h-2 rounded-full bg-muted-foreground/30 mt-1" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">{snap.name}</p>
+                            {snap.description && <p className="text-xs text-muted-foreground truncate">{snap.description}</p>}
+                            <div className="flex items-center gap-3 mt-1 text-[11px] text-muted-foreground">
+                              <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{fmt(snap.createdAt)}</span>
+                              {snap.createdByUsername && <span className="flex items-center gap-1"><User className="w-3 h-3" />{snap.createdByUsername}</span>}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <Badge variant="outline" className="text-[10px] px-1.5">{snap.journalEntryCount} JEs</Badge>
+                          <Button
+                            variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-red-500"
+                            onClick={e => { e.stopPropagation(); setDeleteId(snap.id); }}
+                            data-testid={`button-delete-snapshot-${snap.id}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Expanded detail */}
+                      {detailId === snap.id && (
+                        <div className="mt-2 pt-2 border-t space-y-2">
+                          <div className="grid grid-cols-2 gap-2 text-[11px]">
+                            <div><span className="text-muted-foreground">Last JE #:</span> <span className="font-mono">{snap.lastEntryNumber ?? "—"}</span></div>
+                            <div><span className="text-muted-foreground">Debit Vol:</span> <span className="font-mono">£{parseFloat(snap.totalDebitVolume).toLocaleString("en-GB", { minimumFractionDigits: 2 })}</span></div>
+                          </div>
+                          {snap.notes && <p className="text-[11px] text-muted-foreground italic">{snap.notes}</p>}
+                          {(() => {
+                            const balances: any[] = JSON.parse(snap.accountBalances);
+                            return (
+                              <div className="rounded border overflow-hidden">
+                                <div className="grid grid-cols-[auto_1fr_auto] text-[10px] font-medium bg-muted/60 px-2 py-1 gap-2">
+                                  <span>Code</span><span>Account</span><span className="text-right">Balance</span>
+                                </div>
+                                <ScrollArea className="h-[120px]">
+                                  {balances.filter(b => parseFloat(b.balance) !== 0).map(b => (
+                                    <div key={b.id} className="grid grid-cols-[auto_1fr_auto] text-[10px] px-2 py-0.5 gap-2 border-t hover:bg-muted/30">
+                                      <span className="font-mono text-muted-foreground">{b.code}</span>
+                                      <span className="truncate">{b.name}</span>
+                                      <span className="font-mono text-right">{parseFloat(b.balance).toFixed(2)}</span>
+                                    </div>
+                                  ))}
+                                </ScrollArea>
+                              </div>
+                            );
+                          })()}
+                          <Button
+                            size="sm" variant="outline" className="w-full h-7 text-xs text-amber-600 border-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/20"
+                            onClick={e => { e.stopPropagation(); setRollbackId(snap.id); }}
+                            data-testid={`button-rollback-${snap.id}`}
+                          >
+                            <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                            Roll Back to This Snapshot
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ── Right: Differential Comparison ── */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <GitCompare className="w-4 h-4" />
+              Differential Comparison
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs mb-1 block text-muted-foreground">Baseline (From)</Label>
+                <Select value={diffFrom} onValueChange={setDiffFrom}>
+                  <SelectTrigger className="h-8 text-xs" data-testid="select-diff-from">
+                    <SelectValue placeholder="Select baseline…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Select baseline…</SelectItem>
+                    {snapshots.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs mb-1 block text-muted-foreground">Compare (To)</Label>
+                <Select value={diffTo} onValueChange={setDiffTo}>
+                  <SelectTrigger className="h-8 text-xs" data-testid="select-diff-to">
+                    <SelectValue placeholder="Select compare…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Select compare…</SelectItem>
+                    {snapshots.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <Button
+              size="sm" className="w-full" disabled={!diffEnabled || diffLoading}
+              onClick={() => fetchDiff()}
+              data-testid="button-run-diff"
+            >
+              {diffLoading ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <GitCompare className="w-3.5 h-3.5 mr-1.5" />}
+              Compare Snapshots
+            </Button>
+
+            {diff && (
+              <div className="space-y-3">
+                {/* Summary cards */}
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="rounded border p-2 text-center">
+                    <p className="text-base font-bold">{diff.summary.totalChanges}</p>
+                    <p className="text-muted-foreground">Accounts Changed</p>
+                  </div>
+                  <div className="rounded border p-2 text-center">
+                    <p className={`text-base font-bold ${diff.summary.entriesAdded >= 0 ? "text-green-500" : "text-red-500"}`}>
+                      {diff.summary.entriesAdded >= 0 ? "+" : ""}{diff.summary.entriesAdded}
+                    </p>
+                    <p className="text-muted-foreground">Journal Entries</p>
+                  </div>
+                  <div className="rounded border p-2 text-center">
+                    <p className={`text-base font-bold ${parseFloat(diff.summary.volumeChange) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                      {parseFloat(diff.summary.volumeChange) >= 0 ? "+" : ""}£{parseFloat(diff.summary.volumeChange).toLocaleString("en-GB", { minimumFractionDigits: 0 })}
+                    </p>
+                    <p className="text-muted-foreground">Volume Change</p>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Diff table */}
+                <div className="rounded border overflow-hidden">
+                  <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-2 text-[10px] font-semibold bg-muted/60 px-3 py-1.5">
+                    <span>Code</span><span>Account</span><span className="text-right">Before</span><span className="text-right">After</span><span className="text-right">Δ</span>
+                  </div>
+                  <ScrollArea className="h-[260px]">
+                    {diff.changes.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-muted-foreground">No differences found between these snapshots.</div>
+                    ) : (
+                      diff.changes.map(c => (
+                        <div key={c.id} className={`grid grid-cols-[auto_1fr_auto_auto_auto] gap-2 text-[10px] px-3 py-1.5 border-t hover:bg-muted/30 ${c.added ? "bg-green-50 dark:bg-green-950/20" : c.removed ? "bg-red-50 dark:bg-red-950/20" : ""}`}>
+                          <span className="font-mono text-muted-foreground">{c.code}</span>
+                          <div className="min-w-0">
+                            <span className="truncate block">{c.name}</span>
+                            <span className={`text-[9px] px-1 rounded ${typeColor[c.type] ?? ""}`}>{c.type}</span>
+                          </div>
+                          <span className="font-mono text-right">{parseFloat(c.before).toFixed(2)}</span>
+                          <span className="font-mono text-right">{parseFloat(c.after).toFixed(2)}</span>
+                          <span className={`font-mono text-right flex items-center gap-0.5 justify-end ${deltaColor(c.delta)}`}>
+                            <DeltaIcon d={c.delta} />
+                            {parseFloat(c.delta) > 0 ? "+" : ""}{parseFloat(c.delta).toFixed(2)}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </ScrollArea>
+                </div>
+              </div>
+            )}
+
+            {!diff && snapshots.length < 2 && (
+              <div className="p-6 text-center text-xs text-muted-foreground">
+                <GitCompare className="w-7 h-7 mx-auto mb-2 opacity-30" />
+                Create at least two snapshots to compare.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* ── Create Snapshot Dialog ── */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Camera className="w-4 h-4 text-violet-500" />
+              Create Accounting Snapshot
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-xs text-muted-foreground">
+              This will capture the current state of all account balances and journal entry count as a named checkpoint. You can compare or roll back to this snapshot at any time.
+            </p>
+            <div>
+              <Label htmlFor="snap-name" className="text-xs">Snapshot Name <span className="text-red-500">*</span></Label>
+              <Input
+                id="snap-name"
+                placeholder="e.g. End of Month — March 2026"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                className="mt-1 h-8 text-sm"
+                data-testid="input-snapshot-name"
+              />
+            </div>
+            <div>
+              <Label htmlFor="snap-desc" className="text-xs">Description</Label>
+              <Input
+                id="snap-desc"
+                placeholder="Brief description (optional)"
+                value={newDesc}
+                onChange={e => setNewDesc(e.target.value)}
+                className="mt-1 h-8 text-sm"
+                data-testid="input-snapshot-description"
+              />
+            </div>
+            <div>
+              <Label htmlFor="snap-notes" className="text-xs">Notes</Label>
+              <Textarea
+                id="snap-notes"
+                placeholder="Any additional context or notes…"
+                value={newNotes}
+                onChange={e => setNewNotes(e.target.value)}
+                className="mt-1 text-sm resize-none"
+                rows={3}
+                data-testid="input-snapshot-notes"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setCreateOpen(false)} data-testid="button-cancel-snapshot">Cancel</Button>
+            <Button
+              size="sm"
+              disabled={!newName.trim() || createMutation.isPending}
+              onClick={() => createMutation.mutate()}
+              data-testid="button-confirm-snapshot"
+            >
+              {createMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Camera className="w-3.5 h-3.5 mr-1.5" />}
+              Save Snapshot
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Rollback Confirm Dialog ── */}
+      <Dialog open={!!rollbackId} onOpenChange={open => !open && setRollbackId(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-600">
+              <RotateCcw className="w-4 h-4" />
+              Confirm Rollback
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 text-sm space-y-1">
+              <p className="font-medium text-amber-700 dark:text-amber-400">⚠ This will overwrite current account balances.</p>
+              <p className="text-amber-600 dark:text-amber-500 text-xs">
+                All account balances will be restored to the values captured in snapshot <strong>"{rollbackSnap?.name}"</strong>
+                {rollbackSnap && <> ({fmt(rollbackSnap.createdAt)})</>}.
+                Journal entries are not deleted — only the balance figures are overwritten.
+              </p>
+            </div>
+            {rollbackSnap && (
+              <div className="text-xs text-muted-foreground grid grid-cols-2 gap-2">
+                <div>JE count at snapshot: <span className="font-semibold text-foreground">{rollbackSnap.journalEntryCount}</span></div>
+                <div>Last entry #: <span className="font-mono font-semibold text-foreground">{rollbackSnap.lastEntryNumber ?? "—"}</span></div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRollbackId(null)} data-testid="button-cancel-rollback">Cancel</Button>
+            <Button
+              size="sm" variant="destructive"
+              disabled={rollbackMutation.isPending}
+              onClick={() => rollbackId && rollbackMutation.mutate(rollbackId)}
+              data-testid="button-confirm-rollback"
+            >
+              {rollbackMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 mr-1.5" />}
+              Yes, Roll Back
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Delete Confirm Dialog ── */}
+      <Dialog open={!!deleteId} onOpenChange={open => !open && setDeleteId(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <Trash2 className="w-4 h-4" />
+              Delete Snapshot
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm py-2">
+            Are you sure you want to delete snapshot <strong>"{deleteSnap?.name}"</strong>? This cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setDeleteId(null)} data-testid="button-cancel-delete-snapshot">Cancel</Button>
+            <Button
+              size="sm" variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={() => deleteId && deleteMutation.mutate(deleteId)}
+              data-testid="button-confirm-delete-snapshot"
+            >
+              {deleteMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5 mr-1.5" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
