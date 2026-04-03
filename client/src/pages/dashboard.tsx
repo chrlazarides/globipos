@@ -9,7 +9,7 @@ import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, ComposedChart, Line, ReferenceLine, Legend,
+  PieChart, Pie, Cell, ComposedChart, Line, ReferenceLine, Legend, Area,
 } from "recharts";
 import type { Invoice, Item, SystemSetting } from "@shared/schema";
 import { formatDate } from "@/lib/utils";
@@ -26,6 +26,45 @@ const CUSTOMER_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#f43f5e", "#8b5cf6"];
 
 const REVENUE_COLOR = "#6366f1";
 const PROFIT_COLOR  = "#10b981";
+
+const EOMDot = (props: any) => {
+  const { cx, cy, value } = props;
+  if (!cx || !cy || !value) return null;
+  const s = 5;
+  return (
+    <polygon
+      points={`${cx},${cy - s} ${cx + s},${cy} ${cx},${cy + s} ${cx - s},${cy}`}
+      fill={REVENUE_COLOR}
+      stroke="white"
+      strokeWidth={1.5}
+    />
+  );
+};
+
+const MonthlyTooltip = ({ active, payload, label }: any) => {
+  if (!active || !payload?.length) return null;
+  const rev = payload.find((p: any) => p.dataKey === "revenue")?.value ?? 0;
+  const profit = payload.find((p: any) => p.dataKey === "profit")?.value ?? 0;
+  const inv = payload.find((p: any) => p.dataKey === "invoices")?.value ?? 0;
+  const margin = rev > 0 ? ((profit / rev) * 100).toFixed(1) : "—";
+  const avgInv = rev > 0 && inv > 0 ? (rev / inv).toFixed(0) : "—";
+  const fmt = (v: number) => `€${v.toLocaleString("el-CY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3 shadow-lg text-xs space-y-1.5 min-w-[175px]">
+      <p className="font-semibold text-sm border-b border-slate-100 dark:border-slate-700 pb-1.5 mb-1.5 flex items-center gap-1.5">
+        <span className="inline-block w-2 h-2 rounded-full bg-slate-400" />
+        {label} · End of Month
+      </p>
+      <div className="flex justify-between gap-4"><span className="flex items-center gap-1.5 text-muted-foreground"><span className="w-2 h-2 rounded-full inline-block" style={{ background: REVENUE_COLOR }} />Revenue</span><span className="font-mono font-semibold">{fmt(rev)}</span></div>
+      <div className="flex justify-between gap-4"><span className="flex items-center gap-1.5 text-muted-foreground"><span className="w-2 h-2 rounded-full inline-block" style={{ background: PROFIT_COLOR }} />Profit</span><span className={`font-mono font-semibold ${profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-500"}`}>{fmt(profit)}</span></div>
+      <div className="flex justify-between gap-4"><span className="flex items-center gap-1.5 text-muted-foreground"><span className="w-2 h-2 rounded-full inline-block bg-amber-400" />Invoices</span><span className="font-mono font-semibold">{inv}</span></div>
+      <div className="border-t border-slate-100 dark:border-slate-700 pt-1.5 mt-1 space-y-1">
+        <div className="flex justify-between gap-4"><span className="text-muted-foreground">Margin</span><span className={`font-semibold ${parseFloat(margin) >= 15 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>{margin !== "—" ? `${margin}%` : "—"}</span></div>
+        <div className="flex justify-between gap-4"><span className="text-muted-foreground">Avg / Invoice</span><span className="font-mono">{avgInv !== "—" ? `€${avgInv}` : "—"}</span></div>
+      </div>
+    </div>
+  );
+};
 
 export default function Dashboard() {
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
@@ -96,54 +135,163 @@ export default function Dashboard() {
         <StatCard title="Cash Collected" value={`€${totalRevNum.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={Euro} />
       </div>
 
-      {/* Main Chart — Sales & Profit */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <div>
-            <CardTitle className="text-base flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-primary" />
-              Sales &amp; Profit — Last 6 Months
-            </CardTitle>
-            <p className="text-xs text-muted-foreground mt-0.5">Gross profit margin (6-month avg): <span className="font-semibold">{avgMargin}%</span></p>
-          </div>
-          <div className="hidden sm:flex items-center gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: REVENUE_COLOR }} />Revenue (ex-VAT)</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: PROFIT_COLOR }} />Profit</span>
-          </div>
-        </CardHeader>
-        <CardContent className="pt-2">
-          {chartsLoading ? (
-            <Skeleton className="h-56 w-full" />
-          ) : c.monthlySales.length === 0 || c.monthlySales.every(m => m.revenue === 0) ? (
-            <div className="h-56 flex items-center justify-center text-sm text-muted-foreground">No sales data yet</div>
-          ) : (
-            <ResponsiveContainer width="100%" height={230}>
-              <BarChart data={c.monthlySales} barCategoryGap="30%" margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="gradRevenue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#818cf8" stopOpacity={1} />
-                    <stop offset="100%" stopColor="#6366f1" stopOpacity={0.85} />
-                  </linearGradient>
-                  <linearGradient id="gradProfit" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#34d399" stopOpacity={1} />
-                    <stop offset="100%" stopColor="#10b981" stopOpacity={0.85} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-                <YAxis tickFormatter={v => `€${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={48} />
-                <Tooltip
-                  formatter={(value: number, name: string) => [fmtEur(value), name === "revenue" ? "Revenue (ex-VAT)" : "Gross Profit"]}
-                  contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
-                  cursor={{ fill: "rgba(99,102,241,0.06)" }}
-                />
-                <Bar dataKey="revenue" name="revenue" fill="url(#gradRevenue)" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="profit" name="profit" fill="url(#gradProfit)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </CardContent>
-      </Card>
+      {/* Main Chart — Sales & Profit (multi-dimensional) */}
+      {(() => {
+        const activeMonths = c.monthlySales.filter(m => m.revenue > 0 || m.invoices > 0);
+        const avgRevenue = activeMonths.length > 0
+          ? Math.round(activeMonths.reduce((s, m) => s + m.revenue, 0) / activeMonths.length)
+          : 0;
+        const maxInvoices = Math.max(...c.monthlySales.map(m => m.invoices), 1);
+        const hasData = c.monthlySales.some(m => m.revenue > 0);
+        const now = new Date();
+        const currentLabel = now.toLocaleString("en-GB", { month: "short", year: "2-digit" });
+        const enriched = c.monthlySales.map(m => ({
+          ...m,
+          isCurrent: m.month === currentLabel,
+          marginPct: m.revenue > 0 ? parseFloat(((m.profit / m.revenue) * 100).toFixed(1)) : 0,
+        }));
+        return (
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <BarChart3 className="w-4 h-4 text-primary" />
+                    Sales &amp; Profit — Last 6 Months
+                  </CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Avg margin: <span className="font-semibold">{avgMargin}%</span>
+                    {avgRevenue > 0 && <> · Avg monthly revenue: <span className="font-semibold">€{avgRevenue.toLocaleString()}</span></>}
+                    {" "}· <span className="italic">◆ markers = end of month</span>
+                  </p>
+                </div>
+                <div className="hidden sm:flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: REVENUE_COLOR, opacity: 0.4 }} />Revenue</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: PROFIT_COLOR }} />Gross Profit</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block bg-amber-400" />Invoice Count</span>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-1">
+              {chartsLoading ? (
+                <Skeleton className="h-64 w-full" />
+              ) : !hasData ? (
+                <div className="h-64 flex items-center justify-center text-sm text-muted-foreground">No sales data yet</div>
+              ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                  <ComposedChart data={enriched} margin={{ top: 12, right: 52, left: 4, bottom: 0 }} barCategoryGap="40%">
+                    <defs>
+                      <linearGradient id="areaRevGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={REVENUE_COLOR} stopOpacity={0.25} />
+                        <stop offset="95%" stopColor={REVENUE_COLOR} stopOpacity={0.02} />
+                      </linearGradient>
+                      <linearGradient id="barProfGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#34d399" stopOpacity={0.95} />
+                        <stop offset="100%" stopColor="#059669" stopOpacity={0.8} />
+                      </linearGradient>
+                    </defs>
+
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+
+                    <XAxis
+                      dataKey="month"
+                      tick={({ x, y, payload }: any) => {
+                        const isCur = payload.value === currentLabel;
+                        return (
+                          <g transform={`translate(${x},${y})`}>
+                            <text x={0} y={0} dy={13} textAnchor="middle" fill={isCur ? REVENUE_COLOR : "hsl(var(--muted-foreground))"} fontSize={11} fontWeight={isCur ? 700 : 400}>
+                              {payload.value}{isCur ? " *" : ""}
+                            </text>
+                          </g>
+                        );
+                      }}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+
+                    {/* Left Y-axis — revenue / profit in € */}
+                    <YAxis
+                      yAxisId="left"
+                      tickFormatter={v => `€${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`}
+                      tick={{ fontSize: 10 }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={50}
+                    />
+
+                    {/* Right Y-axis — invoice count */}
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      tickFormatter={v => `${v}`}
+                      tick={{ fontSize: 10, fill: "#f59e0b" }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={30}
+                      domain={[0, maxInvoices + Math.ceil(maxInvoices * 0.2)]}
+                    />
+
+                    <Tooltip content={<MonthlyTooltip />} cursor={{ fill: "rgba(99,102,241,0.05)" }} />
+
+                    {/* Average revenue reference line */}
+                    {avgRevenue > 0 && (
+                      <ReferenceLine
+                        yAxisId="left"
+                        y={avgRevenue}
+                        stroke={REVENUE_COLOR}
+                        strokeDasharray="5 3"
+                        strokeOpacity={0.45}
+                        label={{ value: "Avg", position: "insideTopLeft", fontSize: 9, fill: REVENUE_COLOR, opacity: 0.7 }}
+                      />
+                    )}
+
+                    {/* Revenue — filled area */}
+                    <Area
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="revenue"
+                      name="Revenue (ex-VAT)"
+                      stroke={REVENUE_COLOR}
+                      strokeWidth={2}
+                      fill="url(#areaRevGrad)"
+                      dot={<EOMDot />}
+                      activeDot={{ r: 6, fill: REVENUE_COLOR, stroke: "white", strokeWidth: 2 }}
+                    />
+
+                    {/* Gross Profit — bars */}
+                    <Bar
+                      yAxisId="left"
+                      dataKey="profit"
+                      name="Gross Profit"
+                      fill="url(#barProfGrad)"
+                      radius={[3, 3, 0, 0]}
+                      maxBarSize={36}
+                    />
+
+                    {/* Invoice count — secondary line */}
+                    <Line
+                      yAxisId="right"
+                      type="monotone"
+                      dataKey="invoices"
+                      name="Invoices"
+                      stroke="#f59e0b"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 2"
+                      dot={{ r: 3.5, fill: "#f59e0b", stroke: "#f59e0b", strokeWidth: 1 }}
+                      activeDot={{ r: 5, fill: "#f59e0b", stroke: "white", strokeWidth: 2 }}
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              )}
+              {hasData && (
+                <p className="text-[10px] text-muted-foreground mt-1 text-right pr-1">
+                  * current month (partial) · ◆ end-of-month · dashed = avg revenue · amber line = invoice count (right axis)
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Two charts side by side */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
