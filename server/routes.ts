@@ -125,45 +125,88 @@ function activityMiddleware(app: Express) {
   });
 }
 
-export async function generateBackupJson(): Promise<string> {
-  const [
-    cats, itms, custs, supps, invs, invItems, piList, piItems,
-    pays, suppPays, pcList, pcRules, soList, soItems,
-    accts, jes, jeLines, exps, settings
-  ] = await Promise.all([
+export async function generateBackupJson(since?: string): Promise<string> {
+  const sinceDate = since ? new Date(since) : null;
+
+  // Config tables — always exported in full (small, frequently mutated)
+  const [cats, itms, custs, supps, pcList, pcRules, pcItems, soList, soItems, accts, settings] = await Promise.all([
     db.select().from(categories),
     db.select().from(items),
     db.select().from(customers),
     db.select().from(suppliers),
-    db.select().from(invoices),
-    db.select().from(invoiceItems),
-    db.select().from(purchaseInvoices),
-    db.select().from(purchaseInvoiceItems),
-    db.select().from(payments),
-    db.select().from(supplierPayments),
     db.select().from(priceContracts),
     db.select().from(priceContractRules),
+    db.select().from(priceContractItems),
     db.select().from(seasonalOffers),
     db.select().from(seasonalOfferItems),
     db.select().from(accounts),
-    db.select().from(journalEntries),
-    db.select().from(journalEntryLines),
-    db.select().from(expenses),
     db.select().from(systemSettings).then(rows => rows.filter(r => r.key !== "settings_password")),
   ]);
+
+  // Transaction tables — differential if sinceDate provided, otherwise full
+  let invs: any[], invItems: any[], piList: any[], piItems: any[],
+      pays: any[], suppPays: any[], jes: any[], jeLines: any[], exps: any[];
+
+  if (sinceDate) {
+    invs = await db.select().from(invoices).where(gte(invoices.createdAt, sinceDate));
+    const invIds = invs.map(i => i.id);
+    invItems = invIds.length
+      ? await db.select().from(invoiceItems).where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(invIds.map(id => `'${id}'`).join(","))}]::text[])`)
+      : [];
+
+    piList = await db.select().from(purchaseInvoices).where(gte(purchaseInvoices.createdAt, sinceDate));
+    const piIds = piList.map(i => i.id);
+    piItems = piIds.length
+      ? await db.select().from(purchaseInvoiceItems).where(sql`${purchaseInvoiceItems.purchaseInvoiceId} = ANY(ARRAY[${sql.raw(piIds.map(id => `'${id}'`).join(","))}]::text[])`)
+      : [];
+
+    pays = await db.select().from(payments).where(gte(payments.createdAt, sinceDate));
+    suppPays = await db.select().from(supplierPayments).where(gte(supplierPayments.createdAt, sinceDate));
+
+    jes = await db.select().from(journalEntries).where(gte(journalEntries.createdAt, sinceDate));
+    const jeIds = jes.map(j => j.id);
+    jeLines = jeIds.length
+      ? await db.select().from(journalEntryLines).where(sql`${journalEntryLines.journalEntryId} = ANY(ARRAY[${sql.raw(jeIds.map(id => `'${id}'`).join(","))}]::text[])`)
+      : [];
+
+    exps = await db.select().from(expenses).where(gte(expenses.createdAt, sinceDate));
+  } else {
+    [invs, invItems, piList, piItems, pays, suppPays, jes, jeLines, exps] = await Promise.all([
+      db.select().from(invoices),
+      db.select().from(invoiceItems),
+      db.select().from(purchaseInvoices),
+      db.select().from(purchaseInvoiceItems),
+      db.select().from(payments),
+      db.select().from(supplierPayments),
+      db.select().from(journalEntries),
+      db.select().from(journalEntryLines),
+      db.select().from(expenses),
+    ]);
+  }
+
+  const data = {
+    categories: cats, items: itms, customers: custs, suppliers: supps,
+    invoices: invs, invoiceItems: invItems,
+    purchaseInvoices: piList, purchaseInvoiceItems: piItems,
+    payments: pays, supplierPayments: suppPays,
+    priceContracts: pcList, priceContractRules: pcRules, priceContractItems: pcItems,
+    seasonalOffers: soList, seasonalOfferItems: soItems,
+    accounts: accts, journalEntries: jes, journalEntryLines: jeLines,
+    expenses: exps, settings,
+  };
+
+  const tableCounts: Record<string, number> = {};
+  for (const [k, v] of Object.entries(data)) {
+    tableCounts[k] = Array.isArray(v) ? v.length : 0;
+  }
+
   return JSON.stringify({
     exportedAt: new Date().toISOString(),
-    version: 1,
-    data: {
-      categories: cats, items: itms, customers: custs, suppliers: supps,
-      invoices: invs, invoiceItems: invItems,
-      purchaseInvoices: piList, purchaseInvoiceItems: piItems,
-      payments: pays, supplierPayments: suppPays,
-      priceContracts: pcList, priceContractRules: pcRules,
-      seasonalOffers: soList, seasonalOfferItems: soItems,
-      accounts: accts, journalEntries: jes, journalEntryLines: jeLines,
-      expenses: exps, settings,
-    }
+    version: 2,
+    backupType: sinceDate ? "differential" : "full",
+    sinceDate: sinceDate ? sinceDate.toISOString() : null,
+    tableCounts,
+    data,
   }, null, 2);
 }
 
@@ -1794,12 +1837,15 @@ export async function registerRoutes(
   });
 
   // Backup
-  app.get("/api/backup/export", async (_req, res) => {
+  app.get("/api/backup/export", async (req, res) => {
     try {
-      const json = await generateBackupJson();
+      const since = req.query.since as string | undefined;
+      const json = await generateBackupJson(since);
+      const parsed = JSON.parse(json);
       const date = new Date().toISOString().split("T")[0];
+      const tag = parsed.backupType === "differential" ? `diff-since-${since?.slice(0,10) || "unknown"}` : "full";
       res.setHeader("Content-Type", "application/json");
-      res.setHeader("Content-Disposition", `attachment; filename="backup-${date}.json"`);
+      res.setHeader("Content-Disposition", `attachment; filename="backup-${date}-${tag}.json"`);
       res.send(json);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -1814,11 +1860,153 @@ export async function registerRoutes(
       if (!toEmail) return res.status(400).json({ message: "No backup email address configured" });
       const companyName = companySetting?.value || "VinTrade";
       const date = new Date().toISOString().split("T")[0];
-      const json = await generateBackupJson();
+      // Use differential if last backup date is known and within 8 days
+      const lastSetting = await storage.getSetting("backup_last_date");
+      const lastDate = lastSetting?.value ? new Date(lastSetting.value) : null;
+      const hoursSinceLast = lastDate ? (Date.now() - lastDate.getTime()) / 3600000 : Infinity;
+      const since = (lastDate && hoursSinceLast < 192) ? lastDate.toISOString() : undefined;
+      const json = await generateBackupJson(since);
+      const parsed = JSON.parse(json);
       const result = await sendBackupEmail(toEmail, companyName, json, date);
       if (!result.success) return res.status(500).json({ message: result.error || "Failed to send backup email" });
       await storage.upsertSetting("backup_last_date", new Date().toISOString(), "Last Backup Date", "backup");
-      res.json({ success: true, sentTo: toEmail });
+      res.json({ success: true, sentTo: toEmail, backupType: parsed.backupType, tableCounts: parsed.tableCounts });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Restore from backup file (v2 format from /api/backup/export)
+  app.post("/api/backup/restore", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const payload = req.body;
+      if (!payload || !payload.version || !payload.data) {
+        return res.status(400).json({ message: "Invalid backup file: missing version or data" });
+      }
+
+      const d = payload.data;
+      const isFull = payload.backupType !== "differential";
+
+      const upsert = async (table: any, rows: any[], conflictCol: string = "id") => {
+        if (!rows?.length) return;
+        for (const row of rows) {
+          await db.insert(table).values(row).onConflictDoUpdate({ target: table[conflictCol], set: row }).catch(() => {});
+        }
+      };
+
+      const insertNew = async (table: any, rows: any[]) => {
+        if (!rows?.length) return;
+        for (const row of rows) {
+          await db.insert(table).values(row).onConflictDoNothing().catch(() => {});
+        }
+      };
+
+      if (isFull) {
+        // Full restore: wipe affected tables and reimport
+        await db.delete(journalEntryLines);
+        await db.delete(journalEntries);
+        await db.delete(expenses);
+        await db.delete(supplierPayments);
+        await db.delete(purchaseInvoiceItems);
+        await db.delete(purchaseInvoices);
+        await db.delete(payments);
+        await db.delete(invoiceItems);
+        await db.delete(invoices);
+        await db.delete(priceContractRules);
+        await db.delete(priceContractItems);
+        await db.delete(priceContracts);
+        await db.delete(seasonalOfferItems);
+        await db.delete(seasonalOffers);
+        await db.delete(customers);
+        await db.delete(suppliers);
+        await db.delete(items);
+        await db.delete(categories);
+        await db.delete(accounts);
+
+        const ins = async (table: any, rows: any[]) => { if (rows?.length) await db.insert(table).values(rows); };
+        await ins(categories, d.categories);
+        await ins(items, d.items);
+        await ins(customers, d.customers);
+        await ins(suppliers, d.suppliers);
+        await ins(accounts, d.accounts);
+        await ins(priceContracts, d.priceContracts);
+        await ins(priceContractRules, d.priceContractRules);
+        await ins(priceContractItems, d.priceContractItems);
+        await ins(seasonalOffers, d.seasonalOffers);
+        await ins(seasonalOfferItems, d.seasonalOfferItems);
+        await ins(invoices, d.invoices);
+        await ins(invoiceItems, d.invoiceItems);
+        await ins(payments, d.payments);
+        await ins(purchaseInvoices, d.purchaseInvoices);
+        await ins(purchaseInvoiceItems, d.purchaseInvoiceItems);
+        await ins(supplierPayments, d.supplierPayments);
+        await ins(journalEntries, d.journalEntries);
+        await ins(journalEntryLines, d.journalEntryLines);
+        await ins(expenses, d.expenses);
+
+        // Settings: upsert (preserve passwords)
+        for (const s of (d.settings || [])) {
+          if (s.key === "settings_password") continue;
+          await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+        }
+      } else {
+        // Differential restore: upsert config, insert-ignore transactions
+        await upsert(categories, d.categories || []);
+        await upsert(items, d.items || []);
+        await upsert(customers, d.customers || []);
+        await upsert(suppliers, d.suppliers || []);
+        await upsert(accounts, d.accounts || []);
+        await upsert(priceContracts, d.priceContracts || []);
+        await upsert(priceContractRules, d.priceContractRules || []);
+        await upsert(priceContractItems, d.priceContractItems || []);
+        await upsert(seasonalOffers, d.seasonalOffers || []);
+        await upsert(seasonalOfferItems, d.seasonalOfferItems || []);
+        for (const s of (d.settings || [])) {
+          if (s.key === "settings_password") continue;
+          await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+        }
+        // Transaction tables: insert new only
+        await insertNew(invoices, d.invoices || []);
+        await insertNew(invoiceItems, d.invoiceItems || []);
+        await insertNew(payments, d.payments || []);
+        await insertNew(purchaseInvoices, d.purchaseInvoices || []);
+        await insertNew(purchaseInvoiceItems, d.purchaseInvoiceItems || []);
+        await insertNew(supplierPayments, d.supplierPayments || []);
+        await insertNew(journalEntries, d.journalEntries || []);
+        await insertNew(journalEntryLines, d.journalEntryLines || []);
+        await insertNew(expenses, d.expenses || []);
+      }
+
+      const totalRecords = Object.values(payload.tableCounts || {}).reduce((s: number, v: any) => s + (Number(v) || 0), 0);
+      res.json({
+        success: true,
+        backupType: payload.backupType,
+        exportedAt: payload.exportedAt,
+        tableCounts: payload.tableCounts,
+        totalRecords,
+        restored: isFull ? "full" : "differential-merge",
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Inspect backup file without restoring (returns metadata)
+  app.post("/api/backup/inspect", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const payload = req.body;
+      if (!payload || !payload.data) {
+        return res.status(400).json({ message: "Invalid backup file" });
+      }
+      const totalRecords = Object.values(payload.tableCounts || {}).reduce((s: number, v: any) => s + (Number(v) || 0), 0);
+      res.json({
+        version: payload.version,
+        backupType: payload.backupType || "full",
+        exportedAt: payload.exportedAt,
+        sinceDate: payload.sinceDate || null,
+        tableCounts: payload.tableCounts || {},
+        totalRecords,
+      });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

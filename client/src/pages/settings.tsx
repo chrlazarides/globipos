@@ -13,6 +13,7 @@ import {
   Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags,
   Database, Lock, Unlock, Shield, Download, Upload,
   Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff, Users,
+  RotateCcw, GitCommit, FileCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { SystemSetting } from "@shared/schema";
@@ -74,6 +75,16 @@ export default function SettingsPage() {
   const [backupAuto, setBackupAuto] = useState("false");
   const [backupLoading, setBackupLoading] = useState(false);
   const [emailingBackup, setEmailingBackup] = useState(false);
+
+  // Restore from backup
+  type BackupMeta = {
+    version: number; backupType: string; exportedAt: string;
+    sinceDate: string | null; tableCounts: Record<string, number>; totalRecords: number;
+  };
+  const [restoreMeta, setRestoreMeta] = useState<BackupMeta | null>(null);
+  const [restoreFile, setRestoreFile] = useState<any>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreInspecting, setRestoreInspecting] = useState(false);
 
   // Data migration (dev → production)
   const [importing, setImporting] = useState(false);
@@ -276,8 +287,56 @@ export default function SettingsPage() {
     }
   };
 
-  const handleDownloadBackup = () => {
-    window.open("/api/backup/export", "_blank");
+  const handleDownloadBackup = (differential?: boolean) => {
+    const lastBackupDate = values["backup_last_date"];
+    let url = "/api/backup/export";
+    if (differential && lastBackupDate) {
+      url += `?since=${encodeURIComponent(lastBackupDate)}`;
+    }
+    window.open(url, "_blank");
+  };
+
+  const handleInspectBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setRestoreInspecting(true);
+    setRestoreMeta(null);
+    setRestoreFile(null);
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      const res = await apiRequest("POST", "/api/backup/inspect", json);
+      const meta = await res.json();
+      setRestoreMeta(meta);
+      setRestoreFile(json);
+    } catch (err: any) {
+      toast({ title: "Cannot read backup file", description: err.message, variant: "destructive" });
+    } finally {
+      setRestoreInspecting(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleRestoreFromBackup = async () => {
+    if (!restoreFile || !restoreMeta) return;
+    const label = restoreMeta.backupType === "differential" ? "differential merge" : "full restore";
+    const warning = restoreMeta.backupType === "full"
+      ? "This will REPLACE ALL data with the backup. Users/passwords are preserved."
+      : `This will MERGE ${restoreMeta.totalRecords} new records into the current database. Existing data is not removed.`;
+    if (!confirm(`${label.toUpperCase()}: ${warning}\n\nBackup taken: ${new Date(restoreMeta.exportedAt).toLocaleString()}\n\nContinue?`)) return;
+    setRestoring(true);
+    try {
+      const res = await apiRequest("POST", "/api/backup/restore", restoreFile);
+      const result = await res.json();
+      toast({ title: "Restore successful", description: `${result.backupType === "differential" ? "Merged" : "Restored"} ${result.totalRecords} records. Refreshing...` });
+      setRestoreMeta(null);
+      setRestoreFile(null);
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err: any) {
+      toast({ title: "Restore failed", description: err.message, variant: "destructive" });
+    } finally {
+      setRestoring(false);
+    }
   };
 
   const handleEmailBackup = async () => {
@@ -678,31 +737,124 @@ export default function SettingsPage() {
           </div>
           <div>
             <h3 className="text-sm font-semibold">Backup & Recovery</h3>
-            <p className="text-xs text-muted-foreground">Export your data and configure automatic backups</p>
+            <p className="text-xs text-muted-foreground">Export, schedule, and restore your data</p>
           </div>
         </CardHeader>
-        <CardContent className="p-4 pt-0 space-y-4">
-          <div className="text-xs text-muted-foreground">
-            Last backup: <span className="font-medium text-foreground">{lastBackupDisplay}</span>
+        <CardContent className="p-4 pt-0 space-y-5">
+
+          {/* Last backup + quick actions */}
+          <div className="space-y-3">
+            <div className="text-xs text-muted-foreground">
+              Last backup: <span className="font-medium text-foreground">{lastBackupDisplay}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => handleDownloadBackup(false)} data-testid="button-download-backup-full">
+                <Download className="w-4 h-4 mr-2" />
+                Full Backup
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleDownloadBackup(true)}
+                disabled={!values["backup_last_date"]}
+                title={!values["backup_last_date"] ? "No previous backup date — run a full backup first" : `Records created since ${lastBackupDisplay}`}
+                data-testid="button-download-backup-diff"
+              >
+                <GitCommit className="w-4 h-4 mr-2" />
+                Differential
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleEmailBackup}
+                disabled={emailingBackup || !backupEmail}
+                data-testid="button-email-backup-now"
+              >
+                <Mail className={`w-4 h-4 mr-2 ${emailingBackup ? "animate-pulse" : ""}`} />
+                {emailingBackup ? "Sending..." : "Email Backup Now"}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              <strong>Full backup</strong> exports all records. <strong>Differential</strong> exports only records created since the last backup date — much smaller file.
+              Daily automated backups are automatically differential (or full if &gt;8 days since last).
+            </p>
           </div>
 
-          <div className="flex flex-wrap gap-3">
-            <Button variant="outline" size="sm" onClick={handleDownloadBackup} data-testid="button-download-backup">
-              <Download className="w-4 h-4 mr-2" />
-              Download Backup (JSON)
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleEmailBackup}
-              disabled={emailingBackup || !backupEmail}
-              data-testid="button-email-backup-now"
-            >
-              <Mail className={`w-4 h-4 mr-2 ${emailingBackup ? "animate-pulse" : ""}`} />
-              {emailingBackup ? "Sending..." : "Send Backup Now"}
-            </Button>
+          {/* Restore from backup */}
+          <div className="border-t pt-4 space-y-3">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Restore from Backup</h4>
+            <p className="text-xs text-muted-foreground">
+              Upload a backup file (.json) to inspect its contents before restoring. Full backups replace all data; differential backups merge new records without removing existing data.
+            </p>
+
+            {!restoreMeta && (
+              <label className="inline-block">
+                <Button variant="outline" size="sm" asChild disabled={restoreInspecting} data-testid="button-inspect-backup">
+                  <span className={restoreInspecting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}>
+                    <FileCheck className="w-4 h-4 mr-2" />
+                    {restoreInspecting ? "Reading file..." : "Load Backup File…"}
+                  </span>
+                </Button>
+                <input type="file" accept=".json" className="hidden" onChange={handleInspectBackup} disabled={restoreInspecting} />
+              </label>
+            )}
+
+            {restoreMeta && (
+              <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1 text-xs">
+                    <div className="flex items-center gap-2">
+                      <Badge variant={restoreMeta.backupType === "full" ? "default" : "secondary"} className="text-xs">
+                        {restoreMeta.backupType === "full" ? "Full Backup" : "Differential Backup"}
+                      </Badge>
+                      <span className="text-muted-foreground">v{restoreMeta.version}</span>
+                    </div>
+                    <p className="text-muted-foreground">Taken: <span className="font-medium text-foreground">{new Date(restoreMeta.exportedAt).toLocaleString()}</span></p>
+                    {restoreMeta.sinceDate && (
+                      <p className="text-muted-foreground">Changes since: <span className="font-medium text-foreground">{new Date(restoreMeta.sinceDate).toLocaleString()}</span></p>
+                    )}
+                    <p className="text-muted-foreground">Total records: <span className="font-medium text-foreground">{restoreMeta.totalRecords.toLocaleString()}</span></p>
+                  </div>
+                  <Button variant="ghost" size="sm" className="text-xs h-6 shrink-0" onClick={() => { setRestoreMeta(null); setRestoreFile(null); }}>
+                    Clear
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 text-xs">
+                  {Object.entries(restoreMeta.tableCounts).filter(([, v]) => v > 0).map(([k, v]) => (
+                    <div key={k} className="flex justify-between bg-background rounded px-2 py-1 border">
+                      <span className="text-muted-foreground truncate">{k}</span>
+                      <span className="font-medium ml-2 shrink-0">{v}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  {restoreMeta.backupType === "full" ? (
+                    <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 flex-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      Full restore will replace all existing data (users preserved)
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 flex-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      Differential merge — existing data will not be removed
+                    </div>
+                  )}
+                  <Button
+                    size="sm"
+                    onClick={handleRestoreFromBackup}
+                    disabled={restoring}
+                    variant={restoreMeta.backupType === "full" ? "destructive" : "default"}
+                    data-testid="button-restore-backup"
+                  >
+                    <RotateCcw className={`w-4 h-4 mr-2 ${restoring ? "animate-spin" : ""}`} />
+                    {restoring ? "Restoring..." : restoreMeta.backupType === "full" ? "Restore (Replace All)" : "Merge (Differential)"}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
 
+          {/* Migrate to Production */}
           <div className="border-t pt-4 space-y-3">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Migrate to Production</h4>
             <p className="text-xs text-muted-foreground">Export all your data here (dev), then import it into the live production app to sync everything.</p>
@@ -723,6 +875,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          {/* Automatic Daily Backup */}
           <div className="border-t pt-4 space-y-3 max-w-md">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Automatic Daily Backup</h4>
             <div className="space-y-1">
@@ -742,7 +895,7 @@ export default function SettingsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="true">Enabled — send daily backup email</SelectItem>
+                  <SelectItem value="true">Enabled — send daily backup email (differential if &lt;8 days)</SelectItem>
                   <SelectItem value="false">Disabled</SelectItem>
                 </SelectContent>
               </Select>

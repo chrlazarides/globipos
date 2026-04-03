@@ -129,11 +129,14 @@ app.use((req, res, next) => {
       const toEmail = emailSetting?.value || "";
       if (!toEmail) return;
       const date = now.toISOString().split("T")[0];
-      const json = await generateBackupJson();
+      // Use differential if last backup is within 8 days, otherwise full
+      const since = (lastDate && hoursSinceLast < 192) ? lastDate.toISOString() : undefined;
+      const json = await generateBackupJson(since);
+      const parsed = JSON.parse(json);
       const result = await sendBackupEmail(toEmail, companySetting?.value || "VinTrade", json, date);
       if (result.success) {
         await storage.upsertSetting("backup_last_date", now.toISOString(), "Last Backup Date", "backup");
-        console.log(`[backup] Daily backup sent to ${toEmail}`);
+        console.log(`[backup] ${parsed.backupType} backup sent to ${toEmail} (${Object.values(parsed.tableCounts).reduce((s: number, v: any) => s + v, 0)} records)`);
       } else {
         console.error(`[backup] Failed to send backup: ${result.error}`);
       }
