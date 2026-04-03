@@ -13,7 +13,7 @@ import {
   Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags,
   Database, Lock, Unlock, Shield, Download, Upload,
   Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff, Users,
-  RotateCcw, GitCommit, FileCheck,
+  RotateCcw, GitCommit, FileCheck, Info, Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { SystemSetting } from "@shared/schema";
@@ -375,6 +375,24 @@ export default function SettingsPage() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setSavingEmailConfig(false);
+    }
+  };
+
+  const [clearingKey, setClearingKey] = useState(false);
+  const handleClearEmailKey = async () => {
+    if (!confirm("Remove the saved API key? Email will fall back to the integration connector if available.")) return;
+    setClearingKey(true);
+    try {
+      const res = await apiRequest("POST", "/api/email/save-config", { apiKey: "", fromEmail: configFromEmail });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to clear key");
+      queryClient.invalidateQueries({ queryKey: ["/api/email-status"] });
+      setConfigApiKey("");
+      toast({ title: "API key removed", description: "The saved Resend key has been cleared." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setClearingKey(false);
     }
   };
 
@@ -931,14 +949,31 @@ export default function SettingsPage() {
 
               {/* ── Configuration ── */}
               <div className="space-y-3">
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Resend Configuration</h4>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Resend Configuration</h4>
+                  {emailStatus?.hasDbApiKey && (
+                    <Badge variant="outline" className="text-xs border-green-300 text-green-700 dark:border-green-700 dark:text-green-400 gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Key saved in this system
+                    </Badge>
+                  )}
+                </div>
+
+                {/* Independence notice */}
+                <div className="flex items-start gap-2 p-3 rounded-md bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 text-xs max-w-xl">
+                  <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Fully independent per environment.</strong> Saving an API key here stores it in <em>this system's database</em> and takes priority over everything else. Dev and production each have their own saved key — configuring one does not affect the other.
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
                   <div className="space-y-1">
                     <Label className="text-xs text-muted-foreground">API Key</Label>
                     <div className="relative">
                       <Input
                         type={showApiKey ? "text" : "password"}
-                        placeholder={emailStatus?.hasDbApiKey ? "re_••••••••• (saved)" : "re_xxxxxxxxxxxx"}
+                        placeholder={emailStatus?.hasDbApiKey ? "re_••••••••• (saved — enter new to replace)" : "re_xxxxxxxxxxxx"}
                         value={configApiKey}
                         onChange={(e) => setConfigApiKey(e.target.value)}
                         className="pr-9 font-mono text-xs"
@@ -952,7 +987,7 @@ export default function SettingsPage() {
                         {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       </button>
                     </div>
-                    <p className="text-xs text-muted-foreground">Get your key from resend.com/api-keys</p>
+                    <p className="text-xs text-muted-foreground">Get your key from <strong>resend.com/api-keys</strong></p>
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs text-muted-foreground">From Email Address</Label>
@@ -966,15 +1001,30 @@ export default function SettingsPage() {
                     <p className="text-xs text-muted-foreground">Must be a verified domain in Resend</p>
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  onClick={handleSaveEmailConfig}
-                  disabled={savingEmailConfig}
-                  data-testid="button-save-email-config"
-                >
-                  <Save className="w-4 h-4 mr-2" />
-                  {savingEmailConfig ? "Saving..." : "Save Email Settings"}
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={handleSaveEmailConfig}
+                    disabled={savingEmailConfig}
+                    data-testid="button-save-email-config"
+                  >
+                    <Save className="w-4 h-4 mr-2" />
+                    {savingEmailConfig ? "Saving..." : "Save Email Settings"}
+                  </Button>
+                  {emailStatus?.hasDbApiKey && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleClearEmailKey}
+                      disabled={clearingKey}
+                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                      data-testid="button-clear-email-key"
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      {clearingKey ? "Clearing..." : "Clear saved key"}
+                    </Button>
+                  )}
+                </div>
               </div>
 
               {/* ── Status ── */}
