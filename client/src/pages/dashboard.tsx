@@ -174,7 +174,7 @@ export default function Dashboard() {
                 </div>
                 <div className="hidden sm:flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: REVENUE_COLOR, opacity: 0.4 }} />Revenue</span>
-                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: PROFIT_COLOR }} />Gross Profit</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-0.5 inline-block rounded-full" style={{ background: PROFIT_COLOR }} />Gross Profit</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block bg-amber-400" />Invoice Count</span>
                 </div>
               </div>
@@ -267,14 +267,16 @@ export default function Dashboard() {
                       activeDot={{ r: 6, fill: REVENUE_COLOR, stroke: "white", strokeWidth: 2 }}
                     />
 
-                    {/* Gross Profit — bars */}
-                    <Bar
+                    {/* Gross Profit — continuous line */}
+                    <Line
                       yAxisId="left"
+                      type="monotone"
                       dataKey="profit"
                       name="Gross Profit"
-                      fill="url(#barProfGrad)"
-                      radius={[3, 3, 0, 0]}
-                      maxBarSize={36}
+                      stroke={PROFIT_COLOR}
+                      strokeWidth={2}
+                      dot={{ r: 3.5, fill: PROFIT_COLOR, stroke: "white", strokeWidth: 1.5 }}
+                      activeDot={{ r: 6, fill: PROFIT_COLOR, stroke: "white", strokeWidth: 2 }}
                     />
 
                     {/* Invoice count — secondary line */}
