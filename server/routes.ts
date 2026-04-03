@@ -10,7 +10,7 @@ import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLogin
 import { db } from "./db";
 import { sql, and, eq, gte, lte, desc } from "drizzle-orm";
 import crypto from "crypto";
-import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin } from "./auth";
+import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser } from "./auth";
 import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
 import QRCode from "qrcode";
 
@@ -237,7 +237,8 @@ export async function registerRoutes(
   // ─── AUTH ───────────────────────────────────────────────────────────────────
   async function completeLogin(res: Response, user: any, ip: string, ua: string, timestamp: string) {
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
-    const token = signToken({ id: user.id, username: user.username, email: user.email, role: user.role });
+    const permissions: string[] = JSON.parse(user.permissions || "[]");
+    const token = signToken({ id: user.id, username: user.username, email: user.email, role: user.role, permissions });
     setAuthCookie(res, token);
     logActivity(user.id, user.username, "login", "auth", null, `Login from ${ip}`, ip, ua);
 
@@ -452,7 +453,10 @@ export async function registerRoutes(
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
     if (!req.user) return res.status(401).json({ message: "Not authenticated" });
-    res.json(req.user);
+    // Always fetch fresh from DB so permissions/role changes take effect without re-login
+    const [dbUser] = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, permissions: users.permissions }).from(users).where(eq(users.id, req.user.id));
+    if (!dbUser) return res.status(401).json({ message: "User not found" });
+    res.json({ ...dbUser, permissions: JSON.parse(dbUser.permissions || "[]") });
   });
 
   app.post("/api/auth/logout", async (req: Request, res: Response) => {
@@ -468,21 +472,23 @@ export async function registerRoutes(
   // ─── USERS (admin only) ──────────────────────────────────────────────────────
   app.get("/api/users", requireAdmin, async (_req: Request, res: Response) => {
     try {
-      const rows = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt, totpEnabled: users.totpEnabled }).from(users).orderBy(users.createdAt);
-      res.json(rows);
+      const rows = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt, totpEnabled: users.totpEnabled, permissions: users.permissions }).from(users).orderBy(users.createdAt);
+      res.json(rows.map(r => ({ ...r, permissions: JSON.parse(r.permissions || "[]") })));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   app.post("/api/users", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { username, email, password, role } = req.body;
+      const { username, email, password, role, permissions } = req.body;
       if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+      const allowedRoles = ["staff", "admin", "superuser"];
+      if (role && !allowedRoles.includes(role)) return res.status(400).json({ message: "Invalid role" });
       const existing = await db.select({ id: users.id }).from(users).where(eq(users.username, username.toLowerCase().trim()));
       if (existing.length > 0) return res.status(409).json({ message: "Username already exists" });
-      const [user] = await db.insert(users).values({ username: username.toLowerCase().trim(), email: email || null, password: hashPassword(password), role: role || "staff", active: true }).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt });
+      const [user] = await db.insert(users).values({ username: username.toLowerCase().trim(), email: email || null, password: hashPassword(password), role: role || "staff", active: true, permissions: JSON.stringify(Array.isArray(permissions) ? permissions : []) }).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, permissions: users.permissions });
 
-      // Alert all admins when a new admin user is created
-      if ((role || "staff") === "admin" && req.user) {
+      // Alert all admins when a new admin/superuser is created
+      if ((role || "staff") !== "staff" && req.user) {
         const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
         const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
         getAdminEmails().then(emails => {
@@ -490,22 +496,25 @@ export async function registerRoutes(
         });
       }
 
-      res.status(201).json(user);
+      res.status(201).json({ ...user, permissions: JSON.parse(user.permissions || "[]") });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   app.put("/api/users/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { username, email, role, active, password } = req.body;
+      const { username, email, role, active, password, permissions } = req.body;
+      const allowedRoles = ["staff", "admin", "superuser"];
+      if (role && !allowedRoles.includes(role)) return res.status(400).json({ message: "Invalid role" });
       const updates: any = {};
       if (username) updates.username = username.toLowerCase().trim();
       if (email !== undefined) updates.email = email || null;
       if (role) updates.role = role;
       if (active !== undefined) updates.active = active;
       if (password) updates.password = hashPassword(password);
-      const [updated] = await db.update(users).set(updates).where(eq(users.id, req.params.id)).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active });
+      if (permissions !== undefined) updates.permissions = JSON.stringify(Array.isArray(permissions) ? permissions : []);
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, req.params.id)).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, permissions: users.permissions });
       if (!updated) return res.status(404).json({ message: "User not found" });
-      res.json(updated);
+      res.json({ ...updated, permissions: JSON.parse(updated.permissions || "[]") });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 

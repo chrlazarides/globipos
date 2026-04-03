@@ -11,6 +11,7 @@ export interface AuthUser {
   username: string;
   email: string | null;
   role: string;
+  permissions: string[];
 }
 
 declare global {
@@ -30,14 +31,14 @@ export function verifyPassword(password: string, hash: string): boolean {
 }
 
 export function signToken(user: AuthUser): string {
-  return jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+  return jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role, permissions: user.permissions }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
 }
 
 export function verifyToken(token: string): AuthUser | null {
   try {
     const payload = jwt.verify(token, JWT_SECRET) as any;
     if (payload.temp) return null;
-    return payload as AuthUser;
+    return { ...payload, permissions: payload.permissions || [] } as AuthUser;
   } catch {
     return null;
   }
@@ -97,8 +98,17 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+/** Superuser only (Settings, user management) */
+export function requireSuperuser(req: Request, res: Response, next: NextFunction) {
+  if (!req.user || req.user.role !== "superuser") {
+    return res.status(403).json({ message: "Superuser access required" });
+  }
+  next();
+}
+
+/** Admin OR superuser */
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  if (!req.user || req.user.role !== "admin") {
+  if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
     return res.status(403).json({ message: "Admin access required" });
   }
   next();

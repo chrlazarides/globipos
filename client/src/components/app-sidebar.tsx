@@ -16,59 +16,62 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import { offlineStore } from "@/lib/offline-store";
-import { useAuth } from "@/App";
+import { useAuth, hasModuleAccess } from "@/App";
 import type { SystemSetting } from "@shared/schema";
 
+// Module keys used in the permissions system
 const mainNav = [
-  { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "Items", url: "/items", icon: Package },
-  { title: "Customers", url: "/customers", icon: Users },
-  { title: "Customer Statements", url: "/reports?tab=statements", icon: ClipboardList },
-  { title: "Email Log", url: "/email-logs", icon: Mail },
+  { title: "Dashboard", url: "/", icon: LayoutDashboard, module: "dashboard" },
+  { title: "Items", url: "/items", icon: Package, module: "items" },
+  { title: "Customers", url: "/customers", icon: Users, module: "customers" },
+  { title: "Customer Statements", url: "/reports?tab=statements", icon: ClipboardList, module: "statements" },
+  { title: "Email Log", url: "/email-logs", icon: Mail, module: "email_logs" },
 ];
 
 const salesNav = [
-  { title: "Invoices", url: "/invoices", icon: FileText },
-  { title: "Credit Notes", url: "/credit-notes", icon: FileText },
-  { title: "Proforma", url: "/proforma", icon: FileText },
-  { title: "Quotations", url: "/quotations", icon: FileText },
-  { title: "Customer Payments", url: "/customer-payments", icon: Banknote },
+  { title: "Invoices", url: "/invoices", icon: FileText, module: "invoices" },
+  { title: "Credit Notes", url: "/credit-notes", icon: FileText, module: "invoices" },
+  { title: "Proforma", url: "/proforma", icon: FileText, module: "invoices" },
+  { title: "Quotations", url: "/quotations", icon: FileText, module: "invoices" },
+  { title: "Customer Payments", url: "/customer-payments", icon: Banknote, module: "payments" },
 ];
 
 const purchasingNav = [
-  { title: "Suppliers", url: "/suppliers", icon: Truck },
-  { title: "Purchase Invoices", url: "/purchase-invoices", icon: ShoppingCart },
-  { title: "Supplier Payments", url: "/supplier-payments", icon: CreditCard },
+  { title: "Suppliers", url: "/suppliers", icon: Truck, module: "suppliers" },
+  { title: "Purchase Invoices", url: "/purchase-invoices", icon: ShoppingCart, module: "suppliers" },
+  { title: "Supplier Payments", url: "/supplier-payments", icon: CreditCard, module: "suppliers" },
 ];
 
 const pricingNav = [
-  { title: "Price Contracts", url: "/pricing", icon: Tag },
-  { title: "Seasonal Offers", url: "/offers", icon: Gift },
+  { title: "Price Contracts", url: "/pricing", icon: Tag, module: "pricing" },
+  { title: "Seasonal Offers", url: "/offers", icon: Gift, module: "pricing" },
 ];
 
 const accountingNav = [
-  { title: "Chart of Accounts", url: "/accounting/chart-of-accounts", icon: BookOpen },
-  { title: "Journal Entries", url: "/accounting/journal-entries", icon: Receipt },
-  { title: "Expenses", url: "/accounting/expenses", icon: Wallet },
-  { title: "Financial Reports", url: "/accounting/reports", icon: PieChart },
+  { title: "Chart of Accounts", url: "/accounting/chart-of-accounts", icon: BookOpen, module: "accounting" },
+  { title: "Journal Entries", url: "/accounting/journal-entries", icon: Receipt, module: "accounting" },
+  { title: "Expenses", url: "/accounting/expenses", icon: Wallet, module: "accounting" },
+  { title: "Financial Reports", url: "/accounting/reports", icon: PieChart, module: "accounting" },
 ];
 
 const reportNav = [
-  { title: "Reports", url: "/reports", icon: BarChart3 },
+  { title: "Reports", url: "/reports", icon: BarChart3, module: "reports" },
 ];
 
 const systemNav = [
-  { title: "Import Data", url: "/import", icon: Upload },
-  { title: "Settings", url: "/settings", icon: Settings },
+  { title: "Import Data", url: "/import", icon: Upload, module: "import" },
+  { title: "Settings", url: "/settings", icon: Settings, module: "_settings" },
 ];
 
 const adminNav = [
-  { title: "Users", url: "/users", icon: ShieldCheck },
-  { title: "Activity Log", url: "/activity-logs", icon: Activity },
+  { title: "Activity Log", url: "/activity-logs", icon: Activity, module: "_admin" },
 ];
 
-function NavSection({ label, items }: { label: string; items: { title: string; url: string; icon: any }[] }) {
+type NavItem = { title: string; url: string; icon: any; module: string };
+
+function NavSection({ label, items }: { label: string; items: NavItem[] }) {
   const [location] = useLocation();
+  if (items.length === 0) return null;
   return (
     <SidebarGroup>
       <SidebarGroupLabel>{label}</SidebarGroupLabel>
@@ -128,6 +131,10 @@ export function AppSidebar() {
     };
   }, []);
 
+  // Filter each section based on the user's permitted modules
+  const isAdmin = user?.role === "admin" || user?.role === "superuser";
+  const filter = (items: NavItem[]) => items.filter(i => hasModuleAccess(user, i.module));
+
   return (
     <Sidebar>
       <SidebarHeader className="p-4">
@@ -153,14 +160,14 @@ export function AppSidebar() {
         )}
       </SidebarHeader>
       <SidebarContent>
-        <NavSection label="Overview" items={mainNav} />
-        <NavSection label="Sales" items={salesNav} />
-        <NavSection label="Purchasing" items={purchasingNav} />
-        <NavSection label="Pricing" items={pricingNav} />
-        <NavSection label="Accounting" items={accountingNav} />
-        <NavSection label="Analytics" items={reportNav} />
-        <NavSection label="System" items={systemNav} />
-        {user?.role === "admin" && <NavSection label="Admin" items={adminNav} />}
+        <NavSection label="Overview" items={filter(mainNav)} />
+        <NavSection label="Sales" items={filter(salesNav)} />
+        <NavSection label="Purchasing" items={filter(purchasingNav)} />
+        <NavSection label="Pricing" items={filter(pricingNav)} />
+        <NavSection label="Accounting" items={filter(accountingNav)} />
+        <NavSection label="Analytics" items={filter(reportNav)} />
+        <NavSection label="System" items={filter(systemNav)} />
+        {isAdmin && <NavSection label="Admin" items={adminNav} />}
       </SidebarContent>
       <SidebarFooter className="p-4 space-y-2">
         {isInstallable && !isInstalled && (

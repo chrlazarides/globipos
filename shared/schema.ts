@@ -15,6 +15,7 @@ export const users = pgTable("users", {
   lastLoginAt: timestamp("last_login_at"),
   totpSecret: text("totp_secret"),
   totpEnabled: boolean("totp_enabled").notNull().default(false),
+  permissions: text("permissions").default("[]"),
 });
 
 export const activityLogs = pgTable("activity_logs", {

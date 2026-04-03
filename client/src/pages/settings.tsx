@@ -12,10 +12,12 @@ import { PageHeader } from "@/components/page-header";
 import {
   Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags,
   Database, Lock, Unlock, Shield, Download, Upload,
-  Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff,
+  Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff, Users,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { SystemSetting } from "@shared/schema";
+import { useAuth } from "@/App";
+import { UsersContent } from "./users";
 
 const groupIcons: Record<string, any> = {
   company: Building2,
@@ -40,13 +42,20 @@ const HIDDEN_GROUPS = ["security", "backup"];
 const SESSION_KEY = "vintrade_settings_auth";
 
 export default function SettingsPage() {
+  const { user: currentUser } = useAuth();
+  const isSuperuser = currentUser?.role === "superuser";
+  const isAdminOrHigher = currentUser?.role === "admin" || currentUser?.role === "superuser";
+
+  // Tab state — Users tab visible to admin/superuser
+  const [activeTab, setActiveTab] = useState<"settings" | "users">("settings");
+
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const { toast } = useToast();
 
-  // Password gate
-  const [authenticated, setAuthenticated] = useState(false);
+  // Password gate (superusers bypass automatically)
+  const [authenticated, setAuthenticated] = useState(isSuperuser);
   const [hasPassword, setHasPassword] = useState(false);
   const [gatePassword, setGatePassword] = useState("");
   const [gateError, setGateError] = useState("");
@@ -91,8 +100,9 @@ export default function SettingsPage() {
     queryKey: ["/api/email-status"],
   });
 
-  // Check session auth on mount
+  // Check session auth on mount — superusers are always authenticated
   useEffect(() => {
+    if (isSuperuser) { setAuthenticated(true); return; }
     const checkAuth = async () => {
       const cached = sessionStorage.getItem(SESSION_KEY);
       const res = await fetch("/api/settings/verify-password", {
@@ -107,7 +117,7 @@ export default function SettingsPage() {
       }
     };
     checkAuth();
-  }, []);
+  }, [isSuperuser]);
 
   useEffect(() => {
     if (settings) {
@@ -401,67 +411,94 @@ export default function SettingsPage() {
     );
   };
 
-  // Password gate overlay
-  if (!authenticated) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-4">
-        <Card className="w-full max-w-sm">
-          <CardHeader className="text-center pb-2">
-            <div className="flex justify-center mb-3">
-              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                <Lock className="w-6 h-6 text-primary" />
-              </div>
-            </div>
-            <h2 className="text-lg font-semibold">Settings Protected</h2>
-            <p className="text-sm text-muted-foreground">Enter your password to access system settings</p>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1">
-              <Label htmlFor="gate-password">Password</Label>
-              <div className="relative">
-                <Input
-                  id="gate-password"
-                  type={showGatePassword ? "text" : "password"}
-                  value={gatePassword}
-                  onChange={(e) => setGatePassword(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleGateSubmit()}
-                  placeholder="Enter password"
-                  data-testid="input-gate-password"
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowGatePassword(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  {showGatePassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-              {gateError && <p className="text-xs text-destructive">{gateError}</p>}
-            </div>
-            <Button
-              className="w-full"
-              onClick={handleGateSubmit}
-              disabled={gateLoading}
-              data-testid="button-gate-unlock"
-            >
-              <Unlock className="w-4 h-4 mr-2" />
-              {gateLoading ? "Verifying..." : "Unlock Settings"}
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="p-6 max-w-4xl mx-auto">
+      {/* Tab navigation — only for admin / superuser */}
+      {isAdminOrHigher && (
+        <div className="flex gap-1 border-b mb-6">
+          <button
+            onClick={() => setActiveTab("settings")}
+            data-testid="tab-settings"
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "settings" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          >
+            <Settings2 className="w-4 h-4" />
+            Settings
+          </button>
+          <button
+            onClick={() => setActiveTab("users")}
+            data-testid="tab-users"
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "users" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          >
+            <Users className="w-4 h-4" />
+            Users
+          </button>
+        </div>
+      )}
+
+      {/* Users tab */}
+      {activeTab === "users" && isAdminOrHigher ? (
+        <>
+          <PageHeader title="User Management" description="Manage who can access this system" />
+          <div className="mt-6">
+            <UsersContent />
+          </div>
+        </>
+      ) : /* Settings tab — password gate for non-superusers */ !authenticated ? (
+        <div className="flex items-center justify-center py-16">
+          <Card className="w-full max-w-sm">
+            <CardHeader className="text-center pb-2">
+              <div className="flex justify-center mb-3">
+                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Lock className="w-6 h-6 text-primary" />
+                </div>
+              </div>
+              <h2 className="text-lg font-semibold">Settings Protected</h2>
+              <p className="text-sm text-muted-foreground">Enter your password to access system settings</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-1">
+                <Label htmlFor="gate-password">Password</Label>
+                <div className="relative">
+                  <Input
+                    id="gate-password"
+                    type={showGatePassword ? "text" : "password"}
+                    value={gatePassword}
+                    onChange={(e) => setGatePassword(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleGateSubmit()}
+                    placeholder="Enter password"
+                    data-testid="input-gate-password"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGatePassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showGatePassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {gateError && <p className="text-xs text-destructive">{gateError}</p>}
+              </div>
+              <Button
+                className="w-full"
+                onClick={handleGateSubmit}
+                disabled={gateLoading}
+                data-testid="button-gate-unlock"
+              >
+                <Unlock className="w-4 h-4 mr-2" />
+                {gateLoading ? "Verifying..." : "Unlock Settings"}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+        <>
       <PageHeader
         title="System Settings"
         description="Configure your system preferences and defaults"
         action={
           <div className="flex items-center gap-2 flex-wrap">
-            {hasPassword && (
+            {hasPassword && !isSuperuser && (
               <Button variant="outline" size="sm" onClick={handleLock} data-testid="button-lock-settings">
                 <Lock className="w-4 h-4 mr-2" />
                 Lock
@@ -877,6 +914,8 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      </>
+      )}
     </div>
   );
 }

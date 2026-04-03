@@ -59,10 +59,18 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 // ─── Auth Context ────────────────────────────────────────────────────────────
-interface AuthUser { id: string; username: string; email: string | null; role: string; }
+interface AuthUser { id: string; username: string; email: string | null; role: string; permissions: string[]; }
 interface AuthContextValue { user: AuthUser | null; setUser: (u: AuthUser | null) => void; logout: () => void; }
 const AuthContext = createContext<AuthContextValue>({ user: null, setUser: () => {}, logout: () => {} });
 export const useAuth = () => useContext(AuthContext);
+
+/** Returns true if the user can access a module. Admin/superuser always pass. */
+export function hasModuleAccess(user: AuthUser | null, module: string): boolean {
+  if (!user) return false;
+  if (user.role === "admin" || user.role === "superuser") return true;
+  if (!user.permissions || user.permissions.length === 0) return true;
+  return user.permissions.includes(module);
+}
 
 // ─── Offline Data Sync ───────────────────────────────────────────────────────
 function OfflineDataSync() {
@@ -115,8 +123,8 @@ function AdminRouter() {
       <Route path="/accounting/general-ledger/:accountId" component={GeneralLedger} />
       <Route path="/import" component={ImportData} />
       <Route path="/settings" component={SettingsPage} />
-      {user?.role === "admin" && <Route path="/users" component={UsersPage} />}
-      {user?.role === "admin" && <Route path="/activity-logs" component={ActivityLogsPage} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/users" component={UsersPage} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/activity-logs" component={ActivityLogsPage} />}
       <Route component={NotFound} />
     </Switch>
   );
