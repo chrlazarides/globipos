@@ -731,6 +731,22 @@ export class DatabaseStorage implements IStorage {
       .slice(0, 5)
       .map(c => ({ name: c.name.length > 18 ? c.name.slice(0, 18) + "…" : c.name, revenue: Math.round(c.revenue * 100) / 100 }));
 
+    // Pareto: all customers sorted descending by revenue with cumulative %
+    const paretoAll = Object.values(custTotals)
+      .filter(c => c.revenue > 0)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 15);
+    const paretoTotal = paretoAll.reduce((s, c) => s + c.revenue, 0);
+    let cumRev = 0;
+    const paretoCustomers = paretoAll.map(c => {
+      cumRev += c.revenue;
+      return {
+        name: c.name.length > 13 ? c.name.slice(0, 13) + "…" : c.name,
+        revenue: Math.round(c.revenue * 100) / 100,
+        cumPct: paretoTotal > 0 ? Math.round(cumRev / paretoTotal * 1000) / 10 : 0,
+      };
+    });
+
     // Invoice status breakdown
     const statusRows = await db
       .select({ status: invoices.status, total: invoices.total })
@@ -748,7 +764,7 @@ export class DatabaseStorage implements IStorage {
       amount: Math.round(v.amount * 100) / 100,
     }));
 
-    return { monthlySales, topCustomers, invoiceStatus };
+    return { monthlySales, topCustomers, invoiceStatus, paretoCustomers };
   }
 
   async getSalesReport(from: string, to: string, customerId?: string) {

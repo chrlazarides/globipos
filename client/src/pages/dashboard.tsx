@@ -4,12 +4,12 @@ import { StatCard } from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Package, Users, FileText, Euro, AlertTriangle, TrendingUp, BarChart3 } from "lucide-react";
+import { Package, Users, FileText, Euro, AlertTriangle, TrendingUp, BarChart3, GitFork } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell,
+  PieChart, Pie, Cell, ComposedChart, Line, ReferenceLine, Legend,
 } from "recharts";
 import type { Invoice, Item, SystemSetting } from "@shared/schema";
 import { formatDate } from "@/lib/utils";
@@ -45,6 +45,7 @@ export default function Dashboard() {
     monthlySales: { month: string; revenue: number; profit: number; invoices: number }[];
     topCustomers: { name: string; revenue: number }[];
     invoiceStatus: { status: string; count: number; amount: number }[];
+    paretoCustomers: { name: string; revenue: number; cumPct: number }[];
   }>({ queryKey: ["/api/dashboard/charts"] });
 
   if (isLoading) {
@@ -59,7 +60,7 @@ export default function Dashboard() {
   }
 
   const s = stats || { totalItems: 0, totalCustomers: 0, totalInvoices: 0, totalRevenue: "0.00", lowStockItems: [], recentInvoices: [], overdueInvoices: 0 };
-  const c = charts || { monthlySales: [], topCustomers: [], invoiceStatus: [] };
+  const c = charts || { monthlySales: [], topCustomers: [], invoiceStatus: [], paretoCustomers: [] };
 
   const totalRevNum = parseFloat(s.totalRevenue);
   const totalProfit = c.monthlySales.reduce((sum, m) => sum + m.profit, 0);
@@ -221,6 +222,108 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Pareto Chart — Customer Revenue Concentration */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <GitFork className="w-4 h-4 text-primary" />
+              Customer Revenue Pareto
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Customers sorted by revenue — orange line shows cumulative % · 80% threshold marked
+            </p>
+          </div>
+          {c.paretoCustomers.length > 0 && (() => {
+            const eightyIdx = c.paretoCustomers.findIndex(p => p.cumPct >= 80);
+            const count = eightyIdx >= 0 ? eightyIdx + 1 : c.paretoCustomers.length;
+            const pct = Math.round(count / c.paretoCustomers.length * 100);
+            return (
+              <div className="hidden sm:flex flex-col items-end text-xs text-muted-foreground">
+                <span className="font-semibold text-foreground">{count} of {c.paretoCustomers.length} customers</span>
+                <span>drive 80% of revenue ({pct}% of base)</span>
+              </div>
+            );
+          })()}
+        </CardHeader>
+        <CardContent className="pt-2">
+          {chartsLoading ? (
+            <Skeleton className="h-64 w-full" />
+          ) : c.paretoCustomers.length === 0 ? (
+            <div className="h-64 flex items-center justify-center text-sm text-muted-foreground">No revenue data yet</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={c.paretoCustomers} margin={{ top: 8, right: 48, left: 8, bottom: 20 }}>
+                <defs>
+                  <linearGradient id="gradPareto" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#6366f1" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#4f46e5" stopOpacity={0.8} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  angle={-30}
+                  textAnchor="end"
+                  interval={0}
+                  height={50}
+                />
+                <YAxis
+                  yAxisId="revenue"
+                  orientation="left"
+                  tickFormatter={v => `€${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`}
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={52}
+                />
+                <YAxis
+                  yAxisId="pct"
+                  orientation="right"
+                  domain={[0, 100]}
+                  tickFormatter={v => `${v}%`}
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={40}
+                />
+                <Tooltip
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null;
+                    const rev = payload.find(p => p.dataKey === "revenue");
+                    const cum = payload.find(p => p.dataKey === "cumPct");
+                    return (
+                      <div className="bg-background border border-border rounded-lg shadow-lg p-3 text-xs space-y-1">
+                        <p className="font-semibold text-sm">{label}</p>
+                        {rev && <p className="text-muted-foreground">Revenue: <span className="font-medium text-foreground">{fmtEur(Number(rev.value))}</span></p>}
+                        {cum && <p className="text-muted-foreground">Cumulative: <span className="font-medium text-foreground">{cum.value}%</span></p>}
+                      </div>
+                    );
+                  }}
+                />
+                <ReferenceLine yAxisId="pct" y={80} stroke="#f59e0b" strokeDasharray="5 3" strokeWidth={1.5}
+                  label={{ value: "80%", position: "right", fontSize: 10, fill: "#f59e0b" }}
+                />
+                <Bar yAxisId="revenue" dataKey="revenue" name="Revenue" fill="url(#gradPareto)" radius={[4, 4, 0, 0]} />
+                <Line
+                  yAxisId="pct"
+                  type="monotone"
+                  dataKey="cumPct"
+                  name="Cumulative %"
+                  stroke="#f97316"
+                  strokeWidth={2}
+                  dot={{ r: 3, fill: "#f97316", strokeWidth: 0 }}
+                  activeDot={{ r: 5 }}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Recent Invoices + Low Stock */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
