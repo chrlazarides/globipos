@@ -2878,6 +2878,7 @@ export async function registerRoutes(
         totalDebitVolume: totalDebitVolume.toFixed(2),
       }).returning();
 
+      await logActivity(req.user.id, req.user.username, "create", "accounting_snapshot", snap[0].id, `Created snapshot "${name.trim()}" — ${allJEs.length} JEs, ${allAccounts.length} accounts`, null, null);
       res.json(snap[0]);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -2885,7 +2886,10 @@ export async function registerRoutes(
   app.delete("/api/accounting/snapshots/:id", async (req, res) => {
     if (!req.user) return res.status(401).json({ message: "Not authenticated" });
     try {
+      const [snap] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, req.params.id));
+      const snapName = snap?.name ?? req.params.id;
       await db.delete(accountingSnapshots).where(eq(accountingSnapshots.id, req.params.id));
+      await logActivity(req.user.id, req.user.username, "delete", "accounting_snapshot", req.params.id, `Deleted snapshot "${snapName}"`, null, null);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -2955,12 +2959,26 @@ export async function registerRoutes(
         await db.update(accounts).set({ balance: saved.balance }).where(eq(accounts.id, saved.id));
       }
 
+      const msg = `Rolled back ${savedBalances.length} account balances to snapshot "${snap.name}" (${new Date(snap.createdAt).toLocaleDateString()}).`;
+      await logActivity(req.user.id, req.user.username, "rollback", "accounting_snapshot", snap.id, msg, null, null);
+
       res.json({
         success: true,
-        message: `Rolled back ${savedBalances.length} account balances to snapshot "${snap.name}" (${new Date(snap.createdAt).toLocaleDateString()}).`,
+        message: msg,
         accountsRestored: savedBalances.length,
         snapshotName: snap.name,
       });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/accounting/snapshots/logs", async (_req, res) => {
+    try {
+      const { activityLogs: alTable } = await import("@shared/schema");
+      const logs = await db.select().from(alTable)
+        .where(eq(alTable.entity, "accounting_snapshot"))
+        .orderBy(desc(alTable.createdAt))
+        .limit(200);
+      res.json(logs);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 

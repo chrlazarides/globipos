@@ -1280,6 +1280,16 @@ interface DiffResult {
   summary: { totalChanges: number; accountsAdded: number; accountsRemoved: number; entriesAdded: number; volumeChange: string };
 }
 
+interface SnapLog {
+  id: string;
+  username: string | null;
+  action: string;
+  entity: string | null;
+  entityId: string | null;
+  description: string | null;
+  createdAt: string;
+}
+
 // ─── SnapshotManager ────────────────────────────────────────────────────────
 function SnapshotManager() {
   const { toast } = useToast();
@@ -1292,8 +1302,11 @@ function SnapshotManager() {
   const [diffFrom, setDiffFrom]         = useState("none");
   const [diffTo,   setDiffTo]           = useState("none");
   const [detailId, setDetailId]         = useState<string | null>(null);
+  const [previewId, setPreviewId]       = useState<string | null>(null);
 
   const { data: snapshots = [], isLoading } = useQuery<Snapshot[]>({ queryKey: ["/api/accounting/snapshots"] });
+
+  const { data: logs = [], isLoading: logsLoading } = useQuery<SnapLog[]>({ queryKey: ["/api/accounting/snapshots/logs"] });
 
   const diffEnabled = diffFrom !== "none" && diffTo !== "none" && diffFrom !== diffTo;
 
@@ -1307,11 +1320,16 @@ function SnapshotManager() {
     enabled: false,
   });
 
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/accounting/snapshots"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/accounting/snapshots/logs"] });
+  };
+
   const createMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/accounting/snapshots", { name: newName, description: newDesc, notes: newNotes }),
     onSuccess: () => {
       toast({ title: "Snapshot created", description: `"${newName}" saved successfully.` });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounting/snapshots"] });
+      invalidateAll();
       setCreateOpen(false);
       setNewName(""); setNewDesc(""); setNewNotes("");
     },
@@ -1322,7 +1340,7 @@ function SnapshotManager() {
     mutationFn: (id: string) => apiRequest("DELETE", `/api/accounting/snapshots/${id}`),
     onSuccess: () => {
       toast({ title: "Snapshot deleted" });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounting/snapshots"] });
+      invalidateAll();
       setDeleteId(null);
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -1335,6 +1353,7 @@ function SnapshotManager() {
     },
     onSuccess: (data: any) => {
       toast({ title: "Rollback complete", description: data.message });
+      invalidateAll();
       setRollbackId(null);
     },
     onError: (e: any) => toast({ title: "Rollback failed", description: e.message, variant: "destructive" }),
@@ -1343,6 +1362,7 @@ function SnapshotManager() {
   const rollbackSnap = snapshots.find(s => s.id === rollbackId);
   const deleteSnap   = snapshots.find(s => s.id === deleteId);
   const detailSnap   = snapshots.find(s => s.id === detailId);
+  const previewSnap  = snapshots.find(s => s.id === previewId);
 
   const fmt = (d: string) => {
     const dt = new Date(d);
@@ -1500,14 +1520,24 @@ function SnapshotManager() {
                               </div>
                             );
                           })()}
-                          <Button
-                            size="sm" variant="outline" className="w-full h-7 text-xs text-amber-600 border-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/20"
-                            onClick={e => { e.stopPropagation(); setRollbackId(snap.id); }}
-                            data-testid={`button-rollback-${snap.id}`}
-                          >
-                            <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-                            Roll Back to This Snapshot
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm" variant="outline" className="flex-1 h-7 text-xs"
+                              onClick={e => { e.stopPropagation(); setPreviewId(snap.id); }}
+                              data-testid={`button-preview-${snap.id}`}
+                            >
+                              <FileText className="w-3.5 h-3.5 mr-1.5" />
+                              Full Preview
+                            </Button>
+                            <Button
+                              size="sm" variant="outline" className="flex-1 h-7 text-xs text-amber-600 border-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/20"
+                              onClick={e => { e.stopPropagation(); setRollbackId(snap.id); }}
+                              data-testid={`button-rollback-${snap.id}`}
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                              Roll Back
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1757,6 +1787,170 @@ function SnapshotManager() {
               Delete
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Snapshot Activity Log ── */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Clock className="w-4 h-4" />
+            Snapshot Activity Log
+            <Badge variant="outline" className="text-[10px] px-1.5 ml-auto">{logs.length} events</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {logsLoading ? (
+            <div className="p-4 space-y-2">{[0,1,2].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+          ) : logs.length === 0 ? (
+            <div className="p-6 text-center text-xs text-muted-foreground">
+              No snapshot operations logged yet. Create your first snapshot to begin.
+            </div>
+          ) : (
+            <ScrollArea className="h-[220px]">
+              <div className="relative px-4 py-3">
+                {/* vertical line */}
+                <div className="absolute left-[27px] top-3 bottom-3 w-px bg-border" />
+                <div className="space-y-3">
+                  {logs.map(log => {
+                    const isCreate   = log.action === "create";
+                    const isRollback = log.action === "rollback";
+                    const isDelete   = log.action === "delete";
+                    const dotColor   = isCreate ? "bg-green-500" : isRollback ? "bg-amber-500" : "bg-red-400";
+                    const icon       = isCreate ? <Plus className="w-3 h-3" /> : isRollback ? <RotateCcw className="w-3 h-3" /> : <Trash2 className="w-3 h-3" />;
+                    const label      = isCreate ? "Created" : isRollback ? "Rollback" : "Deleted";
+                    const labelColor = isCreate ? "text-green-600 dark:text-green-400" : isRollback ? "text-amber-600 dark:text-amber-400" : "text-red-500";
+                    return (
+                      <div key={log.id} className="flex items-start gap-3 relative">
+                        <div className={`w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 z-10 ${dotColor} text-white`}>
+                          {icon}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline gap-2 flex-wrap">
+                            <span className={`text-[11px] font-semibold uppercase tracking-wide ${labelColor}`}>{label}</span>
+                            <span className="text-[11px] text-muted-foreground">{log.description}</span>
+                          </div>
+                          <div className="flex items-center gap-3 text-[10px] text-muted-foreground mt-0.5">
+                            {log.username && <span className="flex items-center gap-1"><User className="w-3 h-3" />{log.username}</span>}
+                            <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{fmt(log.createdAt)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </ScrollArea>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── History Preview Modal ── */}
+      <Dialog open={!!previewId} onOpenChange={open => !open && setPreviewId(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Camera className="w-4 h-4 text-violet-500" />
+              Snapshot Preview — {previewSnap?.name}
+            </DialogTitle>
+          </DialogHeader>
+          {previewSnap && (() => {
+            const balances: Array<{ id: string; code: string; name: string; type: string; subtype?: string; balance: string }> =
+              JSON.parse(previewSnap.accountBalances);
+
+            const groups: Record<string, typeof balances> = { asset: [], liability: [], equity: [], revenue: [], expense: [] };
+            for (const b of balances) {
+              if (groups[b.type]) groups[b.type].push(b);
+            }
+            const subtotal = (arr: typeof balances) => arr.reduce((s, b) => s + parseFloat(b.balance), 0);
+            const totalAssets = subtotal(groups.asset);
+            const totalLiabilities = subtotal(groups.liability);
+            const totalEquity = subtotal(groups.equity);
+            const totalRevenue = subtotal(groups.revenue);
+            const totalExpenses = subtotal(groups.expense);
+            const netIncome = totalRevenue - totalExpenses;
+            const balSheet = totalLiabilities + totalEquity + netIncome;
+
+            const SectionTable = ({ title, rows, color, total }: { title: string; rows: typeof balances; color: string; total: number }) => (
+              <div className="mb-3">
+                <div className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded mb-1 ${color}`}>{title}</div>
+                {rows.length === 0 ? (
+                  <div className="text-[10px] text-muted-foreground px-2">No accounts</div>
+                ) : rows.map(r => (
+                  <div key={r.id} className="grid grid-cols-[auto_1fr_auto] text-[11px] px-2 py-0.5 gap-2 hover:bg-muted/30 rounded">
+                    <span className="font-mono text-muted-foreground w-14">{r.code}</span>
+                    <span className="truncate">{r.name}</span>
+                    <span className={`font-mono text-right ${parseFloat(r.balance) < 0 ? "text-red-500" : ""}`}>{parseFloat(r.balance).toFixed(2)}</span>
+                  </div>
+                ))}
+                <div className="grid grid-cols-[auto_1fr_auto] text-[11px] px-2 py-0.5 gap-2 border-t mt-1 font-semibold">
+                  <span className="w-14" /><span className="text-muted-foreground">Subtotal</span>
+                  <span className={`font-mono text-right ${total < 0 ? "text-red-500" : ""}`}>{total.toFixed(2)}</span>
+                </div>
+              </div>
+            );
+
+            return (
+              <div className="flex-1 overflow-hidden flex flex-col gap-3">
+                {/* Metadata bar */}
+                <div className="grid grid-cols-4 gap-2 text-xs bg-muted/40 rounded-lg p-3">
+                  <div><span className="text-muted-foreground">Created:</span> <span className="font-medium">{fmt(previewSnap.createdAt)}</span></div>
+                  <div><span className="text-muted-foreground">By:</span> <span className="font-medium">{previewSnap.createdByUsername ?? "—"}</span></div>
+                  <div><span className="text-muted-foreground">JEs:</span> <span className="font-medium">{previewSnap.journalEntryCount}</span></div>
+                  <div><span className="text-muted-foreground">Last #:</span> <span className="font-mono font-medium">{previewSnap.lastEntryNumber ?? "—"}</span></div>
+                </div>
+
+                {previewSnap.description && (
+                  <p className="text-xs text-muted-foreground italic px-1">{previewSnap.description}</p>
+                )}
+
+                {/* Balance sections */}
+                <ScrollArea className="flex-1">
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-1 pr-4">
+                    <div>
+                      <SectionTable title="Assets" rows={groups.asset} color="bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" total={totalAssets} />
+                      <SectionTable title="Revenue" rows={groups.revenue} color="bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" total={totalRevenue} />
+                    </div>
+                    <div>
+                      <SectionTable title="Liabilities" rows={groups.liability} color="bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300" total={totalLiabilities} />
+                      <SectionTable title="Equity" rows={groups.equity} color="bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" total={totalEquity} />
+                      <SectionTable title="Expenses" rows={groups.expense} color="bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300" total={totalExpenses} />
+                    </div>
+                  </div>
+
+                  {/* Summary totals */}
+                  <div className="mx-4 mt-3 pt-3 border-t grid grid-cols-2 gap-3 text-xs">
+                    <div className="space-y-1">
+                      <div className="flex justify-between"><span className="text-muted-foreground">Total Assets:</span><span className="font-mono font-semibold">{totalAssets.toFixed(2)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Net Income (Rev − Exp):</span><span className={`font-mono font-semibold ${netIncome < 0 ? "text-red-500" : "text-green-600"}`}>{netIncome.toFixed(2)}</span></div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex justify-between"><span className="text-muted-foreground">Total Liabilities:</span><span className="font-mono">{totalLiabilities.toFixed(2)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Total Equity:</span><span className="font-mono">{totalEquity.toFixed(2)}</span></div>
+                      <div className="flex justify-between font-semibold border-t pt-1"><span className="text-muted-foreground">Liabilities + Equity + NI:</span><span className={`font-mono ${Math.abs(balSheet - totalAssets) < 0.05 ? "text-green-600" : "text-red-500"}`}>{balSheet.toFixed(2)}</span></div>
+                    </div>
+                  </div>
+
+                  {/* Balance check */}
+                  <div className={`mx-4 mt-2 rounded p-2 text-xs flex items-center gap-2 ${Math.abs(balSheet - totalAssets) < 0.05 ? "bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400" : "bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-400"}`}>
+                    {Math.abs(balSheet - totalAssets) < 0.05
+                      ? <><CheckCircle2 className="w-3.5 h-3.5" /> Balance sheet balanced at this checkpoint.</>
+                      : <><XCircle className="w-3.5 h-3.5" /> Balance sheet imbalance detected: Assets {totalAssets.toFixed(2)} ≠ L+E+NI {balSheet.toFixed(2)}</>
+                    }
+                  </div>
+                  <div className="h-4" />
+                </ScrollArea>
+
+                <DialogFooter className="mt-2">
+                  <Button variant="outline" size="sm" onClick={() => { setRollbackId(previewId!); setPreviewId(null); }} className="text-amber-600 border-amber-300" data-testid="button-preview-rollback">
+                    <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                    Roll Back to This
+                  </Button>
+                  <Button size="sm" onClick={() => setPreviewId(null)} data-testid="button-close-preview">Close</Button>
+                </DialogFooter>
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>
