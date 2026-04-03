@@ -52,6 +52,7 @@ const accountingNav = [
   { title: "Journal Entries", url: "/accounting/journal-entries", icon: Receipt, module: "accounting" },
   { title: "Expenses", url: "/accounting/expenses", icon: Wallet, module: "accounting" },
   { title: "Financial Reports", url: "/accounting/reports", icon: PieChart, module: "accounting" },
+  { title: "Audit Grid", url: "/accounting/audit", icon: ShieldCheck, module: "accounting" },
 ];
 
 const reportNav = [

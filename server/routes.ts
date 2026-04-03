@@ -2806,6 +2806,45 @@ export async function registerRoutes(
     res.json(entries);
   });
 
+  // Audit endpoint — all entries with lines + account info in one payload
+  app.get("/api/accounting/audit", async (_req, res) => {
+    try {
+      const allEntries = await db.select().from(journalEntries).orderBy(desc(journalEntries.date), desc(journalEntries.createdAt));
+      const allLines = await db
+        .select({
+          id: journalEntryLines.id,
+          journalEntryId: journalEntryLines.journalEntryId,
+          accountId: journalEntryLines.accountId,
+          debit: journalEntryLines.debit,
+          credit: journalEntryLines.credit,
+          description: journalEntryLines.description,
+          accountCode: accounts.code,
+          accountName: accounts.name,
+          accountType: accounts.type,
+        })
+        .from(journalEntryLines)
+        .leftJoin(accounts, eq(journalEntryLines.accountId, accounts.id));
+
+      const linesMap: Record<string, typeof allLines> = {};
+      for (const line of allLines) {
+        if (!linesMap[line.journalEntryId]) linesMap[line.journalEntryId] = [];
+        linesMap[line.journalEntryId].push(line);
+      }
+
+      const enriched = allEntries.map(entry => {
+        const lines = linesMap[entry.id] || [];
+        const totalDebit = lines.reduce((s, l) => s + parseFloat(String(l.debit || "0")), 0);
+        const totalCredit = lines.reduce((s, l) => s + parseFloat(String(l.credit || "0")), 0);
+        const balanced = Math.abs(totalDebit - totalCredit) < 0.01;
+        return { ...entry, lines, totalDebit: totalDebit.toFixed(2), totalCredit: totalCredit.toFixed(2), balanced };
+      });
+
+      res.json(enriched);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.get("/api/journal-entries/:id", async (req, res) => {
     const entry = await storage.getJournalEntry(req.params.id);
     if (!entry) return res.status(404).json({ message: "Journal entry not found" });
