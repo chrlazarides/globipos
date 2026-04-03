@@ -81,7 +81,7 @@ export default function Dashboard() {
   }>({ queryKey: ["/api/dashboard/stats"] });
 
   const { data: charts, isLoading: chartsLoading } = useQuery<{
-    monthlySales: { month: string; revenue: number; profit: number; invoices: number }[];
+    monthlySales: { month: string; endDate: string; revenue: number; profit: number; invoices: number }[];
     topCustomers: { name: string; revenue: number }[];
     invoiceStatus: { status: string; count: number; amount: number }[];
     paretoCustomers: { name: string; revenue: number; cumPct: number }[];
@@ -145,10 +145,17 @@ export default function Dashboard() {
         const hasData = c.monthlySales.some(m => m.revenue > 0);
         const now = new Date();
         const currentLabel = now.toLocaleString("en-GB", { month: "short", year: "2-digit" });
+        const fmtEndDate = (iso: string) => {
+          const d = new Date(iso + "T00:00:00");
+          const day = d.getDate();
+          const mon = d.toLocaleString("en-GB", { month: "short" });
+          return `${day} ${mon}`;
+        };
         const enriched = c.monthlySales.map(m => ({
           ...m,
           isCurrent: m.month === currentLabel,
           marginPct: m.revenue > 0 ? parseFloat(((m.profit / m.revenue) * 100).toFixed(1)) : 0,
+          eomLabel: m.endDate ? fmtEndDate(m.endDate) : m.month,
         }));
         return (
           <Card>
@@ -194,12 +201,13 @@ export default function Dashboard() {
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
 
                     <XAxis
-                      dataKey="month"
-                      tick={({ x, y, payload }: any) => {
-                        const isCur = payload.value === currentLabel;
+                      dataKey="eomLabel"
+                      tick={({ x, y, payload, index }: any) => {
+                        const item = enriched[index];
+                        const isCur = item?.isCurrent;
                         return (
                           <g transform={`translate(${x},${y})`}>
-                            <text x={0} y={0} dy={13} textAnchor="middle" fill={isCur ? REVENUE_COLOR : "hsl(var(--muted-foreground))"} fontSize={11} fontWeight={isCur ? 700 : 400}>
+                            <text x={0} y={0} dy={14} textAnchor="middle" fill={isCur ? REVENUE_COLOR : "#94a3b8"} fontSize={10.5} fontWeight={isCur ? 700 : 400}>
                               {payload.value}{isCur ? " *" : ""}
                             </text>
                           </g>
@@ -207,6 +215,7 @@ export default function Dashboard() {
                       }}
                       tickLine={false}
                       axisLine={false}
+                      height={28}
                     />
 
                     {/* Left Y-axis — revenue / profit in € */}

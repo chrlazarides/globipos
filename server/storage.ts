@@ -705,7 +705,7 @@ export class DatabaseStorage implements IStorage {
       const revenue = monthInvs.reduce((s, i) => s + parseFloat(i.subtotal) - parseFloat(i.discountAmount || "0"), 0);
       const cost = monthInvs.reduce((s, i) => s + (invItemCosts[i.id] || 0), 0);
       const profit = revenue - cost;
-      return { month: m.label, revenue: Math.round(revenue * 100) / 100, profit: Math.round(profit * 100) / 100, invoices: monthInvs.length };
+      return { month: m.label, endDate: m.to, revenue: Math.round(revenue * 100) / 100, profit: Math.round(profit * 100) / 100, invoices: monthInvs.length };
     });
 
     // Top 5 customers by net revenue ex-VAT (all time, non-cancelled)
