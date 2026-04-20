@@ -81,7 +81,8 @@ export default function InvoiceForm() {
 
   const { data: onlineCustomers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: onlineItems = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
-  const { data: contracts = [] } = useQuery<(PriceContract & { rules?: PriceContractRule[]; priceLevel?: number })[]>({ queryKey: ["/api/price-contracts"] });
+  type PriceContractWithDetails = PriceContract & { rules?: PriceContractRule[]; priceLevel?: number; contractItems?: PriceContractItem[] };
+  const { data: contracts = [] } = useQuery<PriceContractWithDetails[]>({ queryKey: ["/api/price-contracts"] });
   const priceLevelNames = usePriceLevels();
   const { data: existingInvoice, isLoading: invoiceLoading, isError: invoiceError } = useQuery<Invoice & { items: InvoiceItem[] }>({
     queryKey: ["/api/invoices", invoiceId],
@@ -90,7 +91,7 @@ export default function InvoiceForm() {
 
   const [cachedCustomers, setCachedCustomers] = useState<Customer[]>([]);
   const [cachedItems, setCachedItems] = useState<Item[]>([]);
-  const [cachedContracts, setCachedContracts] = useState<(PriceContract & { rules?: PriceContractRule[]; priceLevel?: number })[]>([]);
+  const [cachedContracts, setCachedContracts] = useState<PriceContractWithDetails[]>([]);
 
   useEffect(() => {
     if (onlineCustomers.length > 0) {
@@ -107,7 +108,7 @@ export default function InvoiceForm() {
   useEffect(() => {
     offlineStore.getCachedCustomers().then(c => setCachedCustomers(c as Customer[])).catch(() => {});
     offlineStore.getCachedItems().then(i => setCachedItems(i as Item[])).catch(() => {});
-    offlineStore.getCachedPriceContracts().then(c => setCachedContracts(c as any[])).catch(() => {});
+    offlineStore.getCachedPriceContracts().then(c => setCachedContracts(c as PriceContractWithDetails[])).catch(() => {});
   }, []);
 
   const customers = onlineCustomers.length > 0 ? onlineCustomers : cachedCustomers;
@@ -141,7 +142,7 @@ export default function InvoiceForm() {
       queryClient.invalidateQueries({ queryKey: ["/api/price-contracts"] });
       toast({ title: "Contract price saved", description: "This price will auto-apply on future invoices for this customer." });
     },
-    onError: (e: any) => {
+    onError: (e: Error) => {
       toast({ title: "Failed to save", description: e.message, variant: "destructive" });
     },
   });
@@ -222,7 +223,7 @@ export default function InvoiceForm() {
 
     // Check fixed-price contract items first (highest priority)
     for (const contract of activeContracts) {
-      const contractItemsList: PriceContractItem[] = (contract as any).contractItems || [];
+      const contractItemsList: PriceContractItem[] = contract.contractItems || [];
       const match = contractItemsList.find(ci => ci.itemId === item.id);
       if (match) {
         const specialPrice = parseFloat(String(match.specialPrice));
@@ -236,7 +237,7 @@ export default function InvoiceForm() {
     let bestDiscountedPrice = levelPrice;
 
     for (const contract of activeContracts) {
-      const rules = (contract as any).rules || [];
+      const rules = contract.rules || [];
       if (rules.length === 0) {
         const catIds = contract.categoryIds?.length ? contract.categoryIds : (contract.categoryId ? [contract.categoryId] : []);
         const brandList = contract.brands?.length ? contract.brands : (contract.brand ? [contract.brand] : []);
@@ -911,38 +912,40 @@ export default function InvoiceForm() {
                                   data-testid={`input-line-desc-${idx}`}
                                 />
                               )}
-                              {line.itemId && isNew && (lastPricesData as Record<string, any[]>)[line.itemId]?.length > 0 && (() => {
-                                const history = (lastPricesData as Record<string, any[]>)[line.itemId];
-                                const lp = history[0];
-                                const lpDisc = parseFloat(lp.lastDiscountPercent) || 0;
-                                const lpDate = lp.invoiceDate ? new Date(lp.invoiceDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
-                                return (
-                                  <div className="flex items-center gap-1 flex-wrap">
-                                    <span className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 leading-tight" data-testid={`hint-last-price-${idx}`}>
-                                      💡 Last: €{parseFloat(lp.lastUnitPrice).toFixed(2)}{lpDisc > 0 ? ` −${lpDisc.toFixed(1)}%` : ""}
-                                      {lp.invoiceNumber ? ` · ${lp.invoiceNumber}` : ""}{lpDate ? ` · ${lpDate}` : ""}
-                                    </span>
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-5 px-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300"
-                                      data-testid={`button-apply-last-price-${idx}`}
-                                      onClick={() => {
-                                        updateLine(idx, "unitPrice", lp.lastUnitPrice);
-                                        if (parseFloat(lp.lastDiscountPercent) > 0) {
-                                          updateLine(idx, "discountPercent", lp.lastDiscountPercent);
-                                        } else if (parseFloat(lp.lastDiscountAmount) > 0) {
-                                          updateLine(idx, "discount", lp.lastDiscountAmount);
-                                        } else {
-                                          updateLine(idx, "discountPercent", "0");
-                                        }
-                                        setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
-                                      }}
-                                    >Apply</Button>
-                                  </div>
-                                );
-                              })()}
+                              {line.itemId && isNew && lastPricesData[line.itemId]?.length > 0 && (
+                                <div className="space-y-0.5" data-testid={`hint-last-price-${idx}`}>
+                                  {lastPricesData[line.itemId].map((lp, hi) => {
+                                    const lpDisc = parseFloat(lp.lastDiscountPercent) || 0;
+                                    const lpDate = lp.invoiceDate ? new Date(lp.invoiceDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" }) : "";
+                                    return (
+                                      <div key={hi} className="flex items-center gap-1 flex-wrap">
+                                        <span className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 leading-tight">
+                                          {hi === 0 ? "💡" : "  "} €{parseFloat(lp.lastUnitPrice).toFixed(2)}{lpDisc > 0 ? ` −${lpDisc.toFixed(1)}%` : ""}
+                                          {lp.invoiceNumber ? ` · ${lp.invoiceNumber}` : ""}{lpDate ? ` · ${lpDate}` : ""}
+                                        </span>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-5 px-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300"
+                                          data-testid={`button-apply-last-price-${idx}-${hi}`}
+                                          onClick={() => {
+                                            updateLine(idx, "unitPrice", lp.lastUnitPrice);
+                                            if (parseFloat(lp.lastDiscountPercent) > 0) {
+                                              updateLine(idx, "discountPercent", lp.lastDiscountPercent);
+                                            } else if (parseFloat(lp.lastDiscountAmount) > 0) {
+                                              updateLine(idx, "discount", lp.lastDiscountAmount);
+                                            } else {
+                                              updateLine(idx, "discountPercent", "0");
+                                            }
+                                            setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
+                                          }}
+                                        >Apply</Button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                               <div className="flex items-center gap-2">
                                 <span className="text-xs text-muted-foreground shrink-0">Qty</span>
                                 <Input
@@ -1106,35 +1109,38 @@ export default function InvoiceForm() {
                                 onChange={(e) => updateLine(idx, "description", e.target.value)}
                               />
                             )}
-                            {line.itemId && isNew && (lastPricesData as Record<string, any[]>)[line.itemId]?.length > 0 && (() => {
-                              const lp = (lastPricesData as Record<string, any[]>)[line.itemId][0];
-                              const lpDisc = parseFloat(lp.lastDiscountPercent) || 0;
-                              const lpDate = lp.invoiceDate ? new Date(lp.invoiceDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
-                              return (
-                                <div className="flex items-center gap-1 flex-wrap">
-                                  <span className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 leading-tight">
-                                    💡 €{parseFloat(lp.lastUnitPrice).toFixed(2)}{lpDisc > 0 ? ` −${lpDisc.toFixed(1)}%` : ""}{lpDate ? ` · ${lpDate}` : ""}
-                                  </span>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-5 px-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300"
-                                    onClick={() => {
-                                      updateLine(idx, "unitPrice", lp.lastUnitPrice);
-                                      if (parseFloat(lp.lastDiscountPercent) > 0) {
-                                        updateLine(idx, "discountPercent", lp.lastDiscountPercent);
-                                      } else if (parseFloat(lp.lastDiscountAmount) > 0) {
-                                        updateLine(idx, "discount", lp.lastDiscountAmount);
-                                      } else {
-                                        updateLine(idx, "discountPercent", "0");
-                                      }
-                                      setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
-                                    }}
-                                  >Apply</Button>
-                                </div>
-                              );
-                            })()}
+                            {line.itemId && isNew && lastPricesData[line.itemId]?.length > 0 && (
+                              <div className="space-y-0.5">
+                                {lastPricesData[line.itemId].map((lp, hi) => {
+                                  const lpDisc = parseFloat(lp.lastDiscountPercent) || 0;
+                                  const lpDate = lp.invoiceDate ? new Date(lp.invoiceDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" }) : "";
+                                  return (
+                                    <div key={hi} className="flex items-center gap-1 flex-wrap">
+                                      <span className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 leading-tight">
+                                        {hi === 0 ? "💡" : "  "} €{parseFloat(lp.lastUnitPrice).toFixed(2)}{lpDisc > 0 ? ` −${lpDisc.toFixed(1)}%` : ""}{lpDate ? ` · ${lpDate}` : ""}
+                                      </span>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-5 px-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300"
+                                        onClick={() => {
+                                          updateLine(idx, "unitPrice", lp.lastUnitPrice);
+                                          if (parseFloat(lp.lastDiscountPercent) > 0) {
+                                            updateLine(idx, "discountPercent", lp.lastDiscountPercent);
+                                          } else if (parseFloat(lp.lastDiscountAmount) > 0) {
+                                            updateLine(idx, "discount", lp.lastDiscountAmount);
+                                          } else {
+                                            updateLine(idx, "discountPercent", "0");
+                                          }
+                                          setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
+                                        }}
+                                      >Apply</Button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

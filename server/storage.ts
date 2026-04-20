@@ -1447,7 +1447,7 @@ export class DatabaseStorage implements IStorage {
     const today = new Date().toISOString().split("T")[0];
     const existingContracts = await db.select().from(priceContracts).where(and(
       eq(priceContracts.customerId, customerId),
-      sql`${(priceContracts as any).source} = 'invoice-discount'`,
+      eq(priceContracts.source, 'invoice-discount'),
       eq(priceContracts.active, true),
     ));
 

@@ -1739,6 +1739,85 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  app.get("/api/reports/savings/:customerId/:from/:to/html", async (req, res) => {
+    try {
+      const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
+      const settings = await storage.getSystemSettings();
+      const companyName = settings?.companyName || "Vineria Di Mare Trading Ltd";
+
+      const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+
+      type SavingsLine = { itemName: string; qty: number; unitPrice: number; discountPercent: number; savings: number };
+      type SavingsInv = { invoiceNumber: string; invoiceDate: string; invoiceTotal: number; totalSavings: number; lines: SavingsLine[] };
+      const invoiceRows = (report.invoices as SavingsInv[]).map((inv) => {
+        const lineRows = inv.lines.map((l) => `
+          <tr>
+            <td style="padding:4px 8px">${l.itemName}</td>
+            <td style="padding:4px 8px;text-align:right">${l.qty}</td>
+            <td style="padding:4px 8px;text-align:right">€${Number(l.unitPrice).toFixed(2)}</td>
+            <td style="padding:4px 8px;text-align:right">${Number(l.discountPercent).toFixed(1)}%</td>
+            <td style="padding:4px 8px;text-align:right;color:#059669">€${Number(l.savings).toFixed(2)}</td>
+          </tr>`).join("");
+        return `
+          <tr style="background:#f9fafb">
+            <td colspan="5" style="padding:6px 8px;font-weight:600">${inv.invoiceNumber} — ${new Date(inv.invoiceDate + "T00:00:00").toLocaleDateString("en-GB")} — Total: €${Number(inv.invoiceTotal).toFixed(2)} — Saved: €${Number(inv.totalSavings).toFixed(2)}</td>
+          </tr>
+          ${lineRows}`;
+      }).join("");
+
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Customer Savings Report – ${report.customerName}</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; color: #111; margin: 0; padding: 20px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin: 0 0 16px; color: #555; }
+    .company { font-size: 12px; color: #555; margin-bottom: 20px; }
+    .stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+    .stat { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 16px; min-width: 120px; }
+    .stat-label { font-size: 11px; color: #6b7280; }
+    .stat-value { font-size: 20px; font-weight: 700; color: #059669; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    th { background: #f3f4f6; padding: 6px 8px; text-align: left; font-size: 12px; border-bottom: 1px solid #e5e7eb; }
+    td { border-bottom: 1px solid #f3f4f6; font-size: 12px; }
+    @media print { body { padding: 10px; } }
+  </style>
+</head>
+<body>
+  <div class="company">${companyName}</div>
+  <h1>Customer Savings Report</h1>
+  <h2>${report.customerName} — ${fromLabel} to ${toLabel}</h2>
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Total Savings</div><div class="stat-value">€${report.totalSavings.toFixed(2)}</div></div>
+    <div class="stat"><div class="stat-label">Avg Discount</div><div class="stat-value">${report.avgDiscountPercent.toFixed(1)}%</div></div>
+    <div class="stat"><div class="stat-label">Invoices with Discount</div><div class="stat-value">${report.invoiceCount}</div></div>
+    <div class="stat"><div class="stat-label">Best Single Invoice Saving</div><div class="stat-value">€${report.bestDeal.toFixed(2)}</div></div>
+    <div class="stat"><div class="stat-label">Saved vs Catalogue</div><div class="stat-value">€${report.savedVsCatalogue.toFixed(2)}</div></div>
+  </div>
+  ${report.invoices.length === 0 ? '<p>No discounted invoices found in this period.</p>' : `
+  <table>
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th style="text-align:right">Qty</th>
+        <th style="text-align:right">Unit Price</th>
+        <th style="text-align:right">Disc %</th>
+        <th style="text-align:right;color:#059669">Saving</th>
+      </tr>
+    </thead>
+    <tbody>${invoiceRows}</tbody>
+  </table>`}
+  <script>window.onload = function() { window.print(); }</script>
+</body>
+</html>`;
+      res.setHeader("Content-Type", "text/html");
+      res.send(html);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   app.get("/api/reports/statements", async (_req, res) => {
     try {
       const statements = await storage.getCustomerStatements();

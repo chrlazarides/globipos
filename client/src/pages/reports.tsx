@@ -1105,8 +1105,13 @@ export default function Reports() {
                   <Input type="date" value={savingsTo} onChange={(e) => setSavingsTo(e.target.value)} data-testid="input-savings-to" />
                 </div>
                 {savingsReport && (
-                  <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-savings">
-                    <Printer className="w-4 h-4 mr-1" /> Print
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    data-testid="button-download-savings"
+                    onClick={() => window.open(`/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/html`, "_blank")}
+                  >
+                    <Download className="w-4 h-4 mr-1" /> Download Summary
                   </Button>
                 )}
               </div>
