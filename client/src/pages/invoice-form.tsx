@@ -917,30 +917,33 @@ export default function InvoiceForm() {
                                   {lastPricesData[line.itemId].map((lp, hi) => {
                                     const lpDisc = parseFloat(lp.lastDiscountPercent) || 0;
                                     const lpDate = lp.invoiceDate ? new Date(lp.invoiceDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" }) : "";
+                                    const isMostRecent = hi === 0;
                                     return (
                                       <div key={hi} className="flex items-center gap-1 flex-wrap">
-                                        <span className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 leading-tight">
-                                          {hi === 0 ? "💡" : "  "} €{parseFloat(lp.lastUnitPrice).toFixed(2)}{lpDisc > 0 ? ` −${lpDisc.toFixed(1)}%` : ""}
+                                        <span className={`text-xs px-1.5 py-0.5 rounded border leading-tight ${isMostRecent ? "text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800" : "text-muted-foreground bg-muted/40 border-border"}`}>
+                                          {isMostRecent ? "💡" : "↩"} €{parseFloat(lp.lastUnitPrice).toFixed(2)}{lpDisc > 0 ? ` −${lpDisc.toFixed(1)}%` : ""}
                                           {lp.invoiceNumber ? ` · ${lp.invoiceNumber}` : ""}{lpDate ? ` · ${lpDate}` : ""}
                                         </span>
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-5 px-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300"
-                                          data-testid={`button-apply-last-price-${idx}-${hi}`}
-                                          onClick={() => {
-                                            updateLine(idx, "unitPrice", lp.lastUnitPrice);
-                                            if (parseFloat(lp.lastDiscountPercent) > 0) {
-                                              updateLine(idx, "discountPercent", lp.lastDiscountPercent);
-                                            } else if (parseFloat(lp.lastDiscountAmount) > 0) {
-                                              updateLine(idx, "discount", lp.lastDiscountAmount);
-                                            } else {
-                                              updateLine(idx, "discountPercent", "0");
-                                            }
-                                            setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
-                                          }}
-                                        >Apply</Button>
+                                        {isMostRecent && (
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-5 px-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300"
+                                            data-testid={`button-apply-last-price-${idx}-${hi}`}
+                                            onClick={() => {
+                                              updateLine(idx, "unitPrice", lp.lastUnitPrice);
+                                              if (parseFloat(lp.lastDiscountPercent) > 0) {
+                                                updateLine(idx, "discountPercent", lp.lastDiscountPercent);
+                                              } else if (parseFloat(lp.lastDiscountAmount) > 0) {
+                                                updateLine(idx, "discount", lp.lastDiscountAmount);
+                                              } else {
+                                                updateLine(idx, "discountPercent", "0");
+                                              }
+                                              setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
+                                            }}
+                                          >Apply</Button>
+                                        )}
                                       </div>
                                     );
                                   })}

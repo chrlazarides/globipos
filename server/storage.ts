@@ -1290,10 +1290,16 @@ export class DatabaseStorage implements IStorage {
     });
 
     const resultMap: Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]> = {};
+    const seenInvoicePerItem: Record<string, Set<string>> = {};
     for (const row of sortedRows) {
       if (!row.itemId) continue;
-      if (!resultMap[row.itemId]) resultMap[row.itemId] = [];
+      if (!resultMap[row.itemId]) {
+        resultMap[row.itemId] = [];
+        seenInvoicePerItem[row.itemId] = new Set();
+      }
       if (resultMap[row.itemId].length >= 3) continue;
+      if (seenInvoicePerItem[row.itemId].has(row.invoiceId)) continue;
+      seenInvoicePerItem[row.itemId].add(row.invoiceId);
       resultMap[row.itemId].push({
         lastUnitPrice: row.unitPrice,
         lastDiscountPercent: row.discountPercent,
