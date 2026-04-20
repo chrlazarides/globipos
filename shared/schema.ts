@@ -131,6 +131,7 @@ export const priceContracts = pgTable("price_contracts", {
   voucherType: text("voucher_type").default("percentage"),
   voucherValue: numeric("voucher_value", { precision: 10, scale: 2 }).default("0"),
   active: boolean("active").default(true).notNull(),
+  source: text("source").default("manual"),
 });
 
 export const priceContractRules = pgTable("price_contract_rules", {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+
 import { useLocation } from "wouter";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { offlineStore } from "@/lib/offline-store";
 import { BarcodeScanner } from "@/components/barcode-scanner";
-import type { Customer, Item, Invoice, InvoiceItem, PriceContract, PriceContractRule } from "@shared/schema";
+import type { Customer, Item, Invoice, InvoiceItem, PriceContract, PriceContractRule, PriceContractItem } from "@shared/schema";
 
 interface LineItem {
   itemId: string;
@@ -123,6 +124,27 @@ export default function InvoiceForm() {
   const [overallDiscountAmount, setOverallDiscountAmount] = useState("0");
   const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discountPercent: "0", discount: "0", total: "0" }]);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [manualDiscountLines, setManualDiscountLines] = useState<Set<number>>(new Set());
+
+  type LastPriceEntry = { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string };
+  const { data: lastPricesData = {} } = useQuery<Record<string, LastPriceEntry[]>>({
+    queryKey: ["/api/invoices/last-prices", customerId],
+    enabled: !!customerId && isNew,
+  });
+
+  const quickSaveMutation = useMutation({
+    mutationFn: async ({ custId, itemId, fixedPrice }: { custId: string; itemId: string; fixedPrice: number }) => {
+      const res = await apiRequest("POST", "/api/price-contracts/quick-save", { customerId: custId, itemId, fixedPrice });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/price-contracts"] });
+      toast({ title: "Contract price saved", description: "This price will auto-apply on future invoices for this customer." });
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to save", description: e.message, variant: "destructive" });
+    },
+  });
 
   // Track which customer was loaded from an existing invoice so the
   // contract-price effect does NOT overwrite the saved line amounts
@@ -197,6 +219,18 @@ export default function InvoiceForm() {
     const levelPriceKey = `price${priceLevel}` as keyof Item;
     const levelPrice = parseFloat(String(item[levelPriceKey])) || 0;
     const retailPrice = parseFloat(item.price1) || 0;
+
+    // Check fixed-price contract items first (highest priority)
+    for (const contract of activeContracts) {
+      const contractItemsList: PriceContractItem[] = (contract as any).contractItems || [];
+      const match = contractItemsList.find(ci => ci.itemId === item.id);
+      if (match) {
+        const specialPrice = parseFloat(String(match.specialPrice));
+        if (specialPrice > 0) {
+          return { type: "fixed_price", value: specialPrice, name: contract.name };
+        }
+      }
+    }
 
     let bestDiscount: { type: string; value: number; name: string } | null = null;
     let bestDiscountedPrice = levelPrice;
@@ -280,7 +314,11 @@ export default function InvoiceForm() {
         const lineGross = qty * price;
         const contractDisc = findContractDiscount(customerId, item, qty);
         if (contractDisc) {
-          if (contractDisc.type === "percentage") {
+          if (contractDisc.type === "fixed_price") {
+            newLine.unitPrice = String(contractDisc.value);
+            newLine.discountPercent = "0";
+            newLine.discount = "0";
+          } else if (contractDisc.type === "percentage") {
             newLine.discountPercent = String(contractDisc.value);
             newLine.discount = (lineGross * contractDisc.value / 100).toFixed(2);
           } else {
@@ -292,7 +330,7 @@ export default function InvoiceForm() {
           newLine.discount = "0";
         }
         const amtDisc = parseFloat(newLine.discount) || 0;
-        newLine.total = Math.max(0, lineGross - amtDisc).toFixed(2);
+        newLine.total = Math.max(0, (parseFloat(newLine.unitPrice) || 0) * qty - amtDisc).toFixed(2);
         return newLine;
       });
       return changed ? updated : prev;
@@ -325,7 +363,11 @@ export default function InvoiceForm() {
             const lineQty = updated[index].quantity || 0;
             const contractDisc = findContractDiscount(customerId, item, lineQty);
             if (contractDisc) {
-              if (contractDisc.type === "percentage") {
+              if (contractDisc.type === "fixed_price") {
+                updated[index].unitPrice = String(contractDisc.value);
+                updated[index].discountPercent = "0";
+                updated[index].discount = "0";
+              } else if (contractDisc.type === "percentage") {
                 updated[index].discountPercent = String(contractDisc.value);
                 const gross = (updated[index].quantity || 0) * (parseFloat(updated[index].unitPrice) || 0);
                 updated[index].discount = (gross * contractDisc.value / 100).toFixed(2);
@@ -385,10 +427,13 @@ export default function InvoiceForm() {
       let discountPercent = "0";
       let discount = "0";
       const newQty = 1;
+      let overrideUnitPrice: string | null = null;
       if (customerId) {
         const contractDisc = findContractDiscount(customerId, item, newQty);
         if (contractDisc) {
-          if (contractDisc.type === "percentage") {
+          if (contractDisc.type === "fixed_price") {
+            overrideUnitPrice = String(contractDisc.value);
+          } else if (contractDisc.type === "percentage") {
             discountPercent = String(contractDisc.value);
           } else {
             discount = String(contractDisc.value);
@@ -396,7 +441,7 @@ export default function InvoiceForm() {
         }
       }
 
-      const unitPrice = String(item[priceKey] || item.price1);
+      const unitPrice = overrideUnitPrice ?? String(item[priceKey] || item.price1);
       const price = parseFloat(unitPrice) || 0;
       const pctDisc = parseFloat(discountPercent) || 0;
       const amtDisc = parseFloat(discount) || 0;
@@ -839,7 +884,10 @@ export default function InvoiceForm() {
                             </div>
                           ) : (
                             <div className="space-y-1.5">
-                              <Select value={line.itemId || "custom"} onValueChange={(v) => updateLine(idx, "itemId", v === "custom" ? "" : v)}>
+                              <Select value={line.itemId || "custom"} onValueChange={(v) => {
+                                updateLine(idx, "itemId", v === "custom" ? "" : v);
+                                setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
+                              }}>
                                 <SelectTrigger data-testid={`select-line-item-${idx}`}>
                                   <SelectValue placeholder="Select item" />
                                 </SelectTrigger>
@@ -863,6 +911,38 @@ export default function InvoiceForm() {
                                   data-testid={`input-line-desc-${idx}`}
                                 />
                               )}
+                              {line.itemId && isNew && (lastPricesData as Record<string, any[]>)[line.itemId]?.length > 0 && (() => {
+                                const history = (lastPricesData as Record<string, any[]>)[line.itemId];
+                                const lp = history[0];
+                                const lpDisc = parseFloat(lp.lastDiscountPercent) || 0;
+                                const lpDate = lp.invoiceDate ? new Date(lp.invoiceDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+                                return (
+                                  <div className="flex items-center gap-1 flex-wrap">
+                                    <span className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 leading-tight" data-testid={`hint-last-price-${idx}`}>
+                                      💡 Last: €{parseFloat(lp.lastUnitPrice).toFixed(2)}{lpDisc > 0 ? ` −${lpDisc.toFixed(1)}%` : ""}
+                                      {lp.invoiceNumber ? ` · ${lp.invoiceNumber}` : ""}{lpDate ? ` · ${lpDate}` : ""}
+                                    </span>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-5 px-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300"
+                                      data-testid={`button-apply-last-price-${idx}`}
+                                      onClick={() => {
+                                        updateLine(idx, "unitPrice", lp.lastUnitPrice);
+                                        if (parseFloat(lp.lastDiscountPercent) > 0) {
+                                          updateLine(idx, "discountPercent", lp.lastDiscountPercent);
+                                        } else if (parseFloat(lp.lastDiscountAmount) > 0) {
+                                          updateLine(idx, "discount", lp.lastDiscountAmount);
+                                        } else {
+                                          updateLine(idx, "discountPercent", "0");
+                                        }
+                                        setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
+                                      }}
+                                    >Apply</Button>
+                                  </div>
+                                );
+                              })()}
                               <div className="flex items-center gap-2">
                                 <span className="text-xs text-muted-foreground shrink-0">Qty</span>
                                 <Input
@@ -922,7 +1002,13 @@ export default function InvoiceForm() {
                                   inputMode="decimal"
                                   placeholder="0"
                                   value={line.discountPercent === "0" || line.discountPercent === "0.00" ? "" : line.discountPercent}
-                                  onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discountPercent", v || "0"); }}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    if (v === "" || /^\d*\.?\d*$/.test(v)) {
+                                      updateLine(idx, "discountPercent", v || "0");
+                                      setManualDiscountLines(prev => new Set(prev).add(idx));
+                                    }
+                                  }}
                                   className="pr-6 h-8 text-sm"
                                   data-testid={`input-line-disc-pct-${idx}`}
                                 />
@@ -934,12 +1020,35 @@ export default function InvoiceForm() {
                                   inputMode="decimal"
                                   placeholder="0.00"
                                   value={line.discount === "0" || line.discount === "0.00" ? "" : line.discount}
-                                  onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discount", v || "0"); }}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    if (v === "" || /^\d*\.?\d*$/.test(v)) {
+                                      updateLine(idx, "discount", v || "0");
+                                      setManualDiscountLines(prev => new Set(prev).add(idx));
+                                    }
+                                  }}
                                   className="pr-6 h-8 text-sm"
                                   data-testid={`input-line-disc-amt-${idx}`}
                                 />
                                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">{"\u20AC"}</span>
                               </div>
+                              {line.itemId && customerId && manualDiscountLines.has(idx) && parseFloat(line.discount) > 0 && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 w-full px-1.5 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800"
+                                  data-testid={`button-save-contract-price-${idx}`}
+                                  disabled={quickSaveMutation.isPending}
+                                  onClick={() => {
+                                    const qty = line.quantity || 1;
+                                    const effPrice = (parseFloat(line.unitPrice) * qty - parseFloat(line.discount)) / qty;
+                                    quickSaveMutation.mutate({ custId: customerId, itemId: line.itemId, fixedPrice: Math.max(0, effPrice) });
+                                  }}
+                                >
+                                  {quickSaveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : "💾 "}Save price to contract
+                                </Button>
+                              )}
                             </div>
                           )}
                         </TableCell>
@@ -971,7 +1080,10 @@ export default function InvoiceForm() {
                           <span className="text-sm font-medium">{line.description}</span>
                         ) : (
                           <div className="space-y-1">
-                            <Select value={line.itemId || "custom"} onValueChange={(v) => updateLine(idx, "itemId", v === "custom" ? "" : v)}>
+                            <Select value={line.itemId || "custom"} onValueChange={(v) => {
+                              updateLine(idx, "itemId", v === "custom" ? "" : v);
+                              setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
+                            }}>
                               <SelectTrigger data-testid={`select-line-item-mobile-${idx}`}>
                                 <SelectValue placeholder="Select item" />
                               </SelectTrigger>
@@ -994,6 +1106,35 @@ export default function InvoiceForm() {
                                 onChange={(e) => updateLine(idx, "description", e.target.value)}
                               />
                             )}
+                            {line.itemId && isNew && (lastPricesData as Record<string, any[]>)[line.itemId]?.length > 0 && (() => {
+                              const lp = (lastPricesData as Record<string, any[]>)[line.itemId][0];
+                              const lpDisc = parseFloat(lp.lastDiscountPercent) || 0;
+                              const lpDate = lp.invoiceDate ? new Date(lp.invoiceDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+                              return (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  <span className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 leading-tight">
+                                    💡 €{parseFloat(lp.lastUnitPrice).toFixed(2)}{lpDisc > 0 ? ` −${lpDisc.toFixed(1)}%` : ""}{lpDate ? ` · ${lpDate}` : ""}
+                                  </span>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-5 px-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300"
+                                    onClick={() => {
+                                      updateLine(idx, "unitPrice", lp.lastUnitPrice);
+                                      if (parseFloat(lp.lastDiscountPercent) > 0) {
+                                        updateLine(idx, "discountPercent", lp.lastDiscountPercent);
+                                      } else if (parseFloat(lp.lastDiscountAmount) > 0) {
+                                        updateLine(idx, "discount", lp.lastDiscountAmount);
+                                      } else {
+                                        updateLine(idx, "discountPercent", "0");
+                                      }
+                                      setManualDiscountLines(prev => { const next = new Set(prev); next.delete(idx); return next; });
+                                    }}
+                                  >Apply</Button>
+                                </div>
+                              );
+                            })()}
                           </div>
                         )}
                       </div>
@@ -1060,7 +1201,7 @@ export default function InvoiceForm() {
                             inputMode="decimal"
                             placeholder="0"
                             value={line.discountPercent === "0" || line.discountPercent === "0.00" ? "" : line.discountPercent}
-                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discountPercent", v || "0"); }}
+                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) { updateLine(idx, "discountPercent", v || "0"); setManualDiscountLines(prev => new Set(prev).add(idx)); } }}
                           />
                         </div>
                         <div>
@@ -1070,10 +1211,27 @@ export default function InvoiceForm() {
                             inputMode="decimal"
                             placeholder="0.00"
                             value={line.discount === "0" || line.discount === "0.00" ? "" : line.discount}
-                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "discount", v || "0"); }}
+                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) { updateLine(idx, "discount", v || "0"); setManualDiscountLines(prev => new Set(prev).add(idx)); } }}
                           />
                         </div>
                       </div>
+                    )}
+
+                    {!isViewMode && line.itemId && customerId && manualDiscountLines.has(idx) && parseFloat(line.discount) > 0 && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 w-full px-1.5 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800"
+                        disabled={quickSaveMutation.isPending}
+                        onClick={() => {
+                          const qty = line.quantity || 1;
+                          const effPrice = (parseFloat(line.unitPrice) * qty - parseFloat(line.discount)) / qty;
+                          quickSaveMutation.mutate({ custId: customerId, itemId: line.itemId, fixedPrice: Math.max(0, effPrice) });
+                        }}
+                      >
+                        {quickSaveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : "💾 "}Save price to contract
+                      </Button>
                     )}
 
                     <div className="flex items-center justify-between pt-1">

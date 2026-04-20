@@ -81,6 +81,10 @@ export interface IStorage {
   getSalesReport(from: string, to: string, customerId?: string): Promise<any>;
   getItemSalesReport(from: string, to: string, customerId?: string, categoryId?: string): Promise<any>;
   getCustomerStatements(): Promise<any[]>;
+  getCustomerLastPrices(customerId: string): Promise<Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]>>;
+  getCustomerSavingsReport(customerId: string, from: string, to: string): Promise<any>;
+  quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number): Promise<{ contractId: string }>;
+  getContractItems(contractId: string): Promise<PriceContractItem[]>;
 
   getSettings(): Promise<SystemSetting[]>;
   getSetting(key: string): Promise<SystemSetting | undefined>;
@@ -1245,6 +1249,243 @@ export class DatabaseStorage implements IStorage {
       });
     }
     return statements;
+  }
+
+  async getContractItems(contractId: string) {
+    return db.select().from(priceContractItems).where(eq(priceContractItems.contractId, contractId));
+  }
+
+  async getCustomerLastPrices(customerId: string) {
+    const recentInvoices = await db.select({
+      id: invoices.id, date: invoices.date, invoiceNumber: invoices.invoiceNumber,
+    }).from(invoices)
+      .where(and(
+        eq(invoices.customerId, customerId),
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} != 'cancelled'`,
+      ))
+      .orderBy(desc(invoices.date))
+      .limit(50);
+
+    if (recentInvoices.length === 0) return {};
+
+    const invoiceIds = recentInvoices.map(i => i.id);
+    const invoiceMap = Object.fromEntries(recentInvoices.map(i => [i.id, { date: i.date, invoiceNumber: i.invoiceNumber }]));
+
+    const lineRows = await db.select({
+      invoiceId: invoiceItems.invoiceId,
+      itemId: invoiceItems.itemId,
+      unitPrice: invoiceItems.unitPrice,
+      discountPercent: invoiceItems.discountPercent,
+      discount: invoiceItems.discount,
+    }).from(invoiceItems)
+      .where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(invoiceIds.map(id => `'${id}'`).join(","))}]::text[]) AND ${invoiceItems.itemId} IS NOT NULL`);
+
+    const sortedRows = lineRows.sort((a, b) => {
+      const dateA = invoiceMap[a.invoiceId]?.date || "";
+      const dateB = invoiceMap[b.invoiceId]?.date || "";
+      return dateB.localeCompare(dateA);
+    });
+
+    const resultMap: Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]> = {};
+    for (const row of sortedRows) {
+      if (!row.itemId) continue;
+      if (!resultMap[row.itemId]) resultMap[row.itemId] = [];
+      if (resultMap[row.itemId].length >= 3) continue;
+      resultMap[row.itemId].push({
+        lastUnitPrice: row.unitPrice,
+        lastDiscountPercent: row.discountPercent,
+        lastDiscountAmount: row.discount,
+        invoiceDate: invoiceMap[row.invoiceId]?.date || "",
+        invoiceNumber: invoiceMap[row.invoiceId]?.invoiceNumber || "",
+      });
+    }
+    return resultMap;
+  }
+
+  async getCustomerSavingsReport(customerId: string, from: string, to: string) {
+    const matchingInvoices = await db.select({
+      id: invoices.id, invoiceNumber: invoices.invoiceNumber, date: invoices.date, total: invoices.total,
+    }).from(invoices)
+      .where(and(
+        eq(invoices.customerId, customerId),
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} != 'cancelled'`,
+        gte(invoices.date, from),
+        lte(invoices.date, to),
+      ))
+      .orderBy(desc(invoices.date));
+
+    if (matchingInvoices.length === 0) {
+      return { monthly: [], invoices: [], totalSavings: 0, totalDiscountPct: 0, invoiceCount: 0, bestDeal: null };
+    }
+
+    const invoiceIds = matchingInvoices.map(i => i.id);
+
+    const lineRows = await db.select({
+      invoiceId: invoiceItems.invoiceId,
+      itemId: invoiceItems.itemId,
+      description: invoiceItems.description,
+      quantity: invoiceItems.quantity,
+      saleUnit: invoiceItems.saleUnit,
+      unitPrice: invoiceItems.unitPrice,
+      discountPercent: invoiceItems.discountPercent,
+      discount: invoiceItems.discount,
+      total: invoiceItems.total,
+    }).from(invoiceItems)
+      .where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(invoiceIds.map(id => `'${id}'`).join(","))}]::text[])`);
+
+    const uniqueItemIds = [...new Set(lineRows.map(r => r.itemId).filter(Boolean))] as string[];
+    const catalogueMap: Record<string, number> = {};
+    if (uniqueItemIds.length > 0) {
+      const itemRows = await db.select({ id: items.id, price1: items.price1 })
+        .from(items)
+        .where(sql`${items.id} = ANY(ARRAY[${sql.raw(uniqueItemIds.map(id => `'${id}'`).join(","))}]::text[])`);
+      for (const r of itemRows) catalogueMap[r.id] = parseFloat(r.price1 || "0");
+    }
+
+    type InvoiceResult = {
+      invoiceId: string; invoiceNumber: string; date: string;
+      totalSavings: number; catalogueTotal: number; actualTotal: number; discountPct: number;
+      lines: { itemName: string; qty: number; cataloguePrice: number; unitPrice: number; savingsPerUnit: number; lineSavings: number; saleUnit: string }[];
+    };
+    const invoiceResults: InvoiceResult[] = [];
+    const monthlyMap: Record<string, { savings: number; invoiceCount: number }> = {};
+
+    for (const inv of matchingInvoices) {
+      const invLines = lineRows.filter(r => r.invoiceId === inv.id);
+      let catalogueTotal = 0;
+      let actualTotal = 0;
+      const discountedLines = [];
+
+      for (const li of invLines) {
+        const qty = li.quantity;
+        const unitPrice = parseFloat(li.unitPrice);
+        const discountAmt = parseFloat(li.discount || "0");
+        const lineTotal = parseFloat(li.total);
+        const cataloguePrice = li.itemId ? (catalogueMap[li.itemId] || unitPrice) : unitPrice;
+        const catalogueLineTotal = cataloguePrice * qty;
+        const savings = Math.max(0, catalogueLineTotal - lineTotal);
+        catalogueTotal += catalogueLineTotal;
+        actualTotal += lineTotal;
+        if (savings > 0 || discountAmt > 0) {
+          discountedLines.push({
+            itemName: li.description,
+            qty,
+            cataloguePrice,
+            unitPrice,
+            savingsPerUnit: qty > 0 ? savings / qty : 0,
+            lineSavings: savings,
+            saleUnit: li.saleUnit,
+          });
+        }
+      }
+
+      const totalSavings = Math.max(0, catalogueTotal - actualTotal);
+      const discountPct = catalogueTotal > 0 ? (totalSavings / catalogueTotal) * 100 : 0;
+
+      if (discountedLines.length > 0) {
+        invoiceResults.push({
+          invoiceId: inv.id,
+          invoiceNumber: inv.invoiceNumber,
+          date: inv.date,
+          totalSavings,
+          catalogueTotal,
+          actualTotal,
+          discountPct,
+          lines: discountedLines,
+        });
+        const monthKey = inv.date.substring(0, 7);
+        if (!monthlyMap[monthKey]) monthlyMap[monthKey] = { savings: 0, invoiceCount: 0 };
+        monthlyMap[monthKey].savings += totalSavings;
+        monthlyMap[monthKey].invoiceCount++;
+      }
+    }
+
+    const monthly = Object.entries(monthlyMap)
+      .map(([month, data]) => ({ month, savings: parseFloat(data.savings.toFixed(2)), invoiceCount: data.invoiceCount }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
+    const totalSavings = invoiceResults.reduce((s, r) => s + r.totalSavings, 0);
+    const totalCatalogue = invoiceResults.reduce((s, r) => s + r.catalogueTotal, 0);
+    const totalDiscountPct = totalCatalogue > 0 ? (totalSavings / totalCatalogue) * 100 : 0;
+    const bestDealEntry = invoiceResults.length > 0
+      ? invoiceResults.reduce((best, r) => r.totalSavings > best.savings ? { invoiceNumber: r.invoiceNumber, savings: r.totalSavings } : best, { invoiceNumber: "", savings: 0 })
+      : null;
+
+    const [cust] = await db.select({ name: customers.name }).from(customers).where(eq(customers.id, customerId));
+    const savedVsCatalogue = parseFloat(totalSavings.toFixed(2));
+
+    return {
+      customerId,
+      customerName: cust?.name || customerId,
+      monthly,
+      invoices: invoiceResults.map(r => ({
+        invoiceId: r.invoiceId,
+        invoiceNumber: r.invoiceNumber,
+        invoiceDate: r.date,
+        totalSavings: r.totalSavings,
+        invoiceTotal: r.actualTotal,
+        lines: r.lines.map(l => ({
+          itemName: l.itemName,
+          qty: l.qty,
+          unitPrice: l.unitPrice,
+          discountPercent: l.unitPrice > 0 ? (l.savingsPerUnit / l.unitPrice) * 100 : 0,
+          discountAmount: l.lineSavings,
+          savings: l.lineSavings,
+        })),
+      })),
+      totalSavings: parseFloat(totalSavings.toFixed(2)),
+      avgDiscountPercent: parseFloat(totalDiscountPct.toFixed(1)),
+      invoiceCount: invoiceResults.length,
+      bestDeal: bestDealEntry && bestDealEntry.savings > 0 ? bestDealEntry.savings : 0,
+      savedVsCatalogue,
+    };
+  }
+
+  async quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number) {
+    const today = new Date().toISOString().split("T")[0];
+    const existingContracts = await db.select().from(priceContracts).where(and(
+      eq(priceContracts.customerId, customerId),
+      sql`${(priceContracts as any).source} = 'invoice-discount'`,
+      eq(priceContracts.active, true),
+    ));
+
+    let contractId: string;
+    if (existingContracts.length > 0) {
+      contractId = existingContracts[0].id;
+    } else {
+      const [cust] = await db.select({ name: customers.name }).from(customers).where(eq(customers.id, customerId));
+      const customerName = cust?.name || customerId;
+      const endDate = new Date();
+      endDate.setFullYear(endDate.getFullYear() + 2);
+      const [newContract] = await db.insert(priceContracts).values({
+        customerId,
+        name: `Auto – ${customerName}`,
+        startDate: today,
+        endDate: endDate.toISOString().split("T")[0],
+        discountType: "percentage",
+        discountValue: "0",
+        active: true,
+        source: "invoice-discount",
+      } as any).returning();
+      contractId = newContract.id;
+    }
+
+    const existingItem = await db.select().from(priceContractItems).where(and(
+      eq(priceContractItems.contractId, contractId),
+      eq(priceContractItems.itemId, itemId),
+    ));
+
+    if (existingItem.length > 0) {
+      await db.update(priceContractItems)
+        .set({ specialPrice: fixedPrice.toFixed(2) })
+        .where(eq(priceContractItems.id, existingItem[0].id));
+    } else {
+      await db.insert(priceContractItems).values({ contractId, itemId, specialPrice: fixedPrice.toFixed(2) });
+    }
+
+    return { contractId };
   }
 
   async getSettings() {

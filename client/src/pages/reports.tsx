@@ -11,8 +11,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus } from "lucide-react";
-import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip, Legend, ResponsiveContainer, Cell } from "recharts";
+import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus, BadgePercent } from "lucide-react";
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip, Legend, ResponsiveContainer, Cell, AreaChart, Area } from "recharts";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -43,6 +43,11 @@ export default function Reports() {
   const [itemSortBy, setItemSortBy] = useState<"revenue" | "profit" | "marginPct" | "qtySold">("revenue");
   const [itemSearch, setItemSearch] = useState("");
   const [itemMinMargin, setItemMinMargin] = useState("");
+
+  const [savingsCustomer, setSavingsCustomer] = useState<string>("");
+  const [savingsFrom, setSavingsFrom] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 12); return d.toISOString().split("T")[0]; });
+  const [savingsTo, setSavingsTo] = useState(new Date().toISOString().split("T")[0]);
+  const [expandedSavingsInvoice, setExpandedSavingsInvoice] = useState<string | null>(null);
 
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: categoryList = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
@@ -120,6 +125,30 @@ export default function Reports() {
     queryKey: ["/api/reports/statements"],
   });
 
+  type SavingsInvoiceRow = {
+    invoiceId: string;
+    invoiceNumber: string;
+    invoiceDate: string;
+    totalSavings: number;
+    invoiceTotal: number;
+    lines: { itemName: string; qty: number; unitPrice: number; discountPercent: number; discountAmount: number; savings: number }[];
+  };
+  type SavingsReport = {
+    customerId: string;
+    customerName: string;
+    totalSavings: number;
+    avgDiscountPercent: number;
+    invoiceCount: number;
+    bestDeal: number;
+    savedVsCatalogue: number;
+    monthly: { month: string; savings: number; invoiceCount: number }[];
+    invoices: SavingsInvoiceRow[];
+  };
+  const { data: savingsReport, isLoading: savingsLoading } = useQuery<SavingsReport>({
+    queryKey: ["/api/reports/savings", savingsCustomer, savingsFrom, savingsTo],
+    enabled: !!savingsCustomer,
+  });
+
   const previewStatement = (customerId: string) => {
     window.open(`/api/reports/statement/${customerId}/pdf?t=${Date.now()}`, "_blank");
   };
@@ -166,6 +195,9 @@ export default function Reports() {
           </TabsTrigger>
           <TabsTrigger value="items" data-testid="tab-item-sales">
             <Package className="w-4 h-4 mr-1" /> Item Performance
+          </TabsTrigger>
+          <TabsTrigger value="savings" data-testid="tab-savings-report">
+            <BadgePercent className="w-4 h-4 mr-1" /> Customer Savings
           </TabsTrigger>
           <TabsTrigger value="statements" data-testid="tab-statements">
             <Users className="w-4 h-4 mr-1" /> Statements
@@ -1047,6 +1079,197 @@ export default function Reports() {
             );
           })()}
         </TabsContent>
+
+        <TabsContent value="savings" className="mt-4 space-y-4">
+          {/* Filter bar */}
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-end gap-4 flex-wrap">
+                <div>
+                  <Label className="text-xs">Customer</Label>
+                  <Select value={savingsCustomer} onValueChange={setSavingsCustomer} data-testid="select-savings-customer">
+                    <SelectTrigger className="w-52">
+                      <SelectValue placeholder="Select customer…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">From</Label>
+                  <Input type="date" value={savingsFrom} onChange={(e) => setSavingsFrom(e.target.value)} data-testid="input-savings-from" />
+                </div>
+                <div>
+                  <Label className="text-xs">To</Label>
+                  <Input type="date" value={savingsTo} onChange={(e) => setSavingsTo(e.target.value)} data-testid="input-savings-to" />
+                </div>
+                {savingsReport && (
+                  <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-savings">
+                    <Printer className="w-4 h-4 mr-1" /> Print
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {!savingsCustomer && (
+            <Card>
+              <CardContent className="p-10 text-center text-muted-foreground">
+                <BadgePercent className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                <p>Select a customer to view their savings history.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {savingsCustomer && savingsLoading && (
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
+            </div>
+          )}
+
+          {savingsReport && !savingsLoading && (
+            <>
+              {/* Stat cards */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground mb-1">Total Savings</p>
+                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400" data-testid="stat-total-savings">€{savingsReport.totalSavings.toFixed(2)}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground mb-1">Avg Discount</p>
+                    <p className="text-2xl font-bold" data-testid="stat-avg-discount">{savingsReport.avgDiscountPercent.toFixed(1)}%</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground mb-1">Invoices with Disc</p>
+                    <p className="text-2xl font-bold" data-testid="stat-invoice-count">{savingsReport.invoiceCount}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground mb-1">Best Deal</p>
+                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400" data-testid="stat-best-deal">€{savingsReport.bestDeal.toFixed(2)}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground mb-1">Saved vs Catalogue</p>
+                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400" data-testid="stat-saved-vs-catalogue">€{savingsReport.savedVsCatalogue.toFixed(2)}</p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Monthly AreaChart */}
+              {savingsReport.monthly.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Monthly Savings Timeline</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <AreaChart data={savingsReport.monthly} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                        <defs>
+                          <linearGradient id="savingsGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                        <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                        <YAxis tickFormatter={(v) => `€${v}`} tick={{ fontSize: 11 }} width={60} />
+                        <RechartTooltip formatter={(value: number) => [`€${value.toFixed(2)}`, "Savings"]} />
+                        <Area type="monotone" dataKey="savings" stroke="#10b981" strokeWidth={2} fill="url(#savingsGradient)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Invoice breakdown table */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Invoice Breakdown — {savingsReport.customerName}</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  {savingsReport.invoices.length === 0 ? (
+                    <p className="p-6 text-center text-muted-foreground">No discounted invoices found in this period.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-8" />
+                          <TableHead>Invoice</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
+                          <TableHead className="text-right text-emerald-700 dark:text-emerald-400">Savings</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {savingsReport.invoices.map((inv) => (
+                          <Fragment key={inv.invoiceId}>
+                            <TableRow
+                              className="cursor-pointer hover:bg-muted/50"
+                              onClick={() => setExpandedSavingsInvoice(expandedSavingsInvoice === inv.invoiceId ? null : inv.invoiceId)}
+                              data-testid={`row-savings-invoice-${inv.invoiceId}`}
+                            >
+                              <TableCell className="py-2 pr-0">
+                                {expandedSavingsInvoice === inv.invoiceId
+                                  ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                                  : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                              </TableCell>
+                              <TableCell className="font-medium py-2">{inv.invoiceNumber}</TableCell>
+                              <TableCell className="text-sm text-muted-foreground py-2">{formatDate(inv.invoiceDate)}</TableCell>
+                              <TableCell className="text-right py-2">€{inv.invoiceTotal.toFixed(2)}</TableCell>
+                              <TableCell className="text-right font-semibold text-emerald-600 dark:text-emerald-400 py-2">€{inv.totalSavings.toFixed(2)}</TableCell>
+                            </TableRow>
+                            {expandedSavingsInvoice === inv.invoiceId && (
+                              <TableRow>
+                                <TableCell colSpan={5} className="bg-muted/30 py-0">
+                                  <div className="px-6 py-3">
+                                    <table className="w-full text-xs">
+                                      <thead>
+                                        <tr className="text-muted-foreground">
+                                          <th className="text-left py-1 pr-4">Item</th>
+                                          <th className="text-right pr-4">Qty</th>
+                                          <th className="text-right pr-4">Unit Price</th>
+                                          <th className="text-right pr-4">Disc %</th>
+                                          <th className="text-right pr-4">Disc €</th>
+                                          <th className="text-right text-emerald-700 dark:text-emerald-400">Saving</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {inv.lines.map((l, li) => (
+                                          <tr key={li} className="border-t border-border/40">
+                                            <td className="py-1 pr-4">{l.itemName}</td>
+                                            <td className="text-right pr-4">{l.qty}</td>
+                                            <td className="text-right pr-4">€{l.unitPrice.toFixed(2)}</td>
+                                            <td className="text-right pr-4">{l.discountPercent.toFixed(1)}%</td>
+                                            <td className="text-right pr-4">€{l.discountAmount.toFixed(2)}</td>
+                                            <td className="text-right font-medium text-emerald-600 dark:text-emerald-400">€{l.savings.toFixed(2)}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </Fragment>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </TabsContent>
+
       </Tabs>
     </div>
   );

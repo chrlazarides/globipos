@@ -1180,13 +1180,27 @@ export async function registerRoutes(
   // Price Contracts
   app.get("/api/price-contracts", async (_req, res) => {
     const contracts = await storage.getPriceContracts();
-    const contractsWithRules = await Promise.all(
+    const contractsWithAll = await Promise.all(
       contracts.map(async (c) => {
         const rules = await storage.getContractRules(c.id);
-        return { ...c, rules };
+        const contractItems = await storage.getContractItems(c.id);
+        return { ...c, rules, contractItems };
       })
     );
-    res.json(contractsWithRules);
+    res.json(contractsWithAll);
+  });
+
+  app.post("/api/price-contracts/quick-save", async (req, res) => {
+    try {
+      const { customerId, itemId, fixedPrice } = req.body;
+      if (!customerId || !itemId || fixedPrice == null) {
+        return res.status(400).json({ message: "customerId, itemId, and fixedPrice are required" });
+      }
+      const result = await storage.quickSaveContractPrice(customerId, itemId, parseFloat(fixedPrice));
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
   });
 
   app.post("/api/price-contracts", async (req, res) => {
@@ -1707,6 +1721,20 @@ export async function registerRoutes(
         req.params.from, req.params.to,
         req.params.customerId, req.params.categoryId
       );
+      res.json(report);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/invoices/last-prices/:customerId", async (req, res) => {
+    try {
+      const prices = await storage.getCustomerLastPrices(req.params.customerId);
+      res.json(prices);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/reports/savings/:customerId/:from/:to", async (req, res) => {
+    try {
+      const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
       res.json(report);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
