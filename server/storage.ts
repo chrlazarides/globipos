@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, and, gte, lte, lt, desc, sql, ilike, or } from "drizzle-orm";
+import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray } from "drizzle-orm";
 import {
   users, categories, items, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
@@ -1256,7 +1256,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCustomerLastPrices(customerId: string) {
-    const recentInvoices = await db.select({
+    const allInvoices = await db.select({
       id: invoices.id, date: invoices.date, invoiceNumber: invoices.invoiceNumber,
     }).from(invoices)
       .where(and(
@@ -1264,13 +1264,12 @@ export class DatabaseStorage implements IStorage {
         eq(invoices.type, "invoice"),
         sql`${invoices.status} != 'cancelled'`,
       ))
-      .orderBy(desc(invoices.date))
-      .limit(50);
+      .orderBy(desc(invoices.date));
 
-    if (recentInvoices.length === 0) return {};
+    if (allInvoices.length === 0) return {};
 
-    const invoiceIds = recentInvoices.map(i => i.id);
-    const invoiceMap = Object.fromEntries(recentInvoices.map(i => [i.id, { date: i.date, invoiceNumber: i.invoiceNumber }]));
+    const invoiceIds = allInvoices.map(i => i.id);
+    const invoiceMap = Object.fromEntries(allInvoices.map(i => [i.id, { date: i.date, invoiceNumber: i.invoiceNumber }]));
 
     const lineRows = await db.select({
       invoiceId: invoiceItems.invoiceId,
@@ -1279,7 +1278,10 @@ export class DatabaseStorage implements IStorage {
       discountPercent: invoiceItems.discountPercent,
       discount: invoiceItems.discount,
     }).from(invoiceItems)
-      .where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(invoiceIds.map(id => `'${id}'`).join(","))}]::text[]) AND ${invoiceItems.itemId} IS NOT NULL`);
+      .where(and(
+        inArray(invoiceItems.invoiceId, invoiceIds),
+        sql`${invoiceItems.itemId} IS NOT NULL`,
+      ));
 
     const sortedRows = lineRows.sort((a, b) => {
       const dateA = invoiceMap[a.invoiceId]?.date || "";
@@ -1333,14 +1335,14 @@ export class DatabaseStorage implements IStorage {
       discount: invoiceItems.discount,
       total: invoiceItems.total,
     }).from(invoiceItems)
-      .where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(invoiceIds.map(id => `'${id}'`).join(","))}]::text[])`);
+      .where(inArray(invoiceItems.invoiceId, invoiceIds));
 
-    const uniqueItemIds = [...new Set(lineRows.map(r => r.itemId).filter(Boolean))] as string[];
+    const uniqueItemIds = [...new Set(lineRows.map(r => r.itemId).filter((id): id is string => id !== null))];
     const catalogueMap: Record<string, number> = {};
     if (uniqueItemIds.length > 0) {
       const itemRows = await db.select({ id: items.id, price1: items.price1 })
         .from(items)
-        .where(sql`${items.id} = ANY(ARRAY[${sql.raw(uniqueItemIds.map(id => `'${id}'`).join(","))}]::text[])`);
+        .where(inArray(items.id, uniqueItemIds));
       for (const r of itemRows) catalogueMap[r.id] = parseFloat(r.price1 || "0");
     }
 
@@ -1459,7 +1461,7 @@ export class DatabaseStorage implements IStorage {
       const customerName = cust?.name || customerId;
       const endDate = new Date();
       endDate.setFullYear(endDate.getFullYear() + 2);
-      const [newContract] = await db.insert(priceContracts).values({
+      const insertPayload: InsertPriceContract = {
         customerId,
         name: `Auto – ${customerName}`,
         startDate: today,
@@ -1468,7 +1470,8 @@ export class DatabaseStorage implements IStorage {
         discountValue: "0",
         active: true,
         source: "invoice-discount",
-      } as any).returning();
+      };
+      const [newContract] = await db.insert(priceContracts).values(insertPayload).returning();
       contractId = newContract.id;
     }
 

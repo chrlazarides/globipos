@@ -1169,31 +1169,42 @@ export default function Reports() {
                 </Card>
               </div>
 
-              {/* Monthly AreaChart */}
-              {savingsReport.monthly.length > 0 && (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Monthly Savings Timeline</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={220}>
-                      <AreaChart data={savingsReport.monthly} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                        <defs>
-                          <linearGradient id="savingsGradient" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                        <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                        <YAxis tickFormatter={(v) => `€${v}`} tick={{ fontSize: 11 }} width={60} />
-                        <RechartTooltip formatter={(value: number) => [`€${value.toFixed(2)}`, "Savings"]} />
-                        <Area type="monotone" dataKey="savings" stroke="#10b981" strokeWidth={2} fill="url(#savingsGradient)" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              )}
+              {/* Monthly Chart with cumulative line */}
+              {savingsReport.monthly.length > 0 && (() => {
+                let cumulative = 0;
+                const chartData = savingsReport.monthly.map(m => {
+                  cumulative += m.savings;
+                  return { ...m, cumulative: parseFloat(cumulative.toFixed(2)) };
+                });
+                return (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Monthly Savings Timeline</CardTitle>
+                      <p className="text-xs text-muted-foreground">Bars = monthly savings · Line = cumulative total</p>
+                    </CardHeader>
+                    <CardContent>
+                      <ResponsiveContainer width="100%" height={240}>
+                        <ComposedChart data={chartData} margin={{ top: 5, right: 50, left: 0, bottom: 5 }}>
+                          <defs>
+                            <linearGradient id="savingsGradient" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                              <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                          <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                          <YAxis yAxisId="monthly" tickFormatter={(v: number) => `€${v}`} tick={{ fontSize: 11 }} width={60} />
+                          <YAxis yAxisId="cumulative" orientation="right" tickFormatter={(v: number) => `€${v}`} tick={{ fontSize: 11 }} width={60} />
+                          <RechartTooltip formatter={(value: number, name: string) => [`€${value.toFixed(2)}`, name === "savings" ? "Monthly Savings" : "Cumulative"]} />
+                          <Legend formatter={(val: string) => val === "savings" ? "Monthly" : "Cumulative"} />
+                          <Area yAxisId="monthly" type="monotone" dataKey="savings" stroke="#10b981" strokeWidth={2} fill="url(#savingsGradient)" />
+                          <Line yAxisId="cumulative" type="monotone" dataKey="cumulative" stroke="#6366f1" strokeWidth={2} dot={false} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
 
               {/* Invoice breakdown table */}
               <Card>
@@ -1212,10 +1223,17 @@ export default function Reports() {
                           <TableHead>Date</TableHead>
                           <TableHead className="text-right">Total</TableHead>
                           <TableHead className="text-right text-emerald-700 dark:text-emerald-400">Savings</TableHead>
+                          <TableHead className="text-right">Disc %</TableHead>
+                          <TableHead className="w-8 text-center">Trend</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {savingsReport.invoices.map((inv) => (
+                        {savingsReport.invoices.map((inv, invIdx) => {
+                          const prevInv = savingsReport.invoices[invIdx + 1];
+                          const savingsPct = inv.invoiceTotal > 0 ? (inv.totalSavings / inv.invoiceTotal) * 100 : 0;
+                          const prevPct = prevInv && prevInv.invoiceTotal > 0 ? (prevInv.totalSavings / prevInv.invoiceTotal) * 100 : null;
+                          const trend = prevPct === null ? null : savingsPct > prevPct + 0.1 ? "up" : savingsPct < prevPct - 0.1 ? "down" : "flat";
+                          return (
                           <Fragment key={inv.invoiceId}>
                             <TableRow
                               className="cursor-pointer hover:bg-muted/50"
@@ -1231,6 +1249,12 @@ export default function Reports() {
                               <TableCell className="text-sm text-muted-foreground py-2">{formatDate(inv.invoiceDate)}</TableCell>
                               <TableCell className="text-right py-2">€{inv.invoiceTotal.toFixed(2)}</TableCell>
                               <TableCell className="text-right font-semibold text-emerald-600 dark:text-emerald-400 py-2">€{inv.totalSavings.toFixed(2)}</TableCell>
+                              <TableCell className="text-right text-sm py-2">{savingsPct.toFixed(1)}%</TableCell>
+                              <TableCell className="text-center py-2">
+                                {trend === "up" && <ArrowUp className="w-3.5 h-3.5 text-emerald-500 inline" />}
+                                {trend === "down" && <ArrowDown className="w-3.5 h-3.5 text-red-500 inline" />}
+                                {trend === "flat" && <Minus className="w-3.5 h-3.5 text-muted-foreground inline" />}
+                              </TableCell>
                             </TableRow>
                             {expandedSavingsInvoice === inv.invoiceId && (
                               <TableRow>
@@ -1265,7 +1289,8 @@ export default function Reports() {
                               </TableRow>
                             )}
                           </Fragment>
-                        ))}
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   )}
