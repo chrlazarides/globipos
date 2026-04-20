@@ -79,6 +79,7 @@ export interface IStorage {
   getDashboardStats(): Promise<any>;
   getDashboardCharts(): Promise<any>;
   getSalesReport(from: string, to: string, customerId?: string): Promise<any>;
+  getItemSalesReport(from: string, to: string, customerId?: string, categoryId?: string): Promise<any>;
   getCustomerStatements(): Promise<any[]>;
 
   getSettings(): Promise<SystemSetting[]>;
@@ -894,6 +895,128 @@ export class DatabaseStorage implements IStorage {
       overallMargin: overallMargin.toFixed(1),
       invoiceCount: invoicesWithCost.length,
       customerProfits,
+    };
+  }
+
+  async getItemSalesReport(from: string, to: string, customerId?: string, categoryId?: string) {
+    let invConditions: any[] = [
+      eq(invoices.type, "invoice"),
+      gte(invoices.date, from),
+      lte(invoices.date, to),
+      sql`${invoices.status} != 'cancelled'`,
+    ];
+    if (customerId && customerId !== "all") invConditions.push(eq(invoices.customerId, customerId));
+
+    const matchingInvoices = await db.select({ id: invoices.id, date: invoices.date })
+      .from(invoices).where(and(...invConditions));
+
+    if (matchingInvoices.length === 0) {
+      return { items: [], totalRevenue: "0.00", totalCost: "0.00", totalProfit: "0.00", overallMargin: "0.0", totalQty: 0, uniqueItemCount: 0 };
+    }
+
+    const invoiceIds = matchingInvoices.map(i => i.id);
+    const invoiceDateMap = Object.fromEntries(matchingInvoices.map(i => [i.id, i.date]));
+
+    const lineRows = await db.select({
+      invoiceId: invoiceItems.invoiceId,
+      itemId: invoiceItems.itemId,
+      quantity: invoiceItems.quantity,
+      saleUnit: invoiceItems.saleUnit,
+      total: invoiceItems.total,
+    }).from(invoiceItems)
+      .where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(invoiceIds.map(id => `'${id}'`).join(","))}]::text[])`);
+
+    const uniqueItemIds = [...new Set(lineRows.map(r => r.itemId).filter(Boolean))] as string[];
+    type ItemDetail = { name: string; sku: string; costPrice: number; packSize: number; categoryId: string | null; categoryName: string };
+    let itemDetailMap: Record<string, ItemDetail> = {};
+
+    if (uniqueItemIds.length > 0) {
+      const itemRows = await db.select({
+        id: items.id, name: items.name, sku: items.sku,
+        costPrice: items.costPrice, packSize: items.packSize,
+        categoryId: items.categoryId, categoryName: categories.name,
+      }).from(items)
+        .leftJoin(categories, eq(items.categoryId, categories.id))
+        .where(sql`${items.id} = ANY(ARRAY[${sql.raw(uniqueItemIds.map(id => `'${id}'`).join(","))}]::text[])`);
+      itemDetailMap = Object.fromEntries(itemRows.map(r => [r.id, {
+        name: r.name, sku: r.sku,
+        costPrice: parseFloat(r.costPrice || "0"),
+        packSize: r.packSize || 1,
+        categoryId: r.categoryId,
+        categoryName: r.categoryName || "Uncategorized",
+      }]));
+    }
+
+    type ItemEntry = {
+      itemId: string; itemName: string; sku: string;
+      categoryId: string | null; categoryName: string;
+      qtySold: number; revenue: number; cost: number;
+      invoiceSet: Set<string>;
+      monthly: Record<string, { qty: number; revenue: number; cost: number }>;
+    };
+    const itemMap: Record<string, ItemEntry> = {};
+
+    for (const li of lineRows) {
+      if (!li.itemId) continue;
+      const d = itemDetailMap[li.itemId];
+      if (!d) continue;
+      if (categoryId && categoryId !== "all" && d.categoryId !== categoryId) continue;
+
+      if (!itemMap[li.itemId]) {
+        itemMap[li.itemId] = {
+          itemId: li.itemId, itemName: d.name, sku: d.sku,
+          categoryId: d.categoryId, categoryName: d.categoryName,
+          qtySold: 0, revenue: 0, cost: 0, invoiceSet: new Set(), monthly: {},
+        };
+      }
+      const e = itemMap[li.itemId];
+      const qty = li.saleUnit === "pack" ? li.quantity * d.packSize : li.quantity;
+      const rev = parseFloat(li.total);
+      const cos = d.costPrice * qty;
+      e.qtySold += qty;
+      e.revenue += rev;
+      e.cost += cos;
+      e.invoiceSet.add(li.invoiceId);
+      const monthKey = (invoiceDateMap[li.invoiceId] || "").substring(0, 7);
+      if (!e.monthly[monthKey]) e.monthly[monthKey] = { qty: 0, revenue: 0, cost: 0 };
+      e.monthly[monthKey].qty += qty;
+      e.monthly[monthKey].revenue += rev;
+      e.monthly[monthKey].cost += cos;
+    }
+
+    const result = Object.values(itemMap).map(e => {
+      const profit = e.revenue - e.cost;
+      const marginPct = e.revenue > 0 ? (profit / e.revenue) * 100 : 0;
+      return {
+        itemId: e.itemId, itemName: e.itemName, sku: e.sku,
+        categoryId: e.categoryId, categoryName: e.categoryName,
+        qtySold: e.qtySold,
+        revenue: parseFloat(e.revenue.toFixed(2)),
+        cost: parseFloat(e.cost.toFixed(2)),
+        profit: parseFloat(profit.toFixed(2)),
+        marginPct: parseFloat(marginPct.toFixed(1)),
+        invoiceCount: e.invoiceSet.size,
+        avgUnitPrice: e.qtySold > 0 ? parseFloat((e.revenue / e.qtySold).toFixed(2)) : 0,
+        monthly: Object.entries(e.monthly).map(([month, m]) => ({
+          month, qty: m.qty,
+          revenue: parseFloat(m.revenue.toFixed(2)),
+          profit: parseFloat((m.revenue - m.cost).toFixed(2)),
+        })).sort((a, b) => a.month.localeCompare(b.month)),
+      };
+    }).sort((a, b) => b.revenue - a.revenue);
+
+    const totRev = result.reduce((s, r) => s + r.revenue, 0);
+    const totCost = result.reduce((s, r) => s + r.cost, 0);
+    const totProfit = result.reduce((s, r) => s + r.profit, 0);
+    const totQty = result.reduce((s, r) => s + r.qtySold, 0);
+    return {
+      items: result,
+      totalRevenue: totRev.toFixed(2),
+      totalCost: totCost.toFixed(2),
+      totalProfit: totProfit.toFixed(2),
+      overallMargin: totRev > 0 ? ((totProfit / totRev) * 100).toFixed(1) : "0.0",
+      totalQty: totQty,
+      uniqueItemCount: result.length,
     };
   }
 

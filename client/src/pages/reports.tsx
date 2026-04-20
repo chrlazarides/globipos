@@ -11,11 +11,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2 } from "lucide-react";
+import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus } from "lucide-react";
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip, Legend, ResponsiveContainer, Cell } from "recharts";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import type { Customer, Invoice } from "@shared/schema";
+import type { Customer, Invoice, Category } from "@shared/schema";
 
 export default function Reports() {
   const { toast } = useToast();
@@ -38,7 +39,26 @@ export default function Reports() {
   });
   const [dateTo, setDateTo] = useState(new Date().toISOString().split("T")[0]);
 
+  const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [itemSortBy, setItemSortBy] = useState<"revenue" | "profit" | "marginPct" | "qtySold">("revenue");
+  const [itemSearch, setItemSearch] = useState("");
+  const [itemMinMargin, setItemMinMargin] = useState("");
+
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+  const { data: categoryList = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
+
+  type ItemRow = {
+    itemId: string; itemName: string; sku: string; categoryId: string | null;
+    categoryName: string; qtySold: number; revenue: number; cost: number;
+    profit: number; marginPct: number; invoiceCount: number; avgUnitPrice: number;
+    monthly: { month: string; qty: number; revenue: number; profit: number }[];
+  };
+  const { data: itemReport, isLoading: itemLoading } = useQuery<{
+    items: ItemRow[];
+    totalRevenue: string; totalCost: string; totalProfit: string;
+    overallMargin: string; totalQty: number; uniqueItemCount: number;
+  }>({ queryKey: ["/api/reports/items", dateFrom, dateTo, selectedCustomer, selectedCategory] });
+
   const { data: salesReport, isLoading: salesLoading } = useQuery<{
     invoices: (Invoice & { customerName: string; costTotal: string; profit: string; marginPct: string })[];
     totalRevenue: string;
@@ -143,6 +163,9 @@ export default function Reports() {
         <TabsList>
           <TabsTrigger value="sales" data-testid="tab-sales-report">
             <BarChart3 className="w-4 h-4 mr-1" /> Sales Report
+          </TabsTrigger>
+          <TabsTrigger value="items" data-testid="tab-item-sales">
+            <Package className="w-4 h-4 mr-1" /> Item Performance
           </TabsTrigger>
           <TabsTrigger value="statements" data-testid="tab-statements">
             <Users className="w-4 h-4 mr-1" /> Statements
@@ -403,6 +426,262 @@ export default function Reports() {
               </Card>
             </>
           ) : null}
+        </TabsContent>
+
+        <TabsContent value="items" className="mt-4 space-y-4">
+          {/* ── Filter bar ── */}
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-end gap-3 flex-wrap">
+                <div>
+                  <Label className="text-xs">From</Label>
+                  <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} data-testid="input-item-date-from" />
+                </div>
+                <div>
+                  <Label className="text-xs">To</Label>
+                  <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} data-testid="input-item-date-to" />
+                </div>
+                <div>
+                  <Label className="text-xs">Customer</Label>
+                  <Select value={selectedCustomer} onValueChange={setSelectedCustomer}>
+                    <SelectTrigger className="w-[180px]" data-testid="select-item-customer"><SelectValue placeholder="All Customers" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Customers</SelectItem>
+                      {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Category</Label>
+                  <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                    <SelectTrigger className="w-[155px]" data-testid="select-item-category"><SelectValue placeholder="All Categories" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Categories</SelectItem>
+                      {categoryList.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Sort By</Label>
+                  <Select value={itemSortBy} onValueChange={v => setItemSortBy(v as "revenue" | "profit" | "marginPct" | "qtySold")}>
+                    <SelectTrigger className="w-[130px]" data-testid="select-item-sort"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="revenue">Revenue</SelectItem>
+                      <SelectItem value="profit">Profit</SelectItem>
+                      <SelectItem value="marginPct">Margin %</SelectItem>
+                      <SelectItem value="qtySold">Units Sold</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Min Margin %</Label>
+                  <Input type="number" placeholder="e.g. 20" value={itemMinMargin} onChange={e => setItemMinMargin(e.target.value)} className="w-24" data-testid="input-item-min-margin" />
+                </div>
+                <div>
+                  <Label className="text-xs">Search</Label>
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <Input placeholder="Name or SKU…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} className="pl-8 w-44" data-testid="input-item-search" />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ── Results ── */}
+          {itemLoading ? <Skeleton className="h-64" /> : itemReport ? (() => {
+            const minM = itemMinMargin !== "" ? parseFloat(itemMinMargin) : -Infinity;
+            const srch = itemSearch.toLowerCase();
+            const displayItems = (itemReport.items ?? [])
+              .filter(r =>
+                (srch ? r.itemName.toLowerCase().includes(srch) || r.sku.toLowerCase().includes(srch) : true)
+                && r.marginPct >= minM
+              )
+              .sort((a, b) => (b[itemSortBy] as number) - (a[itemSortBy] as number));
+
+            const chartData = [...displayItems]
+              .sort((a, b) => b.revenue - a.revenue).slice(0, 12)
+              .map(r => ({
+                name: r.itemName.length > 22 ? r.itemName.substring(0, 21) + "…" : r.itemName,
+                revenue: r.revenue, profit: r.profit > 0 ? r.profit : 0, loss: r.profit < 0 ? Math.abs(r.profit) : 0, margin: r.marginPct,
+              })).reverse();
+
+            const MarginBadge = ({ m }: { m: number }) => {
+              if (m >= 35) return <span className="flex items-center gap-0.5 text-green-600 font-semibold text-xs" title="Excellent margin"><TrendingUp className="w-3.5 h-3.5" />{m.toFixed(1)}%</span>;
+              if (m >= 20) return <span className="flex items-center gap-0.5 text-green-500 text-xs" title="Good margin"><ArrowUp className="w-3.5 h-3.5" />{m.toFixed(1)}%</span>;
+              if (m >= 10) return <span className="flex items-center gap-0.5 text-amber-500 text-xs" title="Marginal"><Minus className="w-3.5 h-3.5" />{m.toFixed(1)}%</span>;
+              if (m >= 0) return <span className="flex items-center gap-0.5 text-orange-500 text-xs" title="Poor margin"><ArrowDown className="w-3.5 h-3.5" />{m.toFixed(1)}%</span>;
+              return <span className="flex items-center gap-0.5 text-red-600 font-semibold text-xs" title="Negative margin"><TrendingDown className="w-3.5 h-3.5" />{m.toFixed(1)}%</span>;
+            };
+
+            const exportCsv = () => {
+              const headers = ["Item Name","SKU","Category","Qty Sold","Revenue €","Cost €","Profit €","Margin %","Invoices","Avg Price €"];
+              const rows = displayItems.map(r => [r.itemName, r.sku, r.categoryName, r.qtySold, r.revenue, r.cost, r.profit, r.marginPct, r.invoiceCount, r.avgUnitPrice]);
+              const csv = [headers, ...rows].map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+              const blob = new Blob([csv], { type: "text/csv" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a"); a.href = url; a.download = `item-performance-${dateFrom}-${dateTo}.csv`; a.click();
+              URL.revokeObjectURL(url);
+            };
+
+            const fmt = (n: number) => n.toLocaleString("el-CY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+            return (
+              <>
+                {/* Stat cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+                  <Card><CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Revenue (Ex-VAT)</p>
+                    <p className="text-xl font-bold mt-1" data-testid="item-stat-revenue">€{fmt(parseFloat(itemReport.totalRevenue))}</p>
+                  </CardContent></Card>
+                  <Card><CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Cost</p>
+                    <p className="text-xl font-bold mt-1" data-testid="item-stat-cost">€{fmt(parseFloat(itemReport.totalCost))}</p>
+                  </CardContent></Card>
+                  <Card><CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Gross Profit</p>
+                    <p className={`text-xl font-bold mt-1 ${parseFloat(itemReport.totalProfit) >= 0 ? "text-green-600" : "text-red-500"}`} data-testid="item-stat-profit">
+                      €{fmt(parseFloat(itemReport.totalProfit))}
+                    </p>
+                  </CardContent></Card>
+                  <Card><CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Avg Margin</p>
+                    <p className={`text-xl font-bold mt-1 ${parseFloat(itemReport.overallMargin) >= 20 ? "text-green-600" : parseFloat(itemReport.overallMargin) >= 0 ? "text-amber-500" : "text-red-500"}`} data-testid="item-stat-margin">
+                      {itemReport.overallMargin}%
+                    </p>
+                  </CardContent></Card>
+                  <Card><CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Units Sold</p>
+                    <p className="text-xl font-bold mt-1" data-testid="item-stat-qty">{itemReport.totalQty.toLocaleString()}</p>
+                  </CardContent></Card>
+                  <Card><CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Unique Items</p>
+                    <p className="text-xl font-bold mt-1" data-testid="item-stat-unique">{displayItems.length}</p>
+                    {displayItems.length !== itemReport.uniqueItemCount && <p className="text-xs text-muted-foreground mt-0.5">of {itemReport.uniqueItemCount} total</p>}
+                  </CardContent></Card>
+                </div>
+
+                {/* Chart */}
+                {chartData.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                        <BarChart2 className="w-4 h-4 text-indigo-500" />
+                        Top {chartData.length} Items — Revenue vs Profit &amp; Margin %
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <ResponsiveContainer width="100%" height={Math.max(280, chartData.length * 38)}>
+                        <ComposedChart data={chartData} layout="vertical" margin={{ top: 4, right: 56, bottom: 4, left: 180 }}>
+                          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                          <XAxis type="number" tickFormatter={v => `€${(v/1000).toFixed(1)}k`} tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                          <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#475569" }} width={175} axisLine={false} tickLine={false} />
+                          <RechartTooltip
+                            formatter={(value: number, name: string) => {
+                              if (name === "margin") return [`${value.toFixed(1)}%`, "Margin %"];
+                              return [`€${fmt(value)}`, name === "revenue" ? "Revenue" : name === "profit" ? "Profit" : "Loss"];
+                            }}
+                            contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
+                          />
+                          <Legend iconType="square" wrapperStyle={{ fontSize: 12 }} />
+                          <Bar dataKey="revenue" name="Revenue" fill="#6366f1" opacity={0.75} radius={[0, 3, 3, 0]} barSize={12} />
+                          <Bar dataKey="profit" name="Profit" fill="#10b981" opacity={0.85} radius={[0, 3, 3, 0]} barSize={12} />
+                          <Bar dataKey="loss" name="Loss" fill="#ef4444" opacity={0.7} radius={[0, 3, 3, 0]} barSize={12} />
+                          <Line type="monotone" dataKey="margin" name="margin" yAxisId={0} stroke="#f59e0b" strokeWidth={0} dot={{ r: 5, fill: "#f59e0b", stroke: "white", strokeWidth: 1.5 }} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                      <div className="flex flex-wrap gap-4 text-xs text-muted-foreground mt-2 px-1">
+                        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block bg-indigo-400 opacity-75" />Revenue</span>
+                        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block bg-emerald-500" />Profit</span>
+                        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block bg-red-400" />Loss</span>
+                        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full inline-block bg-amber-400" />Margin % (dot)</span>
+                        <span className="ml-auto flex items-center gap-3">
+                          <span className="flex items-center gap-0.5 text-green-600"><TrendingUp className="w-3 h-3" />≥35% Excellent</span>
+                          <span className="flex items-center gap-0.5 text-green-500"><ArrowUp className="w-3 h-3" />20–35% Good</span>
+                          <span className="flex items-center gap-0.5 text-amber-500"><Minus className="w-3 h-3" />10–20% Marginal</span>
+                          <span className="flex items-center gap-0.5 text-orange-500"><ArrowDown className="w-3 h-3" />0–10% Poor</span>
+                          <span className="flex items-center gap-0.5 text-red-600"><TrendingDown className="w-3 h-3" />&lt;0% Loss</span>
+                        </span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Table */}
+                <Card>
+                  <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                    <CardTitle className="text-sm font-semibold">
+                      Item Breakdown <span className="text-muted-foreground font-normal">({displayItems.length} items)</span>
+                    </CardTitle>
+                    <Button variant="outline" size="sm" onClick={exportCsv} data-testid="button-export-items-csv">
+                      <Download className="w-3.5 h-3.5 mr-1" /> CSV
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="text-xs">
+                          <TableHead className="pl-4">#</TableHead>
+                          <TableHead>Item Name</TableHead>
+                          <TableHead>SKU</TableHead>
+                          <TableHead>Category</TableHead>
+                          <TableHead className="text-right">Qty Sold</TableHead>
+                          <TableHead className="text-right">Avg Price</TableHead>
+                          <TableHead className="text-right">Revenue</TableHead>
+                          <TableHead className="text-right">Cost</TableHead>
+                          <TableHead className="text-right">Profit</TableHead>
+                          <TableHead className="text-right">Margin</TableHead>
+                          <TableHead className="text-right pr-4">Invoices</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {displayItems.length === 0 ? (
+                          <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No items found for the selected period and filters.</TableCell></TableRow>
+                        ) : displayItems.map((r, idx) => {
+                          const rowClass = r.marginPct >= 20 ? "bg-green-50/30 dark:bg-green-950/10" : r.marginPct < 0 ? "bg-red-50/40 dark:bg-red-950/10" : "";
+                          const profitPct = itemReport.totalRevenue !== "0.00" ? (r.revenue / parseFloat(itemReport.totalRevenue) * 100).toFixed(1) : "0.0";
+                          return (
+                            <TableRow key={r.itemId} className={`text-xs ${rowClass} hover:bg-muted/40`} data-testid={`row-item-${r.itemId}`}>
+                              <TableCell className="pl-4 text-muted-foreground">{idx + 1}</TableCell>
+                              <TableCell className="font-medium max-w-[200px]">
+                                <span title={r.itemName}>{r.itemName.length > 30 ? r.itemName.substring(0, 28) + "…" : r.itemName}</span>
+                              </TableCell>
+                              <TableCell className="text-muted-foreground font-mono text-[11px]">{r.sku}</TableCell>
+                              <TableCell>
+                                {r.categoryName !== "Uncategorized" ? <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{r.categoryName}</Badge> : <span className="text-muted-foreground">—</span>}
+                              </TableCell>
+                              <TableCell className="text-right font-medium">{r.qtySold.toLocaleString()}</TableCell>
+                              <TableCell className="text-right text-muted-foreground">€{fmt(r.avgUnitPrice)}</TableCell>
+                              <TableCell className="text-right font-semibold">
+                                <div>€{fmt(r.revenue)}</div>
+                                <div className="text-[10px] text-muted-foreground">{profitPct}% of total</div>
+                              </TableCell>
+                              <TableCell className="text-right text-muted-foreground">€{fmt(r.cost)}</TableCell>
+                              <TableCell className={`text-right font-semibold ${r.profit >= 0 ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
+                                €{fmt(r.profit)}
+                              </TableCell>
+                              <TableCell className="text-right"><MarginBadge m={r.marginPct} /></TableCell>
+                              <TableCell className="text-right pr-4 text-muted-foreground">{r.invoiceCount}</TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                    {displayItems.length > 0 && (
+                      <div className="flex justify-end gap-8 p-3 border-t text-xs font-semibold bg-muted/20">
+                        <span>Revenue: €{fmt(displayItems.reduce((s,r)=>s+r.revenue,0))}</span>
+                        <span>Cost: €{fmt(displayItems.reduce((s,r)=>s+r.cost,0))}</span>
+                        <span className={displayItems.reduce((s,r)=>s+r.profit,0)>=0?"text-green-700":"text-red-600"}>
+                          Profit: €{fmt(displayItems.reduce((s,r)=>s+r.profit,0))}
+                        </span>
+                        <span>Units: {displayItems.reduce((s,r)=>s+r.qtySold,0).toLocaleString()}</span>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </>
+            );
+          })() : <div className="text-center py-12 text-muted-foreground text-sm">No data for the selected period.</div>}
         </TabsContent>
 
         <TabsContent value="statements" className="mt-4 space-y-4">

@@ -1701,6 +1701,16 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/reports/items/:from/:to/:customerId/:categoryId", async (req, res) => {
+    try {
+      const report = await storage.getItemSalesReport(
+        req.params.from, req.params.to,
+        req.params.customerId, req.params.categoryId
+      );
+      res.json(report);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   app.get("/api/reports/statements", async (_req, res) => {
     try {
       const statements = await storage.getCustomerStatements();
