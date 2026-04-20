@@ -1742,8 +1742,9 @@ export async function registerRoutes(
   app.get("/api/reports/savings/:customerId/:from/:to/html", async (req, res) => {
     try {
       const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
-      const settings = await storage.getSystemSettings();
-      const companyName = settings?.companyName || "Vineria Di Mare Trading Ltd";
+      const allSettings = await storage.getSettings();
+      const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
+      const companyName = settingsMap["companyName"] || "Vineria Di Mare Trading Ltd";
 
       const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
       const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });

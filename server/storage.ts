@@ -1319,7 +1319,8 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(invoices.date));
 
     if (matchingInvoices.length === 0) {
-      return { monthly: [], invoices: [], totalSavings: 0, totalDiscountPct: 0, invoiceCount: 0, bestDeal: null };
+      const [cust0] = await db.select({ name: customers.name }).from(customers).where(eq(customers.id, customerId));
+      return { customerId, customerName: cust0?.name || customerId, monthly: [], invoices: [], totalSavings: 0, avgDiscountPercent: 0, invoiceCount: 0, bestDeal: 0, savedVsCatalogue: 0 };
     }
 
     const invoiceIds = matchingInvoices.map(i => i.id);
