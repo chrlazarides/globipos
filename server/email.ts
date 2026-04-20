@@ -138,6 +138,34 @@ export async function sendInvoiceEmail(toEmail: string, subject: string, htmlCon
   }
 }
 
+export async function sendSavingsReportEmail(toEmail: string, subject: string, htmlContent: string, customerName: string): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const filename = `savings-report-${customerName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.html`;
+    await client.emails.send({
+      to: toEmail,
+      from: fromEmail,
+      subject,
+      html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;">
+        <h2 style="color:#059669;margin-top:0;">Your Savings Report</h2>
+        <p style="color:#374151;">Please find your savings report attached to this email.</p>
+        <p style="color:#6b7280;font-size:13px;">Open the attached HTML file in your browser to view the full report with all details.</p>
+      </div>`,
+      attachments: [
+        {
+          filename,
+          content: Buffer.from(htmlContent).toString('base64'),
+        },
+      ],
+    });
+    return { success: true, fromEmail };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to send savings report email';
+    console.error('Savings report email error:', message);
+    return { success: false, fromEmail: '', error: message };
+  }
+}
+
 export async function sendBackupEmail(toEmail: string, companyName: string, backupJson: string, date: string): Promise<{ success: boolean; error?: string }> {
   try {
     const { client, fromEmail } = await getUncachableResendClient();

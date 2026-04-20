@@ -1,5 +1,5 @@
 import { useState, Fragment, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,17 @@ export default function Reports() {
   const [savingsFrom, setSavingsFrom] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 12); return d.toISOString().split("T")[0]; });
   const [savingsTo, setSavingsTo] = useState(new Date().toISOString().split("T")[0]);
   const [expandedSavingsInvoice, setExpandedSavingsInvoice] = useState<string | null>(null);
+
+  const sendSavingsEmailMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/email`),
+    onSuccess: () => {
+      toast({ title: "Report sent", description: "The savings report has been emailed to the customer." });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : "Could not send the email.";
+      toast({ title: "Failed to send", description: message, variant: "destructive" });
+    },
+  });
 
   const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: categoryList = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
@@ -1121,6 +1132,20 @@ export default function Reports() {
                       onClick={() => { window.location.href = `/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/excel`; }}
                     >
                       <FileSpreadsheet className="w-4 h-4 mr-1" /> Export Excel
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      data-testid="button-send-savings-email"
+                      disabled={sendSavingsEmailMutation.isPending}
+                      onClick={() => sendSavingsEmailMutation.mutate()}
+                    >
+                      {sendSavingsEmailMutation.isPending ? (
+                        <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                      ) : (
+                        <Send className="w-4 h-4 mr-1" />
+                      )}
+                      Send to Customer
                     </Button>
                   </div>
                 )}
