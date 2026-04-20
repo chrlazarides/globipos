@@ -1245,6 +1245,37 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/price-contracts/:id", async (req, res) => {
+    try {
+      const contract = await storage.getPriceContract(req.params.id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (contract.source !== "invoice-discount") {
+        return res.status(403).json({ message: "Only auto-saved contracts can be deleted via this endpoint" });
+      }
+      await storage.deleteContract(req.params.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/price-contract-items/:itemId", async (req, res) => {
+    try {
+      const items = await db.select({ id: priceContractItems.id, contractId: priceContractItems.contractId })
+        .from(priceContractItems)
+        .where(eq(priceContractItems.id, req.params.itemId));
+      if (items.length === 0) return res.status(404).json({ message: "Contract item not found" });
+      const contract = await storage.getPriceContract(items[0].contractId);
+      if (!contract || contract.source !== "invoice-discount") {
+        return res.status(403).json({ message: "Only items in auto-saved contracts can be deleted via this endpoint" });
+      }
+      await storage.deleteContractItem(req.params.itemId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   // Seasonal Offers
   app.get("/api/seasonal-offers", async (_req, res) => {
     const offers = await storage.getSeasonalOffers();

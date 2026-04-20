@@ -85,6 +85,8 @@ export interface IStorage {
   getCustomerSavingsReport(customerId: string, from: string, to: string): Promise<any>;
   quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number): Promise<{ contractId: string }>;
   getContractItems(contractId: string): Promise<PriceContractItem[]>;
+  deleteContractItem(itemId: string): Promise<void>;
+  deleteContract(id: string): Promise<void>;
 
   getSettings(): Promise<SystemSetting[]>;
   getSetting(key: string): Promise<SystemSetting | undefined>;
@@ -281,6 +283,7 @@ export class DatabaseStorage implements IStorage {
         voucherType: priceContracts.voucherType,
         voucherValue: priceContracts.voucherValue,
         active: priceContracts.active,
+        source: priceContracts.source,
         customerName: customers.name,
         priceLevel: customers.priceLevel,
       })
@@ -1253,6 +1256,16 @@ export class DatabaseStorage implements IStorage {
 
   async getContractItems(contractId: string) {
     return db.select().from(priceContractItems).where(eq(priceContractItems.contractId, contractId));
+  }
+
+  async deleteContractItem(itemId: string) {
+    await db.delete(priceContractItems).where(eq(priceContractItems.id, itemId));
+  }
+
+  async deleteContract(id: string) {
+    await db.delete(priceContractItems).where(eq(priceContractItems.contractId, id));
+    await db.delete(priceContractRules).where(eq(priceContractRules.contractId, id));
+    await db.delete(priceContracts).where(eq(priceContracts.id, id));
   }
 
   async getCustomerLastPrices(customerId: string) {

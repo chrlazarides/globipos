@@ -13,10 +13,10 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Tag, Pencil, X, Trash2, ArrowLeft, AlertTriangle, CheckCircle, Gift } from "lucide-react";
+import { Plus, Tag, Pencil, X, Trash2, ArrowLeft, AlertTriangle, CheckCircle, Gift, Bookmark } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { type PriceContract, type PriceContractRule, type Customer, type Category, type Item } from "@shared/schema";
+import { type PriceContract, type PriceContractRule, type PriceContractItem, type Customer, type Category, type Item } from "@shared/schema";
 import { z } from "zod";
 
 const contractFormSchema = z.object({
@@ -65,6 +65,7 @@ function calcDiscountedPrice(retailPrice: number, discountType: string, discount
 export default function Pricing() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"contracts" | "auto-saved">("contracts");
   const { toast } = useToast();
 
   const { data: contracts = [], isLoading } = useQuery<ContractWithMeta[]>({ queryKey: ["/api/price-contracts"] });
@@ -101,6 +102,9 @@ export default function Pricing() {
       />
     );
   }
+
+  const manualContracts = contracts.filter(c => c.source !== "invoice-discount");
+  const autoContracts = contracts.filter(c => c.source === "invoice-discount");
 
   const columns: Column<ContractWithMeta>[] = [
     {
@@ -174,28 +178,66 @@ export default function Pricing() {
     <div className="p-6 space-y-6">
       <PageHeader
         title="Price Contracts"
-        description="Manage customer-specific pricing agreements with discount rules"
+        description="Manage customer-specific pricing agreements and auto-saved fixed prices"
         action={
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-new-contract"><Plus className="w-4 h-4 mr-1" /> New Contract</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>New Price Contract</DialogTitle></DialogHeader>
-              <NewContractForm
-                onSubmit={(d) => createContract.mutate(d)}
-                isPending={createContract.isPending}
-                customers={customers}
-              />
-            </DialogContent>
-          </Dialog>
+          activeTab === "contracts" ? (
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-new-contract"><Plus className="w-4 h-4 mr-1" /> New Contract</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader><DialogTitle>New Price Contract</DialogTitle></DialogHeader>
+                <NewContractForm
+                  onSubmit={(d) => createContract.mutate(d)}
+                  isPending={createContract.isPending}
+                  customers={customers}
+                />
+              </DialogContent>
+            </Dialog>
+          ) : undefined
         }
       />
-      <Card>
-        <CardContent className="p-4">
-          <DataTable columns={columns} data={contracts} isLoading={isLoading} emptyMessage="No price contracts found" />
-        </CardContent>
-      </Card>
+
+      <div className="flex gap-1 border-b">
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "contracts" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          onClick={() => setActiveTab("contracts")}
+          data-testid="tab-manual-contracts"
+        >
+          <Tag className="w-3.5 h-3.5 inline mr-1.5" />
+          Manual Contracts
+          {manualContracts.length > 0 && (
+            <Badge variant="secondary" className="ml-2 text-xs">{manualContracts.length}</Badge>
+          )}
+        </button>
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "auto-saved" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          onClick={() => setActiveTab("auto-saved")}
+          data-testid="tab-auto-saved"
+        >
+          <Bookmark className="w-3.5 h-3.5 inline mr-1.5" />
+          Auto-Saved Prices
+          {autoContracts.length > 0 && (
+            <Badge variant="secondary" className="ml-2 text-xs">{autoContracts.length}</Badge>
+          )}
+        </button>
+      </div>
+
+      {activeTab === "contracts" && (
+        <Card>
+          <CardContent className="p-4">
+            <DataTable columns={columns} data={manualContracts} isLoading={isLoading} emptyMessage="No manual price contracts found" />
+          </CardContent>
+        </Card>
+      )}
+
+      {activeTab === "auto-saved" && (
+        <AutoSavedPrices
+          contracts={autoContracts}
+          allItems={allItems}
+          isLoading={isLoading}
+        />
+      )}
     </div>
   );
 }
@@ -703,6 +745,158 @@ function RuleEditor({ rule, index, categories, allBrands, onUpdate, onRemove }: 
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+interface ContractWithItems extends ContractWithMeta {
+  contractItems?: PriceContractItem[];
+}
+
+function AutoSavedPrices({ contracts, allItems, isLoading }: {
+  contracts: ContractWithItems[];
+  allItems: Item[];
+  isLoading: boolean;
+}) {
+  const { toast } = useToast();
+
+  const deleteItem = useMutation({
+    mutationFn: async (itemId: string) => {
+      const res = await apiRequest("DELETE", `/api/price-contract-items/${itemId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/price-contracts"] });
+      toast({ title: "Fixed price removed" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteContract = useMutation({
+    mutationFn: async (contractId: string) => {
+      const res = await apiRequest("DELETE", `/api/price-contracts/${contractId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/price-contracts"] });
+      toast({ title: "Auto-saved contract removed" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2, 3].map(i => (
+          <Card key={i}>
+            <CardContent className="p-4">
+              <div className="animate-pulse space-y-2">
+                <div className="h-4 bg-muted rounded w-1/4" />
+                <div className="h-3 bg-muted rounded w-1/3" />
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
+  if (contracts.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center text-muted-foreground">
+          <Bookmark className="w-8 h-8 mx-auto mb-3 opacity-30" />
+          <p className="font-medium">No auto-saved prices yet</p>
+          <p className="text-sm mt-1">When you click "Save price to contract" on an invoice line, the fixed price will appear here.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4" data-testid="auto-saved-prices-section">
+      <p className="text-sm text-muted-foreground">
+        These fixed prices were saved directly from invoice lines. Each customer has one auto-generated contract that holds all their saved prices.
+      </p>
+      {contracts.map(contract => {
+        const items = contract.contractItems || [];
+        return (
+          <Card key={contract.id} data-testid={`auto-contract-card-${contract.id}`}>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+              <div className="flex items-center gap-2">
+                <div className="flex items-center justify-center w-8 h-8 rounded-md bg-amber-100 dark:bg-amber-900/30">
+                  <Bookmark className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <CardTitle className="text-sm font-semibold">{contract.customerName}</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    {items.length} saved {items.length === 1 ? "price" : "prices"} · Valid until {formatDate(contract.endDate)}
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-destructive hover:text-destructive"
+                onClick={() => {
+                  if (confirm(`Remove all auto-saved prices for ${contract.customerName}?`)) {
+                    deleteContract.mutate(contract.id);
+                  }
+                }}
+                disabled={deleteContract.isPending}
+                data-testid={`button-delete-auto-contract-${contract.id}`}
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1" /> Remove All
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              {items.length === 0 ? (
+                <p className="text-sm text-muted-foreground px-4 pb-4">No saved prices in this contract.</p>
+              ) : (
+                <div className="divide-y">
+                  <div className="grid grid-cols-[2fr_1fr_auto] gap-3 px-4 py-2 text-xs font-medium text-muted-foreground bg-muted/30">
+                    <span>Item</span>
+                    <span>Fixed Price</span>
+                    <span />
+                  </div>
+                  {items.map(ci => {
+                    const item = allItems.find(it => it.id === ci.itemId);
+                    return (
+                      <div
+                        key={ci.id}
+                        className="grid grid-cols-[2fr_1fr_auto] gap-3 items-center px-4 py-2.5"
+                        data-testid={`auto-price-row-${ci.id}`}
+                      >
+                        <div>
+                          <p className="text-sm font-medium">{item?.name || ci.itemId}</p>
+                          {item?.brand && <p className="text-xs text-muted-foreground">{item.brand}</p>}
+                        </div>
+                        <span className="text-sm font-semibold text-green-700 dark:text-green-400">
+                          {"\u20AC"}{parseFloat(String(ci.specialPrice)).toFixed(2)}
+                        </span>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          onClick={() => {
+                            if (confirm(`Remove fixed price for ${item?.name || ci.itemId}?`)) {
+                              deleteItem.mutate(ci.id);
+                            }
+                          }}
+                          disabled={deleteItem.isPending}
+                          data-testid={`button-delete-price-item-${ci.id}`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
     </div>
   );
 }
