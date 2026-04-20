@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus, BadgePercent } from "lucide-react";
+import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus, BadgePercent, FileSpreadsheet } from "lucide-react";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip, Legend, ResponsiveContainer, Cell, AreaChart, Area } from "recharts";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -1105,14 +1105,24 @@ export default function Reports() {
                   <Input type="date" value={savingsTo} onChange={(e) => setSavingsTo(e.target.value)} data-testid="input-savings-to" />
                 </div>
                 {savingsReport && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    data-testid="button-download-savings"
-                    onClick={() => window.open(`/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/html`, "_blank")}
-                  >
-                    <Download className="w-4 h-4 mr-1" /> Download Summary
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      data-testid="button-export-savings-pdf"
+                      onClick={() => window.open(`/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/html`, "_blank")}
+                    >
+                      <FileText className="w-4 h-4 mr-1" /> Print / Save as PDF
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      data-testid="button-export-savings-excel"
+                      onClick={() => { window.location.href = `/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/excel`; }}
+                    >
+                      <FileSpreadsheet className="w-4 h-4 mr-1" /> Export Excel
+                    </Button>
+                  </div>
                 )}
               </div>
             </CardContent>

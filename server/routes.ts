@@ -1767,6 +1767,18 @@ export async function registerRoutes(
           ${lineRows}`;
       }).join("");
 
+      type SavingsMonthly = { month: string; savings: number; invoiceCount: number };
+      let cumulative = 0;
+      const monthlyRows = (report.monthly as SavingsMonthly[]).map(m => {
+        cumulative += m.savings;
+        return `<tr>
+          <td style="padding:4px 8px">${m.month}</td>
+          <td style="padding:4px 8px;text-align:right;color:#059669">€${Number(m.savings).toFixed(2)}</td>
+          <td style="padding:4px 8px;text-align:right">${m.invoiceCount}</td>
+          <td style="padding:4px 8px;text-align:right;color:#7c3aed">€${cumulative.toFixed(2)}</td>
+        </tr>`;
+      }).join("");
+
       const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -1776,14 +1788,16 @@ export async function registerRoutes(
     body { font-family: Arial, sans-serif; font-size: 13px; color: #111; margin: 0; padding: 20px; }
     h1 { font-size: 20px; margin: 0 0 4px; }
     h2 { font-size: 15px; margin: 0 0 16px; color: #555; }
+    h3 { font-size: 13px; margin: 0 0 8px; color: #374151; }
     .company { font-size: 12px; color: #555; margin-bottom: 20px; }
     .stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
     .stat { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 16px; min-width: 120px; }
     .stat-label { font-size: 11px; color: #6b7280; }
     .stat-value { font-size: 20px; font-weight: 700; color: #059669; }
     table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-    th { background: #f3f4f6; padding: 6px 8px; text-align: left; font-size: 12px; border-bottom: 1px solid #e5e7eb; }
+    th { background: #059669; color: #fff; padding: 6px 8px; text-align: left; font-size: 12px; }
     td { border-bottom: 1px solid #f3f4f6; font-size: 12px; }
+    .section { margin-bottom: 24px; }
     @media print { body { padding: 10px; } }
   </style>
 </head>
@@ -1798,24 +1812,206 @@ export async function registerRoutes(
     <div class="stat"><div class="stat-label">Best Single Invoice Saving</div><div class="stat-value">€${report.bestDeal.toFixed(2)}</div></div>
     <div class="stat"><div class="stat-label">Saved vs Catalogue</div><div class="stat-value">€${report.savedVsCatalogue.toFixed(2)}</div></div>
   </div>
+  ${report.monthly.length > 0 ? `
+  <div class="section">
+    <h3>Monthly Savings Timeline</h3>
+    <table>
+      <thead><tr>
+        <th>Month</th>
+        <th style="text-align:right">Monthly Savings</th>
+        <th style="text-align:right">Invoices</th>
+        <th style="text-align:right">Cumulative</th>
+      </tr></thead>
+      <tbody>${monthlyRows}</tbody>
+    </table>
+  </div>` : ""}
   ${report.invoices.length === 0 ? '<p>No discounted invoices found in this period.</p>' : `
-  <table>
-    <thead>
-      <tr>
-        <th>Item</th>
-        <th style="text-align:right">Qty</th>
-        <th style="text-align:right">Unit Price</th>
-        <th style="text-align:right">Disc %</th>
-        <th style="text-align:right;color:#059669">Saving</th>
-      </tr>
-    </thead>
-    <tbody>${invoiceRows}</tbody>
-  </table>`}
+  <div class="section">
+    <h3>Invoice Breakdown</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th style="text-align:right">Qty</th>
+          <th style="text-align:right">Unit Price</th>
+          <th style="text-align:right">Disc %</th>
+          <th style="text-align:right">Saving</th>
+        </tr>
+      </thead>
+      <tbody>${invoiceRows}</tbody>
+    </table>
+  </div>`}
   <script>window.onload = function() { window.print(); }</script>
 </body>
 </html>`;
       res.setHeader("Content-Type", "text/html");
       res.send(html);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/reports/savings/:customerId/:from/:to/excel", async (req, res) => {
+    try {
+      const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
+      const allSettings = await storage.getSettings();
+      const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
+      const companyName = settingsMap["companyName"] || "Vineria Di Mare Trading Ltd";
+
+      const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = companyName;
+      workbook.created = new Date();
+
+      // ── Summary sheet ──────────────────────────────────────────────────────
+      const summary = workbook.addWorksheet("Summary");
+
+      summary.mergeCells("A1:E1");
+      const titleCell = summary.getCell("A1");
+      titleCell.value = companyName;
+      titleCell.font = { bold: true, size: 14, color: { argb: "FF059669" } };
+      titleCell.alignment = { horizontal: "left" };
+
+      summary.mergeCells("A2:E2");
+      const subtitleCell = summary.getCell("A2");
+      subtitleCell.value = `Customer Savings Report — ${report.customerName} — ${fromLabel} to ${toLabel}`;
+      subtitleCell.font = { size: 11, italic: true, color: { argb: "FF555555" } };
+
+      summary.addRow([]);
+
+      // Stat cards row
+      const statHeaders = summary.addRow(["Total Savings", "Avg Discount", "Invoices with Disc.", "Best Single Saving", "Saved vs Catalogue"]);
+      statHeaders.eachCell(cell => {
+        cell.font = { bold: true, color: { argb: "FF374151" }, size: 10 };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+        cell.alignment = { horizontal: "center" };
+        cell.border = { bottom: { style: "thin", color: { argb: "FFE5E7EB" } } };
+      });
+      const statValues = summary.addRow([
+        report.totalSavings,
+        report.avgDiscountPercent / 100,
+        report.invoiceCount,
+        report.bestDeal,
+        report.savedVsCatalogue,
+      ]);
+      statValues.getCell(1).numFmt = '"€"#,##0.00';
+      statValues.getCell(2).numFmt = '0.0%';
+      statValues.getCell(4).numFmt = '"€"#,##0.00';
+      statValues.getCell(5).numFmt = '"€"#,##0.00';
+      statValues.eachCell(cell => {
+        cell.font = { bold: true, size: 13, color: { argb: "FF059669" } };
+        cell.alignment = { horizontal: "center" };
+      });
+
+      summary.addRow([]);
+
+      // Monthly breakdown
+      if (report.monthly.length > 0) {
+        const mHead = summary.addRow(["Month", "Monthly Savings (€)", "Invoice Count", "Cumulative (€)"]);
+        mHead.eachCell(cell => {
+          cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF059669" } };
+          cell.alignment = { horizontal: "center" };
+        });
+        let cumulative = 0;
+        for (const m of report.monthly) {
+          cumulative += m.savings;
+          const row = summary.addRow([m.month, m.savings, m.invoiceCount, cumulative]);
+          row.getCell(2).numFmt = '"€"#,##0.00';
+          row.getCell(3).alignment = { horizontal: "center" };
+          row.getCell(4).numFmt = '"€"#,##0.00';
+          row.getCell(4).font = { color: { argb: "FF7C3AED" } };
+        }
+        const totalRow = summary.addRow(["TOTAL", report.totalSavings]);
+        totalRow.getCell(1).font = { bold: true };
+        totalRow.getCell(2).numFmt = '"€"#,##0.00';
+        totalRow.getCell(2).font = { bold: true, color: { argb: "FF059669" } };
+      }
+
+      summary.columns = [
+        { width: 22 },
+        { width: 22 },
+        { width: 22 },
+        { width: 22 },
+        { width: 22 },
+      ];
+
+      // ── Invoice detail sheet ───────────────────────────────────────────────
+      const detail = workbook.addWorksheet("Invoice Detail");
+
+      detail.mergeCells("A1:I1");
+      const detailTitle = detail.getCell("A1");
+      detailTitle.value = `Invoice Breakdown — ${report.customerName}`;
+      detailTitle.font = { bold: true, size: 12 };
+
+      detail.addRow([]);
+
+      const invHead = detail.addRow(["Invoice #", "Date", "Invoice Total (€)", "Saved (€)", "Item", "Qty", "Unit Price (€)", "Disc %", "Line Saving (€)"]);
+      invHead.eachCell(cell => {
+        cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF059669" } };
+        cell.alignment = { horizontal: "center" };
+      });
+
+      type SavingsLine = { itemName: string; qty: number; unitPrice: number; discountPercent: number; discountAmount: number; savings: number };
+      type SavingsInv = { invoiceNumber: string; invoiceDate: string; invoiceTotal: number; totalSavings: number; lines: SavingsLine[] };
+
+      for (const inv of report.invoices as SavingsInv[]) {
+        const dateStr = new Date(inv.invoiceDate + "T00:00:00").toLocaleDateString("en-GB");
+        if (inv.lines.length === 0) {
+          const r = detail.addRow([inv.invoiceNumber, dateStr, inv.invoiceTotal, inv.totalSavings, "", "", "", "", ""]);
+          r.getCell(1).font = { bold: true };
+          r.getCell(3).numFmt = '"€"#,##0.00';
+          r.getCell(4).numFmt = '"€"#,##0.00';
+          r.getCell(4).font = { color: { argb: "FF059669" } };
+          r.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+        } else {
+          for (let i = 0; i < inv.lines.length; i++) {
+            const l = inv.lines[i];
+            const r = detail.addRow([
+              i === 0 ? inv.invoiceNumber : "",
+              i === 0 ? dateStr : "",
+              i === 0 ? inv.invoiceTotal : "",
+              i === 0 ? inv.totalSavings : "",
+              l.itemName,
+              l.qty,
+              l.unitPrice,
+              l.discountPercent / 100,
+              l.savings,
+            ]);
+            if (i === 0) {
+              r.getCell(1).font = { bold: true };
+              r.getCell(3).numFmt = '"€"#,##0.00';
+              r.getCell(4).numFmt = '"€"#,##0.00';
+              r.getCell(4).font = { color: { argb: "FF059669" } };
+              r.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+            }
+            r.getCell(7).numFmt = '"€"#,##0.00';
+            r.getCell(8).numFmt = '0.0%';
+            r.getCell(9).numFmt = '"€"#,##0.00';
+            r.getCell(9).font = { color: { argb: "FF059669" } };
+          }
+        }
+      }
+
+      detail.columns = [
+        { width: 14 },
+        { width: 13 },
+        { width: 18 },
+        { width: 14 },
+        { width: 32 },
+        { width: 7 },
+        { width: 16 },
+        { width: 9 },
+        { width: 16 },
+      ];
+
+      const safeCustomer = report.customerName.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
+      const filename = `savings_${safeCustomer}_${req.params.from}_${req.params.to}.xlsx`;
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      const buf = await workbook.xlsx.writeBuffer();
+      res.send(buf);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
