@@ -128,9 +128,12 @@ export default function InvoiceForm() {
   const [manualDiscountLines, setManualDiscountLines] = useState<Set<number>>(new Set());
 
   type LastPriceEntry = { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string };
+  const lastPricesUrl = customerId
+    ? `/api/invoices/last-prices/${customerId}${invoiceId ? `?exclude=${invoiceId}` : ""}`
+    : null;
   const { data: lastPricesData = {} } = useQuery<Record<string, LastPriceEntry[]>>({
-    queryKey: ["/api/invoices/last-prices", customerId],
-    enabled: !!customerId,
+    queryKey: [lastPricesUrl],
+    enabled: !!lastPricesUrl,
   });
 
   const quickSaveMutation = useMutation({

@@ -81,7 +81,7 @@ export interface IStorage {
   getSalesReport(from: string, to: string, customerId?: string): Promise<any>;
   getItemSalesReport(from: string, to: string, customerId?: string, categoryId?: string): Promise<any>;
   getCustomerStatements(): Promise<any[]>;
-  getCustomerLastPrices(customerId: string): Promise<Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]>>;
+  getCustomerLastPrices(customerId: string, excludeInvoiceId?: string): Promise<Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]>>;
   getCustomerSavingsReport(customerId: string, from: string, to: string): Promise<any>;
   quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number): Promise<{ contractId: string }>;
   getContractItems(contractId: string): Promise<PriceContractItem[]>;
@@ -1268,7 +1268,7 @@ export class DatabaseStorage implements IStorage {
     await db.delete(priceContracts).where(eq(priceContracts.id, id));
   }
 
-  async getCustomerLastPrices(customerId: string) {
+  async getCustomerLastPrices(customerId: string, excludeInvoiceId?: string) {
     const allInvoices = await db.select({
       id: invoices.id, date: invoices.date, invoiceNumber: invoices.invoiceNumber,
     }).from(invoices)
@@ -1276,6 +1276,7 @@ export class DatabaseStorage implements IStorage {
         eq(invoices.customerId, customerId),
         eq(invoices.type, "invoice"),
         sql`${invoices.status} != 'cancelled'`,
+        excludeInvoiceId ? sql`${invoices.id} != ${excludeInvoiceId}` : undefined,
       ))
       .orderBy(desc(invoices.date));
 

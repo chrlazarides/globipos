@@ -1758,7 +1758,8 @@ export async function registerRoutes(
 
   app.get("/api/invoices/last-prices/:customerId", async (req, res) => {
     try {
-      const prices = await storage.getCustomerLastPrices(req.params.customerId);
+      const excludeId = typeof req.query.exclude === "string" ? req.query.exclude : undefined;
+      const prices = await storage.getCustomerLastPrices(req.params.customerId, excludeId);
       res.json(prices);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
