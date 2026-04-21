@@ -11,9 +11,10 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Package, Upload } from "lucide-react";
+import { Plus, Search, Package, Upload, History } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertItemSchema, insertCategorySchema, type Item, type Category } from "@shared/schema";
@@ -295,6 +296,7 @@ export default function Items() {
               isPending={updateItem.isPending}
               categories={categories}
               priceLevelNames={priceLevelNames}
+              itemId={editingItem.id}
               defaultValues={{
                 name: editingItem.name,
                 sku: editingItem.sku,
@@ -327,7 +329,91 @@ export default function Items() {
   );
 }
 
-function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNames }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any; priceLevelNames: string[] }) {
+function PriceHistoryTab({ itemId }: { itemId: string }) {
+  const [customerFilter, setCustomerFilter] = useState("");
+  const { data: history = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/items", itemId, "price-history"],
+    queryFn: async () => {
+      const res = await fetch(`/api/items/${itemId}/price-history`);
+      if (!res.ok) throw new Error("Failed to load price history");
+      return res.json();
+    },
+  });
+
+  const filtered = customerFilter
+    ? history.filter((r) => r.customerName.toLowerCase().includes(customerFilter.toLowerCase()))
+    : history;
+
+  return (
+    <div className="space-y-3 mt-4" data-testid="price-history-tab">
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Filter by customer..."
+            value={customerFilter}
+            onChange={(e) => setCustomerFilter(e.target.value)}
+            className="pl-8 h-8 text-sm"
+            data-testid="input-price-history-customer-filter"
+          />
+        </div>
+        {customerFilter && (
+          <Button variant="ghost" size="sm" onClick={() => setCustomerFilter("")} className="h-8 px-2 text-xs">
+            Clear
+          </Button>
+        )}
+      </div>
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground py-4 text-center">Loading price history...</p>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground" data-testid="price-history-empty">
+          <History className="w-8 h-8 opacity-40" />
+          <p className="text-sm">{customerFilter ? "No results matching that customer." : "No sales history found for this item."}</p>
+        </div>
+      ) : (
+        <div className="border rounded-md overflow-auto max-h-64">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-xs">Customer</TableHead>
+                <TableHead className="text-xs">Invoice #</TableHead>
+                <TableHead className="text-xs">Date</TableHead>
+                <TableHead className="text-xs text-right">Qty</TableHead>
+                <TableHead className="text-xs text-right">Unit Price</TableHead>
+                <TableHead className="text-xs text-right">Disc %</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((row, i) => (
+                <TableRow key={`${row.invoiceId}-${i}`} data-testid={`price-history-row-${i}`}>
+                  <TableCell className="text-xs font-medium">{row.customerName}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{row.invoiceNumber}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{row.date}</TableCell>
+                  <TableCell className="text-xs text-right tabular-nums">{row.quantity}</TableCell>
+                  <TableCell className="text-xs text-right tabular-nums font-medium">€{parseFloat(row.unitPrice).toFixed(2)}</TableCell>
+                  <TableCell className="text-xs text-right tabular-nums">
+                    {parseFloat(row.discountPercent) > 0 ? (
+                      <Badge variant="secondary" className="text-xs px-1 py-0">{parseFloat(row.discountPercent).toFixed(1)}%</Badge>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+      {!isLoading && filtered.length > 0 && (
+        <p className="text-xs text-muted-foreground text-right">
+          Showing {filtered.length} transaction{filtered.length !== 1 ? "s" : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNames, itemId }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any; priceLevelNames: string[]; itemId?: string }) {
   const isEditing = !!defaultValues;
   const form = useForm({
     resolver: zodResolver(itemFormSchema),
@@ -368,6 +454,11 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
             <TabsTrigger value="basic" className="flex-1" data-testid="tab-basic">Basic</TabsTrigger>
             <TabsTrigger value="pricing" className="flex-1" data-testid="tab-pricing">Pricing</TabsTrigger>
             <TabsTrigger value="details" className="flex-1" data-testid="tab-details">Details</TabsTrigger>
+            {itemId && (
+              <TabsTrigger value="price-history" className="flex-1" data-testid="tab-price-history">
+                <History className="w-3.5 h-3.5 mr-1" />History
+              </TabsTrigger>
+            )}
           </TabsList>
           <TabsContent value="basic" className="space-y-4 mt-4">
             <div className="grid grid-cols-2 gap-4">
@@ -559,6 +650,11 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
               )} />
             </div>
           </TabsContent>
+          {itemId && (
+            <TabsContent value="price-history">
+              <PriceHistoryTab itemId={itemId} />
+            </TabsContent>
+          )}
         </Tabs>
         <div className="flex justify-end gap-2 pt-4">
           <Button type="submit" disabled={isPending} data-testid="button-save-item">

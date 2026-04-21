@@ -83,6 +83,7 @@ export interface IStorage {
   getCustomerStatements(): Promise<any[]>;
   getCustomerLastPrices(customerId: string, excludeInvoiceId?: string): Promise<Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]>>;
   getCustomerSavingsReport(customerId: string, from: string, to: string): Promise<any>;
+  getItemPriceHistory(itemId: string, limit?: number): Promise<{ invoiceId: string; invoiceNumber: string; date: string; customerId: string; customerName: string; quantity: number; unitPrice: string; discountPercent: string; discountAmount: string }[]>;
   quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number): Promise<{ contractId: string }>;
   getContractItems(contractId: string): Promise<PriceContractItem[]>;
   deleteContractItem(itemId: string): Promise<void>;
@@ -1323,6 +1324,44 @@ export class DatabaseStorage implements IStorage {
       });
     }
     return resultMap;
+  }
+
+  async getItemPriceHistory(itemId: string, limit = 50) {
+    const rows = await db
+      .select({
+        invoiceId: invoiceItems.invoiceId,
+        invoiceNumber: invoices.invoiceNumber,
+        date: invoices.date,
+        customerId: invoices.customerId,
+        customerName: customers.name,
+        quantity: invoiceItems.quantity,
+        unitPrice: invoiceItems.unitPrice,
+        discountPercent: invoiceItems.discountPercent,
+        discountAmount: invoiceItems.discount,
+      })
+      .from(invoiceItems)
+      .innerJoin(invoices, eq(invoiceItems.invoiceId, invoices.id))
+      .leftJoin(customers, eq(invoices.customerId, customers.id))
+      .where(
+        and(
+          eq(invoiceItems.itemId, itemId),
+          eq(invoices.type, "invoice"),
+          sql`${invoices.status} != 'cancelled'`,
+        )
+      )
+      .orderBy(desc(invoices.date))
+      .limit(limit);
+    return rows.map(r => ({
+      invoiceId: r.invoiceId,
+      invoiceNumber: r.invoiceNumber,
+      date: r.date,
+      customerId: r.customerId || "",
+      customerName: r.customerName || "Unknown",
+      quantity: r.quantity,
+      unitPrice: r.unitPrice,
+      discountPercent: r.discountPercent,
+      discountAmount: r.discountAmount,
+    }));
   }
 
   async getCustomerSavingsReport(customerId: string, from: string, to: string) {

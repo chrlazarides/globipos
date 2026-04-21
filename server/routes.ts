@@ -834,6 +834,16 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/items/:id/price-history", async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+      const history = await storage.getItemPriceHistory(req.params.id, limit);
+      res.json(history);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/items/import", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
