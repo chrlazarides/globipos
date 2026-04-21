@@ -1115,6 +1115,44 @@ export default function Reports() {
                   <Label className="text-xs">To</Label>
                   <Input type="date" value={savingsTo} onChange={(e) => setSavingsTo(e.target.value)} data-testid="input-savings-to" />
                 </div>
+                <div>
+                  <Label className="text-xs invisible">Presets</Label>
+                  <div className="flex gap-1">
+                    {[
+                      { label: "3 Months", months: 3 },
+                      { label: "6 Months", months: 6 },
+                      { label: "12 Months", months: 12 },
+                    ].map(({ label, months }) => (
+                      <Button
+                        key={label}
+                        variant="outline"
+                        size="sm"
+                        data-testid={`button-preset-${months}m`}
+                        onClick={() => {
+                          const to = new Date();
+                          const from = new Date();
+                          from.setMonth(from.getMonth() - months);
+                          setSavingsFrom(from.toISOString().split("T")[0]);
+                          setSavingsTo(to.toISOString().split("T")[0]);
+                        }}
+                      >
+                        Last {label}
+                      </Button>
+                    ))}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      data-testid="button-preset-this-year"
+                      onClick={() => {
+                        const now = new Date();
+                        setSavingsFrom(`${now.getFullYear()}-01-01`);
+                        setSavingsTo(now.toISOString().split("T")[0]);
+                      }}
+                    >
+                      This Year
+                    </Button>
+                  </div>
+                </div>
                 {savingsReport && (
                   <div className="flex items-center gap-2">
                     <Button
