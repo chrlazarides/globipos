@@ -130,7 +130,7 @@ export default function InvoiceForm() {
   type LastPriceEntry = { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string };
   const { data: lastPricesData = {} } = useQuery<Record<string, LastPriceEntry[]>>({
     queryKey: ["/api/invoices/last-prices", customerId],
-    enabled: !!customerId && isNew,
+    enabled: !!customerId,
   });
 
   const quickSaveMutation = useMutation({
@@ -912,7 +912,7 @@ export default function InvoiceForm() {
                                   data-testid={`input-line-desc-${idx}`}
                                 />
                               )}
-                              {line.itemId && isNew && lastPricesData[line.itemId]?.length > 0 && (
+                              {line.itemId && lastPricesData[line.itemId]?.length > 0 && (
                                 <div className="space-y-0.5" data-testid={`hint-last-price-${idx}`}>
                                   {lastPricesData[line.itemId].map((lp, hi) => {
                                     const lpDisc = parseFloat(lp.lastDiscountPercent) || 0;
@@ -1112,7 +1112,7 @@ export default function InvoiceForm() {
                                 onChange={(e) => updateLine(idx, "description", e.target.value)}
                               />
                             )}
-                            {line.itemId && isNew && lastPricesData[line.itemId]?.length > 0 && (
+                            {line.itemId && lastPricesData[line.itemId]?.length > 0 && (
                               <div className="space-y-0.5">
                                 {lastPricesData[line.itemId].map((lp, hi) => {
                                   const lpDisc = parseFloat(lp.lastDiscountPercent) || 0;
