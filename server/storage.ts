@@ -87,6 +87,7 @@ export interface IStorage {
   quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number): Promise<{ contractId: string }>;
   getContractItems(contractId: string): Promise<PriceContractItem[]>;
   deleteContractItem(itemId: string): Promise<void>;
+  updateContractItem(itemId: string, specialPrice: number): Promise<PriceContractItem>;
   deleteContract(id: string): Promise<void>;
 
   getSettings(): Promise<SystemSetting[]>;
@@ -1261,6 +1262,14 @@ export class DatabaseStorage implements IStorage {
 
   async deleteContractItem(itemId: string) {
     await db.delete(priceContractItems).where(eq(priceContractItems.id, itemId));
+  }
+
+  async updateContractItem(itemId: string, specialPrice: number) {
+    const [updated] = await db.update(priceContractItems)
+      .set({ specialPrice: String(specialPrice) })
+      .where(eq(priceContractItems.id, itemId))
+      .returning();
+    return updated;
   }
 
   async deleteContract(id: string) {

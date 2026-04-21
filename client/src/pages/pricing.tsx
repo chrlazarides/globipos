@@ -759,6 +759,8 @@ function AutoSavedPrices({ contracts, allItems, isLoading }: {
   isLoading: boolean;
 }) {
   const { toast } = useToast();
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState<string>("");
 
   const deleteItem = useMutation({
     mutationFn: async (itemId: string) => {
@@ -768,6 +770,19 @@ function AutoSavedPrices({ contracts, allItems, isLoading }: {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/price-contracts"] });
       toast({ title: "Fixed price removed" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updateItem = useMutation({
+    mutationFn: async ({ itemId, specialPrice }: { itemId: string; specialPrice: number }) => {
+      const res = await apiRequest("PATCH", `/api/price-contract-items/${itemId}`, { specialPrice });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/price-contracts"] });
+      setEditingItemId(null);
+      toast({ title: "Fixed price updated" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -783,6 +798,25 @@ function AutoSavedPrices({ contracts, allItems, isLoading }: {
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  const startEdit = (ci: PriceContractItem) => {
+    setEditingItemId(ci.id);
+    setEditingValue(parseFloat(String(ci.specialPrice)).toFixed(2));
+  };
+
+  const cancelEdit = () => {
+    setEditingItemId(null);
+    setEditingValue("");
+  };
+
+  const saveEdit = (itemId: string) => {
+    const parsed = parseFloat(editingValue);
+    if (isNaN(parsed) || parsed <= 0) {
+      toast({ title: "Invalid price", description: "Please enter a valid positive number.", variant: "destructive" });
+      return;
+    }
+    updateItem.mutate({ itemId, specialPrice: parsed });
+  };
 
   if (isLoading) {
     return (
@@ -861,6 +895,7 @@ function AutoSavedPrices({ contracts, allItems, isLoading }: {
                   </div>
                   {items.map(ci => {
                     const item = allItems.find(it => it.id === ci.itemId);
+                    const isEditing = editingItemId === ci.id;
                     return (
                       <div
                         key={ci.id}
@@ -871,23 +906,78 @@ function AutoSavedPrices({ contracts, allItems, isLoading }: {
                           <p className="text-sm font-medium">{item?.name || ci.itemId}</p>
                           {item?.brand && <p className="text-xs text-muted-foreground">{item.brand}</p>}
                         </div>
-                        <span className="text-sm font-semibold text-green-700 dark:text-green-400">
-                          {"\u20AC"}{parseFloat(String(ci.specialPrice)).toFixed(2)}
-                        </span>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-destructive hover:text-destructive"
-                          onClick={() => {
-                            if (confirm(`Remove fixed price for ${item?.name || ci.itemId}?`)) {
-                              deleteItem.mutate(ci.id);
-                            }
-                          }}
-                          disabled={deleteItem.isPending}
-                          data-testid={`button-delete-price-item-${ci.id}`}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </Button>
+                        {isEditing ? (
+                          <div className="flex items-center gap-1">
+                            <span className="text-sm text-muted-foreground">{"\u20AC"}</span>
+                            <Input
+                              inputMode="decimal"
+                              value={editingValue}
+                              onChange={e => setEditingValue(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === "Enter") saveEdit(ci.id);
+                                if (e.key === "Escape") cancelEdit();
+                              }}
+                              className="h-7 w-24 text-sm px-2"
+                              autoFocus
+                              data-testid={`input-edit-price-${ci.id}`}
+                            />
+                          </div>
+                        ) : (
+                          <span className="text-sm font-semibold text-green-700 dark:text-green-400">
+                            {"\u20AC"}{parseFloat(String(ci.specialPrice)).toFixed(2)}
+                          </span>
+                        )}
+                        <div className="flex items-center gap-0.5">
+                          {isEditing ? (
+                            <>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 text-green-700 hover:text-green-700 dark:text-green-400"
+                                onClick={() => saveEdit(ci.id)}
+                                disabled={updateItem.isPending}
+                                data-testid={`button-save-price-item-${ci.id}`}
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                onClick={cancelEdit}
+                                data-testid={`button-cancel-price-item-${ci.id}`}
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                onClick={() => startEdit(ci)}
+                                data-testid={`button-edit-price-item-${ci.id}`}
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 text-destructive hover:text-destructive"
+                                onClick={() => {
+                                  if (confirm(`Remove fixed price for ${item?.name || ci.itemId}?`)) {
+                                    deleteItem.mutate(ci.id);
+                                  }
+                                }}
+                                disabled={deleteItem.isPending}
+                                data-testid={`button-delete-price-item-${ci.id}`}
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     );
                   })}

@@ -1269,6 +1269,29 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/price-contract-items/:itemId", async (req, res) => {
+    try {
+      const { specialPrice } = req.body;
+      const parsedPrice = parseFloat(specialPrice);
+      if (specialPrice === undefined || isNaN(parsedPrice) || parsedPrice <= 0) {
+        return res.status(400).json({ message: "specialPrice is required and must be a positive number" });
+      }
+      const rows = await db.select({ id: priceContractItems.id, contractId: priceContractItems.contractId })
+        .from(priceContractItems)
+        .where(eq(priceContractItems.id, req.params.itemId));
+      if (rows.length === 0) return res.status(404).json({ message: "Contract item not found" });
+      const contract = await storage.getPriceContract(rows[0].contractId);
+      if (!contract || contract.source !== "invoice-discount") {
+        return res.status(403).json({ message: "Only items in auto-saved contracts can be edited via this endpoint" });
+      }
+      const updated = await storage.updateContractItem(req.params.itemId, parsedPrice);
+      if (!updated) return res.status(404).json({ message: "Contract item not found or could not be updated" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.delete("/api/price-contract-items/:itemId", async (req, res) => {
     try {
       const items = await db.select({ id: priceContractItems.id, contractId: priceContractItems.contractId })
