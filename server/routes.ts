@@ -1906,7 +1906,7 @@ export async function registerRoutes(
       <tbody>${invoiceRows}</tbody>
     </table>
   </div>`}
-  <script>window.onload = function() { window.print(); }</script>
+  ${req.query.print === "1" ? `<script>window.onload = function() { window.print(); }</script>` : ""}
 </body>
 </html>`;
       res.setHeader("Content-Type", "text/html");
@@ -1918,8 +1918,11 @@ export async function registerRoutes(
     try {
       const customer = await storage.getCustomer(req.params.customerId);
       if (!customer) return res.status(404).json({ message: "Customer not found" });
-      const toEmail = customer.email;
-      if (!toEmail) return res.status(400).json({ message: "Customer has no email address on file" });
+      const rawEmail = (req.body && req.body.email) ? String(req.body.email).trim() : customer.email;
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!rawEmail) return res.status(400).json({ message: "Customer has no email address on file" });
+      if (!emailRegex.test(rawEmail)) return res.status(400).json({ message: "Invalid email address" });
+      const toEmail = rawEmail;
 
       const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
       const allSettings = await storage.getSettings();

@@ -11,7 +11,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus, BadgePercent, FileSpreadsheet } from "lucide-react";
+import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus, BadgePercent, FileSpreadsheet, Mail } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip, Legend, ResponsiveContainer, Cell, AreaChart, Area } from "recharts";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -48,10 +49,13 @@ export default function Reports() {
   const [savingsFrom, setSavingsFrom] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 12); return d.toISOString().split("T")[0]; });
   const [savingsTo, setSavingsTo] = useState(new Date().toISOString().split("T")[0]);
   const [expandedSavingsInvoice, setExpandedSavingsInvoice] = useState<string | null>(null);
+  const [showEmailPreview, setShowEmailPreview] = useState(false);
+  const [previewEmailOverride, setPreviewEmailOverride] = useState("");
 
   const sendSavingsEmailMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/email`),
+    mutationFn: (emailOverride?: string) => apiRequest("POST", `/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/email`, emailOverride ? { email: emailOverride } : undefined),
     onSuccess: () => {
+      setShowEmailPreview(false);
       toast({ title: "Report sent", description: "The savings report has been emailed to the customer." });
     },
     onError: (err: unknown) => {
@@ -1159,7 +1163,7 @@ export default function Reports() {
                       variant="outline"
                       size="sm"
                       data-testid="button-export-savings-pdf"
-                      onClick={() => window.open(`/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/html`, "_blank")}
+                      onClick={() => window.open(`/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/html?print=1`, "_blank")}
                     >
                       <FileText className="w-4 h-4 mr-1" /> Print / Save as PDF
                     </Button>
@@ -1175,14 +1179,13 @@ export default function Reports() {
                       variant="outline"
                       size="sm"
                       data-testid="button-send-savings-email"
-                      disabled={sendSavingsEmailMutation.isPending}
-                      onClick={() => sendSavingsEmailMutation.mutate()}
+                      onClick={() => {
+                        const selectedCust = customers.find(c => c.id === savingsCustomer);
+                        setPreviewEmailOverride(selectedCust?.email || "");
+                        setShowEmailPreview(true);
+                      }}
                     >
-                      {sendSavingsEmailMutation.isPending ? (
-                        <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                      ) : (
-                        <Send className="w-4 h-4 mr-1" />
-                      )}
+                      <Send className="w-4 h-4 mr-1" />
                       Send to Customer
                     </Button>
                   </div>
@@ -1374,6 +1377,72 @@ export default function Reports() {
         </TabsContent>
 
       </Tabs>
+
+      <Dialog open={showEmailPreview} onOpenChange={(open) => { if (!sendSavingsEmailMutation.isPending) setShowEmailPreview(open); }}>
+        <DialogContent className="max-w-3xl w-full" data-testid="dialog-email-preview">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="w-5 h-5" /> Preview &amp; Send Savings Report
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <Label htmlFor="preview-email">Recipient Email</Label>
+              <Input
+                id="preview-email"
+                data-testid="input-preview-email"
+                type="email"
+                value={previewEmailOverride}
+                onChange={(e) => setPreviewEmailOverride(e.target.value)}
+                placeholder="customer@example.com"
+              />
+              {!previewEmailOverride && (
+                <p className="text-xs text-destructive">No email address set. Enter one to send the report.</p>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <Label>Email Preview</Label>
+              <div className="border rounded-md overflow-hidden" style={{ height: 400 }}>
+                {savingsCustomer && savingsFrom && savingsTo && (
+                  <iframe
+                    data-testid="iframe-email-preview"
+                    src={`/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/html`}
+                    className="w-full h-full"
+                    style={{ border: "none" }}
+                    title="Email Preview"
+                  />
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">This is a preview of the report that will be emailed to the customer.</p>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              data-testid="button-cancel-email"
+              onClick={() => setShowEmailPreview(false)}
+              disabled={sendSavingsEmailMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              data-testid="button-confirm-send-email"
+              disabled={!previewEmailOverride || sendSavingsEmailMutation.isPending}
+              onClick={() => sendSavingsEmailMutation.mutate(previewEmailOverride)}
+            >
+              {sendSavingsEmailMutation.isPending ? (
+                <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Sending…</>
+              ) : (
+                <><Send className="w-4 h-4 mr-1" /> Send Report</>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
