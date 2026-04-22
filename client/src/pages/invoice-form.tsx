@@ -12,7 +12,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard, FileText } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard, FileText, Lock } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { StatusBadge } from "./dashboard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
@@ -231,12 +232,12 @@ export default function InvoiceForm() {
       if (match) {
         const specialPrice = parseFloat(String(match.specialPrice));
         if (specialPrice > 0) {
-          return { type: "fixed_price", value: specialPrice, name: contract.name };
+          return { type: "fixed_price", value: specialPrice, name: contract.name, source: contract.source };
         }
       }
     }
 
-    let bestDiscount: { type: string; value: number; name: string } | null = null;
+    let bestDiscount: { type: string; value: number; name: string; source?: string | null } | null = null;
     let bestDiscountedPrice = levelPrice;
 
     for (const contract of activeContracts) {
@@ -982,14 +983,40 @@ export default function InvoiceForm() {
                           )}
                         </TableCell>
                         <TableCell>
-                          <Input
-                            type="text"
-                            inputMode="decimal"
-                            value={line.unitPrice}
-                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
-                            disabled={isViewMode}
-                            data-testid={`input-line-price-${idx}`}
-                          />
+                          <div className="space-y-1">
+                            <Input
+                              type="text"
+                              inputMode="decimal"
+                              value={line.unitPrice}
+                              onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
+                              disabled={isViewMode}
+                              data-testid={`input-line-price-${idx}`}
+                            />
+                            {line.itemId && customerId && (() => {
+                              const _item = items.find(i => i.id === line.itemId);
+                              if (!_item) return null;
+                              const _disc = findContractDiscount(customerId, _item, line.quantity);
+                              if (_disc?.type !== "fixed_price" || _disc.source !== "invoice-discount") return null;
+                              return (
+                                <TooltipProvider delayDuration={200}>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        type="button"
+                                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors"
+                                        onClick={() => navigate(`/pricing?tab=auto-saved`)}
+                                        data-testid={`badge-fixed-price-${idx}`}
+                                      >
+                                        <Lock className="w-3 h-3" />
+                                        Fixed price
+                                      </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="bottom">Fixed price from contract</TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              );
+                            })()}
+                          </div>
                         </TableCell>
                         <TableCell>
                           {isViewMode ? (
@@ -1201,6 +1228,30 @@ export default function InvoiceForm() {
                           onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
                           disabled={isViewMode}
                         />
+                        {line.itemId && customerId && (() => {
+                          const _item = items.find(i => i.id === line.itemId);
+                          if (!_item) return null;
+                          const _disc = findContractDiscount(customerId, _item, line.quantity);
+                          if (_disc?.type !== "fixed_price" || _disc.source !== "invoice-discount") return null;
+                          return (
+                            <TooltipProvider delayDuration={200}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors"
+                                    onClick={() => navigate(`/pricing?tab=auto-saved`)}
+                                    data-testid={`badge-fixed-price-mobile-${idx}`}
+                                  >
+                                    <Lock className="w-3 h-3" />
+                                    Fixed price
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent side="bottom">Fixed price from contract</TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          );
+                        })()}
                       </div>
                     </div>
 

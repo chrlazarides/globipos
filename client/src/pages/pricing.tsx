@@ -65,7 +65,10 @@ function calcDiscountedPrice(retailPrice: number, discountType: string, discount
 export default function Pricing() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"contracts" | "auto-saved">("contracts");
+  const _pricingSearchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  const [activeTab, setActiveTab] = useState<"contracts" | "auto-saved">(
+    _pricingSearchParams.get("tab") === "auto-saved" ? "auto-saved" : "contracts"
+  );
   const { toast } = useToast();
 
   const { data: contracts = [], isLoading } = useQuery<ContractWithMeta[]>({ queryKey: ["/api/price-contracts"] });
