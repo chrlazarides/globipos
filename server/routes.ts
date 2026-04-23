@@ -2029,7 +2029,24 @@ export async function registerRoutes(
       const { sendSavingsReportEmail } = await import("./email");
       const subject = `Your Savings Report — ${report.customerName} (${fromLabel} to ${toLabel})`;
       const result = await sendSavingsReportEmail(toEmail, subject, html, report.customerName);
-      if (!result.success) return res.status(500).json({ message: result.error || "Failed to send email" });
+      if (!result.success) {
+        await storage.createEmailLog({
+          customerId: req.params.customerId,
+          customerName: report.customerName,
+          toEmail,
+          subject,
+          status: "failed",
+          errorMessage: result.error || "Failed to send email",
+        });
+        return res.status(500).json({ message: result.error || "Failed to send email" });
+      }
+      await storage.createEmailLog({
+        customerId: req.params.customerId,
+        customerName: report.customerName,
+        toEmail,
+        subject,
+        status: "sent",
+      });
       res.json({ success: true, sentTo: toEmail });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

@@ -14,10 +14,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus, BadgePercent, FileSpreadsheet, Mail } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip, Legend, ResponsiveContainer, Cell, AreaChart, Area } from "recharts";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import type { Customer, Invoice, Category } from "@shared/schema";
+import type { Customer, Invoice, Category, EmailLog } from "@shared/schema";
 
 export default function Reports() {
   const { toast } = useToast();
@@ -56,9 +56,11 @@ export default function Reports() {
     mutationFn: (emailOverride?: string) => apiRequest("POST", `/api/reports/savings/${savingsCustomer}/${savingsFrom}/${savingsTo}/email`, emailOverride ? { email: emailOverride } : undefined),
     onSuccess: () => {
       setShowEmailPreview(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/email-logs/customer", savingsCustomer] });
       toast({ title: "Report sent", description: "The savings report has been emailed to the customer." });
     },
     onError: (err: unknown) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/email-logs/customer", savingsCustomer] });
       const message = err instanceof Error ? err.message : "Could not send the email.";
       toast({ title: "Failed to send", description: message, variant: "destructive" });
     },
@@ -162,6 +164,12 @@ export default function Reports() {
   const { data: savingsReport, isLoading: savingsLoading } = useQuery<SavingsReport>({
     queryKey: ["/api/reports/savings", savingsCustomer, savingsFrom, savingsTo],
     enabled: !!savingsCustomer,
+  });
+
+  const { data: savingsEmailLogs = [] } = useQuery<EmailLog[]>({
+    queryKey: ["/api/email-logs/customer", savingsCustomer],
+    enabled: !!savingsCustomer,
+    select: (logs) => logs.filter(l => l.subject.includes("Savings Report")),
   });
 
   const previewStatement = (customerId: string) => {
@@ -1373,6 +1381,44 @@ export default function Reports() {
                 </CardContent>
               </Card>
             </>
+          )}
+
+          {savingsCustomer && savingsEmailLogs.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2 pt-4 px-4">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <Mail className="w-4 h-4 text-muted-foreground" /> Sent Reports History
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Sent</TableHead>
+                      <TableHead>Recipient</TableHead>
+                      <TableHead>Subject</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {savingsEmailLogs.map(log => (
+                      <TableRow key={log.id} data-testid={`row-savings-email-log-${log.id}`}>
+                        <TableCell className="text-sm whitespace-nowrap">
+                          {new Date(log.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </TableCell>
+                        <TableCell className="text-sm" data-testid={`text-email-log-recipient-${log.id}`}>{log.toEmail}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{log.subject}</TableCell>
+                        <TableCell>
+                          <Badge variant={log.status === "sent" ? "default" : "destructive"} data-testid={`badge-email-log-status-${log.id}`}>
+                            {log.status}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
           )}
         </TabsContent>
 
