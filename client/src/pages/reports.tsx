@@ -48,7 +48,21 @@ export default function Reports() {
   const [itemMinMargin, setItemMinMargin] = useState("");
 
   const [savingsCustomer, setSavingsCustomer] = useState<string>("");
-  const [savingsFrom, setSavingsFrom] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 12); return d.toISOString().split("T")[0]; });
+  const [savingsPreset, setSavingsPreset] = useState<string>(() => localStorage.getItem("savingsDatePreset") ?? "12");
+  const [savingsFrom, setSavingsFrom] = useState(() => {
+    const saved = localStorage.getItem("savingsDatePreset");
+    const d = new Date();
+    if (saved === "this-year") {
+      return `${d.getFullYear()}-01-01`;
+    }
+    const months = parseInt(saved ?? "12", 10);
+    if (!isNaN(months)) {
+      d.setMonth(d.getMonth() - months);
+    } else {
+      d.setMonth(d.getMonth() - 12);
+    }
+    return d.toISOString().split("T")[0];
+  });
   const [savingsTo, setSavingsTo] = useState(new Date().toISOString().split("T")[0]);
   const [savingsFromOpen, setSavingsFromOpen] = useState(false);
   const [savingsToOpen, setSavingsToOpen] = useState(false);
@@ -1195,7 +1209,7 @@ export default function Reports() {
                     ].map(({ label, months }) => (
                       <Button
                         key={label}
-                        variant="outline"
+                        variant={savingsPreset === String(months) ? "default" : "outline"}
                         size="sm"
                         data-testid={`button-preset-${months}m`}
                         onClick={() => {
@@ -1204,19 +1218,23 @@ export default function Reports() {
                           from.setMonth(from.getMonth() - months);
                           setSavingsFrom(from.toISOString().split("T")[0]);
                           setSavingsTo(to.toISOString().split("T")[0]);
+                          setSavingsPreset(String(months));
+                          localStorage.setItem("savingsDatePreset", String(months));
                         }}
                       >
                         Last {label}
                       </Button>
                     ))}
                     <Button
-                      variant="outline"
+                      variant={savingsPreset === "this-year" ? "default" : "outline"}
                       size="sm"
                       data-testid="button-preset-this-year"
                       onClick={() => {
                         const now = new Date();
                         setSavingsFrom(`${now.getFullYear()}-01-01`);
                         setSavingsTo(now.toISOString().split("T")[0]);
+                        setSavingsPreset("this-year");
+                        localStorage.setItem("savingsDatePreset", "this-year");
                       }}
                     >
                       This Year
