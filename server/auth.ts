@@ -2,7 +2,12 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import type { Request, Response, NextFunction } from "express";
 
-const JWT_SECRET = process.env.SESSION_SECRET || "vintrade-secret-key-2024";
+const JWT_SECRET = process.env.SESSION_SECRET;
+if (!JWT_SECRET) {
+  console.error("FATAL: SESSION_SECRET environment variable is not set. Refusing to start.");
+  process.exit(1);
+}
+const JWT_SECRET_SAFE = JWT_SECRET as string;
 const TOKEN_COOKIE = "vt_auth";
 const TOKEN_EXPIRY = "30d";
 
@@ -31,12 +36,12 @@ export function verifyPassword(password: string, hash: string): boolean {
 }
 
 export function signToken(user: AuthUser): string {
-  return jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role, permissions: user.permissions }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+  return jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role, permissions: user.permissions }, JWT_SECRET_SAFE, { expiresIn: TOKEN_EXPIRY });
 }
 
 export function verifyToken(token: string): AuthUser | null {
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as any;
+    const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
     if (payload.temp) return null;
     return { ...payload, permissions: payload.permissions || [] } as AuthUser;
   } catch {
@@ -45,12 +50,12 @@ export function verifyToken(token: string): AuthUser | null {
 }
 
 export function signTempToken(userId: string): string {
-  return jwt.sign({ temp: true, id: userId }, JWT_SECRET, { expiresIn: "5m" });
+  return jwt.sign({ temp: true, id: userId }, JWT_SECRET_SAFE, { expiresIn: "5m" });
 }
 
 export function verifyTempToken(token: string): string | null {
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as any;
+    const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
     if (!payload.temp || !payload.id) return null;
     return payload.id as string;
   } catch {
