@@ -11,7 +11,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus, BadgePercent, FileSpreadsheet, Mail } from "lucide-react";
+import { BarChart3, Download, FileText, Users, Printer, Eye, Send, Loader2, ChevronDown, ChevronRight, BarChart2, Package, Search, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus, BadgePercent, FileSpreadsheet, Mail, CalendarIcon } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip, Legend, ResponsiveContainer, Cell, AreaChart, Area } from "recharts";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -48,6 +50,8 @@ export default function Reports() {
   const [savingsCustomer, setSavingsCustomer] = useState<string>("");
   const [savingsFrom, setSavingsFrom] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 12); return d.toISOString().split("T")[0]; });
   const [savingsTo, setSavingsTo] = useState(new Date().toISOString().split("T")[0]);
+  const [savingsFromOpen, setSavingsFromOpen] = useState(false);
+  const [savingsToOpen, setSavingsToOpen] = useState(false);
   const [expandedSavingsInvoice, setExpandedSavingsInvoice] = useState<string | null>(null);
   const [showEmailPreview, setShowEmailPreview] = useState(false);
   const [previewEmailOverride, setPreviewEmailOverride] = useState("");
@@ -1121,11 +1125,65 @@ export default function Reports() {
                 </div>
                 <div>
                   <Label className="text-xs">From</Label>
-                  <Input type="date" value={savingsFrom} onChange={(e) => setSavingsFrom(e.target.value)} data-testid="input-savings-from" />
+                  <Popover open={savingsFromOpen} onOpenChange={setSavingsFromOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-36 justify-start text-left font-normal"
+                        data-testid="input-savings-from"
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                        {savingsFrom ? savingsFrom : <span className="text-muted-foreground">Pick a date</span>}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={savingsFrom ? new Date(savingsFrom + "T12:00:00") : undefined}
+                        onSelect={(date) => {
+                          if (date) {
+                            const y = date.getFullYear();
+                            const m = String(date.getMonth() + 1).padStart(2, "0");
+                            const d = String(date.getDate()).padStart(2, "0");
+                            setSavingsFrom(`${y}-${m}-${d}`);
+                          }
+                          setSavingsFromOpen(false);
+                        }}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 <div>
                   <Label className="text-xs">To</Label>
-                  <Input type="date" value={savingsTo} onChange={(e) => setSavingsTo(e.target.value)} data-testid="input-savings-to" />
+                  <Popover open={savingsToOpen} onOpenChange={setSavingsToOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-36 justify-start text-left font-normal"
+                        data-testid="input-savings-to"
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                        {savingsTo ? savingsTo : <span className="text-muted-foreground">Pick a date</span>}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={savingsTo ? new Date(savingsTo + "T12:00:00") : undefined}
+                        onSelect={(date) => {
+                          if (date) {
+                            const y = date.getFullYear();
+                            const m = String(date.getMonth() + 1).padStart(2, "0");
+                            const d = String(date.getDate()).padStart(2, "0");
+                            setSavingsTo(`${y}-${m}-${d}`);
+                          }
+                          setSavingsToOpen(false);
+                        }}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 <div>
                   <Label className="text-xs invisible">Presets</Label>
