@@ -83,7 +83,7 @@ export interface IStorage {
   getCustomerStatements(): Promise<any[]>;
   getCustomerLastPrices(customerId: string, excludeInvoiceId?: string): Promise<Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]>>;
   getCustomerSavingsReport(customerId: string, from: string, to: string): Promise<any>;
-  getItemPriceHistory(itemId: string, limit?: number): Promise<{ invoiceId: string; invoiceNumber: string; date: string; customerId: string; customerName: string; quantity: number; unitPrice: string; discountPercent: string; discountAmount: string }[]>;
+  getItemPriceHistory(itemId: string, limit?: number, from?: string, to?: string): Promise<{ invoiceId: string; invoiceNumber: string; date: string; customerId: string; customerName: string; quantity: number; unitPrice: string; discountPercent: string; discountAmount: string }[]>;
   quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number): Promise<{ contractId: string }>;
   getContractItems(contractId: string): Promise<PriceContractItem[]>;
   deleteContractItem(itemId: string): Promise<void>;
@@ -1335,7 +1335,14 @@ export class DatabaseStorage implements IStorage {
     return resultMap;
   }
 
-  async getItemPriceHistory(itemId: string, limit = 50) {
+  async getItemPriceHistory(itemId: string, limit = 50, from?: string, to?: string) {
+    const conditions = [
+      eq(invoiceItems.itemId, itemId),
+      eq(invoices.type, "invoice"),
+      sql`${invoices.status} != 'cancelled'`,
+    ] as any[];
+    if (from) conditions.push(gte(invoices.date, from));
+    if (to) conditions.push(lte(invoices.date, to));
     const rows = await db
       .select({
         invoiceId: invoiceItems.invoiceId,
@@ -1351,13 +1358,7 @@ export class DatabaseStorage implements IStorage {
       .from(invoiceItems)
       .innerJoin(invoices, eq(invoiceItems.invoiceId, invoices.id))
       .leftJoin(customers, eq(invoices.customerId, customers.id))
-      .where(
-        and(
-          eq(invoiceItems.itemId, itemId),
-          eq(invoices.type, "invoice"),
-          sql`${invoices.status} != 'cancelled'`,
-        )
-      )
+      .where(and(...conditions))
       .orderBy(desc(invoices.date))
       .limit(limit);
     return rows.map(r => ({

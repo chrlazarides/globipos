@@ -331,10 +331,21 @@ export default function Items() {
 
 function PriceHistoryTab({ itemId }: { itemId: string }) {
   const [customerFilter, setCustomerFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const buildUrl = () => {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set("from", dateFrom);
+    if (dateTo) params.set("to", dateTo);
+    const qs = params.toString();
+    return `/api/items/${itemId}/price-history${qs ? `?${qs}` : ""}`;
+  };
+
   const { data: history = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/items", itemId, "price-history"],
+    queryKey: ["/api/items", itemId, "price-history", dateFrom, dateTo],
     queryFn: async () => {
-      const res = await fetch(`/api/items/${itemId}/price-history`);
+      const res = await fetch(buildUrl());
       if (!res.ok) throw new Error("Failed to load price history");
       return res.json();
     },
@@ -344,31 +355,58 @@ function PriceHistoryTab({ itemId }: { itemId: string }) {
     ? history.filter((r) => r.customerName.toLowerCase().includes(customerFilter.toLowerCase()))
     : history;
 
+  const hasDateFilter = dateFrom || dateTo;
+
   return (
     <div className="space-y-3 mt-4" data-testid="price-history-tab">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-          <Input
-            placeholder="Filter by customer..."
-            value={customerFilter}
-            onChange={(e) => setCustomerFilter(e.target.value)}
-            className="pl-8 h-8 text-sm"
-            data-testid="input-price-history-customer-filter"
-          />
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Filter by customer..."
+              value={customerFilter}
+              onChange={(e) => setCustomerFilter(e.target.value)}
+              className="pl-8 h-8 text-sm"
+              data-testid="input-price-history-customer-filter"
+            />
+          </div>
+          {customerFilter && (
+            <Button variant="ghost" size="sm" onClick={() => setCustomerFilter("")} className="h-8 px-2 text-xs">
+              Clear
+            </Button>
+          )}
         </div>
-        {customerFilter && (
-          <Button variant="ghost" size="sm" onClick={() => setCustomerFilter("")} className="h-8 px-2 text-xs">
-            Clear
-          </Button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-muted-foreground whitespace-nowrap">Date range:</span>
+          <Input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="h-8 text-xs w-[140px]"
+            data-testid="input-price-history-date-from"
+          />
+          <span className="text-xs text-muted-foreground">to</span>
+          <Input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="h-8 text-xs w-[140px]"
+            data-testid="input-price-history-date-to"
+          />
+          {hasDateFilter && (
+            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="h-8 px-2 text-xs">
+              Clear dates
+            </Button>
+          )}
+        </div>
       </div>
       {isLoading ? (
         <p className="text-sm text-muted-foreground py-4 text-center">Loading price history...</p>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground" data-testid="price-history-empty">
           <History className="w-8 h-8 opacity-40" />
-          <p className="text-sm">{customerFilter ? "No results matching that customer." : "No sales history found for this item."}</p>
+          <p className="text-sm">{customerFilter ? "No results matching that customer." : hasDateFilter ? "No sales history found for this date range." : "No sales history found for this item."}</p>
         </div>
       ) : (
         <div className="border rounded-md overflow-auto max-h-64">

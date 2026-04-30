@@ -837,7 +837,9 @@ export async function registerRoutes(
   app.get("/api/items/:id/price-history", async (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-      const history = await storage.getItemPriceHistory(req.params.id, limit);
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const history = await storage.getItemPriceHistory(req.params.id, limit, from, to);
       res.json(history);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
