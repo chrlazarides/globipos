@@ -130,15 +130,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
 
   const logo = (
     <div className="flex justify-center mb-8">
-      <div className="flex items-center gap-3">
-        <div className="w-12 h-12 flex items-center justify-center rounded-xl bg-primary text-primary-foreground">
-          <Wine className="w-6 h-6" />
-        </div>
-        <div>
-          <h1 className="text-xl font-bold text-foreground">FC GASTRONOBILE LTD</h1>
-          <p className="text-xs text-muted-foreground">Wholesale Management</p>
-        </div>
-      </div>
+      <img src="/logo.png" alt="Gastro Nobile" className="h-20 w-auto object-contain" />
     </div>
   );
 
