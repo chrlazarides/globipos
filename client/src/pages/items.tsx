@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Package, Upload, History } from "lucide-react";
+import { Plus, Search, Package, Upload, History, Download } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertItemSchema, insertCategorySchema, type Item, type Category } from "@shared/schema";
@@ -357,6 +357,28 @@ function PriceHistoryTab({ itemId }: { itemId: string }) {
 
   const hasDateFilter = dateFrom || dateTo;
 
+  const exportCsv = () => {
+    const headers = ["Customer", "Invoice #", "Date", "Qty", "Unit Price", "Discount %"];
+    const rows = filtered.map((row) => [
+      row.customerName,
+      row.invoiceNumber,
+      row.date,
+      row.quantity,
+      parseFloat(row.unitPrice).toFixed(2),
+      parseFloat(row.discountPercent).toFixed(2),
+    ]);
+    const csvContent = [headers, ...rows]
+      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "price-history.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-3 mt-4" data-testid="price-history-tab">
       <div className="flex flex-col gap-2">
@@ -443,9 +465,15 @@ function PriceHistoryTab({ itemId }: { itemId: string }) {
         </div>
       )}
       {!isLoading && filtered.length > 0 && (
-        <p className="text-xs text-muted-foreground text-right">
-          Showing {filtered.length} transaction{filtered.length !== 1 ? "s" : ""}
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground">
+            Showing {filtered.length} transaction{filtered.length !== 1 ? "s" : ""}
+          </p>
+          <Button variant="outline" size="sm" onClick={exportCsv} className="h-7 text-xs gap-1" data-testid="button-export-price-history-csv">
+            <Download className="w-3 h-3" />
+            Export CSV
+          </Button>
+        </div>
       )}
     </div>
   );
