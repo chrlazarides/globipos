@@ -389,7 +389,7 @@ export async function registerRoutes(
     try {
       if (!req.user) return res.status(401).json({ message: "Not authenticated" });
       const secret = totpGenerateSecret();
-      const otpauth = totpGenerateURI({ secret, label: req.user.username, issuer: "VinTrade" });
+      const otpauth = totpGenerateURI({ secret, label: req.user.username, issuer: "FC GASTRONOBILE" });
       const qrDataUrl = await QRCode.toDataURL(String(otpauth));
       res.json({ secret, qrDataUrl });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -451,7 +451,7 @@ export async function registerRoutes(
       const [user] = await db.select({ username: users.username }).from(users).where(eq(users.id, userId));
       if (!user) return res.status(401).json({ message: "User not found" });
       const secret = totpGenerateSecret();
-      const otpauth = totpGenerateURI({ secret, label: user.username, issuer: "VinTrade" });
+      const otpauth = totpGenerateURI({ secret, label: user.username, issuer: "FC GASTRONOBILE" });
       const qrDataUrl = await QRCode.toDataURL(String(otpauth));
       pendingSetupSecrets.set(token, { secret, expiresAt: Date.now() + 10 * 60 * 1000 });
       res.json({ secret, qrDataUrl });
@@ -1547,7 +1547,7 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
-      const companyName = settingsMap.company_name || "VINERIA DI MARE Trading";
+      const companyName = settingsMap.company_name || "FC GASTRONOBILE LTD";
       const subject = `${typeLabel} ${inv.invoiceNumber} from ${companyName}`;
 
       const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
@@ -1811,7 +1811,7 @@ export async function registerRoutes(
       const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
-      const companyName = settingsMap["companyName"] || "Vineria Di Mare Trading Ltd";
+      const companyName = settingsMap["company_name"] || "FC GASTRONOBILE LTD";
 
       const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
       const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
@@ -1929,7 +1929,7 @@ export async function registerRoutes(
       const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
-      const companyName = settingsMap["companyName"] || "Vineria Di Mare Trading Ltd";
+      const companyName = settingsMap["company_name"] || "FC GASTRONOBILE LTD";
 
       const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
       const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
@@ -2269,7 +2269,7 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
-      const companyName = settingsMap.company_name || "VINERIA DI MARE Trading";
+      const companyName = settingsMap.company_name || "FC GASTRONOBILE LTD";
       const subject = `Account Statement from ${companyName}`;
       const html = generateStatementHtml(customer, st, false, settingsMap);
 
@@ -2324,12 +2324,12 @@ export async function registerRoutes(
   app.post("/api/settings/seed-defaults", async (_req, res) => {
     try {
       const defaults = [
-        { key: "company_name", value: "VINERIA DI MARE Trading", label: "Company Name", group: "company" },
-        { key: "company_address", value: "Limassol, Cyprus", label: "Company Address", group: "company" },
-        { key: "company_phone", value: "+357-25-000000", label: "Company Phone", group: "company" },
-        { key: "company_email", value: "info@vineriadimare.cy", label: "Company Email", group: "company" },
-        { key: "company_tax_id", value: "CY-00000000A", label: "Company Tax ID (TIN)", group: "company" },
-        { key: "company_reg_no", value: "", label: "Company Registration No.", group: "company" },
+        { key: "company_name", value: "FC GASTRONOBILE LTD", label: "Company Name", group: "company" },
+        { key: "company_address", value: "Georgiou Pilatou 11, 5510, Famagusta, Cyprus", label: "Company Address", group: "company" },
+        { key: "company_phone", value: "", label: "Company Phone", group: "company" },
+        { key: "company_email", value: "gastronobile@gmail.com", label: "Company Email", group: "company" },
+        { key: "company_tax_id", value: "CY60323722T", label: "Company Tax ID (TIN)", group: "company" },
+        { key: "company_reg_no", value: "HE 487597", label: "Company Registration No.", group: "company" },
         { key: "company_iban", value: "", label: "Bank IBAN", group: "company" },
         { key: "company_swift", value: "", label: "Bank SWIFT/BIC", group: "company" },
         { key: "company_bank_name", value: "", label: "Bank Name", group: "company" },
@@ -2444,7 +2444,7 @@ export async function registerRoutes(
       const companySetting = await storage.getSetting("company_name");
       const toEmail = req.body?.email || emailSetting?.value || "";
       if (!toEmail) return res.status(400).json({ message: "No backup email address configured" });
-      const companyName = companySetting?.value || "VinTrade";
+      const companyName = companySetting?.value || "FC GASTRONOBILE LTD";
       const date = new Date().toISOString().split("T")[0];
       // Use differential if last backup date is known and within 8 days
       const lastSetting = await storage.getSetting("backup_last_date");
@@ -4422,7 +4422,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   const hasBarcodes = items.some((li: any) => li.barcode);
   const overallDiscount = parseFloat(inv.discountAmount || "0");
 
-  const companyName = settings.company_name || "VINERIA DI MARE Trading";
+  const companyName = settings.company_name || "FC GASTRONOBILE LTD";
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";
@@ -4651,7 +4651,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
 }
 
 function generateStatementHtml(customer: any, statement: any, autoPrint: boolean = false, settings: Record<string, string> = {}) {
-  const companyName = settings.company_name || "VINERIA DI MARE Trading";
+  const companyName = settings.company_name || "FC GASTRONOBILE LTD";
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";

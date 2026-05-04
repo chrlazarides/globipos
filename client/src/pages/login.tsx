@@ -135,7 +135,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
           <Wine className="w-6 h-6" />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-foreground">VinTrade</h1>
+          <h1 className="text-xl font-bold text-foreground">FC GASTRONOBILE LTD</h1>
           <p className="text-xs text-muted-foreground">Wholesale Management</p>
         </div>
       </div>

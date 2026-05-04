@@ -145,7 +145,7 @@ export function AppSidebar() {
           </div>
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-sidebar-foreground leading-tight">{companyName}</span>
-            <span className="text-xs text-sidebar-foreground/60">Wholesale Management</span>
+            <span className="text-xs text-sidebar-foreground/60">Food &amp; Beverage Wholesale</span>
           </div>
         </div>
         {!isOnline && (

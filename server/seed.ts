@@ -4,12 +4,12 @@ import { sql, eq, and } from "drizzle-orm";
 import { hashPassword } from "./auth";
 
 const DEFAULT_SETTINGS = [
-  { key: "company_name", value: "VINERIA DI MARE Trading", label: "Company Name", group: "company" },
-  { key: "company_address", value: "", label: "Company Address", group: "company" },
+  { key: "company_name", value: "FC GASTRONOBILE LTD", label: "Company Name", group: "company" },
+  { key: "company_address", value: "Georgiou Pilatou 11, 5510, Famagusta, Cyprus", label: "Company Address", group: "company" },
   { key: "company_phone", value: "", label: "Company Phone", group: "company" },
-  { key: "company_email", value: "", label: "Company Email", group: "company" },
-  { key: "company_tax_id", value: "", label: "Company Tax ID (TIN)", group: "company" },
-  { key: "company_reg_no", value: "", label: "Company Registration No.", group: "company" },
+  { key: "company_email", value: "gastronobile@gmail.com", label: "Company Email", group: "company" },
+  { key: "company_tax_id", value: "CY60323722T", label: "Company Tax ID (TIN)", group: "company" },
+  { key: "company_reg_no", value: "HE 487597", label: "Company Registration No.", group: "company" },
   { key: "company_iban", value: "", label: "Bank IBAN", group: "company" },
   { key: "company_swift", value: "", label: "Bank SWIFT/BIC", group: "company" },
   { key: "company_bank_name", value: "", label: "Bank Name", group: "company" },
@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS = [
 ];
 
 // Known stale/wrong company names that should be reset to default
-const INVALID_COMPANY_NAMES = ["ALBANIA POWER", "Demo Company", "Test Company", "Your Company Name"];
+const INVALID_COMPANY_NAMES = ["ALBANIA POWER", "Demo Company", "Test Company", "Your Company Name", "VINERIA DI MARE Trading"];
 
 export async function ensureDefaultSettings() {
   try {
@@ -45,7 +45,7 @@ export async function ensureDefaultSettings() {
     if (nameSetting && INVALID_COMPANY_NAMES.includes(nameSetting.value)) {
       console.log(`Resetting invalid company name "${nameSetting.value}" to default`);
       await db.update(systemSettings)
-        .set({ value: "VINERIA DI MARE Trading" })
+        .set({ value: "FC GASTRONOBILE LTD" })
         .where(eq(systemSettings.key, "company_name"));
     }
 
