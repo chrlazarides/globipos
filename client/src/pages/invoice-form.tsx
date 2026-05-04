@@ -12,8 +12,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard, FileText, Lock } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard, FileText, Lock, History } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { StatusBadge } from "./dashboard";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { usePriceLevels } from "@/hooks/use-price-levels";
@@ -32,6 +33,90 @@ interface LineItem {
   discountPercent: string;
   discount: string;
   total: string;
+}
+
+type PriceHistoryEntry = {
+  invoiceId: string;
+  invoiceNumber: string;
+  date: string;
+  customerId: string;
+  customerName: string;
+  quantity: number;
+  unitPrice: string;
+  discountPercent: string;
+  discountAmount: string;
+};
+
+function ItemPriceHistoryPopover({ itemId, itemName }: { itemId: string; itemName: string }) {
+  const [open, setOpen] = useState(false);
+  const { data: history = [], isLoading } = useQuery<PriceHistoryEntry[]>({
+    queryKey: ["/api/items", itemId, "price-history"],
+    enabled: open && !!itemId,
+  });
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-testid={`button-price-history-${itemId}`}
+          className="inline-flex items-center justify-center w-7 h-7 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+          title="View price history across all customers"
+        >
+          <History className="w-3.5 h-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="bottom" align="end" className="w-[380px] p-0">
+        <div className="p-3 border-b">
+          <p className="text-sm font-medium">Price history</p>
+          <p className="text-xs text-muted-foreground truncate">{itemName} — all customers</p>
+        </div>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground text-sm">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+          </div>
+        ) : history.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">No sales history found</div>
+        ) : (
+          <div className="overflow-auto max-h-72">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">Date</th>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">Customer</th>
+                  <th className="text-right px-3 py-2 font-medium text-muted-foreground">Qty</th>
+                  <th className="text-right px-3 py-2 font-medium text-muted-foreground">Unit price</th>
+                  <th className="text-right px-3 py-2 font-medium text-muted-foreground">Disc %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((entry, i) => {
+                  const dateStr = entry.date
+                    ? new Date(entry.date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })
+                    : "";
+                  const discPct = parseFloat(entry.discountPercent) || 0;
+                  return (
+                    <tr key={i} className="border-t border-border/50 hover:bg-muted/40 transition-colors">
+                      <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">{dateStr}</td>
+                      <td className="px-3 py-1.5 max-w-[120px] truncate" title={entry.customerName}>{entry.customerName}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{entry.quantity}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-medium">€{parseFloat(entry.unitPrice).toFixed(2)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">{discPct > 0 ? `${discPct.toFixed(1)}%` : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {history.length > 0 && (
+          <div className="px-3 py-2 border-t text-xs text-muted-foreground">
+            Showing {history.length} most recent sale{history.length !== 1 ? "s" : ""}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function saleUnitLabel(unit: string): string {
@@ -984,14 +1069,22 @@ export default function InvoiceForm() {
                         </TableCell>
                         <TableCell>
                           <div className="space-y-1">
-                            <Input
-                              type="text"
-                              inputMode="decimal"
-                              value={line.unitPrice}
-                              onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
-                              disabled={isViewMode}
-                              data-testid={`input-line-price-${idx}`}
-                            />
+                            <div className="flex items-center gap-1">
+                              <Input
+                                type="text"
+                                inputMode="decimal"
+                                value={line.unitPrice}
+                                onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
+                                disabled={isViewMode}
+                                data-testid={`input-line-price-${idx}`}
+                              />
+                              {line.itemId && !isViewMode && (
+                                <ItemPriceHistoryPopover
+                                  itemId={line.itemId}
+                                  itemName={line.description || items.find(i => i.id === line.itemId)?.name || ""}
+                                />
+                              )}
+                            </div>
                             {line.itemId && customerId && (() => {
                               const _item = items.find(i => i.id === line.itemId);
                               if (!_item) return null;
@@ -1221,13 +1314,21 @@ export default function InvoiceForm() {
                       </div>
                       <div className="col-span-2">
                         <Label className="text-xs text-muted-foreground">Unit Price</Label>
-                        <Input
-                          type="text"
-                          inputMode="decimal"
-                          value={line.unitPrice}
-                          onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
-                          disabled={isViewMode}
-                        />
+                        <div className="flex items-center gap-1">
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            value={line.unitPrice}
+                            onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
+                            disabled={isViewMode}
+                          />
+                          {line.itemId && !isViewMode && (
+                            <ItemPriceHistoryPopover
+                              itemId={line.itemId}
+                              itemName={line.description || items.find(i => i.id === line.itemId)?.name || ""}
+                            />
+                          )}
+                        </div>
                         {line.itemId && customerId && (() => {
                           const _item = items.find(i => i.id === line.itemId);
                           if (!_item) return null;
