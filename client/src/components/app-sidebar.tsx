@@ -140,7 +140,9 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="px-3 py-3">
         <div className="flex flex-col items-start gap-1">
-          <img src="/logo.png" alt="Gastro Nobile" className="h-16 w-auto object-contain" />
+          <div className="w-full rounded-lg bg-white px-3 py-2 flex items-center justify-start">
+            <img src="/logo.png" alt="Gastro Nobile" className="h-14 w-auto object-contain" />
+          </div>
         </div>
         {!isOnline && (
           <div className="flex items-center gap-1.5 mt-2 px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/50" data-testid="sidebar-offline-badge">
