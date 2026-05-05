@@ -281,53 +281,53 @@ export default function Reports() {
             <>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
                 <Card>
-                  <CardContent className="p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Revenue (Ex-VAT)</p>
-                    <p className="text-xl font-bold mt-1" data-testid="stat-total-revenue">
+                  <CardContent className="p-4 flex flex-col">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider h-8 flex items-start">Revenue (Ex-VAT)</p>
+                    <p className="text-xl font-bold" data-testid="stat-total-revenue">
                       €{parseFloat(salesReport.totalRevenue).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">After discounts, excl. tax</p>
                   </CardContent>
                 </Card>
                 <Card>
-                  <CardContent className="p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Incl. VAT</p>
-                    <p className="text-xl font-bold mt-1" data-testid="stat-total-sales">
+                  <CardContent className="p-4 flex flex-col">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider h-8 flex items-start">Total Incl. VAT</p>
+                    <p className="text-xl font-bold" data-testid="stat-total-sales">
                       €{parseFloat(salesReport.totalSales).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">VAT: €{parseFloat(salesReport.totalTax).toLocaleString("el-CY", { minimumFractionDigits: 2 })}</p>
                   </CardContent>
                 </Card>
                 <Card>
-                  <CardContent className="p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Cost</p>
-                    <p className="text-xl font-bold mt-1" data-testid="stat-total-cost">
+                  <CardContent className="p-4 flex flex-col">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider h-8 flex items-start">Total Cost</p>
+                    <p className="text-xl font-bold" data-testid="stat-total-cost">
                       €{parseFloat(salesReport.totalCost).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
                   </CardContent>
                 </Card>
                 <Card>
-                  <CardContent className="p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Gross Profit</p>
-                    <p className={`text-xl font-bold mt-1 ${parseFloat(salesReport.totalProfit) >= 0 ? "text-green-600" : "text-red-500"}`} data-testid="stat-total-profit">
+                  <CardContent className="p-4 flex flex-col">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider h-8 flex items-start">Gross Profit</p>
+                    <p className={`text-xl font-bold ${parseFloat(salesReport.totalProfit) >= 0 ? "text-green-600" : "text-red-500"}`} data-testid="stat-total-profit">
                       €{parseFloat(salesReport.totalProfit).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">On ex-VAT revenue</p>
                   </CardContent>
                 </Card>
                 <Card>
-                  <CardContent className="p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Margin</p>
-                    <p className={`text-xl font-bold mt-1 ${parseFloat(salesReport.overallMargin) >= 0 ? "text-green-600" : "text-red-500"}`} data-testid="stat-overall-margin">
+                  <CardContent className="p-4 flex flex-col">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider h-8 flex items-start">Margin</p>
+                    <p className={`text-xl font-bold ${parseFloat(salesReport.overallMargin) >= 0 ? "text-green-600" : "text-red-500"}`} data-testid="stat-overall-margin">
                       {salesReport.overallMargin}%
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">Profit / Revenue</p>
                   </CardContent>
                 </Card>
                 <Card>
-                  <CardContent className="p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Invoices</p>
-                    <p className="text-xl font-bold mt-1">{salesReport.invoiceCount}</p>
+                  <CardContent className="p-4 flex flex-col">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider h-8 flex items-start">Invoices</p>
+                    <p className="text-xl font-bold">{salesReport.invoiceCount}</p>
                   </CardContent>
                 </Card>
               </div>
