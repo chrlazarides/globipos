@@ -444,6 +444,7 @@ export class DatabaseStorage implements IStorage {
       .from(payments)
       .leftJoin(invoices, eq(payments.invoiceId, invoices.id))
       .leftJoin(customers, sql`${customers.id} = COALESCE(${payments.customerId}, ${invoices.customerId})`)
+      .where(sql`${payments.notes} IS NULL OR ${payments.notes} NOT LIKE 'Applied from balance payment%'`)
       .orderBy(desc(payments.createdAt));
     return rows.map(r => ({
       ...r,
@@ -596,10 +597,10 @@ export class DatabaseStorage implements IStorage {
         sql`${invoices.dueDate} < ${todayStr}`,
       )
     );
-    // Revenue: total collected (sum of payments received)
+    // Revenue: total collected (sum of payments received, excluding sub-payments)
     const [revenueRow] = await db.select({ total: sql<string>`coalesce(sum(amount::numeric), 0)` }).from(payments)
       .leftJoin(invoices, eq(payments.invoiceId, invoices.id))
-      .where(sql`${invoices.type} = 'invoice' OR ${payments.invoiceId} IS NULL`);
+      .where(sql`(${invoices.type} = 'invoice' OR ${payments.invoiceId} IS NULL) AND (${payments.notes} IS NULL OR ${payments.notes} NOT LIKE 'Applied from balance payment%')`);
 
     const lowStockItems = await db.select().from(items)
       .where(and(eq(items.active, true), sql`${items.stockQuantity} <= ${items.reorderLevel}`))
@@ -1169,8 +1170,9 @@ export class DatabaseStorage implements IStorage {
       // Subtract payments received on or before prevMonthEnd
       const custInvIdsSet = new Set(allInvs.map(i => i.id));
       for (const pmt of allPayments) {
+        if ((pmt.notes || "").startsWith("Applied from balance payment")) continue;
         const belongsToCust = (pmt.invoiceId && custInvIdsSet.has(pmt.invoiceId)) ||
-          (!pmt.invoiceId && pmt.customerId === cust.id && !(pmt.notes || "").startsWith("Applied from balance payment"));
+          (!pmt.invoiceId && pmt.customerId === cust.id);
         if (!belongsToCust) continue;
         const pmtDate = String(pmt.paymentDate || "");
         if (pmtDate > prevMonthEndStr) continue;
@@ -1208,8 +1210,9 @@ export class DatabaseStorage implements IStorage {
       const custInvIds = new Set(allInvs.map(i => i.id));
       const paymentList = allPayments
         .filter(p => {
+          if ((p.notes || "").startsWith("Applied from balance payment")) return false;
           if (p.invoiceId && custInvIds.has(p.invoiceId)) return true;
-          if (!p.invoiceId && p.customerId === cust.id && !(p.notes || "").startsWith("Applied from balance payment")) return true;
+          if (!p.invoiceId && p.customerId === cust.id) return true;
           return false;
         })
         .sort((a, b) => String(a.paymentDate).localeCompare(String(b.paymentDate)))
