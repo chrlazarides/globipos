@@ -710,46 +710,52 @@ export default function Reports() {
                       <TableBody>
                         {displayItems.length === 0 ? (
                           <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No items found for the selected period and filters.</TableCell></TableRow>
-                        ) : displayItems.map((r, idx) => {
-                          const rowClass = r.marginPct >= 20 ? "bg-green-50/30 dark:bg-green-950/10" : r.marginPct < 0 ? "bg-red-50/40 dark:bg-red-950/10" : "";
-                          const profitPct = itemReport.totalRevenue !== "0.00" ? (r.revenue / parseFloat(itemReport.totalRevenue) * 100).toFixed(1) : "0.0";
-                          return (
-                            <TableRow key={r.itemId} className={`text-xs ${rowClass} hover:bg-muted/40`} data-testid={`row-item-${r.itemId}`}>
-                              <TableCell className="pl-4 text-muted-foreground">{idx + 1}</TableCell>
-                              <TableCell className="font-medium max-w-[200px]">
-                                <span title={r.itemName}>{r.itemName.length > 30 ? r.itemName.substring(0, 28) + "…" : r.itemName}</span>
+                        ) : (
+                          <>
+                            {displayItems.map((r, idx) => {
+                              const rowClass = r.marginPct >= 20 ? "bg-green-50/30 dark:bg-green-950/10" : r.marginPct < 0 ? "bg-red-50/40 dark:bg-red-950/10" : "";
+                              const profitPct = itemReport.totalRevenue !== "0.00" ? (r.revenue / parseFloat(itemReport.totalRevenue) * 100).toFixed(1) : "0.0";
+                              return (
+                                <TableRow key={r.itemId} className={`text-xs ${rowClass} hover:bg-muted/40`} data-testid={`row-item-${r.itemId}`}>
+                                  <TableCell className="pl-4 text-muted-foreground">{idx + 1}</TableCell>
+                                  <TableCell className="font-medium max-w-[200px]">
+                                    <span title={r.itemName}>{r.itemName.length > 30 ? r.itemName.substring(0, 28) + "…" : r.itemName}</span>
+                                  </TableCell>
+                                  <TableCell className="text-muted-foreground font-mono text-[11px]">{r.sku}</TableCell>
+                                  <TableCell>
+                                    {r.categoryName !== "Uncategorized" ? <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{r.categoryName}</Badge> : <span className="text-muted-foreground">—</span>}
+                                  </TableCell>
+                                  <TableCell className="text-right font-medium">{r.qtySold.toLocaleString()}</TableCell>
+                                  <TableCell className="text-right text-muted-foreground">€{fmt(r.avgUnitPrice)}</TableCell>
+                                  <TableCell className="text-right font-semibold">
+                                    <div>€{fmt(r.revenue)}</div>
+                                    <div className="text-[10px] text-muted-foreground">{profitPct}% of total</div>
+                                  </TableCell>
+                                  <TableCell className="text-right text-muted-foreground">€{fmt(r.cost)}</TableCell>
+                                  <TableCell className={`text-right font-semibold ${r.profit >= 0 ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
+                                    €{fmt(r.profit)}
+                                  </TableCell>
+                                  <TableCell className="text-right"><MarginBadge m={r.marginPct} /></TableCell>
+                                  <TableCell className="text-right pr-4 text-muted-foreground">{r.invoiceCount}</TableCell>
+                                </TableRow>
+                              );
+                            })}
+                            <TableRow className="border-t-2 border-border bg-muted/30 dark:bg-muted/20 font-semibold text-xs">
+                              <TableCell colSpan={4} className="pl-4 text-[10px] uppercase tracking-wide text-muted-foreground">Totals</TableCell>
+                              <TableCell className="text-right">{displayItems.reduce((s,r)=>s+r.qtySold,0).toLocaleString()}</TableCell>
+                              <TableCell />
+                              <TableCell className="text-right">€{fmt(displayItems.reduce((s,r)=>s+r.revenue,0))}</TableCell>
+                              <TableCell className="text-right text-muted-foreground">€{fmt(displayItems.reduce((s,r)=>s+r.cost,0))}</TableCell>
+                              <TableCell className={`text-right ${displayItems.reduce((s,r)=>s+r.profit,0)>=0?"text-green-700 dark:text-green-400":"text-red-600"}`}>
+                                €{fmt(displayItems.reduce((s,r)=>s+r.profit,0))}
                               </TableCell>
-                              <TableCell className="text-muted-foreground font-mono text-[11px]">{r.sku}</TableCell>
-                              <TableCell>
-                                {r.categoryName !== "Uncategorized" ? <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{r.categoryName}</Badge> : <span className="text-muted-foreground">—</span>}
-                              </TableCell>
-                              <TableCell className="text-right font-medium">{r.qtySold.toLocaleString()}</TableCell>
-                              <TableCell className="text-right text-muted-foreground">€{fmt(r.avgUnitPrice)}</TableCell>
-                              <TableCell className="text-right font-semibold">
-                                <div>€{fmt(r.revenue)}</div>
-                                <div className="text-[10px] text-muted-foreground">{profitPct}% of total</div>
-                              </TableCell>
-                              <TableCell className="text-right text-muted-foreground">€{fmt(r.cost)}</TableCell>
-                              <TableCell className={`text-right font-semibold ${r.profit >= 0 ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
-                                €{fmt(r.profit)}
-                              </TableCell>
-                              <TableCell className="text-right"><MarginBadge m={r.marginPct} /></TableCell>
-                              <TableCell className="text-right pr-4 text-muted-foreground">{r.invoiceCount}</TableCell>
+                              <TableCell />
+                              <TableCell className="pr-4" />
                             </TableRow>
-                          );
-                        })}
+                          </>
+                        )}
                       </TableBody>
                     </Table>
-                    {displayItems.length > 0 && (
-                      <div className="flex justify-end gap-8 p-3 border-t text-xs font-semibold bg-muted/20">
-                        <span>Revenue: €{fmt(displayItems.reduce((s,r)=>s+r.revenue,0))}</span>
-                        <span>Cost: €{fmt(displayItems.reduce((s,r)=>s+r.cost,0))}</span>
-                        <span className={displayItems.reduce((s,r)=>s+r.profit,0)>=0?"text-green-700":"text-red-600"}>
-                          Profit: €{fmt(displayItems.reduce((s,r)=>s+r.profit,0))}
-                        </span>
-                        <span>Units: {displayItems.reduce((s,r)=>s+r.qtySold,0).toLocaleString()}</span>
-                      </div>
-                    )}
                   </CardContent>
                 </Card>
               </>
