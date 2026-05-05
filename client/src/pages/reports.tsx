@@ -474,24 +474,39 @@ export default function Reports() {
                           <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No invoices in this period</TableCell>
                         </TableRow>
                       ) : (
-                        salesReport.invoices.map((inv) => (
-                          <TableRow key={inv.id}>
-                            <TableCell className="font-medium text-sm">{inv.invoiceNumber}</TableCell>
-                            <TableCell className="text-sm">{inv.customerName}</TableCell>
-                            <TableCell className="text-sm">{formatDate(inv.date)}</TableCell>
-                            <TableCell>
-                              <Badge variant={inv.status === "paid" ? "default" : inv.status === "overdue" ? "destructive" : "secondary"}>
-                                {inv.status}
-                              </Badge>
+                        <>
+                          {salesReport.invoices.map((inv) => (
+                            <TableRow key={inv.id}>
+                              <TableCell className="font-medium text-sm">{inv.invoiceNumber}</TableCell>
+                              <TableCell className="text-sm">{inv.customerName}</TableCell>
+                              <TableCell className="text-sm">{formatDate(inv.date)}</TableCell>
+                              <TableCell>
+                                <Badge variant={inv.status === "paid" ? "default" : inv.status === "overdue" ? "destructive" : "secondary"}>
+                                  {inv.status}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right font-medium text-sm">€{parseFloat(inv.total).toFixed(2)}</TableCell>
+                              <TableCell className="text-right text-sm">€{parseFloat(inv.costTotal).toFixed(2)}</TableCell>
+                              <TableCell className={`text-right text-sm font-medium ${parseFloat(inv.profit) >= 0 ? "text-green-600" : "text-red-500"}`}>
+                                €{parseFloat(inv.profit).toFixed(2)}
+                              </TableCell>
+                              <TableCell className="text-right text-sm">{inv.marginPct}%</TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow className="border-t-2 border-border bg-muted/30 dark:bg-muted/20 font-semibold text-sm">
+                            <TableCell colSpan={4} className="text-[10px] uppercase tracking-wide text-muted-foreground pl-4">Totals</TableCell>
+                            <TableCell className="text-right">
+                              €{salesReport.invoices.reduce((s, i) => s + parseFloat(i.total), 0).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                             </TableCell>
-                            <TableCell className="text-right font-medium text-sm">€{parseFloat(inv.total).toFixed(2)}</TableCell>
-                            <TableCell className="text-right text-sm">€{parseFloat(inv.costTotal).toFixed(2)}</TableCell>
-                            <TableCell className={`text-right text-sm font-medium ${parseFloat(inv.profit) >= 0 ? "text-green-600" : "text-red-500"}`}>
-                              €{parseFloat(inv.profit).toFixed(2)}
+                            <TableCell className="text-right">
+                              €{salesReport.invoices.reduce((s, i) => s + parseFloat(i.costTotal), 0).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
                             </TableCell>
-                            <TableCell className="text-right text-sm">{inv.marginPct}%</TableCell>
+                            <TableCell className={`text-right ${salesReport.invoices.reduce((s, i) => s + parseFloat(i.profit), 0) >= 0 ? "text-green-600" : "text-red-500"}`}>
+                              €{salesReport.invoices.reduce((s, i) => s + parseFloat(i.profit), 0).toLocaleString("el-CY", { minimumFractionDigits: 2 })}
+                            </TableCell>
+                            <TableCell className="text-right">{salesReport.overallMargin}%</TableCell>
                           </TableRow>
-                        ))
+                        </>
                       )}
                     </TableBody>
                   </Table>
