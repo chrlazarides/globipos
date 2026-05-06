@@ -39,6 +39,7 @@ const customerImportFields = [
   { key: "paymentTerms", label: "Payment Terms" },
   { key: "creditLimit", label: "Credit Limit" },
   { key: "priceLevel", label: "Price Level" },
+  { key: "location", label: "Location / Branch" },
   { key: "notes", label: "Notes" },
   { key: "portalAccessCode", label: "Portal Access Code" },
 ];
@@ -428,6 +429,7 @@ function CustomerProfileDialog({
                 currentBalance: customer.currentBalance || "0",
                 priceLevel: customer.priceLevel,
                 notes: customer.notes || "",
+                location: customer.location || "",
                 active: customer.active,
               }}
             />
@@ -450,7 +452,7 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: {
     defaultValues: defaultValues || {
       name: "", code: "", contactFirstName: "", contactLastName: "",
       email: "", phone: "", address: "", city: "", taxId: "",
-      paymentTerms: "cash", creditLimit: "0", currentBalance: "0", priceLevel: 1, notes: "", active: true,
+      paymentTerms: "cash", creditLimit: "0", currentBalance: "0", priceLevel: 1, notes: "", location: "", active: true,
     },
   });
 
@@ -577,6 +579,13 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: {
             </FormItem>
           )} />
         </div>
+        <FormField control={form.control} name="location" render={({ field }) => (
+          <FormItem>
+            <FormLabel>Location / Branch</FormLabel>
+            <FormControl><Input {...field} value={field.value || ""} placeholder="e.g. Nicosia Main Branch, Ayia Napa Beach Bar…" data-testid="input-customer-location" /></FormControl>
+            <FormMessage />
+          </FormItem>
+        )} />
         <FormField control={form.control} name="notes" render={({ field }) => (
           <FormItem>
             <FormLabel>Notes</FormLabel>

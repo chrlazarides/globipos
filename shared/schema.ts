@@ -89,6 +89,7 @@ export const customers = pgTable("customers", {
   currentBalance: numeric("current_balance", { precision: 12, scale: 2 }).notNull().default("0"),
   priceLevel: integer("price_level").notNull().default(1),
   notes: text("notes"),
+  location: text("location"),
   portalAccessCode: text("portal_access_code"),
   active: boolean("active").default(true).notNull(),
 });
@@ -184,6 +185,7 @@ export const invoices = pgTable("invoices", {
   total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
   status: text("status").notNull().default("draft"),
   notes: text("notes"),
+  deliveryLocation: text("delivery_location"),
   linkedInvoiceId: varchar("linked_invoice_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

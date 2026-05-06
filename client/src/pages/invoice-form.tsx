@@ -202,6 +202,7 @@ export default function InvoiceForm() {
   const allContracts = contracts.length > 0 ? contracts : cachedContracts;
 
   const [customerId, setCustomerId] = useState("");
+  const [deliveryLocation, setDeliveryLocation] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
   const [dueDate, setDueDate] = useState("");
   const [taxRate, setTaxRate] = useState("19");
@@ -236,6 +237,18 @@ export default function InvoiceForm() {
     },
   });
 
+  // Auto-fill delivery location from customer when selecting a new customer
+  const prevCustomerIdRef = useRef<string>("");
+  useEffect(() => {
+    if (!customerId || customerId === prevCustomerIdRef.current) return;
+    prevCustomerIdRef.current = customerId;
+    // Only auto-fill if this is a new invoice (not loaded from existing)
+    if (!existingInvoice) {
+      const cust = customers.find(c => c.id === customerId);
+      if (cust?.location) setDeliveryLocation(cust.location);
+    }
+  }, [customerId, customers, existingInvoice]);
+
   // Track which customer was loaded from an existing invoice so the
   // contract-price effect does NOT overwrite the saved line amounts
   // just because items/contracts finish loading after the invoice data.
@@ -247,6 +260,7 @@ export default function InvoiceForm() {
       // overwrite the saved line amounts on initial load.
       loadedInvoiceCustomerId.current = existingInvoice.customerId;
       setCustomerId(existingInvoice.customerId);
+      setDeliveryLocation((existingInvoice as any).deliveryLocation || "");
       setInvoiceDate(existingInvoice.date);
       setDueDate(existingInvoice.dueDate || "");
       setTaxRate(existingInvoice.taxRate);
@@ -606,6 +620,7 @@ export default function InvoiceForm() {
         total: total.toFixed(2),
         status,
         notes: notes || null,
+        deliveryLocation: deliveryLocation || null,
         linkedInvoiceId: fromId || null,
         items: lines.filter((l) => l.description).map((l) => ({
           itemId: l.itemId || null,
@@ -909,6 +924,17 @@ export default function InvoiceForm() {
                   )}</Label>
                   <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} disabled={isViewMode} data-testid="input-due-date" />
                 </div>
+              </div>
+
+              <div>
+                <Label>Delivery Location</Label>
+                <Input
+                  value={deliveryLocation}
+                  onChange={(e) => setDeliveryLocation(e.target.value)}
+                  placeholder="e.g. Nicosia Main Branch, Beach Bar…"
+                  disabled={isViewMode}
+                  data-testid="input-delivery-location"
+                />
               </div>
 
               {selectedCustomer && !isViewMode && (
@@ -1531,6 +1557,7 @@ export default function InvoiceForm() {
                     <>
                       <p className="text-sm font-medium">{customer.name}</p>
                       <p className="text-xs text-muted-foreground">{customer.code}</p>
+                      {(customer as any).location && <p className="text-xs font-medium text-foreground">{(customer as any).location}</p>}
                       {customer.address && <p className="text-xs text-muted-foreground">{customer.address}</p>}
                       <div className="flex gap-2 flex-wrap">
                         <Badge variant="secondary">{customer.paymentTerms === "cash" ? "Cash" : customer.paymentTerms.replace("credit_", "") + " days"}</Badge>

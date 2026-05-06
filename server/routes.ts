@@ -4564,6 +4564,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
         <div class="party-label">Bill To</div>
         <div class="party-name">${customer?.name || "N/A"}</div>
         <div class="party-detail">
+          ${(inv as any).deliveryLocation ? `<strong>${(inv as any).deliveryLocation}</strong><br>` : (customer as any)?.location ? `<strong>${(customer as any).location}</strong><br>` : ""}
           ${customer?.address ? customer.address + "<br>" : ""}
           ${customer?.city || ""}
           ${customer?.taxId ? "<br>Tax ID: " + customer.taxId : ""}
