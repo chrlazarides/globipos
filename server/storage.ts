@@ -132,10 +132,13 @@ export interface IStorage {
   getJournalEntries(): Promise<JournalEntry[]>;
   getJournalEntry(id: string): Promise<(JournalEntry & { lines: (JournalEntryLine & { accountName?: string; accountCode?: string })[] }) | undefined>;
   createJournalEntry(data: InsertJournalEntry, lines: InsertJournalEntryLine[]): Promise<JournalEntry>;
+  updateJournalEntry(id: string, data: Partial<InsertJournalEntry>, lines: InsertJournalEntryLine[]): Promise<JournalEntry | undefined>;
+  deleteJournalEntry(id: string): Promise<void>;
   getNextJournalEntryNumber(): Promise<string>;
 
   getExpenses(): Promise<(Expense & { expenseAccountName?: string; paymentAccountName?: string; supplierName?: string })[]>;
   createExpense(data: InsertExpense): Promise<Expense>;
+  updateExpense(id: string, data: Partial<InsertExpense>): Promise<Expense | undefined>;
 
   getGeneralLedger(accountId: string, from: string, to: string): Promise<{ entries: any[]; openingBalance: string }>;
   getTrialBalance(): Promise<{ accounts: any[]; totalDebits: string; totalCredits: string }>;
@@ -1912,6 +1915,77 @@ export class DatabaseStorage implements IStorage {
     return entry;
   }
 
+  async updateJournalEntry(id: string, data: Partial<InsertJournalEntry>, lines: InsertJournalEntryLine[]) {
+    // Reverse existing line impacts on account balances
+    const existingLines = await db.select().from(journalEntryLines).where(eq(journalEntryLines.journalEntryId, id));
+    for (const line of existingLines) {
+      const debitAmt = parseFloat(String(line.debit || "0"));
+      const creditAmt = parseFloat(String(line.credit || "0"));
+      if (debitAmt === 0 && creditAmt === 0) continue;
+      const [acct] = await db.select().from(accounts).where(eq(accounts.id, line.accountId));
+      if (!acct) continue;
+      const currentBal = parseFloat(acct.balance);
+      let newBal = currentBal;
+      if (acct.type === "asset" || acct.type === "expense") {
+        newBal -= debitAmt - creditAmt;
+      } else {
+        newBal -= creditAmt - debitAmt;
+      }
+      await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, line.accountId));
+    }
+
+    // Delete old lines
+    await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, id));
+
+    // Update header
+    const [entry] = await db.update(journalEntries).set(data).where(eq(journalEntries.id, id)).returning();
+    if (!entry) return undefined;
+
+    // Insert new lines and update balances
+    if (lines.length > 0) {
+      const linesWithEntry = lines.map(l => ({ ...l, journalEntryId: id }));
+      await db.insert(journalEntryLines).values(linesWithEntry);
+    }
+    for (const line of lines) {
+      const debitAmt = parseFloat(String(line.debit || "0"));
+      const creditAmt = parseFloat(String(line.credit || "0"));
+      if (debitAmt === 0 && creditAmt === 0) continue;
+      const [acct] = await db.select().from(accounts).where(eq(accounts.id, line.accountId));
+      if (!acct) continue;
+      const currentBal = parseFloat(acct.balance);
+      let newBal = currentBal;
+      if (acct.type === "asset" || acct.type === "expense") {
+        newBal += debitAmt - creditAmt;
+      } else {
+        newBal += creditAmt - debitAmt;
+      }
+      await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, line.accountId));
+    }
+    return entry;
+  }
+
+  async deleteJournalEntry(id: string) {
+    // Reverse account balance impacts first
+    const existingLines = await db.select().from(journalEntryLines).where(eq(journalEntryLines.journalEntryId, id));
+    for (const line of existingLines) {
+      const debitAmt = parseFloat(String(line.debit || "0"));
+      const creditAmt = parseFloat(String(line.credit || "0"));
+      if (debitAmt === 0 && creditAmt === 0) continue;
+      const [acct] = await db.select().from(accounts).where(eq(accounts.id, line.accountId));
+      if (!acct) continue;
+      const currentBal = parseFloat(acct.balance);
+      let newBal = currentBal;
+      if (acct.type === "asset" || acct.type === "expense") {
+        newBal -= debitAmt - creditAmt;
+      } else {
+        newBal -= creditAmt - debitAmt;
+      }
+      await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, line.accountId));
+    }
+    await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, id));
+    await db.delete(journalEntries).where(eq(journalEntries.id, id));
+  }
+
   async getNextJournalEntryNumber() {
     const [result] = await db.select({
       maxNum: sql<number>`COALESCE(MAX(CAST(SUBSTRING(entry_number FROM 4) AS INTEGER)), 0)`
@@ -1954,6 +2028,11 @@ export class DatabaseStorage implements IStorage {
 
   async createExpense(data: InsertExpense) {
     const [expense] = await db.insert(expenses).values(data).returning();
+    return expense;
+  }
+
+  async updateExpense(id: string, data: Partial<InsertExpense>) {
+    const [expense] = await db.update(expenses).set(data).where(eq(expenses.id, id)).returning();
     return expense;
   }
 

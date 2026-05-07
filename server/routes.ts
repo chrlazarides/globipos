@@ -4085,6 +4085,34 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/journal-entries/:id", async (req, res) => {
+    try {
+      const { lines, ...data } = req.body;
+      if (!lines || !Array.isArray(lines) || lines.length < 2) {
+        return res.status(400).json({ message: "At least 2 lines required" });
+      }
+      const totalDebit = lines.reduce((s: number, l: any) => s + parseFloat(l.debit || "0"), 0);
+      const totalCredit = lines.reduce((s: number, l: any) => s + parseFloat(l.credit || "0"), 0);
+      if (Math.abs(totalDebit - totalCredit) > 0.01) {
+        return res.status(400).json({ message: `Debits (${totalDebit.toFixed(2)}) must equal Credits (${totalCredit.toFixed(2)})` });
+      }
+      const updated = await storage.updateJournalEntry(req.params.id, { ...data, totalAmount: totalDebit.toFixed(2) }, lines);
+      if (!updated) return res.status(404).json({ message: "Journal entry not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/journal-entries/:id", async (req, res) => {
+    try {
+      await storage.deleteJournalEntry(req.params.id);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   // Repost all auto-generated journal entries from source transactions
   app.post("/api/accounting/repost-journals", async (req, res) => {
     if (!req.user) return res.status(401).json({ message: "Not authenticated" });
@@ -4260,33 +4288,79 @@ export async function registerRoutes(
     res.json(exp);
   });
 
+  async function buildExpenseJournalLines(body: any) {
+    const totalWithVat = parseFloat(String(body.amount)) + parseFloat(String(body.vatAmount || "0"));
+    const lines: any[] = [
+      { accountId: body.expenseAccountId, debit: String(body.amount), credit: "0", description: body.description },
+    ];
+    if (parseFloat(String(body.vatAmount || "0")) > 0) {
+      const vatAccounts = await storage.getAccounts();
+      const vatAccount = vatAccounts.find((a: any) => a.code === "2100");
+      if (vatAccount) {
+        lines.push({ accountId: vatAccount.id, debit: String(body.vatAmount), credit: "0", description: "VAT on expense" });
+      }
+    }
+    lines.push({ accountId: body.paymentAccountId, debit: "0", credit: totalWithVat.toFixed(2), description: body.description });
+    return { lines, totalWithVat };
+  }
+
   app.post("/api/expenses", async (req, res) => {
     try {
       const expense = await storage.createExpense(req.body);
-
+      const { lines, totalWithVat } = await buildExpenseJournalLines(req.body);
       const entryNumber = await storage.getNextJournalEntryNumber();
-      const totalWithVat = parseFloat(String(req.body.amount)) + parseFloat(String(req.body.vatAmount || "0"));
-      const lines: any[] = [
-        { accountId: req.body.expenseAccountId, debit: String(req.body.amount), credit: "0", description: req.body.description },
-      ];
-      if (parseFloat(String(req.body.vatAmount || "0")) > 0) {
-        const vatAccounts = await storage.getAccounts();
-        const vatAccount = vatAccounts.find(a => a.code === "2100");
-        if (vatAccount) {
-          lines.push({ accountId: vatAccount.id, debit: String(req.body.vatAmount), credit: "0", description: "VAT on expense" });
-        }
-      }
-      lines.push({ accountId: req.body.paymentAccountId, debit: "0", credit: totalWithVat.toFixed(2), description: req.body.description });
-
       const je = await storage.createJournalEntry(
         { entryNumber, date: req.body.date, description: `Expense: ${req.body.description}`, sourceType: "expense", sourceId: expense.id, status: "posted", totalAmount: totalWithVat.toFixed(2) },
         lines
       );
-
       await db.update(expenses).set({ journalEntryId: je.id }).where(sql`id = ${expense.id}`);
       res.json(expense);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/expenses/:id", async (req, res) => {
+    try {
+      const existing = await db.select().from(expenses).where(sql`id = ${req.params.id}`);
+      if (!existing.length) return res.status(404).json({ message: "Expense not found" });
+      const expense = await storage.updateExpense(req.params.id, req.body);
+      if (!expense) return res.status(404).json({ message: "Expense not found" });
+
+      // Regenerate journal entry for this expense
+      const body = { ...existing[0], ...req.body };
+      const { lines, totalWithVat } = await buildExpenseJournalLines(body);
+      const existingJeId = (existing[0] as any).journalEntryId;
+      if (existingJeId) {
+        await storage.updateJournalEntry(existingJeId,
+          { date: body.date, description: `Expense: ${body.description}`, totalAmount: totalWithVat.toFixed(2) },
+          lines
+        );
+      } else {
+        const entryNumber = await storage.getNextJournalEntryNumber();
+        const je = await storage.createJournalEntry(
+          { entryNumber, date: body.date, description: `Expense: ${body.description}`, sourceType: "expense", sourceId: expense.id, status: "posted", totalAmount: totalWithVat.toFixed(2) },
+          lines
+        );
+        await db.update(expenses).set({ journalEntryId: je.id }).where(sql`id = ${expense.id}`);
+      }
+      res.json(expense);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/expenses/:id", async (req, res) => {
+    try {
+      const [exp] = await db.select().from(expenses).where(sql`id = ${req.params.id}`);
+      if (!exp) return res.status(404).json({ message: "Expense not found" });
+      if ((exp as any).journalEntryId) {
+        await storage.deleteJournalEntry((exp as any).journalEntryId);
+      }
+      await db.delete(expenses).where(sql`id = ${req.params.id}`);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
     }
   });
 

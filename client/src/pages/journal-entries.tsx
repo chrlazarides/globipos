@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Trash2, ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Loader2, RefreshCw, Pencil } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { JournalEntry, JournalEntryLine, Account } from "@shared/schema";
@@ -90,7 +90,7 @@ function ExpandedEntryDetail({ entryId }: { entryId: string }) {
   if (isLoading) {
     return (
       <TableRow>
-        <TableCell colSpan={6} className="p-4">
+        <TableCell colSpan={8} className="p-4">
           <div className="space-y-2">
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-3/4" />
@@ -104,7 +104,7 @@ function ExpandedEntryDetail({ entryId }: { entryId: string }) {
 
   return (
     <TableRow data-testid={`entry-detail-${entryId}`}>
-      <TableCell colSpan={6} className="p-0">
+      <TableCell colSpan={8} className="p-0">
         <div className="bg-muted/30 p-4">
           <Table>
             <TableHeader>
@@ -147,6 +147,7 @@ export default function JournalEntries() {
   const { toast } = useToast();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [formDate, setFormDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [formDescription, setFormDescription] = useState("");
   const [formReference, setFormReference] = useState("");
@@ -162,13 +163,7 @@ export default function JournalEntries() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (payload: {
-      date: string;
-      description: string;
-      reference: string;
-      sourceType: string;
-      lines: { accountId: string; debit: string; credit: string; description: string }[];
-    }) => {
+    mutationFn: async (payload: any) => {
       const res = await apiRequest("POST", "/api/journal-entries", payload);
       return res.json();
     },
@@ -177,6 +172,36 @@ export default function JournalEntries() {
       toast({ title: "Journal entry created" });
       resetForm();
       setDialogOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, payload }: { id: string; payload: any }) => {
+      const res = await apiRequest("PATCH", `/api/journal-entries/${id}`, payload);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
+      toast({ title: "Journal entry updated" });
+      resetForm();
+      setDialogOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/journal-entries/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
+      toast({ title: "Journal entry deleted" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -203,6 +228,37 @@ export default function JournalEntries() {
     setFormReference("");
     setLines([emptyLine(), emptyLine()]);
     setValidationError("");
+    setEditingId(null);
+  }
+
+  function openNew() {
+    resetForm();
+    setDialogOpen(true);
+  }
+
+  async function openEdit(entry: JournalEntry) {
+    // Fetch the full entry with lines
+    try {
+      const res = await fetch(`/api/journal-entries/${entry.id}`, { credentials: "include" });
+      const data: JournalEntryWithLines = await res.json();
+      const entryDate = typeof entry.date === "string" ? entry.date : new Date(entry.date).toISOString().split("T")[0];
+      setEditingId(entry.id);
+      setFormDate(entryDate);
+      setFormDescription(entry.description || "");
+      setFormReference(entry.reference || "");
+      setLines(
+        (data.lines || []).map((l) => ({
+          accountId: l.accountId,
+          debit: parseFloat(l.debit) > 0 ? l.debit : "",
+          credit: parseFloat(l.credit) > 0 ? l.credit : "",
+          description: l.description || "",
+        }))
+      );
+      setValidationError("");
+      setDialogOpen(true);
+    } catch {
+      toast({ title: "Failed to load entry", variant: "destructive" });
+    }
   }
 
   function updateLine(index: number, field: keyof LineItem, value: string) {
@@ -241,7 +297,7 @@ export default function JournalEntries() {
     }
 
     setValidationError("");
-    createMutation.mutate({
+    const payload = {
       date: formDate,
       description: formDescription,
       reference: formReference,
@@ -252,8 +308,16 @@ export default function JournalEntries() {
         credit: (parseFloat(l.credit) || 0).toFixed(2),
         description: l.description,
       })),
-    });
+    };
+
+    if (editingId) {
+      updateMutation.mutate({ id: editingId, payload });
+    } else {
+      createMutation.mutate(payload);
+    }
   }
+
+  const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
     <div className="p-6 space-y-6">
@@ -277,10 +341,7 @@ export default function JournalEntries() {
             </Button>
             <Button
               data-testid="button-new-journal-entry"
-              onClick={() => {
-                resetForm();
-                setDialogOpen(true);
-              }}
+              onClick={openNew}
             >
               <Plus className="w-4 h-4 mr-1" /> New Journal Entry
             </Button>
@@ -307,12 +368,13 @@ export default function JournalEntries() {
                   <TableHead>Source</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="w-20" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {entries.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-8" data-testid="text-empty-entries">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8" data-testid="text-empty-entries">
                       No journal entries found
                     </TableCell>
                   </TableRow>
@@ -352,6 +414,36 @@ export default function JournalEntries() {
                         <TableCell>
                           <StatusBadge status={entry.status} />
                         </TableCell>
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <div className="flex gap-1 justify-end">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              title="Edit entry"
+                              data-testid={`button-edit-${entry.id}`}
+                              onClick={(e) => { e.stopPropagation(); openEdit(entry); }}
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-destructive hover:text-destructive"
+                              title="Delete entry"
+                              data-testid={`button-delete-${entry.id}`}
+                              disabled={deleteMutation.isPending}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirm(`Delete journal entry ${entry.entryNumber}? This will reverse its account balance impacts.`)) {
+                                  deleteMutation.mutate(entry.id);
+                                }
+                              }}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </TableCell>
                       </TableRow>
                       {isExpanded && <ExpandedEntryDetail key={`detail-${entry.id}`} entryId={entry.id} />}
                     </>
@@ -363,10 +455,10 @@ export default function JournalEntries() {
         </CardContent>
       </Card>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto" data-testid="dialog-new-journal-entry">
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) resetForm(); setDialogOpen(open); }}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto" data-testid="dialog-journal-entry">
           <DialogHeader>
-            <DialogTitle>New Journal Entry</DialogTitle>
+            <DialogTitle>{editingId ? "Edit Journal Entry" : "New Journal Entry"}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -513,12 +605,12 @@ export default function JournalEntries() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)} data-testid="button-cancel">
+            <Button variant="outline" onClick={() => { resetForm(); setDialogOpen(false); }} data-testid="button-cancel">
               Cancel
             </Button>
-            <Button onClick={handleSubmit} disabled={createMutation.isPending} data-testid="button-submit-entry">
-              {createMutation.isPending && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
-              Create Entry
+            <Button onClick={handleSubmit} disabled={isPending} data-testid="button-submit-entry">
+              {isPending && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
+              {editingId ? "Save Changes" : "Create Entry"}
             </Button>
           </DialogFooter>
         </DialogContent>
