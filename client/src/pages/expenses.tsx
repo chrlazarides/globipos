@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
@@ -8,12 +8,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Receipt } from "lucide-react";
+import { Plus, Receipt, Pencil, Trash2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertExpenseSchema, type Expense, type Account, type Supplier } from "@shared/schema";
@@ -32,14 +32,30 @@ const expenseFormSchema = insertExpenseSchema.extend({
   journalEntryId: z.string().nullable().optional(),
 });
 
+type ExpenseFormValues = z.infer<typeof expenseFormSchema>;
+
 type ExpenseWithDetails = Expense & {
   expenseAccountName?: string;
   paymentAccountName?: string;
   supplierName?: string;
 };
 
+const emptyDefaults: ExpenseFormValues = {
+  date: new Date().toISOString().split("T")[0],
+  description: "",
+  reference: "",
+  expenseAccountId: "",
+  paymentAccountId: "",
+  amount: "",
+  vatAmount: "0",
+  paymentMethod: "cash",
+  supplierId: "",
+  journalEntryId: null,
+};
+
 export default function ExpensesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<ExpenseWithDetails | null>(null);
   const { toast } = useToast();
 
   const { data: expenses = [], isLoading } = useQuery<ExpenseWithDetails[]>({ queryKey: ["/api/expenses"] });
@@ -49,25 +65,73 @@ export default function ExpensesPage() {
   const expenseAccounts = accounts.filter(a => a.type === "expense");
   const paymentAccounts = accounts.filter(a => a.type === "asset" && a.subtype === "current_asset");
 
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
+  };
+
   const createExpense = useMutation({
-    mutationFn: async (data: z.infer<typeof expenseFormSchema>) => {
-      const payload = {
+    mutationFn: async (data: ExpenseFormValues) => {
+      const res = await apiRequest("POST", "/api/expenses", {
         ...data,
-        supplierId: data.supplierId || null,
+        supplierId: data.supplierId === "none" ? null : data.supplierId || null,
         reference: data.reference || null,
         journalEntryId: null,
-      };
-      const res = await apiRequest("POST", "/api/expenses", payload);
+      });
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      setDialogOpen(false);
+      invalidate();
+      closeDialog();
       toast({ title: "Expense recorded successfully" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  const updateExpense = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: ExpenseFormValues }) => {
+      const res = await apiRequest("PATCH", `/api/expenses/${id}`, {
+        ...data,
+        supplierId: data.supplierId === "none" ? null : data.supplierId || null,
+        reference: data.reference || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidate();
+      closeDialog();
+      toast({ title: "Expense updated successfully" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteExpense = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/expenses/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "Expense deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  function openNew() {
+    setEditingExpense(null);
+    setDialogOpen(true);
+  }
+
+  function openEdit(expense: ExpenseWithDetails) {
+    setEditingExpense(expense);
+    setDialogOpen(true);
+  }
+
+  function closeDialog() {
+    setDialogOpen(false);
+    setEditingExpense(null);
+  }
 
   const now = new Date();
   const thisMonthExpenses = expenses.filter(e => {
@@ -113,19 +177,19 @@ export default function ExpensesPage() {
     {
       key: "amount",
       header: "Amount",
-      cell: (row) => <span className="text-sm font-medium" data-testid={`text-expense-amount-${row.id}`}>{"\u20AC"}{parseFloat(row.amount).toFixed(2)}</span>,
+      cell: (row) => <span className="text-sm font-medium" data-testid={`text-expense-amount-${row.id}`}>€{parseFloat(row.amount).toFixed(2)}</span>,
     },
     {
       key: "vat",
       header: "VAT",
-      cell: (row) => <span className="text-sm" data-testid={`text-expense-vat-${row.id}`}>{"\u20AC"}{parseFloat(row.vatAmount).toFixed(2)}</span>,
+      cell: (row) => <span className="text-sm" data-testid={`text-expense-vat-${row.id}`}>€{parseFloat(row.vatAmount).toFixed(2)}</span>,
     },
     {
       key: "total",
       header: "Total",
       cell: (row) => {
         const total = parseFloat(row.amount) + parseFloat(row.vatAmount);
-        return <span className="text-sm font-medium" data-testid={`text-expense-total-${row.id}`}>{"\u20AC"}{total.toFixed(2)}</span>;
+        return <span className="text-sm font-medium" data-testid={`text-expense-total-${row.id}`}>€{total.toFixed(2)}</span>;
       },
     },
     {
@@ -142,7 +206,58 @@ export default function ExpensesPage() {
         </span>
       ),
     },
+    {
+      key: "actions" as any,
+      header: "",
+      cell: (row) => (
+        <div className="flex gap-1 justify-end">
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
+            title="Edit expense"
+            data-testid={`button-edit-expense-${row.id}`}
+            onClick={(e) => { e.stopPropagation(); openEdit(row); }}
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7 text-destructive hover:text-destructive"
+            title="Delete expense"
+            data-testid={`button-delete-expense-${row.id}`}
+            disabled={deleteExpense.isPending}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (confirm(`Delete expense "${row.description}"? Its journal entry will also be reversed.`)) {
+                deleteExpense.mutate(row.id);
+              }
+            }}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      ),
+    },
   ];
+
+  const editDefaults: ExpenseFormValues | undefined = editingExpense
+    ? {
+        date: typeof editingExpense.date === "string" ? editingExpense.date : new Date(editingExpense.date).toISOString().split("T")[0],
+        description: editingExpense.description,
+        reference: editingExpense.reference || "",
+        expenseAccountId: editingExpense.expenseAccountId,
+        paymentAccountId: editingExpense.paymentAccountId,
+        amount: editingExpense.amount,
+        vatAmount: editingExpense.vatAmount,
+        paymentMethod: editingExpense.paymentMethod,
+        supplierId: editingExpense.supplierId || "",
+        journalEntryId: editingExpense.journalEntryId || null,
+      }
+    : undefined;
+
+  const isPending = createExpense.isPending || updateExpense.isPending;
 
   return (
     <div className="p-6 space-y-6">
@@ -150,21 +265,9 @@ export default function ExpensesPage() {
         title="Expenses"
         description="Track and manage business expenses"
         action={
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-new-expense"><Plus className="w-4 h-4 mr-1" /> New Expense</Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-lg">
-              <DialogHeader><DialogTitle>New Expense</DialogTitle></DialogHeader>
-              <ExpenseForm
-                onSubmit={(d) => createExpense.mutate(d)}
-                isPending={createExpense.isPending}
-                expenseAccounts={expenseAccounts}
-                paymentAccounts={paymentAccounts}
-                suppliers={suppliers}
-              />
-            </DialogContent>
-          </Dialog>
+          <Button data-testid="button-new-expense" onClick={openNew}>
+            <Plus className="w-4 h-4 mr-1" /> New Expense
+          </Button>
         }
       />
 
@@ -172,13 +275,13 @@ export default function ExpensesPage() {
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-muted-foreground">Total Expenses (This Month)</p>
-            <p className="text-2xl font-bold" data-testid="text-total-expenses">{"\u20AC"}{totalExpenses.toFixed(2)}</p>
+            <p className="text-2xl font-bold" data-testid="text-total-expenses">€{totalExpenses.toFixed(2)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-muted-foreground">Total VAT (This Month)</p>
-            <p className="text-2xl font-bold" data-testid="text-total-vat">{"\u20AC"}{totalVat.toFixed(2)}</p>
+            <p className="text-2xl font-bold" data-testid="text-total-vat">€{totalVat.toFixed(2)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -194,40 +297,62 @@ export default function ExpensesPage() {
           <DataTable columns={columns} data={expenses} isLoading={isLoading} emptyMessage="No expenses recorded" />
         </CardContent>
       </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editingExpense ? "Edit Expense" : "New Expense"}</DialogTitle>
+          </DialogHeader>
+          <ExpenseForm
+            key={editingExpense?.id ?? "new"}
+            defaultValues={editDefaults ?? emptyDefaults}
+            onSubmit={(d) => {
+              if (editingExpense) {
+                updateExpense.mutate({ id: editingExpense.id, data: d });
+              } else {
+                createExpense.mutate(d);
+              }
+            }}
+            isPending={isPending}
+            isEditing={!!editingExpense}
+            expenseAccounts={expenseAccounts}
+            paymentAccounts={paymentAccounts}
+            suppliers={suppliers}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
 function ExpenseForm({
+  defaultValues,
   onSubmit,
   isPending,
+  isEditing,
   expenseAccounts,
   paymentAccounts,
   suppliers,
 }: {
+  defaultValues: z.infer<typeof expenseFormSchema>;
   onSubmit: (d: z.infer<typeof expenseFormSchema>) => void;
   isPending: boolean;
+  isEditing: boolean;
   expenseAccounts: Account[];
   paymentAccounts: Account[];
   suppliers: Supplier[];
 }) {
-  const [autoVat, setAutoVat] = useState(true);
+  const [autoVat, setAutoVat] = useState(!isEditing);
 
   const form = useForm({
     resolver: zodResolver(expenseFormSchema),
-    defaultValues: {
-      date: new Date().toISOString().split("T")[0],
-      description: "",
-      reference: "",
-      expenseAccountId: "",
-      paymentAccountId: "",
-      amount: "",
-      vatAmount: "0",
-      paymentMethod: "cash",
-      supplierId: "",
-      journalEntryId: null,
-    },
+    defaultValues,
   });
+
+  useEffect(() => {
+    form.reset(defaultValues);
+    setAutoVat(!isEditing);
+  }, [defaultValues]);
 
   const amountValue = form.watch("amount");
 
@@ -321,7 +446,7 @@ function ExpenseForm({
         <div className="grid grid-cols-2 gap-4">
           <FormField control={form.control} name="amount" render={({ field }) => (
             <FormItem>
-              <FormLabel>Amount</FormLabel>
+              <FormLabel>Amount (excl. VAT)</FormLabel>
               <FormControl>
                 <Input
                   type="number"
@@ -406,7 +531,7 @@ function ExpenseForm({
 
         <div className="flex justify-end">
           <Button type="submit" disabled={isPending} data-testid="button-save-expense">
-            {isPending ? "Saving..." : "Save Expense"}
+            {isPending ? "Saving..." : isEditing ? "Save Changes" : "Save Expense"}
           </Button>
         </div>
       </form>
