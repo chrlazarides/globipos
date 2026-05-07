@@ -244,29 +244,34 @@ export default function InvoiceForm() {
     },
   });
 
-  // Auto-fill delivery location from customer's default saved location (or location field)
-  const prevCustomerIdRef = useRef<string>("");
+  // Auto-fill delivery location for new invoices only.
+  // Priority: customer's default saved location → customer.location field → blank.
+  // Guarded by a ref so re-renders / query refetches never overwrite a manual change.
+  const autoFilledLocCustomerRef = useRef<string>("");
+
+  // Step 1: when customer changes, reset the guard and apply fallback immediately
   useEffect(() => {
-    if (!customerId || customerId === prevCustomerIdRef.current) return;
-    prevCustomerIdRef.current = customerId;
-    if (!existingInvoice) {
-      // Will be updated again when customerDeliveryLocations loads
-      const cust = customers.find(c => c.id === customerId);
-      if (cust?.location) { setDeliveryLocation(cust.location); setCustomDeliveryLocation(cust.location); }
-    }
+    if (!customerId || existingInvoice) return;
+    if (customerId === autoFilledLocCustomerRef.current) return;
+    autoFilledLocCustomerRef.current = customerId;
+    // Fallback to customer.location; will be overwritten by step 2 if saved locations exist
+    const cust = customers.find(c => c.id === customerId);
+    const fallback = cust?.location || "";
+    setDeliveryLocation(fallback);
+    setCustomDeliveryLocation(fallback ? fallback : "");
   }, [customerId, customers, existingInvoice]);
 
-  // When delivery locations load for a new invoice, auto-select the default one
+  // Step 2: once saved locations arrive for the current customer, prefer the default one
   useEffect(() => {
     if (existingInvoice) return;
     if (!customerId) return;
+    // Only auto-fill once per customer — if the guard has moved on, skip
+    if (autoFilledLocCustomerRef.current !== customerId) return;
     if (customerDeliveryLocations.length === 0) return;
-    const defaultLoc = customerDeliveryLocations.find(l => l.isDefault);
-    if (defaultLoc) {
-      setDeliveryLocation(defaultLoc.name);
-      setCustomDeliveryLocation("");
-    }
-  }, [customerDeliveryLocations, existingInvoice, customerId]);
+    const defaultLoc = customerDeliveryLocations.find(l => l.isDefault) ?? customerDeliveryLocations[0];
+    setDeliveryLocation(defaultLoc.name);
+    setCustomDeliveryLocation("");
+  }, [customerDeliveryLocations]); // intentionally narrow: only react to the list itself
 
   // Track which customer was loaded from an existing invoice so the
   // contract-price effect does NOT overwrite the saved line amounts
