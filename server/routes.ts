@@ -1127,6 +1127,43 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/customers/:id/delivery-locations", async (req, res) => {
+    try {
+      const locs = await storage.getCustomerDeliveryLocations(req.params.id);
+      res.json(locs);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/customers/:id/delivery-locations", async (req, res) => {
+    try {
+      const loc = await storage.createCustomerDeliveryLocation({ ...req.body, customerId: req.params.id });
+      res.json(loc);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/customers/:customerId/delivery-locations/:locId", async (req, res) => {
+    try {
+      const loc = await storage.updateCustomerDeliveryLocation(req.params.locId, { ...req.body, customerId: req.params.customerId });
+      if (!loc) return res.status(404).json({ message: "Location not found" });
+      res.json(loc);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/customers/:customerId/delivery-locations/:locId", async (req, res) => {
+    try {
+      await storage.deleteCustomerDeliveryLocation(req.params.locId);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/customers/import", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });

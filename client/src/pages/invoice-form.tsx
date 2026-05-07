@@ -22,7 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { offlineStore } from "@/lib/offline-store";
 import { BarcodeScanner } from "@/components/barcode-scanner";
-import type { Customer, Item, Invoice, InvoiceItem, PriceContract, PriceContractRule, PriceContractItem } from "@shared/schema";
+import type { Customer, Item, Invoice, InvoiceItem, PriceContract, PriceContractRule, PriceContractItem, CustomerDeliveryLocation } from "@shared/schema";
 
 interface LineItem {
   itemId: string;
@@ -203,6 +203,7 @@ export default function InvoiceForm() {
 
   const [customerId, setCustomerId] = useState("");
   const [deliveryLocation, setDeliveryLocation] = useState("");
+  const [customDeliveryLocation, setCustomDeliveryLocation] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
   const [dueDate, setDueDate] = useState("");
   const [taxRate, setTaxRate] = useState("19");
@@ -223,6 +224,12 @@ export default function InvoiceForm() {
     enabled: !!lastPricesUrl,
   });
 
+  const { data: customerDeliveryLocations = [] } = useQuery<CustomerDeliveryLocation[]>({
+    queryKey: ["/api/customers", customerId, "delivery-locations"],
+    queryFn: () => fetch(`/api/customers/${customerId}/delivery-locations`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!customerId,
+  });
+
   const quickSaveMutation = useMutation({
     mutationFn: async ({ custId, itemId, fixedPrice }: { custId: string; itemId: string; fixedPrice: number }) => {
       const res = await apiRequest("POST", "/api/price-contracts/quick-save", { customerId: custId, itemId, fixedPrice });
@@ -237,17 +244,29 @@ export default function InvoiceForm() {
     },
   });
 
-  // Auto-fill delivery location from customer when selecting a new customer
+  // Auto-fill delivery location from customer's default saved location (or location field)
   const prevCustomerIdRef = useRef<string>("");
   useEffect(() => {
     if (!customerId || customerId === prevCustomerIdRef.current) return;
     prevCustomerIdRef.current = customerId;
-    // Only auto-fill if this is a new invoice (not loaded from existing)
     if (!existingInvoice) {
+      // Will be updated again when customerDeliveryLocations loads
       const cust = customers.find(c => c.id === customerId);
-      if (cust?.location) setDeliveryLocation(cust.location);
+      if (cust?.location) { setDeliveryLocation(cust.location); setCustomDeliveryLocation(cust.location); }
     }
   }, [customerId, customers, existingInvoice]);
+
+  // When delivery locations load for a new invoice, auto-select the default one
+  useEffect(() => {
+    if (existingInvoice) return;
+    if (!customerId) return;
+    if (customerDeliveryLocations.length === 0) return;
+    const defaultLoc = customerDeliveryLocations.find(l => l.isDefault);
+    if (defaultLoc) {
+      setDeliveryLocation(defaultLoc.name);
+      setCustomDeliveryLocation("");
+    }
+  }, [customerDeliveryLocations, existingInvoice, customerId]);
 
   // Track which customer was loaded from an existing invoice so the
   // contract-price effect does NOT overwrite the saved line amounts
@@ -926,15 +945,54 @@ export default function InvoiceForm() {
                 </div>
               </div>
 
-              <div>
+              <div className="space-y-1.5">
                 <Label>Delivery Location</Label>
-                <Input
-                  value={deliveryLocation}
-                  onChange={(e) => setDeliveryLocation(e.target.value)}
-                  placeholder="e.g. Nicosia Main Branch, Beach Bar…"
-                  disabled={isViewMode}
-                  data-testid="input-delivery-location"
-                />
+                {customerDeliveryLocations.length > 0 && !isViewMode ? (
+                  <div className="space-y-1.5">
+                    <Select
+                      value={customerDeliveryLocations.some(l => l.name === deliveryLocation) ? deliveryLocation : "__custom__"}
+                      onValueChange={(val) => {
+                        if (val === "__custom__") {
+                          setDeliveryLocation(customDeliveryLocation);
+                        } else {
+                          setDeliveryLocation(val);
+                          setCustomDeliveryLocation("");
+                        }
+                      }}
+                    >
+                      <SelectTrigger data-testid="select-delivery-location">
+                        <SelectValue placeholder="Select delivery location…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {customerDeliveryLocations.map(loc => (
+                          <SelectItem key={loc.id} value={loc.name}>
+                            <span className="flex items-center gap-1.5">
+                              {loc.name}
+                              {loc.isDefault && <span className="text-xs text-muted-foreground">(default)</span>}
+                            </span>
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="__custom__">Other / custom…</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {(!customerDeliveryLocations.some(l => l.name === deliveryLocation)) && (
+                      <Input
+                        value={customDeliveryLocation}
+                        onChange={(e) => { setCustomDeliveryLocation(e.target.value); setDeliveryLocation(e.target.value); }}
+                        placeholder="Enter delivery location…"
+                        data-testid="input-delivery-location-custom"
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <Input
+                    value={deliveryLocation}
+                    onChange={(e) => setDeliveryLocation(e.target.value)}
+                    placeholder="e.g. Nicosia Main Branch, Beach Bar…"
+                    disabled={isViewMode}
+                    data-testid="input-delivery-location"
+                  />
+                )}
               </div>
 
               {selectedCustomer && !isViewMode && (

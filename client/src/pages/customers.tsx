@@ -14,10 +14,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Users, Upload, Printer, TrendingUp, FileText, AlertTriangle, Euro, BarChart3 } from "lucide-react";
+import { Plus, Search, Users, Upload, Printer, TrendingUp, FileText, AlertTriangle, Euro, BarChart3, MapPin, Pencil, Trash2, Star } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { insertCustomerSchema, type Customer } from "@shared/schema";
+import { insertCustomerSchema, type Customer, type CustomerDeliveryLocation } from "@shared/schema";
 import { ImportDialog } from "@/components/import-dialog";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { z } from "zod";
@@ -329,6 +329,9 @@ function CustomerProfileDialog({
             <TabsTrigger value="details" data-testid="tab-customer-details">
               <FileText className="w-3.5 h-3.5 mr-1.5" />Details
             </TabsTrigger>
+            <TabsTrigger value="locations" data-testid="tab-customer-locations">
+              <MapPin className="w-3.5 h-3.5 mr-1.5" />Locations
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="performance" className="space-y-4">
@@ -434,9 +437,156 @@ function CustomerProfileDialog({
               }}
             />
           </TabsContent>
+
+          <TabsContent value="locations">
+            <CustomerLocationsTab customerId={customer.id} open={open} />
+          </TabsContent>
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function CustomerLocationsTab({ customerId, open }: { customerId: string; open: boolean }) {
+  const { toast } = useToast();
+  const [editingLoc, setEditingLoc] = useState<CustomerDeliveryLocation | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [formName, setFormName] = useState("");
+  const [formAddress, setFormAddress] = useState("");
+  const [formDefault, setFormDefault] = useState(false);
+
+  const { data: locations = [], isLoading } = useQuery<CustomerDeliveryLocation[]>({
+    queryKey: ["/api/customers", customerId, "delivery-locations"],
+    queryFn: () => fetch(`/api/customers/${customerId}/delivery-locations`, { credentials: "include" }).then(r => r.json()),
+    enabled: open,
+  });
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/customers", customerId, "delivery-locations"] });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: { name: string; address: string; isDefault: boolean }) => {
+      const res = await apiRequest("POST", `/api/customers/${customerId}/delivery-locations`, data);
+      return res.json();
+    },
+    onSuccess: () => { invalidate(); resetForm(); setAddOpen(false); toast({ title: "Location added" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      const res = await apiRequest("PATCH", `/api/customers/${customerId}/delivery-locations/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => { invalidate(); resetForm(); setAddOpen(false); toast({ title: "Location updated" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/customers/${customerId}/delivery-locations/${id}`);
+      return res.json();
+    },
+    onSuccess: () => { invalidate(); toast({ title: "Location deleted" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  function resetForm() {
+    setFormName(""); setFormAddress(""); setFormDefault(false); setEditingLoc(null);
+  }
+
+  function openAdd() { resetForm(); setAddOpen(true); }
+
+  function openEdit(loc: CustomerDeliveryLocation) {
+    setEditingLoc(loc); setFormName(loc.name); setFormAddress(loc.address || ""); setFormDefault(loc.isDefault); setAddOpen(true);
+  }
+
+  function handleSave() {
+    if (!formName.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; }
+    const payload = { name: formName.trim(), address: formAddress.trim() || "", isDefault: formDefault };
+    if (editingLoc) {
+      updateMutation.mutate({ id: editingLoc.id, data: payload });
+    } else {
+      createMutation.mutate(payload);
+    }
+  }
+
+  const isPending = createMutation.isPending || updateMutation.isPending;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">Saved delivery locations used during invoicing.</p>
+        <Button size="sm" onClick={openAdd} data-testid="button-add-location">
+          <Plus className="w-3.5 h-3.5 mr-1" /> Add Location
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">{[1,2].map(i => <Skeleton key={i} className="h-14 w-full" />)}</div>
+      ) : locations.length === 0 ? (
+        <div className="text-center py-10 text-sm text-muted-foreground">
+          <MapPin className="w-8 h-8 mx-auto mb-2 opacity-30" />
+          No delivery locations saved yet
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {locations.map((loc) => (
+            <div key={loc.id} className="flex items-start gap-3 p-3 rounded-lg border bg-card">
+              <MapPin className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{loc.name}</span>
+                  {loc.isDefault && (
+                    <Badge variant="secondary" className="text-xs px-1.5 py-0">
+                      <Star className="w-2.5 h-2.5 mr-1 fill-current" />Default
+                    </Badge>
+                  )}
+                </div>
+                {loc.address && <p className="text-xs text-muted-foreground mt-0.5 truncate">{loc.address}</p>}
+              </div>
+              <div className="flex gap-1 shrink-0">
+                <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(loc)} data-testid={`button-edit-loc-${loc.id}`}>
+                  <Pencil className="w-3.5 h-3.5" />
+                </Button>
+                <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" disabled={deleteMutation.isPending}
+                  onClick={() => { if (confirm(`Delete "${loc.name}"?`)) deleteMutation.mutate(loc.id); }}
+                  data-testid={`button-delete-loc-${loc.id}`}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Dialog open={addOpen} onOpenChange={(o) => { if (!o) { resetForm(); } setAddOpen(o); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{editingLoc ? "Edit Location" : "Add Delivery Location"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Location Name *</label>
+              <Input value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. Nicosia Branch, Beach Bar…" data-testid="input-loc-name" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Address (optional)</label>
+              <Input value={formAddress} onChange={e => setFormAddress(e.target.value)} placeholder="Street, city…" data-testid="input-loc-address" />
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" id="loc-default" checked={formDefault} onChange={e => setFormDefault(e.target.checked)} className="rounded" data-testid="checkbox-loc-default" />
+              <label htmlFor="loc-default" className="text-sm cursor-pointer">Set as default delivery location</label>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button variant="outline" onClick={() => { resetForm(); setAddOpen(false); }}>Cancel</Button>
+            <Button onClick={handleSave} disabled={isPending} data-testid="button-save-location">
+              {isPending ? "Saving…" : editingLoc ? "Save Changes" : "Add Location"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 

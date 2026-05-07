@@ -27,6 +27,8 @@ import {
   type InsertJournalEntry, type JournalEntry,
   type InsertJournalEntryLine, type JournalEntryLine,
   type InsertExpense, type Expense,
+  customerDeliveryLocations,
+  type InsertCustomerDeliveryLocation, type CustomerDeliveryLocation,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -51,6 +53,10 @@ export interface IStorage {
   findDuplicateCustomer(name: string, email?: string | null, taxId?: string | null, excludeId?: string): Promise<Customer[]>;
   createCustomer(data: InsertCustomer): Promise<Customer>;
   updateCustomer(id: string, data: Partial<InsertCustomer>): Promise<Customer | undefined>;
+  getCustomerDeliveryLocations(customerId: string): Promise<CustomerDeliveryLocation[]>;
+  createCustomerDeliveryLocation(data: InsertCustomerDeliveryLocation): Promise<CustomerDeliveryLocation>;
+  updateCustomerDeliveryLocation(id: string, data: Partial<InsertCustomerDeliveryLocation>): Promise<CustomerDeliveryLocation | undefined>;
+  deleteCustomerDeliveryLocation(id: string): Promise<void>;
 
   getPriceContracts(): Promise<(PriceContract & { customerName?: string; priceLevel?: number })[]>;
   getPriceContract(id: string): Promise<PriceContract | undefined>;
@@ -267,6 +273,36 @@ export class DatabaseStorage implements IStorage {
   async updateCustomer(id: string, data: Partial<InsertCustomer>) {
     const [cust] = await db.update(customers).set(data).where(eq(customers.id, id)).returning();
     return cust;
+  }
+
+  async getCustomerDeliveryLocations(customerId: string) {
+    return db.select().from(customerDeliveryLocations)
+      .where(eq(customerDeliveryLocations.customerId, customerId))
+      .orderBy(desc(customerDeliveryLocations.isDefault), customerDeliveryLocations.name);
+  }
+
+  async createCustomerDeliveryLocation(data: InsertCustomerDeliveryLocation) {
+    if (data.isDefault) {
+      await db.update(customerDeliveryLocations)
+        .set({ isDefault: false })
+        .where(eq(customerDeliveryLocations.customerId, data.customerId));
+    }
+    const [loc] = await db.insert(customerDeliveryLocations).values(data).returning();
+    return loc;
+  }
+
+  async updateCustomerDeliveryLocation(id: string, data: Partial<InsertCustomerDeliveryLocation>) {
+    if (data.isDefault && data.customerId) {
+      await db.update(customerDeliveryLocations)
+        .set({ isDefault: false })
+        .where(eq(customerDeliveryLocations.customerId, data.customerId));
+    }
+    const [loc] = await db.update(customerDeliveryLocations).set(data).where(eq(customerDeliveryLocations.id, id)).returning();
+    return loc;
+  }
+
+  async deleteCustomerDeliveryLocation(id: string) {
+    await db.delete(customerDeliveryLocations).where(eq(customerDeliveryLocations.id, id));
   }
 
   async getPriceContracts() {

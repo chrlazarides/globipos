@@ -438,3 +438,16 @@ export type Expense = typeof expenses.$inferSelect;
 export const insertActivityLogSchema = createInsertSchema(activityLogs).omit({ id: true, createdAt: true });
 export type InsertActivityLog = z.infer<typeof insertActivityLogSchema>;
 export type ActivityLog = typeof activityLogs.$inferSelect;
+
+export const customerDeliveryLocations = pgTable("customer_delivery_locations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  name: text("name").notNull(),
+  address: text("address"),
+  isDefault: boolean("is_default").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCustomerDeliveryLocationSchema = createInsertSchema(customerDeliveryLocations).omit({ id: true, createdAt: true });
+export type InsertCustomerDeliveryLocation = z.infer<typeof insertCustomerDeliveryLocationSchema>;
+export type CustomerDeliveryLocation = typeof customerDeliveryLocations.$inferSelect;
