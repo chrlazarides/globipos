@@ -267,8 +267,8 @@ export default function InvoiceForm() {
     if (!customerId) return;
     // Only auto-fill once per customer — if the guard has moved on, skip
     if (autoFilledLocCustomerRef.current !== customerId) return;
-    if (customerDeliveryLocations.length === 0) return;
-    const defaultLoc = customerDeliveryLocations.find(l => l.isDefault) ?? customerDeliveryLocations[0];
+    const defaultLoc = customerDeliveryLocations.find(l => l.isDefault);
+    if (!defaultLoc) return; // no explicit default — keep the customer.location fallback
     setDeliveryLocation(defaultLoc.name);
     setCustomDeliveryLocation("");
   }, [customerDeliveryLocations]); // intentionally narrow: only react to the list itself
