@@ -14,11 +14,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Users, Upload, Printer, TrendingUp, FileText, AlertTriangle, Euro, BarChart3, MapPin, Pencil, Trash2, Star } from "lucide-react";
+import { Plus, Search, Users, Upload, Printer, TrendingUp, FileText, AlertTriangle, Euro, BarChart3, MapPin, Pencil, Trash2, Star, ExternalLink } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertCustomerSchema, type Customer, type CustomerDeliveryLocation } from "@shared/schema";
 import { ImportDialog } from "@/components/import-dialog";
+import { LocationMapPicker } from "@/components/location-map-picker";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { z } from "zod";
 import {
@@ -453,6 +454,8 @@ function CustomerLocationsTab({ customerId, open }: { customerId: string; open: 
   const [addOpen, setAddOpen] = useState(false);
   const [formName, setFormName] = useState("");
   const [formAddress, setFormAddress] = useState("");
+  const [formLat, setFormLat] = useState<number | null>(null);
+  const [formLng, setFormLng] = useState<number | null>(null);
   const [formDefault, setFormDefault] = useState(false);
 
   const { data: locations = [], isLoading } = useQuery<CustomerDeliveryLocation[]>({
@@ -464,7 +467,7 @@ function CustomerLocationsTab({ customerId, open }: { customerId: string; open: 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/customers", customerId, "delivery-locations"] });
 
   const createMutation = useMutation({
-    mutationFn: async (data: { name: string; address: string; isDefault: boolean }) => {
+    mutationFn: async (data: any) => {
       const res = await apiRequest("POST", `/api/customers/${customerId}/delivery-locations`, data);
       return res.json();
     },
@@ -491,23 +494,37 @@ function CustomerLocationsTab({ customerId, open }: { customerId: string; open: 
   });
 
   function resetForm() {
-    setFormName(""); setFormAddress(""); setFormDefault(false); setEditingLoc(null);
+    setFormName(""); setFormAddress(""); setFormLat(null); setFormLng(null); setFormDefault(false); setEditingLoc(null);
   }
 
   function openAdd() { resetForm(); setAddOpen(true); }
 
   function openEdit(loc: CustomerDeliveryLocation) {
-    setEditingLoc(loc); setFormName(loc.name); setFormAddress(loc.address || ""); setFormDefault(loc.isDefault); setAddOpen(true);
+    setEditingLoc(loc);
+    setFormName(loc.name);
+    setFormAddress(loc.address || "");
+    setFormLat(loc.lat ? parseFloat(loc.lat) : null);
+    setFormLng(loc.lng ? parseFloat(loc.lng) : null);
+    setFormDefault(loc.isDefault);
+    setAddOpen(true);
   }
 
   function handleSave() {
     if (!formName.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; }
-    const payload = { name: formName.trim(), address: formAddress.trim() || "", isDefault: formDefault };
+    const payload: any = { name: formName.trim(), address: formAddress.trim() || "", isDefault: formDefault };
+    if (formLat !== null) payload.lat = String(formLat);
+    if (formLng !== null) payload.lng = String(formLng);
     if (editingLoc) {
       updateMutation.mutate({ id: editingLoc.id, data: payload });
     } else {
       createMutation.mutate(payload);
     }
+  }
+
+  function googleMapsUrl(loc: CustomerDeliveryLocation) {
+    if (loc.lat && loc.lng) return `https://www.google.com/maps?q=${loc.lat},${loc.lng}`;
+    if (loc.address) return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc.address)}`;
+    return null;
   }
 
   const isPending = createMutation.isPending || updateMutation.isPending;
@@ -530,49 +547,68 @@ function CustomerLocationsTab({ customerId, open }: { customerId: string; open: 
         </div>
       ) : (
         <div className="space-y-2">
-          {locations.map((loc) => (
-            <div key={loc.id} className="flex items-start gap-3 p-3 rounded-lg border bg-card">
-              <MapPin className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{loc.name}</span>
-                  {loc.isDefault && (
-                    <Badge variant="secondary" className="text-xs px-1.5 py-0">
-                      <Star className="w-2.5 h-2.5 mr-1 fill-current" />Default
-                    </Badge>
+          {locations.map((loc) => {
+            const mapsUrl = googleMapsUrl(loc);
+            return (
+              <div key={loc.id} className="flex items-start gap-3 p-3 rounded-lg border bg-card">
+                <MapPin className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium">{loc.name}</span>
+                    {loc.isDefault && (
+                      <Badge variant="secondary" className="text-xs px-1.5 py-0">
+                        <Star className="w-2.5 h-2.5 mr-1 fill-current" />Default
+                      </Badge>
+                    )}
+                  </div>
+                  {loc.address && <p className="text-xs text-muted-foreground mt-0.5 truncate">{loc.address}</p>}
+                  {loc.lat && loc.lng && (
+                    <p className="text-xs text-muted-foreground/60 mt-0.5">{parseFloat(loc.lat).toFixed(5)}, {parseFloat(loc.lng).toFixed(5)}</p>
                   )}
                 </div>
-                {loc.address && <p className="text-xs text-muted-foreground mt-0.5 truncate">{loc.address}</p>}
+                <div className="flex gap-1 shrink-0">
+                  {mapsUrl && (
+                    <a href={mapsUrl} target="_blank" rel="noopener noreferrer">
+                      <Button size="icon" variant="ghost" className="h-7 w-7 text-blue-600 hover:text-blue-700" data-testid={`button-map-loc-${loc.id}`}>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </Button>
+                    </a>
+                  )}
+                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(loc)} data-testid={`button-edit-loc-${loc.id}`}>
+                    <Pencil className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" disabled={deleteMutation.isPending}
+                    onClick={() => { if (confirm(`Delete "${loc.name}"?`)) deleteMutation.mutate(loc.id); }}
+                    data-testid={`button-delete-loc-${loc.id}`}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
               </div>
-              <div className="flex gap-1 shrink-0">
-                <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(loc)} data-testid={`button-edit-loc-${loc.id}`}>
-                  <Pencil className="w-3.5 h-3.5" />
-                </Button>
-                <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" disabled={deleteMutation.isPending}
-                  onClick={() => { if (confirm(`Delete "${loc.name}"?`)) deleteMutation.mutate(loc.id); }}
-                  data-testid={`button-delete-loc-${loc.id}`}>
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       <Dialog open={addOpen} onOpenChange={(o) => { if (!o) { resetForm(); } setAddOpen(o); }}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingLoc ? "Edit Location" : "Add Delivery Location"}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Location Name *</label>
               <Input value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g. Nicosia Branch, Beach Bar…" data-testid="input-loc-name" />
             </div>
+
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Address (optional)</label>
-              <Input value={formAddress} onChange={e => setFormAddress(e.target.value)} placeholder="Street, city…" data-testid="input-loc-address" />
+              <label className="text-sm font-medium">Address &amp; Map</label>
+              <LocationMapPicker
+                value={formLat !== null && formLng !== null ? { address: formAddress, lat: formLat, lng: formLng } : undefined}
+                onChange={(val) => { setFormAddress(val.address); setFormLat(val.lat); setFormLng(val.lng); }}
+                placeholder="Search address on map…"
+              />
             </div>
+
             <div className="flex items-center gap-2">
               <input type="checkbox" id="loc-default" checked={formDefault} onChange={e => setFormDefault(e.target.checked)} className="rounded" data-testid="checkbox-loc-default" />
               <label htmlFor="loc-default" className="text-sm cursor-pointer">Set as default delivery location</label>

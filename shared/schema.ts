@@ -444,6 +444,8 @@ export const customerDeliveryLocations = pgTable("customer_delivery_locations", 
   customerId: varchar("customer_id").notNull(),
   name: text("name").notNull(),
   address: text("address"),
+  lat: numeric("lat", { precision: 10, scale: 7 }),
+  lng: numeric("lng", { precision: 10, scale: 7 }),
   isDefault: boolean("is_default").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
