@@ -14,6 +14,16 @@ import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken
 import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
 import QRCode from "qrcode";
 
+// ─── HTML ESCAPING HELPER ────────────────────────────────────────────────────
+function escHtml(str: unknown): string {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // ─── RATE LIMITER (in-memory, per IP) ────────────────────────────────────────
 const RATE_WINDOW_MS = 15 * 60 * 1000;
 const RATE_MAX_ATTEMPTS = 10;
@@ -372,7 +382,7 @@ export async function registerRoutes(
 
       const cleanToken2fa = code.replace(/\s/g, "");
       const result = totpVerify({ token: cleanToken2fa, secret: user.totpSecret, window: 1 });
-      console.log(`[2FA login] user=${user.username} token=${cleanToken2fa} result=`, result);
+      // [2FA login] result logged without exposing token
       if (!result.valid) return res.status(401).json({ message: "Invalid authentication code" });
 
       const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
@@ -404,7 +414,7 @@ export async function registerRoutes(
 
       const cleanToken = code.replace(/\s/g, "");
       const result = totpVerify({ token: cleanToken, secret, window: 1 });
-      console.log(`[2FA enable] user=${req.user.username} token=${cleanToken} secret=${secret} result=`, result);
+      // [2FA enable] result logged without exposing secret or token
       if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
 
       await db.update(users).set({ totpSecret: secret, totpEnabled: true }).where(eq(users.id, req.user.id));
@@ -1887,7 +1897,7 @@ export async function registerRoutes(
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Customer Savings Report – ${report.customerName}</title>
+  <title>Customer Savings Report – ${escHtml(report.customerName)}</title>
   <style>
     body { font-family: Arial, sans-serif; font-size: 13px; color: #111; margin: 0; padding: 20px; }
     h1 { font-size: 20px; margin: 0 0 4px; }
@@ -1906,9 +1916,9 @@ export async function registerRoutes(
   </style>
 </head>
 <body>
-  <div class="company">${companyName}</div>
+  <div class="company">${escHtml(companyName)}</div>
   <h1>Customer Savings Report</h1>
-  <h2>${report.customerName} — ${fromLabel} to ${toLabel}</h2>
+  <h2>${escHtml(report.customerName)} — ${fromLabel} to ${toLabel}</h2>
   <div class="stats">
     <div class="stat"><div class="stat-label">Total Savings</div><div class="stat-value">€${report.totalSavings.toFixed(2)}</div></div>
     <div class="stat"><div class="stat-label">Avg Discount</div><div class="stat-value">${report.avgDiscountPercent.toFixed(1)}%</div></div>
@@ -2005,7 +2015,7 @@ export async function registerRoutes(
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Customer Savings Report – ${report.customerName}</title>
+  <title>Customer Savings Report – ${escHtml(report.customerName)}</title>
   <style>
     body { font-family: Arial, sans-serif; font-size: 13px; color: #111; margin: 0; padding: 20px; }
     h1 { font-size: 20px; margin: 0 0 4px; }
@@ -2023,9 +2033,9 @@ export async function registerRoutes(
   </style>
 </head>
 <body>
-  <div class="company">${companyName}</div>
+  <div class="company">${escHtml(companyName)}</div>
   <h1>Customer Savings Report</h1>
-  <h2>${report.customerName} — ${fromLabel} to ${toLabel}</h2>
+  <h2>${escHtml(report.customerName)} — ${fromLabel} to ${toLabel}</h2>
   <div class="stats">
     <div class="stat"><div class="stat-label">Total Savings</div><div class="stat-value">€${report.totalSavings.toFixed(2)}</div></div>
     <div class="stat"><div class="stat-label">Avg Discount</div><div class="stat-value">${report.avgDiscountPercent.toFixed(1)}%</div></div>

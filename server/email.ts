@@ -7,6 +7,15 @@ import { db } from './db';
 import { systemSettings } from '@shared/schema';
 import { eq } from 'drizzle-orm';
 
+function escHtml(str: unknown): string {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function getSettingValue(key: string): Promise<string | null> {
   try {
     const rows = await db.select().from(systemSettings).where(eq(systemSettings.key, key));
@@ -203,9 +212,9 @@ export async function sendBackupEmail(
       from: fromEmail,
       to: toEmail,
       subject: `${companyName} — Database Backup ${date}`,
-      html: `<p>Automated database backup for <strong>${companyName}</strong>.</p>
-             <p>Date: ${date}</p>
-             <p>The full backup is attached as <code>${filename}</code>.</p>
+      html: `<p>Automated database backup for <strong>${escHtml(companyName)}</strong>.</p>
+             <p>Date: ${escHtml(date)}</p>
+             <p>The full backup is attached as <code>${escHtml(filename)}</code>.</p>
              <p style="color:#666;font-size:12px;">This is an automated backup email. Keep this file in a safe place.</p>`,
       attachments: [{ filename, content: Buffer.from(backupJson).toString('base64') }],
     });
@@ -236,10 +245,10 @@ export async function sendLoginAlertEmail(
         </div>
         <p style="color:#374151;">A user has logged in from a <strong>new IP address</strong> that has not been seen before.</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${username}</td></tr>
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">IP Address</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${ip}</td></tr>
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${timestamp}</td></tr>
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Browser</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${userAgent}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(username)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">IP Address</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${escHtml(ip)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(timestamp)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Browser</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${escHtml(userAgent)}</td></tr>
         </table>
         <p style="color:#374151;">If this was not you, log in immediately and deactivate this account.</p>
         <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from VinTrade.</p>
@@ -270,10 +279,10 @@ export async function sendFailedLoginAlertEmail(
         </div>
         <p style="color:#374151;">There have been <strong>${failCount} failed login attempts</strong> in a short period. This may indicate a brute-force attack.</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">Target User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${attemptedUsername || '(unknown)'}</td></tr>
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Attack IP</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${ip}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">Target User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(attemptedUsername) || '(unknown)'}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Attack IP</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${escHtml(ip)}</td></tr>
           <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Attempts</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${failCount} failed attempts</td></tr>
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${timestamp}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(timestamp)}</td></tr>
         </table>
         <p style="color:#374151;">The IP has been temporarily blocked. Review your system if this activity is unexpected.</p>
         <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from VinTrade.</p>
@@ -304,10 +313,10 @@ export async function sendNewAdminAlertEmail(
         </div>
         <p style="color:#374151;">A new <strong>admin user</strong> has been created on the system.</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">New User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${newUsername}</td></tr>
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Created By</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${createdBy}</td></tr>
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">From IP</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${ip}</td></tr>
-          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${timestamp}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">New User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(newUsername)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Created By</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(createdBy)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">From IP</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${escHtml(ip)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(timestamp)}</td></tr>
         </table>
         <p style="color:#374151;">If you did not create this user, log in immediately and deactivate them.</p>
         <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from VinTrade.</p>
