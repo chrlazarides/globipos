@@ -1,5 +1,8 @@
-// Resend integration for sending emails
+// Resend email integration — uses Replit connector SDK (@replit/connectors-sdk)
+// Priority 1: DB-stored API key (set in Settings → Email)
+// Priority 2: Replit connector (managed via Replit integrations)
 import { Resend } from 'resend';
+import { ReplitConnectors } from '@replit/connectors-sdk';
 import { db } from './db';
 import { systemSettings } from '@shared/schema';
 import { eq } from 'drizzle-orm';
@@ -13,44 +16,10 @@ async function getSettingValue(key: string): Promise<string | null> {
   }
 }
 
-async function getCredentials(): Promise<{ apiKey: string; fromEmail: string; source: 'db' | 'connector' }> {
-  // Priority 1: settings stored in the database by admin
-  const dbApiKey = await getSettingValue('resend_api_key');
-  const dbFromEmail = await getSettingValue('resend_from_email');
-  if (dbApiKey && dbApiKey.startsWith('re_')) {
-    return { apiKey: dbApiKey, fromEmail: dbFromEmail || '', source: 'db' };
-  }
-
-  // Priority 2: Replit integration connector
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY
-    ? 'repl ' + process.env.REPL_IDENTITY
-    : process.env.WEB_REPL_RENEWAL
-    ? 'depl ' + process.env.WEB_REPL_RENEWAL
-    : null;
-
-  if (!xReplitToken || !hostname) {
-    throw new Error('Resend not configured. Please add your API key in Settings → Email.');
-  }
-
-  const connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=resend',
-    {
-      headers: {
-        'Accept': 'application/json',
-        'X-Replit-Token': xReplitToken
-      }
-    }
-  ).then(res => res.json()).then(data => data.items?.[0]);
-
-  if (!connectionSettings || !connectionSettings.settings.api_key) {
-    throw new Error('Resend not configured. Please add your API key in Settings → Email.');
-  }
-  return { apiKey: connectionSettings.settings.api_key, fromEmail: connectionSettings.settings.from_email, source: 'connector' };
-}
-
-// WARNING: Never cache this client - always get fresh credentials
-const PERSONAL_EMAIL_DOMAINS = ['gmail.com','yahoo.com','yahoo.co.uk','hotmail.com','outlook.com','live.com','icloud.com','me.com','aol.com','protonmail.com','cytanet.com.cy'];
+const PERSONAL_EMAIL_DOMAINS = [
+  'gmail.com','yahoo.com','yahoo.co.uk','hotmail.com','outlook.com',
+  'live.com','icloud.com','me.com','aol.com','protonmail.com','cytanet.com.cy'
+];
 
 function isSendableFromAddress(email: string): boolean {
   if (!email) return false;
@@ -58,13 +27,45 @@ function isSendableFromAddress(email: string): boolean {
   return !!domain && !PERSONAL_EMAIL_DOMAINS.includes(domain);
 }
 
-async function getUncachableResendClient() {
-  const { apiKey, fromEmail } = await getCredentials();
-  const resolvedFrom = isSendableFromAddress(fromEmail) ? fromEmail : 'onboarding@resend.dev';
-  return {
-    client: new Resend(apiKey),
-    fromEmail: resolvedFrom
-  };
+async function getFromEmail(): Promise<string> {
+  const dbFromEmail = await getSettingValue('resend_from_email');
+  if (dbFromEmail && isSendableFromAddress(dbFromEmail)) return dbFromEmail;
+  return 'onboarding@resend.dev';
+}
+
+interface EmailPayload {
+  from: string;
+  to: string | string[];
+  subject: string;
+  html: string;
+  attachments?: Array<{ filename: string; content: string }>;
+}
+
+async function sendEmailPayload(payload: EmailPayload): Promise<void> {
+  const dbApiKey = await getSettingValue('resend_api_key');
+
+  if (dbApiKey && dbApiKey.startsWith('re_')) {
+    // Use Resend SDK directly with the stored API key
+    const client = new Resend(dbApiKey);
+    const result = await client.emails.send(payload as any);
+    if ((result as any).error) {
+      throw new Error((result as any).error.message || 'Resend API error');
+    }
+    return;
+  }
+
+  // Use Replit connector proxy — auth handled automatically
+  const connectors = new ReplitConnectors();
+  const response = await connectors.proxy('resend', '/emails', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Resend error (${response.status}): ${errText}`);
+  }
 }
 
 export async function getEmailStatus(): Promise<{
@@ -78,34 +79,60 @@ export async function getEmailStatus(): Promise<{
   error?: string;
 }> {
   const dbApiKey = await getSettingValue('resend_api_key');
-  const dbFromEmail = await getSettingValue('resend_from_email');
+  const dbFromEmail = await getSettingValue('resend_from_email') || '';
+  const hasDbApiKey = !!(dbApiKey && dbApiKey.startsWith('re_'));
+
   try {
-    const { fromEmail, source } = await getCredentials();
-    const usable = isSendableFromAddress(fromEmail);
+    let source: 'db' | 'connector' = 'connector';
+    if (hasDbApiKey) source = 'db';
+
+    const fromEmail = await getFromEmail();
+    const usingFallback = fromEmail === 'onboarding@resend.dev';
+
+    // Quick connectivity check
+    if (hasDbApiKey) {
+      // DB key is present — assume connected without a live check
+    } else {
+      // Verify connector is reachable
+      const connectors = new ReplitConnectors();
+      const res = await connectors.proxy('resend', '/domains', { method: 'GET' });
+      if (!res.ok && res.status !== 200) {
+        const errText = await res.text();
+        throw new Error(`Connector check failed (${res.status}): ${errText}`);
+      }
+    }
+
     return {
       connected: true,
-      configuredFrom: fromEmail || '',
-      actualFrom: usable ? fromEmail : 'onboarding@resend.dev',
-      usingFallback: !usable,
+      configuredFrom: dbFromEmail,
+      actualFrom: fromEmail,
+      usingFallback,
       source,
-      hasDbApiKey: !!(dbApiKey && dbApiKey.startsWith('re_')),
-      dbFromEmail: dbFromEmail || '',
+      hasDbApiKey,
+      dbFromEmail,
     };
   } catch (e: any) {
     return {
-      connected: false, configuredFrom: '', actualFrom: '', usingFallback: false,
-      source: 'none', hasDbApiKey: !!(dbApiKey && dbApiKey.startsWith('re_')),
-      dbFromEmail: dbFromEmail || '', error: e.message,
+      connected: false,
+      configuredFrom: dbFromEmail,
+      actualFrom: '',
+      usingFallback: false,
+      source: 'none',
+      hasDbApiKey,
+      dbFromEmail,
+      error: e.message,
     };
   }
 }
 
-export async function sendTestEmail(toEmail: string): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+export async function sendTestEmail(
+  toEmail: string
+): Promise<{ success: boolean; fromEmail: string; error?: string }> {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
-    await client.emails.send({
-      to: toEmail,
+    const fromEmail = await getFromEmail();
+    await sendEmailPayload({
       from: fromEmail,
+      to: toEmail,
       subject: 'VinTrade — Email Test',
       html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
         <h2 style="color:#374151;margin-top:0;">Email Test Successful</h2>
@@ -120,43 +147,40 @@ export async function sendTestEmail(toEmail: string): Promise<{ success: boolean
   }
 }
 
-export async function sendInvoiceEmail(toEmail: string, subject: string, htmlContent: string): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+export async function sendInvoiceEmail(
+  toEmail: string,
+  subject: string,
+  htmlContent: string
+): Promise<{ success: boolean; fromEmail: string; error?: string }> {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
-
-    await client.emails.send({
-      to: toEmail,
-      from: fromEmail,
-      subject: subject,
-      html: htmlContent,
-    });
-
+    const fromEmail = await getFromEmail();
+    await sendEmailPayload({ from: fromEmail, to: toEmail, subject, html: htmlContent });
     return { success: true, fromEmail };
   } catch (error: any) {
-    console.error('Resend error:', error?.message || error);
+    console.error('Invoice email error:', error?.message || error);
     return { success: false, fromEmail: '', error: error?.message || 'Failed to send email' };
   }
 }
 
-export async function sendSavingsReportEmail(toEmail: string, subject: string, htmlContent: string, customerName: string): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+export async function sendSavingsReportEmail(
+  toEmail: string,
+  subject: string,
+  htmlContent: string,
+  customerName: string
+): Promise<{ success: boolean; fromEmail: string; error?: string }> {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
+    const fromEmail = await getFromEmail();
     const filename = `savings-report-${customerName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.html`;
-    await client.emails.send({
-      to: toEmail,
+    await sendEmailPayload({
       from: fromEmail,
+      to: toEmail,
       subject,
       html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;">
         <h2 style="color:#059669;margin-top:0;">Your Savings Report</h2>
         <p style="color:#374151;">Please find your savings report attached to this email.</p>
         <p style="color:#6b7280;font-size:13px;">Open the attached HTML file in your browser to view the full report with all details.</p>
       </div>`,
-      attachments: [
-        {
-          filename,
-          content: Buffer.from(htmlContent).toString('base64'),
-        },
-      ],
+      attachments: [{ filename, content: Buffer.from(htmlContent).toString('base64') }],
     });
     return { success: true, fromEmail };
   } catch (error: unknown) {
@@ -166,13 +190,18 @@ export async function sendSavingsReportEmail(toEmail: string, subject: string, h
   }
 }
 
-export async function sendBackupEmail(toEmail: string, companyName: string, backupJson: string, date: string): Promise<{ success: boolean; error?: string }> {
+export async function sendBackupEmail(
+  toEmail: string,
+  companyName: string,
+  backupJson: string,
+  date: string
+): Promise<{ success: boolean; error?: string }> {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
+    const fromEmail = await getFromEmail();
     const filename = `backup-${date}.json`;
-    await client.emails.send({
-      to: toEmail,
+    await sendEmailPayload({
       from: fromEmail,
+      to: toEmail,
       subject: `${companyName} — Database Backup ${date}`,
       html: `<p>Automated database backup for <strong>${companyName}</strong>.</p>
              <p>Date: ${date}</p>
@@ -195,8 +224,12 @@ export async function sendLoginAlertEmail(
   timestamp: string
 ): Promise<void> {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
-    const html = `
+    const fromEmail = await getFromEmail();
+    await sendEmailPayload({
+      from: fromEmail,
+      to: adminEmails,
+      subject: `🔐 Security Alert: ${username} logged in from new location`,
+      html: `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
         <div style="background:#dc2626;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
           <h2 style="color:#fff;margin:0;font-size:18px;">⚠️ New Login Location Detected</h2>
@@ -209,13 +242,8 @@ export async function sendLoginAlertEmail(
           <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Browser</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${userAgent}</td></tr>
         </table>
         <p style="color:#374151;">If this was not you, log in immediately and deactivate this account.</p>
-        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Vineria Di Mare.</p>
-      </div>`;
-    await client.emails.send({
-      to: adminEmails,
-      from: fromEmail,
-      subject: `🔐 Security Alert: ${username} logged in from new location`,
-      html,
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from VinTrade.</p>
+      </div>`,
     });
   } catch (error: any) {
     console.error('Login alert email error:', error?.message || error);
@@ -230,8 +258,12 @@ export async function sendFailedLoginAlertEmail(
   timestamp: string
 ): Promise<void> {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
-    const html = `
+    const fromEmail = await getFromEmail();
+    await sendEmailPayload({
+      from: fromEmail,
+      to: adminEmails,
+      subject: `🚨 Security Alert: ${failCount} failed login attempts from ${ip}`,
+      html: `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
         <div style="background:#b45309;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
           <h2 style="color:#fff;margin:0;font-size:18px;">🚨 Multiple Failed Login Attempts</h2>
@@ -244,13 +276,8 @@ export async function sendFailedLoginAlertEmail(
           <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${timestamp}</td></tr>
         </table>
         <p style="color:#374151;">The IP has been temporarily blocked. Review your system if this activity is unexpected.</p>
-        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Vineria Di Mare.</p>
-      </div>`;
-    await client.emails.send({
-      to: adminEmails,
-      from: fromEmail,
-      subject: `🚨 Security Alert: ${failCount} failed login attempts from ${ip}`,
-      html,
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from VinTrade.</p>
+      </div>`,
     });
   } catch (error: any) {
     console.error('Failed login alert email error:', error?.message || error);
@@ -265,8 +292,12 @@ export async function sendNewAdminAlertEmail(
   timestamp: string
 ): Promise<void> {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
-    const html = `
+    const fromEmail = await getFromEmail();
+    await sendEmailPayload({
+      from: fromEmail,
+      to: adminEmails,
+      subject: `👤 Security Alert: New admin user "${newUsername}" created`,
+      html: `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
         <div style="background:#7c3aed;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
           <h2 style="color:#fff;margin:0;font-size:18px;">👤 New Admin User Created</h2>
@@ -279,13 +310,8 @@ export async function sendNewAdminAlertEmail(
           <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${timestamp}</td></tr>
         </table>
         <p style="color:#374151;">If you did not create this user, log in immediately and deactivate them.</p>
-        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Vineria Di Mare.</p>
-      </div>`;
-    await client.emails.send({
-      to: adminEmails,
-      from: fromEmail,
-      subject: `👤 Security Alert: New admin user "${newUsername}" created`,
-      html,
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from VinTrade.</p>
+      </div>`,
     });
   } catch (error: any) {
     console.error('New admin alert email error:', error?.message || error);
