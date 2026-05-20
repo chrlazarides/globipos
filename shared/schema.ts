@@ -195,7 +195,7 @@ export const invoiceItems = pgTable("invoice_items", {
   invoiceId: varchar("invoice_id").notNull(),
   itemId: varchar("item_id"),
   description: text("description").notNull(),
-  quantity: integer("quantity").notNull(),
+  quantity: numeric("quantity", { precision: 12, scale: 4 }).notNull(),
   saleUnit: text("sale_unit").notNull().default("pc"),
   unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
   discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).notNull().default("0"),
