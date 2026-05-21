@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "OyY5_H0-VBvvODBDtBW26"
+uri = "file://attached_assets/suppliers-for-production.json"
+type = "unspecified"
+title = "Suppliers backup — ready to restore on production"
