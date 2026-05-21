@@ -112,7 +112,7 @@ export function AppSidebar() {
   const [pendingCount, setPendingCount] = useState(0);
   const { isInstallable, isInstalled, install } = usePwaInstall();
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
-  const companyName = settings.find(s => s.key === "company_name")?.value || "VINERIA DI MARE Trading";
+  const companyName = settings.find(s => s.key === "company_name")?.value || "Gastro Nobile";
   const { user, logout } = useAuth();
 
   useEffect(() => {

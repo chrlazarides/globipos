@@ -71,7 +71,7 @@ const MonthlyTooltip = ({ active, payload, label }: any) => {
 
 export default function Dashboard() {
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
-  const companyName = settings.find(s => s.key === "company_name")?.value || "VINERIA DI MARE Trading";
+  const companyName = settings.find(s => s.key === "company_name")?.value || "Gastro Nobile";
 
   const { data: stats, isLoading } = useQuery<{
     totalItems: number;

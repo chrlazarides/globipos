@@ -1,6 +1,6 @@
 {
-  "name": "VINERIA DI MARE Trading",
-  "short_name": "VDM Trading",
+  "name": "Gastro Nobile",
+  "short_name": "Gastro Nobile",
   "description": "Wholesale wine and spirits invoicing and inventory management",
   "start_url": "/invoices/new",
   "display": "standalone",
