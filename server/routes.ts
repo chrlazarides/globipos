@@ -2470,6 +2470,18 @@ export async function registerRoutes(
   });
 
   // Backup
+  app.get("/api/backup/suppliers-for-production", async (_req, res) => {
+    try {
+      const { readFileSync } = await import("fs");
+      const { join } = await import("path");
+      const filePath = join(process.cwd(), "client/public/suppliers-for-production.json");
+      const json = readFileSync(filePath, "utf-8");
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", 'attachment; filename="suppliers-for-production.json"');
+      res.send(json);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   app.get("/api/backup/export", async (req, res) => {
     try {
       const since = req.query.since as string | undefined;
