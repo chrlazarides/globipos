@@ -46,6 +46,8 @@ export default function PurchaseInvoices() {
   const { toast } = useToast();
 
   const { data: invoices = [], isLoading } = useQuery<PurchaseInvoiceWithSupplier[]>({ queryKey: ["/api/purchase-invoices"] });
+  const { data: currentUser } = useQuery<{ id: string; username: string; role: string }>({ queryKey: ["/api/auth/me"] });
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "superuser";
 
   const handleEdit = (row: PurchaseInvoiceWithSupplier) => {
     setEditingId(row.id);
@@ -56,6 +58,21 @@ export default function PurchaseInvoices() {
     setFormOpen(false);
     setEditingId(null);
   };
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/purchase-invoices/${id}`, {});
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({ title: "Purchase invoice deleted", description: "Stock and supplier balance have been reversed." });
+    },
+    onError: (e: Error) => toast({ title: "Cannot delete", description: e.message, variant: "destructive" }),
+  });
 
   const columns: Column<PurchaseInvoiceWithSupplier>[] = [
     {
@@ -105,9 +122,27 @@ export default function PurchaseInvoices() {
       key: "actions",
       header: "",
       cell: (row) => (
-        <Button size="sm" variant="ghost" onClick={() => handleEdit(row)} data-testid={`button-edit-purchase-${row.id}`}>
-          <Pencil className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant="ghost" onClick={() => handleEdit(row)} data-testid={`button-edit-purchase-${row.id}`}>
+            <Pencil className="w-4 h-4" />
+          </Button>
+          {isAdmin && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+              disabled={deleteMutation.isPending}
+              data-testid={`button-delete-purchase-${row.id}`}
+              onClick={() => {
+                if (confirm(`Delete purchase invoice "${row.invoiceNumber}" (${row.supplierName}, €${parseFloat(row.total).toFixed(2)})?\n\nThis will reverse stock quantities and the supplier balance. This cannot be undone.`)) {
+                  deleteMutation.mutate(row.id);
+                }
+              }}
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
       ),
     },
   ];

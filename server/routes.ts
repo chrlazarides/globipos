@@ -2985,6 +2985,45 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/purchase-invoices/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    try {
+      const existing = await storage.getPurchaseInvoice(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Purchase invoice not found" });
+
+      // Reverse stock impact
+      for (const item of existing.items) {
+        const stockItem = await storage.getItem(item.itemId);
+        if (stockItem) {
+          const bottlesToRemove = item.purchaseUnit === "pack" ? item.quantity * stockItem.packSize : item.quantity;
+          await storage.updateItem(stockItem.id, { stockQuantity: Math.max(0, stockItem.stockQuantity - bottlesToRemove) });
+        }
+      }
+
+      // Reverse supplier balance
+      const supplier = await storage.getSupplier(existing.supplierId);
+      if (supplier) {
+        const newBalance = parseFloat(supplier.currentBalance) - parseFloat(existing.total);
+        await storage.updateSupplier(existing.supplierId, { currentBalance: Math.max(0, newBalance).toFixed(2) });
+      }
+
+      // Delete journal entries for this purchase
+      const relatedJEs = await db.select({ id: journalEntries.id }).from(journalEntries)
+        .where(and(eq(journalEntries.sourceType, "purchase"), eq(journalEntries.sourceId, req.params.id)));
+      for (const je of relatedJEs) {
+        await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, je.id));
+        await db.delete(journalEntries).where(eq(journalEntries.id, je.id));
+      }
+
+      await storage.deletePurchaseInvoice(req.params.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Supplier Payments
   app.get("/api/supplier-payments", async (req, res) => {
     const supplierId = req.query.supplierId as string | undefined;
