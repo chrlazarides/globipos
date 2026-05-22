@@ -1408,7 +1408,7 @@ export async function registerRoutes(
     try {
       const inv = await storage.getInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
-      if (inv.status !== "draft") return res.status(400).json({ message: "Only draft documents can be deleted" });
+      if (inv.status !== "draft" && inv.status !== "cancelled") return res.status(400).json({ message: "Only draft or cancelled documents can be deleted" });
       await storage.deleteInvoice(req.params.id);
       res.json({ ok: true });
     } catch (e: any) {

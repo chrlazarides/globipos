@@ -926,12 +926,12 @@ export default function InvoiceForm() {
                         <span className="hidden sm:inline">Reopen</span>
                       </Button>
                     )}
-                    {status === "draft" && invoiceId && (
+                    {(status === "draft" || status === "cancelled") && invoiceId && (
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => {
-                          if (confirm(`Delete this draft ${typeLabel}? This cannot be undone.`)) {
+                          if (confirm(`Delete this ${status} ${typeLabel}? This cannot be undone.`)) {
                             deleteInvoiceMutation.mutate();
                           }
                         }}
