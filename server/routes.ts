@@ -1388,17 +1388,35 @@ export async function registerRoutes(
     res.json(invs);
   });
 
+  app.get("/api/invoices/next-number", async (req, res) => {
+    const type = (req.query.type as string) || "invoice";
+    const number = await storage.getNextInvoiceNumber(type);
+    res.json({ number });
+  });
+
   app.get("/api/invoices/:id", async (req, res) => {
     // Skip non-UUID ids
-    if (req.params.id === "new" || req.params.id === "type") return res.status(404).json({ message: "Not found" });
+    if (req.params.id === "new" || req.params.id === "type" || req.params.id === "next-number") return res.status(404).json({ message: "Not found" });
     const inv = await storage.getInvoice(req.params.id);
     if (!inv) return res.status(404).json({ message: "Invoice not found" });
     res.json(inv);
   });
 
+  app.delete("/api/invoices/:id", async (req, res) => {
+    try {
+      const inv = await storage.getInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      if (inv.status !== "draft") return res.status(400).json({ message: "Only draft documents can be deleted" });
+      await storage.deleteInvoice(req.params.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   app.post("/api/invoices", async (req, res) => {
     try {
-      const { items: lineItems, ...invoiceData } = req.body;
+      const { items: lineItems, invoiceNumber: customNumber, ...invoiceData } = req.body;
       const data = insertInvoiceSchema.parse({ ...invoiceData, invoiceNumber: "TEMP" });
       const parsedItems = (lineItems || []).map((li: any) => insertInvoiceItemSchema.parse({ ...li, invoiceId: "TEMP" }));
 
@@ -1428,7 +1446,7 @@ export async function registerRoutes(
         }
       }
 
-      const inv = await storage.createInvoice(data, parsedItems);
+      const inv = await storage.createInvoice(data, parsedItems, customNumber || undefined);
 
       if (data.type === "invoice" && data.status !== "draft") {
         for (const li of parsedItems) {

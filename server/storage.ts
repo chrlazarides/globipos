@@ -71,8 +71,9 @@ export interface IStorage {
 
   getInvoices(type?: string): Promise<(Invoice & { customerName: string })[]>;
   getInvoice(id: string): Promise<(Invoice & { items: InvoiceItem[]; customerName: string }) | undefined>;
-  createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[]): Promise<Invoice>;
+  createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[], overrideNumber?: string): Promise<Invoice>;
   updateInvoice(id: string, data: Partial<InsertInvoice>, lineItems?: InsertInvoiceItem[]): Promise<Invoice | undefined>;
+  deleteInvoice(id: string): Promise<void>;
   getNextInvoiceNumber(type: string): Promise<string>;
 
   getPayments(invoiceId: string): Promise<Payment[]>;
@@ -439,8 +440,8 @@ export class DatabaseStorage implements IStorage {
     return `${prefix}-${String(num).padStart(5, "0")}`;
   }
 
-  async createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[]) {
-    const invoiceNumber = await this.getNextInvoiceNumber(data.type as string);
+  async createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[], overrideNumber?: string) {
+    const invoiceNumber = overrideNumber || await this.getNextInvoiceNumber(data.type as string);
     const [inv] = await db.insert(invoices).values({ ...data, invoiceNumber }).returning();
     if (lineItems.length > 0) {
       await db.insert(invoiceItems).values(lineItems.map((li) => ({ ...li, invoiceId: inv.id })));
@@ -458,6 +459,11 @@ export class DatabaseStorage implements IStorage {
       }
     }
     return inv;
+  }
+
+  async deleteInvoice(id: string) {
+    await db.delete(invoiceItems).where(eq(invoiceItems.invoiceId, id));
+    await db.delete(invoices).where(eq(invoices.id, id));
   }
 
   async getPayments(invoiceId: string) {

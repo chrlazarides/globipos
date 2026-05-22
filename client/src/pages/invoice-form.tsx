@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard, FileText, Lock, History } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard, FileText, Lock, History, Hash } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { StatusBadge } from "./dashboard";
@@ -209,6 +209,7 @@ export default function InvoiceForm() {
   const [taxRate, setTaxRate] = useState("19");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState("draft");
+  const [customInvoiceNumber, setCustomInvoiceNumber] = useState("");
   const [overallDiscountPercent, setOverallDiscountPercent] = useState("0");
   const [overallDiscountAmount, setOverallDiscountAmount] = useState("0");
   const [lines, setLines] = useState<LineItem[]>([{ itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discountPercent: "0", discount: "0", total: "0" }]);
@@ -228,6 +229,33 @@ export default function InvoiceForm() {
     queryKey: ["/api/customers", customerId, "delivery-locations"],
     queryFn: () => fetch(`/api/customers/${customerId}/delivery-locations`, { credentials: "include" }).then(r => r.json()),
     enabled: !!customerId,
+  });
+
+  const { data: nextNumberData } = useQuery<{ number: string }>({
+    queryKey: ["/api/invoices/next-number", docType],
+    queryFn: () => fetch(`/api/invoices/next-number?type=${docType}`, { credentials: "include" }).then(r => r.json()),
+    enabled: isNew,
+    staleTime: 0,
+  });
+
+  useEffect(() => {
+    if (isNew && nextNumberData?.number && !customInvoiceNumber) {
+      setCustomInvoiceNumber(nextNumberData.number);
+    }
+  }, [nextNumberData, isNew]);
+
+  const deleteInvoiceMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", `/api/invoices/${invoiceId}`, {});
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ title: "Document deleted" });
+      window.location.href = backUrl;
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const quickSaveMutation = useMutation({
@@ -675,7 +703,7 @@ export default function InvoiceForm() {
         const res = await apiRequest("PATCH", `/api/invoices/${invoiceId}`, payload);
         return res.json();
       } else {
-        const res = await apiRequest("POST", "/api/invoices", payload);
+        const res = await apiRequest("POST", "/api/invoices", { ...payload, invoiceNumber: customInvoiceNumber || undefined });
         return res.json();
       }
     },
@@ -898,6 +926,23 @@ export default function InvoiceForm() {
                         <span className="hidden sm:inline">Reopen</span>
                       </Button>
                     )}
+                    {status === "draft" && invoiceId && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (confirm(`Delete this draft ${typeLabel}? This cannot be undone.`)) {
+                            deleteInvoiceMutation.mutate();
+                          }
+                        }}
+                        disabled={deleteInvoiceMutation.isPending}
+                        data-testid="button-delete-draft"
+                        className="border-red-300 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30"
+                      >
+                        {deleteInvoiceMutation.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Trash2 className="w-4 h-4 sm:mr-1" />}
+                        <span className="hidden sm:inline">Delete</span>
+                      </Button>
+                    )}
                   </>
                 )}
               </>
@@ -933,6 +978,30 @@ export default function InvoiceForm() {
                     <StatusBadge status={status} />
                     {isNew && <span className="text-xs text-muted-foreground ml-2">New invoices start as Draft</span>}
                   </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label className="flex items-center gap-1">
+                    <Hash className="w-3.5 h-3.5 text-muted-foreground" />
+                    Document Number
+                  </Label>
+                  {isNew ? (
+                    <Input
+                      value={customInvoiceNumber}
+                      onChange={(e) => setCustomInvoiceNumber(e.target.value)}
+                      placeholder="Auto-assigned…"
+                      data-testid="input-invoice-number"
+                    />
+                  ) : (
+                    <div className="flex items-center h-9 px-3 rounded-md border bg-muted/30 font-mono text-sm font-semibold tracking-wide" data-testid="display-invoice-number">
+                      {existingInvoice?.invoiceNumber || "—"}
+                    </div>
+                  )}
+                  {isNew && customInvoiceNumber && nextNumberData?.number && customInvoiceNumber !== nextNumberData.number && (
+                    <p className="text-xs text-amber-600 mt-1">Custom number — ensure it's unique</p>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
