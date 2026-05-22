@@ -1405,6 +1405,9 @@ export async function registerRoutes(
   });
 
   app.delete("/api/invoices/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
     try {
       const inv = await storage.getInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Invoice not found" });

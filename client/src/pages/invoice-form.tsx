@@ -165,6 +165,9 @@ export default function InvoiceForm() {
     enabled: !!fromId && isNew,
   });
 
+  const { data: currentUser } = useQuery<{ id: string; username: string; role: string }>({ queryKey: ["/api/auth/me"] });
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "superuser";
+
   const { data: onlineCustomers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: onlineItems = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   type PriceContractWithDetails = PriceContract & { rules?: PriceContractRule[]; priceLevel?: number; contractItems?: PriceContractItem[] };
@@ -926,7 +929,7 @@ export default function InvoiceForm() {
                         <span className="hidden sm:inline">Reopen</span>
                       </Button>
                     )}
-                    {(status === "draft" || status === "cancelled") && invoiceId && (
+                    {(status === "draft" || status === "cancelled") && invoiceId && isAdmin && (
                       <Button
                         variant="outline"
                         size="sm"
