@@ -2707,6 +2707,24 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/suppliers/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    try {
+      const sup = await storage.getSupplier(req.params.id);
+      if (!sup) return res.status(404).json({ message: "Supplier not found" });
+      const linked = await db.select({ id: purchaseInvoices.id }).from(purchaseInvoices).where(eq(purchaseInvoices.supplierId, req.params.id)).limit(1);
+      if (linked.length > 0) {
+        return res.status(400).json({ message: "Cannot delete: supplier has purchase invoices. Remove them first or mark the supplier inactive." });
+      }
+      await storage.deleteSupplier(req.params.id);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   app.post("/api/suppliers/import", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });

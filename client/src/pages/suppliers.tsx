@@ -12,7 +12,7 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Truck, Search, Pencil } from "lucide-react";
+import { Plus, Truck, Search, Pencil, Trash2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertSupplierSchema, type Supplier } from "@shared/schema";
@@ -31,6 +31,8 @@ export default function Suppliers() {
   const { toast } = useToast();
 
   const { data: suppliers = [], isLoading } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
+  const { data: currentUser } = useQuery<{ id: string; username: string; role: string }>({ queryKey: ["/api/auth/me"] });
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "superuser";
 
   const createSupplier = useMutation({
     mutationFn: async (data: z.infer<typeof supplierFormSchema>) => {
@@ -57,6 +59,19 @@ export default function Suppliers() {
       toast({ title: "Supplier updated" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteSupplier = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/suppliers/${id}`, {});
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
+      toast({ title: "Supplier deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Cannot delete supplier", description: e.message, variant: "destructive" }),
   });
 
   const handleEdit = (supplier: Supplier) => {
@@ -126,9 +141,27 @@ export default function Suppliers() {
       key: "actions",
       header: "",
       cell: (row) => (
-        <Button size="icon" variant="ghost" onClick={() => handleEdit(row)} data-testid={`button-edit-supplier-${row.id}`}>
-          <Pencil className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button size="icon" variant="ghost" onClick={() => handleEdit(row)} data-testid={`button-edit-supplier-${row.id}`}>
+            <Pencil className="w-4 h-4" />
+          </Button>
+          {isAdmin && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+              disabled={deleteSupplier.isPending}
+              data-testid={`button-delete-supplier-${row.id}`}
+              onClick={() => {
+                if (confirm(`Delete supplier "${row.name}"? This cannot be undone.\n\nNote: suppliers with purchase invoices cannot be deleted.`)) {
+                  deleteSupplier.mutate(row.id);
+                }
+              }}
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
       ),
     },
   ];

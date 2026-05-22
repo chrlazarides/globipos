@@ -111,6 +111,7 @@ export interface IStorage {
   getSupplier(id: string): Promise<Supplier | undefined>;
   createSupplier(data: InsertSupplier): Promise<Supplier>;
   updateSupplier(id: string, data: Partial<InsertSupplier>): Promise<Supplier | undefined>;
+  deleteSupplier(id: string): Promise<void>;
 
   getPurchaseInvoices(): Promise<(PurchaseInvoice & { supplierName: string })[]>;
   getPurchaseInvoice(id: string): Promise<(PurchaseInvoice & { items: PurchaseInvoiceItem[]; supplierName: string }) | undefined>;
@@ -1685,6 +1686,10 @@ export class DatabaseStorage implements IStorage {
   async updateSupplier(id: string, data: Partial<InsertSupplier>) {
     const [sup] = await db.update(suppliers).set(data).where(eq(suppliers.id, id)).returning();
     return sup;
+  }
+  async deleteSupplier(id: string) {
+    await db.delete(supplierPayments).where(eq(supplierPayments.supplierId, id));
+    await db.delete(suppliers).where(eq(suppliers.id, id));
   }
 
   async getPurchaseInvoices() {
