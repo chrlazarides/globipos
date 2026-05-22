@@ -3544,7 +3544,7 @@ export async function registerRoutes(
             lines,
           });
           result ? generated++ : skipped++;
-        } else if (inv.type === "credit_note") {
+        } else if (inv.type === "credit_note" && inv.status !== "draft") {
           const lines = [
             { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
             { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
