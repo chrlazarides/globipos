@@ -3594,7 +3594,7 @@ export async function registerRoutes(
           description: `Purchase Invoice ${pi.invoiceNumber}`, reference: pi.invoiceNumber,
           lines: [
             { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
-            { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT" },
+            { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
             { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
           ],
         });
@@ -3639,10 +3639,21 @@ export async function registerRoutes(
         result ? generated++ : skipped++;
       }
 
+      // Rebuild supplier currentBalance from purchase invoices minus supplier payments
+      const allSuppliers = await storage.getSuppliers();
+      for (const sup of allSuppliers) {
+        const supPI = allPI.filter(p => p.supplierId === sup.id);
+        const totalOwed = supPI.reduce((s, p) => s + parseFloat(p.total), 0);
+        const supPayments = allSP.filter(p => p.supplierId === sup.id);
+        const totalPaid = supPayments.reduce((s, p) => s + parseFloat(p.amount), 0);
+        const newBal = Math.max(0, totalOwed - totalPaid);
+        await storage.updateSupplier(sup.id, { currentBalance: newBal.toFixed(2) });
+      }
+
       const updatedAccts = await storage.getAccounts();
       const nonZero = updatedAccts.filter(a => parseFloat(a.balance) !== 0);
       res.json({ 
-        message: `Recalculated. Generated ${generated} journal entries (${skipped} skipped). ${manualEntries.length} manual entries preserved. All account balances rebuilt.`, 
+        message: `Recalculated. Generated ${generated} journal entries (${skipped} skipped). ${manualEntries.length} manual entries preserved. All account balances and supplier balances rebuilt.`, 
         nonZeroAccounts: nonZero.length,
         generated,
         skipped,
