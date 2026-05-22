@@ -450,20 +450,24 @@ export async function registerRoutes(
   });
 
   // ─── 2FA: Initial forced setup (pre-login, using tempToken) ─────────────────
-  // In-memory store: tempToken → { secret, expiresAt }
-  const pendingSetupSecrets = new Map<string, { secret: string; expiresAt: number }>();
+  // Pending secret is stored in the DB (totpSecret, totpEnabled=false) so it
+  // survives server restarts. No in-memory state needed.
 
   app.get("/api/auth/2fa/setup-initial", async (req: Request, res: Response) => {
     try {
       const { token } = req.query as { token: string };
       const userId = verifyTempToken(token);
       if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
-      const [user] = await db.select({ username: users.username }).from(users).where(eq(users.id, userId));
+      const [user] = await db.select({ username: users.username, totpSecret: users.totpSecret, totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, userId));
       if (!user) return res.status(401).json({ message: "User not found" });
-      const secret = totpGenerateSecret();
+      // Reuse any already-pending secret (not yet enabled) so repeated calls return the same QR
+      let secret = (!user.totpEnabled && user.totpSecret) ? user.totpSecret : null;
+      if (!secret) {
+        secret = totpGenerateSecret();
+        await db.update(users).set({ totpSecret: secret, totpEnabled: false }).where(eq(users.id, userId));
+      }
       const otpauth = totpGenerateURI({ secret, label: user.username, issuer: "FC GASTRONOBILE" });
       const qrDataUrl = await QRCode.toDataURL(String(otpauth));
-      pendingSetupSecrets.set(token, { secret, expiresAt: Date.now() + 10 * 60 * 1000 });
       res.json({ secret, qrDataUrl });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -474,14 +478,12 @@ export async function registerRoutes(
       if (!tempToken || !code) return res.status(400).json({ message: "Token and code required" });
       const userId = verifyTempToken(tempToken);
       if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
-      const pending = pendingSetupSecrets.get(tempToken);
-      if (!pending || Date.now() > pending.expiresAt) return res.status(401).json({ message: "Setup session expired. Please log in again." });
-      const result = totpVerify({ token: code.replace(/\s/g, ""), secret: pending.secret, window: 1 });
-      if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user || !user.active) return res.status(401).json({ message: "Invalid session" });
-      await db.update(users).set({ totpSecret: pending.secret, totpEnabled: true }).where(eq(users.id, userId));
-      pendingSetupSecrets.delete(tempToken);
+      if (!user.totpSecret || user.totpEnabled) return res.status(400).json({ message: "No pending 2FA setup. Please log in again." });
+      const result = totpVerify({ token: code.replace(/\s/g, ""), secret: user.totpSecret, window: 1 });
+      if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
+      await db.update(users).set({ totpEnabled: true }).where(eq(users.id, userId));
       logActivity(userId, user.username, "update", "user", userId, "Two-factor authentication enabled (forced setup)", null, null);
       const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
       const ua = req.headers["user-agent"] || "unknown";
