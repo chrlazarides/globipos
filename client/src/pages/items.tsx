@@ -587,6 +587,8 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
                       <SelectItem value="bottle">Bottle</SelectItem>
                       <SelectItem value="kg">Kilogram (kg)</SelectItem>
                       <SelectItem value="lt">Litre (lt)</SelectItem>
+                      <SelectItem value="gr">Gram (gr)</SelectItem>
+                      <SelectItem value="ml">Millilitre (ml)</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />

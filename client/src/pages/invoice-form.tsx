@@ -127,6 +127,8 @@ function saleUnitLabel(unit: string): string {
     case "pack": return "Pack";
     case "kg": return "kg";
     case "lt": return "lt";
+    case "gr": return "gr";
+    case "ml": return "ml";
     default: return "Piece";
   }
 }
@@ -139,6 +141,8 @@ function itemToSaleUnit(item: Item): string {
   if (item.unitType === "12-pack") return "12-pack";
   if (item.unitType === "kg") return "kg";
   if (item.unitType === "lt") return "lt";
+  if (item.unitType === "gr") return "gr";
+  if (item.unitType === "ml") return "ml";
   return item.unitType === "bottle" ? "bottle" : "pc";
 }
 
@@ -1259,6 +1263,8 @@ export default function InvoiceForm() {
                                     <SelectItem value="12-pack">12-Pack</SelectItem>
                                     <SelectItem value="kg">kg</SelectItem>
                                     <SelectItem value="lt">lt</SelectItem>
+                                    <SelectItem value="gr">gr</SelectItem>
+                                    <SelectItem value="ml">ml</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -1508,6 +1514,8 @@ export default function InvoiceForm() {
                               <SelectItem value="12-pack">12-Pack</SelectItem>
                               <SelectItem value="kg">kg</SelectItem>
                               <SelectItem value="lt">lt</SelectItem>
+                              <SelectItem value="gr">gr</SelectItem>
+                              <SelectItem value="ml">ml</SelectItem>
                             </SelectContent>
                           </Select>
                         )}
