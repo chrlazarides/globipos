@@ -3952,6 +3952,47 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  app.post("/api/accounting/full-reset", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    try {
+      // 1. Delete all journal entry lines and entries
+      await db.delete(journalEntryLines);
+      await db.delete(journalEntries);
+
+      // 2. Delete all customer payments
+      await db.delete(payments);
+
+      // 3. Delete all supplier payments
+      await db.delete(supplierPayments);
+
+      // 4. Reset customer balances to zero
+      await db.update(customers).set({ currentBalance: "0.00" });
+
+      // 5. Reset supplier balances to zero
+      await db.update(suppliers).set({ currentBalance: "0.00" });
+
+      // 6. Reset invoice statuses: paid/partial → sent (since payments are gone)
+      await db.update(invoices)
+        .set({ status: "sent" })
+        .where(sql`${invoices.status} IN ('paid', 'partial') AND ${invoices.type} = 'invoice'`);
+
+      // 7. Reset account balances to zero
+      await db.update(accounts).set({ balance: "0.00" });
+
+      // 8. Delete all accounting snapshots (now stale)
+      await db.delete(accountingSnapshots);
+
+      await logActivity(req.user.id, req.user.username, "full_reset", "accounting", "all",
+        "Full accounting reset: cleared all journal entries, payments, customer/supplier balances, and account balances.", null, null);
+
+      res.json({ ok: true, message: "Full accounting reset complete." });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.get("/api/accounting/snapshots/logs", async (_req, res) => {
     try {
       const logs = await db.select().from(activityLogs)

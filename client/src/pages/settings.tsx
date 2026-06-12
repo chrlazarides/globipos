@@ -76,6 +76,28 @@ export default function SettingsPage() {
   const [backupLoading, setBackupLoading] = useState(false);
   const [emailingBackup, setEmailingBackup] = useState(false);
 
+  // Full accounting reset
+  const [resetConfirming, setResetConfirming] = useState(false);
+  const [resetCode, setResetCode] = useState("");
+  const [resetting, setResetting] = useState(false);
+
+  const handleFullReset = async () => {
+    if (resetCode !== "RESET") return;
+    setResetting(true);
+    try {
+      const res = await apiRequest("POST", "/api/accounting/full-reset", {});
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+      queryClient.invalidateQueries();
+      toast({ title: "Accounting reset complete", description: "All balances, payments and journal entries have been cleared." });
+      setResetConfirming(false);
+      setResetCode("");
+    } catch (err: any) {
+      toast({ title: "Reset failed", description: err.message, variant: "destructive" });
+    } finally {
+      setResetting(false);
+    }
+  };
+
   // Restore from backup
   type BackupMeta = {
     version: number; backupType: string; exportedAt: string;
@@ -925,6 +947,80 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Danger Zone Card */}
+      {isAdminOrHigher && (
+        <Card className="mt-6 border-red-200 dark:border-red-900">
+          <CardHeader className="flex flex-row items-center gap-2 p-4 pb-2">
+            <div className="flex items-center justify-center w-8 h-8 rounded-md bg-red-100 dark:bg-red-900/50">
+              <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-red-700 dark:text-red-400">Danger Zone</h3>
+              <p className="text-xs text-muted-foreground">Irreversible operations — use with caution</p>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-0 space-y-4">
+            <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/30 p-4 space-y-3">
+              <div>
+                <h4 className="text-sm font-semibold text-red-800 dark:text-red-300">Full Accounting Reset</h4>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Permanently deletes all journal entries, all customer and supplier payments, resets every account balance to €0,
+                  and clears all accounting snapshots. Invoice and credit note documents are kept but their payment status is reset.
+                  <strong className="text-red-700 dark:text-red-400"> This cannot be undone.</strong>
+                </p>
+              </div>
+              {!resetConfirming ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-300 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300"
+                  onClick={() => setResetConfirming(true)}
+                  data-testid="button-accounting-reset-start"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Reset All Balances to Zero…
+                </Button>
+              ) : (
+                <div className="space-y-3 pt-1">
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-red-100 dark:bg-red-950 border border-red-300 dark:border-red-700 text-xs text-red-800 dark:text-red-300">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>Type <strong>RESET</strong> below to confirm. This will delete all payments and journal entries and zero all balances permanently.</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={resetCode}
+                      onChange={(e) => setResetCode(e.target.value.toUpperCase())}
+                      placeholder="Type RESET to confirm"
+                      className="max-w-[200px] border-red-300 dark:border-red-700 focus-visible:ring-red-400 font-mono"
+                      data-testid="input-reset-confirm"
+                    />
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={handleFullReset}
+                      disabled={resetCode !== "RESET" || resetting}
+                      data-testid="button-accounting-reset-confirm"
+                    >
+                      {resetting ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                      {resetting ? "Resetting…" : "Confirm Reset"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => { setResetConfirming(false); setResetCode(""); }}
+                      disabled={resetting}
+                      data-testid="button-accounting-reset-cancel"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Email Card */}
       <Card className="mt-6 border-violet-200 dark:border-violet-800">
