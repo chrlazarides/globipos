@@ -525,6 +525,10 @@ export default function InvoiceForm() {
           updated[index].description = item.name;
           updated[index].unitPrice = String(item[priceKey] || item.price1);
           updated[index].saleUnit = itemToSaleUnit(item);
+          // Auto-fill tax rate from item's vatRate on new invoices only
+          if (!existingInvoice && item.vatRate != null) {
+            setTaxRate(String(item.vatRate));
+          }
 
           if (customerId) {
             const lineQty = updated[index].quantity || 0;
