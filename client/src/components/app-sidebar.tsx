@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers } from "lucide-react";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import {
   Sidebar,
@@ -23,6 +23,7 @@ import type { SystemSetting } from "@shared/schema";
 const mainNav = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard, module: "dashboard" },
   { title: "Items", url: "/items", icon: Package, module: "items" },
+  { title: "Categories", url: "/categories", icon: Layers, module: "items" },
   { title: "Customers", url: "/customers", icon: Users, module: "customers" },
   { title: "Customer Statements", url: "/reports?tab=statements", icon: ClipboardList, module: "statements" },
   { title: "Email Log", url: "/email-logs", icon: Mail, module: "email_logs" },

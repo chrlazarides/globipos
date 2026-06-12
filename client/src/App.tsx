@@ -12,6 +12,7 @@ import { offlineStore } from "@/lib/offline-store";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import Items from "@/pages/items";
+import Categories from "@/pages/categories";
 import Customers from "@/pages/customers";
 import Invoices from "@/pages/invoices";
 import InvoiceForm from "@/pages/invoice-form";
@@ -101,6 +102,7 @@ function AdminRouter() {
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/items" component={Items} />
+      <Route path="/categories" component={Categories} />
       <Route path="/customers" component={Customers} />
       <Route path="/invoices/new" component={InvoiceForm} />
       <Route path="/invoices/:id/edit" component={InvoiceForm} />
