@@ -680,7 +680,7 @@ export default function InvoiceForm() {
         items: lines.filter((l) => l.description).map((l) => ({
           itemId: l.itemId || null,
           description: l.description,
-          quantity: l.quantity,
+          quantity: String(l.quantity),
           saleUnit: l.saleUnit,
           unitPrice: l.unitPrice,
           discountPercent: l.discountPercent || "0",
