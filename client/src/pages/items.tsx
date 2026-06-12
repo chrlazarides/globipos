@@ -756,8 +756,8 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
                 <FormItem>
                   <FormLabel>VAT Rate</FormLabel>
                   <Select
-                    value={field.value ?? ""}
-                    onValueChange={(v) => field.onChange(v === "" ? null : v)}
+                    value={field.value ?? "inherit"}
+                    onValueChange={(v) => field.onChange(v === "inherit" ? null : v)}
                   >
                     <FormControl>
                       <SelectTrigger data-testid="select-vat-rate">
@@ -765,7 +765,7 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="">{inheritLabel}</SelectItem>
+                      <SelectItem value="inherit">{inheritLabel}</SelectItem>
                       {CY_VAT_RATES.map((r) => (
                         <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                       ))}
