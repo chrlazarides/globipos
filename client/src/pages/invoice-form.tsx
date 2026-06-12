@@ -1002,7 +1002,33 @@ export default function InvoiceForm() {
                       {existingInvoice?.invoiceNumber || "—"}
                     </div>
                   )}
-                  {isNew && customInvoiceNumber && nextNumberData?.number && customInvoiceNumber !== nextNumberData.number && (
+                  {isNew && sourceInvoice && (sourceInvoice.type === "proforma" || sourceInvoice.type === "quotation") && (
+                    customInvoiceNumber === sourceInvoice.invoiceNumber ? (
+                      <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                        Using original {sourceInvoice.type === "proforma" ? "proforma" : "quotation"} number
+                        <button
+                          type="button"
+                          className="underline text-primary hover:no-underline"
+                          onClick={() => setCustomInvoiceNumber(nextNumberData?.number || "")}
+                        >
+                          reset to auto
+                        </button>
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Keep original number?{" "}
+                        <button
+                          type="button"
+                          className="underline text-primary hover:no-underline"
+                          data-testid="button-use-source-number"
+                          onClick={() => setCustomInvoiceNumber(sourceInvoice.invoiceNumber)}
+                        >
+                          Use {sourceInvoice.invoiceNumber}
+                        </button>
+                      </p>
+                    )
+                  )}
+                  {isNew && customInvoiceNumber && nextNumberData?.number && customInvoiceNumber !== nextNumberData.number && !(sourceInvoice && customInvoiceNumber === sourceInvoice.invoiceNumber) && (
                     <p className="text-xs text-amber-600 mt-1">Custom number — ensure it's unique</p>
                   )}
                 </div>
