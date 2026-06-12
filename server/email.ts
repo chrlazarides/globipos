@@ -98,18 +98,9 @@ export async function getEmailStatus(): Promise<{
     const fromEmail = await getFromEmail();
     const usingFallback = fromEmail === 'onboarding@resend.dev';
 
-    // Quick connectivity check
-    if (hasDbApiKey) {
-      // DB key is present — assume connected without a live check
-    } else {
-      // Verify connector is reachable
-      const connectors = new ReplitConnectors();
-      const res = await connectors.proxy('resend', '/domains', { method: 'GET' });
-      if (!res.ok && res.status !== 200) {
-        const errText = await res.text();
-        throw new Error(`Connector check failed (${res.status}): ${errText}`);
-      }
-    }
+    // Connector-mode: we don't do a live check because the managed key may be
+    // restricted to send-only (no /domains or /emails GET permission). Sending
+    // will succeed or fail at call time; we report connected:true optimistically.
 
     return {
       connected: true,
