@@ -125,6 +125,8 @@ function saleUnitLabel(unit: string): string {
     case "6-pack": return "6-Pack";
     case "12-pack": return "12-Pack";
     case "pack": return "Pack";
+    case "kg": return "kg";
+    case "lt": return "lt";
     default: return "Piece";
   }
 }
@@ -135,6 +137,8 @@ function itemToSaleUnit(item: Item): string {
   if (item.unitType === "pack" && item.packSize === 12) return "12-pack";
   if (item.unitType === "6-pack") return "6-pack";
   if (item.unitType === "12-pack") return "12-pack";
+  if (item.unitType === "kg") return "kg";
+  if (item.unitType === "lt") return "lt";
   return item.unitType === "bottle" ? "bottle" : "pc";
 }
 
@@ -1234,13 +1238,13 @@ export default function InvoiceForm() {
                                 <span className="text-xs text-muted-foreground shrink-0">Qty</span>
                                 <Input
                                   type="number"
-                                  min="1"
-                                  step="1"
+                                  min="0.001"
+                                  step="any"
                                   className="w-20 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                   value={line.quantity > 0 ? line.quantity : ""}
-                                  onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) || v < 1 ? 1 : v); }}
+                                  onChange={(e) => { const v = parseFloat(e.target.value); updateLine(idx, "quantity", isNaN(v) || v <= 0 ? 0.001 : v); }}
                                   onFocus={(e) => e.target.select()}
-                                  onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
+                                  onBlur={() => { if (!line.quantity || line.quantity <= 0) updateLine(idx, "quantity", 1); }}
                                   data-testid={`input-line-qty-${idx}`}
                                 />
                                 <Select value={line.saleUnit} onValueChange={(v) => updateLine(idx, "saleUnit", v)}>
@@ -1253,6 +1257,8 @@ export default function InvoiceForm() {
                                     <SelectItem value="pack">Pack</SelectItem>
                                     <SelectItem value="6-pack">6-Pack</SelectItem>
                                     <SelectItem value="12-pack">12-Pack</SelectItem>
+                                    <SelectItem value="kg">kg</SelectItem>
+                                    <SelectItem value="lt">lt</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -1474,14 +1480,14 @@ export default function InvoiceForm() {
                         <Label className="text-xs text-muted-foreground">Qty</Label>
                         <Input
                           type="number"
-                          min="1"
-                          step="1"
+                          min="0.001"
+                          step="any"
                           className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           style={{ color: 'hsl(var(--foreground))', WebkitTextFillColor: 'hsl(var(--foreground))' }}
                           value={line.quantity > 0 ? line.quantity : ""}
-                          onChange={(e) => { const v = parseInt(e.target.value); updateLine(idx, "quantity", isNaN(v) || v < 1 ? 1 : v); }}
+                          onChange={(e) => { const v = parseFloat(e.target.value); updateLine(idx, "quantity", isNaN(v) || v <= 0 ? 0.001 : v); }}
                           onFocus={(e) => e.target.select()}
-                          onBlur={() => { if (!line.quantity || line.quantity < 1) updateLine(idx, "quantity", 1); }}
+                          onBlur={() => { if (!line.quantity || line.quantity <= 0) updateLine(idx, "quantity", 1); }}
                           disabled={isViewMode}
                         />
                       </div>
@@ -1500,6 +1506,8 @@ export default function InvoiceForm() {
                               <SelectItem value="pack">Pack</SelectItem>
                               <SelectItem value="6-pack">6-Pack</SelectItem>
                               <SelectItem value="12-pack">12-Pack</SelectItem>
+                              <SelectItem value="kg">kg</SelectItem>
+                              <SelectItem value="lt">lt</SelectItem>
                             </SelectContent>
                           </Select>
                         )}
