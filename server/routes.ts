@@ -752,6 +752,23 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/categories/:id", async (req, res) => {
+    try {
+      const { name, description, parentId, vatRate, active } = req.body;
+      const update: any = {};
+      if (name !== undefined) update.name = name;
+      if (description !== undefined) update.description = description;
+      if (parentId !== undefined) update.parentId = (parentId === "none" || parentId === "") ? null : parentId;
+      if (vatRate !== undefined) update.vatRate = vatRate === "" ? null : vatRate;
+      if (active !== undefined) update.active = active;
+      const [updated] = await db.update(categories).set(update).where(eq(categories.id, req.params.id)).returning();
+      if (!updated) return res.status(404).json({ message: "Category not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Items
   app.get("/api/items", async (_req, res) => {
     const allItems = await storage.getItems();

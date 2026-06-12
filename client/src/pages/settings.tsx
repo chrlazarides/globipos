@@ -668,6 +668,38 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* Cyprus VAT Rates Card */}
+      <Card className="mt-6">
+        <CardHeader className="flex flex-row items-center gap-2 p-4 pb-2">
+          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10">
+            <Globe className="w-4 h-4 text-primary" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">Cyprus VAT Rates</h3>
+            <p className="text-xs text-muted-foreground">Applicable VAT rates for Cyprus — assign to product categories or individual items</p>
+          </div>
+        </CardHeader>
+        <CardContent className="p-4 pt-0">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              { rate: "19%", label: "Standard Rate", desc: "Most goods & services, alcohol, tobacco", color: "bg-red-50 border-red-200 text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-300" },
+              { rate: "9%", label: "Reduced Rate", desc: "Accommodation, restaurants, catering, cinema", color: "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300" },
+              { rate: "5%", label: "Reduced Rate", desc: "Food items, books, medicines, water supplies", color: "bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300" },
+              { rate: "0%", label: "Zero / Exempt", desc: "Exports, intra-EU supplies, certain services", color: "bg-green-50 border-green-200 text-green-800 dark:bg-green-900/20 dark:border-green-800 dark:text-green-300" },
+            ].map(({ rate, label, desc, color }) => (
+              <div key={rate} className={`rounded-lg border p-3 ${color}`}>
+                <div className="text-2xl font-bold mb-0.5">{rate}</div>
+                <div className="text-xs font-semibold mb-1">{label}</div>
+                <div className="text-xs opacity-80">{desc}</div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-3">
+            VAT rates can be set per category (Items → New Category) and per individual item. Invoice lines inherit the rate from the item automatically.
+          </p>
+        </CardContent>
+      </Card>
+
       {/* Security Card */}
       <Card className="mt-6 border-blue-200 dark:border-blue-800">
         <CardHeader className="flex flex-row items-center gap-2 p-4 pb-2">

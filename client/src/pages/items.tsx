@@ -51,8 +51,16 @@ const itemFormSchema = insertItemSchema.extend({
   price1: z.string().min(1),
 });
 
+const CY_VAT_RATES = [
+  { value: "19", label: "19% — Standard" },
+  { value: "9",  label: "9% — Reduced (accommodation, restaurants)" },
+  { value: "5",  label: "5% — Reduced (food, books, medicines)" },
+  { value: "0",  label: "0% — Zero rated / exempt" },
+];
+
 const categoryFormSchema = insertCategorySchema.extend({
   name: z.string().min(1, "Name is required"),
+  vatRate: z.string().optional().nullable(),
 });
 
 export default function Items() {
@@ -82,6 +90,9 @@ export default function Items() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [editCategoryDialogOpen, setEditCategoryDialogOpen] = useState(false);
+
   const createCategory = useMutation({
     mutationFn: async (data: z.infer<typeof categoryFormSchema>) => {
       const res = await apiRequest("POST", "/api/categories", data);
@@ -91,6 +102,21 @@ export default function Items() {
       queryClient.invalidateQueries({ queryKey: ["/api/categories"] });
       setCategoryDialogOpen(false);
       toast({ title: "Category created successfully" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updateCategory = useMutation({
+    mutationFn: async (data: z.infer<typeof categoryFormSchema>) => {
+      if (!editingCategory) return;
+      const res = await apiRequest("PATCH", `/api/categories/${editingCategory.id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/categories"] });
+      setEditCategoryDialogOpen(false);
+      setEditingCategory(null);
+      toast({ title: "Category updated" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -275,6 +301,43 @@ export default function Items() {
         </CardContent>
       </Card>
 
+      {categories.length > 0 && (
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold">Categories</h3>
+              <span className="text-xs text-muted-foreground">{categories.length} categories</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {categories.map((cat) => (
+                <div key={cat.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-medium truncate">{cat.name}</span>
+                    {cat.description && <span className="text-xs text-muted-foreground truncate">{cat.description}</span>}
+                  </div>
+                  <div className="flex items-center gap-2 ml-2 shrink-0">
+                    {cat.vatRate != null && cat.vatRate !== "" ? (
+                      <Badge variant="outline" className="text-xs">{parseFloat(cat.vatRate)}% VAT</Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-xs">No VAT override</Badge>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2"
+                      data-testid={`button-edit-category-${cat.id}`}
+                      onClick={() => { setEditingCategory(cat); setEditCategoryDialogOpen(true); }}
+                    >
+                      Edit
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <ImportDialog
         open={importDialogOpen}
         onOpenChange={setImportDialogOpen}
@@ -284,6 +347,28 @@ export default function Items() {
         apiEndpoint="/api/items/import"
         onSuccess={() => queryClient.invalidateQueries({ queryKey: ["/api/items"] })}
       />
+
+      <Dialog open={editCategoryDialogOpen} onOpenChange={(open) => { setEditCategoryDialogOpen(open); if (!open) setEditingCategory(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Category</DialogTitle>
+          </DialogHeader>
+          {editingCategory && (
+            <CategoryForm
+              onSubmit={(d) => updateCategory.mutate(d)}
+              isPending={updateCategory.isPending}
+              categories={categories.filter((c) => c.id !== editingCategory.id)}
+              defaultValues={{
+                name: editingCategory.name,
+                description: editingCategory.description || "",
+                parentId: editingCategory.parentId || "",
+                vatRate: editingCategory.vatRate != null ? String(parseFloat(editingCategory.vatRate)) : "",
+                active: editingCategory.active,
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={editDialogOpen} onOpenChange={(open) => { setEditDialogOpen(open); if (!open) setEditingItem(null); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -512,6 +597,14 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
     }
   }, [categoryId, isEditing, suggestSku]);
 
+  useEffect(() => {
+    if (!categoryId) return;
+    const cat = categories.find((c) => c.id === categoryId);
+    if (cat?.vatRate != null && cat.vatRate !== "") {
+      form.setValue("vatRate", String(parseFloat(cat.vatRate)));
+    }
+  }, [categoryId]);
+
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -736,10 +829,10 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
   );
 }
 
-function CategoryForm({ onSubmit, isPending, categories }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[] }) {
+function CategoryForm({ onSubmit, isPending, categories, defaultValues }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any }) {
   const form = useForm({
     resolver: zodResolver(categoryFormSchema),
-    defaultValues: { name: "", description: "", parentId: "", active: true },
+    defaultValues: defaultValues || { name: "", description: "", parentId: "", vatRate: "", active: true },
   });
 
   return (
@@ -759,25 +852,46 @@ function CategoryForm({ onSubmit, isPending, categories }: { onSubmit: (d: any) 
             <FormMessage />
           </FormItem>
         )} />
-        <FormField control={form.control} name="parentId" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Parent Category (optional)</FormLabel>
-            <Select value={field.value || ""} onValueChange={field.onChange}>
-              <FormControl>
-                <SelectTrigger data-testid="select-parent-category">
-                  <SelectValue placeholder="None" />
-                </SelectTrigger>
-              </FormControl>
-              <SelectContent>
-                <SelectItem value="none">None</SelectItem>
-                {categories.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <FormMessage />
-          </FormItem>
-        )} />
+        <div className="grid grid-cols-2 gap-4">
+          <FormField control={form.control} name="parentId" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Parent Category (optional)</FormLabel>
+              <Select value={field.value || ""} onValueChange={field.onChange}>
+                <FormControl>
+                  <SelectTrigger data-testid="select-parent-category">
+                    <SelectValue placeholder="None" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  {categories.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )} />
+          <FormField control={form.control} name="vatRate" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Default VAT Rate</FormLabel>
+              <Select value={field.value ?? ""} onValueChange={field.onChange}>
+                <FormControl>
+                  <SelectTrigger data-testid="select-category-vat-rate">
+                    <SelectValue placeholder="Inherit from item" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="inherit">No override</SelectItem>
+                  {CY_VAT_RATES.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )} />
+        </div>
         <div className="flex justify-end">
           <Button type="submit" disabled={isPending} data-testid="button-save-category">
             {isPending ? "Saving..." : "Save Category"}

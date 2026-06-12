@@ -44,6 +44,7 @@ export const categories = pgTable("categories", {
   name: text("name").notNull(),
   description: text("description"),
   parentId: varchar("parent_id"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }),
   active: boolean("active").default(true).notNull(),
 });
 
