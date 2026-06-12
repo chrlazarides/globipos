@@ -949,7 +949,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Danger Zone Card */}
-      {isAdminOrHigher && (
+      {isSuperuser && (
         <Card className="mt-6 border-red-200 dark:border-red-900">
           <CardHeader className="flex flex-row items-center gap-2 p-4 pb-2">
             <div className="flex items-center justify-center w-8 h-8 rounded-md bg-red-100 dark:bg-red-900/50">

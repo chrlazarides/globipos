@@ -3953,8 +3953,8 @@ export async function registerRoutes(
   });
 
   app.post("/api/accounting/full-reset", async (req, res) => {
-    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
-      return res.status(403).json({ message: "Admin access required" });
+    if (!req.user || req.user.role !== "superuser") {
+      return res.status(403).json({ message: "Superuser access required" });
     }
     try {
       // 1. Delete all journal entry lines and entries
