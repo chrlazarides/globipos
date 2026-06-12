@@ -183,7 +183,17 @@ export default function Items() {
     {
       key: "vatRate",
       header: "VAT",
-      cell: (row) => <Badge variant="outline">{parseFloat((row as any).vatRate || "19")}%</Badge>,
+      cell: (row) => {
+        const ownRate = (row as any).vatRate;
+        if (ownRate != null) return <Badge variant="outline">{parseFloat(ownRate)}%</Badge>;
+        const cat = categories.find((c) => c.id === row.categoryId);
+        const effective = cat?.vatRate != null ? parseFloat(cat.vatRate) : 19;
+        return (
+          <Badge variant="secondary" title="Inherited from category">
+            {effective}% ↑
+          </Badge>
+        );
+      },
     },
     {
       key: "price",
@@ -396,7 +406,7 @@ export default function Items() {
                 price4: editingItem.price4,
                 price5: editingItem.price5,
                 costPrice: editingItem.costPrice,
-                vatRate: (editingItem as any).vatRate || "19",
+                vatRate: (editingItem as any).vatRate ?? null,
                 stockQuantity: editingItem.stockQuantity,
                 reorderLevel: editingItem.reorderLevel,
                 volume: editingItem.volume || "",
@@ -570,7 +580,7 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
     resolver: zodResolver(itemFormSchema),
     defaultValues: defaultValues || {
       name: "", sku: "", barcode: "", description: "", categoryId: "", unitType: "pc", packSize: 1,
-      price1: "0", price2: "0", price3: "0", price4: "0", price5: "0", costPrice: "0", vatRate: "19",
+      price1: "0", price2: "0", price3: "0", price4: "0", price5: "0", costPrice: "0", vatRate: null,
       stockQuantity: 0, reorderLevel: 10, volume: "", alcoholPercentage: "", brand: "", origin: "", vintage: "", active: true,
     },
   });
@@ -736,25 +746,35 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
                 </FormItem>
               )} />
             </div>
-            <FormField control={form.control} name="vatRate" render={({ field }) => (
-              <FormItem>
-                <FormLabel>VAT Rate</FormLabel>
-                <Select value={field.value || "19"} onValueChange={field.onChange}>
-                  <FormControl>
-                    <SelectTrigger data-testid="select-vat-rate">
-                      <SelectValue />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    <SelectItem value="19">19% - Standard</SelectItem>
-                    <SelectItem value="9">9% - Reduced</SelectItem>
-                    <SelectItem value="5">5% - Reduced</SelectItem>
-                    <SelectItem value="0">0% - Zero Rated</SelectItem>
-                  </SelectContent>
-                </Select>
-                <FormMessage />
-              </FormItem>
-            )} />
+            <FormField control={form.control} name="vatRate" render={({ field }) => {
+              const catId = form.watch("categoryId");
+              const cat = categories.find((c) => c.id === catId);
+              const inheritLabel = cat?.vatRate != null
+                ? `Inherit from category (${parseFloat(cat.vatRate)}%)`
+                : "Inherit from category";
+              return (
+                <FormItem>
+                  <FormLabel>VAT Rate</FormLabel>
+                  <Select
+                    value={field.value ?? ""}
+                    onValueChange={(v) => field.onChange(v === "" ? null : v)}
+                  >
+                    <FormControl>
+                      <SelectTrigger data-testid="select-vat-rate">
+                        <SelectValue placeholder={inheritLabel} />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="">{inheritLabel}</SelectItem>
+                      {CY_VAT_RATES.map((r) => (
+                        <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              );
+            }} />
             <div className="grid grid-cols-2 gap-4">
               <FormField control={form.control} name="stockQuantity" render={({ field }) => (
                 <FormItem>

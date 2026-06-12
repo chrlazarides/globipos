@@ -817,8 +817,11 @@ export async function registerRoutes(
   const numericIntFields = ["stockQuantity", "reorderLevel", "packSize"];
   function sanitizeItemNumericFields(body: any) {
     for (const field of numericStringFields) {
-      if (body[field] === "" || body[field] === null || body[field] === undefined) {
-        body[field] = field === "vatRate" ? "19" : "0";
+      if (field === "vatRate") {
+        // null/undefined/empty means "inherit from category" — keep as null
+        if (body[field] === "") body[field] = null;
+      } else if (body[field] === "" || body[field] === null || body[field] === undefined) {
+        body[field] = "0";
       }
     }
     for (const field of numericIntFields) {

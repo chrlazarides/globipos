@@ -178,6 +178,7 @@ export default function InvoiceForm() {
 
   const { data: onlineCustomers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: onlineItems = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
+  const { data: categories = [] } = useQuery<{ id: string; vatRate: string | null }[]>({ queryKey: ["/api/categories"] });
   type PriceContractWithDetails = PriceContract & { rules?: PriceContractRule[]; priceLevel?: number; contractItems?: PriceContractItem[] };
   const { data: contracts = [] } = useQuery<PriceContractWithDetails[]>({ queryKey: ["/api/price-contracts"] });
   const priceLevelNames = usePriceLevels();
@@ -525,9 +526,11 @@ export default function InvoiceForm() {
           updated[index].description = item.name;
           updated[index].unitPrice = String(item[priceKey] || item.price1);
           updated[index].saleUnit = itemToSaleUnit(item);
-          // Auto-fill tax rate from item's vatRate on new invoices only
-          if (!existingInvoice && item.vatRate != null) {
-            setTaxRate(String(item.vatRate));
+          // Resolve effective VAT rate: item's own rate → category rate → 19% default
+          const catVatRate = categories.find((c) => c.id === item.categoryId)?.vatRate;
+          const effectiveVat = item.vatRate ?? catVatRate ?? "19";
+          if (!existingInvoice) {
+            setTaxRate(String(parseFloat(effectiveVat)));
           }
 
           if (customerId) {
