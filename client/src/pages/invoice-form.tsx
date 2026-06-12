@@ -740,13 +740,20 @@ export default function InvoiceForm() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const [emailPopoverOpen, setEmailPopoverOpen] = useState(false);
+  const [overrideEmail, setOverrideEmail] = useState("");
+
   const sendEmail = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/invoices/${invoiceId}/send-email`, {});
+    mutationFn: async (toEmail?: string) => {
+      const body = toEmail ? { email: toEmail } : {};
+      const res = await apiRequest("POST", `/api/invoices/${invoiceId}/send-email`, body);
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
       return res.json();
     },
     onSuccess: (data) => {
       toast({ title: "Email Sent", description: data.message });
+      setEmailPopoverOpen(false);
+      setOverrideEmail("");
       queryClient.invalidateQueries({ queryKey: ["/api/email-logs"] });
       queryClient.invalidateQueries({ queryKey: ["/api/invoices", invoiceId] });
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
@@ -869,15 +876,55 @@ export default function InvoiceForm() {
                 <Button variant="outline" onClick={downloadDocument} data-testid="button-download-pdf">
                   <Download className="w-4 h-4 sm:mr-1" /> <span className="hidden sm:inline">Download</span>
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => sendEmail.mutate()}
-                  disabled={sendEmail.isPending || !selectedCustomer?.email || !invoiceId}
-                  data-testid="button-send-email"
-                >
-                  {sendEmail.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Send className="w-4 h-4 sm:mr-1" />}
-                  <span className="hidden sm:inline">{sendEmail.isPending ? "Sending..." : "Send"}</span>
-                </Button>
+                {selectedCustomer?.email ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => sendEmail.mutate(undefined)}
+                    disabled={sendEmail.isPending || !invoiceId}
+                    data-testid="button-send-email"
+                    title={`Send to ${selectedCustomer.email}`}
+                  >
+                    {sendEmail.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Send className="w-4 h-4 sm:mr-1" />}
+                    <span className="hidden sm:inline">{sendEmail.isPending ? "Sending..." : "Send"}</span>
+                  </Button>
+                ) : (
+                  <Popover open={emailPopoverOpen} onOpenChange={setEmailPopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        disabled={sendEmail.isPending || !invoiceId}
+                        data-testid="button-send-email"
+                      >
+                        {sendEmail.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Send className="w-4 h-4 sm:mr-1" />}
+                        <span className="hidden sm:inline">{sendEmail.isPending ? "Sending..." : "Send"}</span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-72 p-3 space-y-2" align="end">
+                      <p className="text-xs font-medium">No email on customer record</p>
+                      <p className="text-xs text-muted-foreground">Enter a recipient address to send this document.</p>
+                      <Input
+                        type="email"
+                        placeholder="recipient@example.com"
+                        value={overrideEmail}
+                        onChange={(e) => setOverrideEmail(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter" && overrideEmail) sendEmail.mutate(overrideEmail); }}
+                        className="h-8 text-sm"
+                        data-testid="input-override-email"
+                        autoFocus
+                      />
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        disabled={!overrideEmail || sendEmail.isPending}
+                        onClick={() => sendEmail.mutate(overrideEmail)}
+                        data-testid="button-confirm-send-email"
+                      >
+                        {sendEmail.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Send className="w-3.5 h-3.5 mr-1" />}
+                        Send Now
+                      </Button>
+                    </PopoverContent>
+                  </Popover>
+                )}
 
                 {/* Status action buttons — only for invoice/credit_note */}
                 {(existingInvoice?.type === "invoice" || existingInvoice?.type === "credit_note") && (
