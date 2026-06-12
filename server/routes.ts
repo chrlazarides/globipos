@@ -1432,7 +1432,42 @@ export async function registerRoutes(
     try {
       const inv = await storage.getInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
-      if (inv.status !== "draft" && inv.status !== "cancelled") return res.status(400).json({ message: "Only draft or cancelled documents can be deleted" });
+
+      // Reverse stock for non-draft sales invoices
+      if (inv.type === "invoice" && inv.status !== "draft") {
+        for (const li of inv.items || []) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const bottlesToAdd = ((li as any).saleUnit === "pack" && item.packSize > 1)
+                ? li.quantity * item.packSize
+                : li.quantity;
+              await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
+            }
+          }
+        }
+      }
+
+      // Delete linked payments and their journal entries
+      const linkedPayments = await db.select().from(payments).where(eq(payments.invoiceId, req.params.id));
+      for (const pmt of linkedPayments) {
+        const pmtJEs = await db.select({ id: journalEntries.id }).from(journalEntries)
+          .where(and(eq(journalEntries.sourceType, "payment"), eq(journalEntries.sourceId, pmt.id)));
+        for (const je of pmtJEs) {
+          await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, je.id));
+          await db.delete(journalEntries).where(eq(journalEntries.id, je.id));
+        }
+      }
+      await db.delete(payments).where(eq(payments.invoiceId, req.params.id));
+
+      // Delete invoice journal entries
+      const relatedJEs = await db.select({ id: journalEntries.id }).from(journalEntries)
+        .where(and(eq(journalEntries.sourceType, "invoice"), eq(journalEntries.sourceId, req.params.id)));
+      for (const je of relatedJEs) {
+        await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, je.id));
+        await db.delete(journalEntries).where(eq(journalEntries.id, je.id));
+      }
+
       await storage.deleteInvoice(req.params.id);
       res.json({ ok: true });
     } catch (e: any) {

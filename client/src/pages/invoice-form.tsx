@@ -929,24 +929,29 @@ export default function InvoiceForm() {
                         <span className="hidden sm:inline">Reopen</span>
                       </Button>
                     )}
-                    {(status === "draft" || status === "cancelled") && invoiceId && isAdmin && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          if (confirm(`Delete this ${status} ${typeLabel}? This cannot be undone.`)) {
-                            deleteInvoiceMutation.mutate();
-                          }
-                        }}
-                        disabled={deleteInvoiceMutation.isPending}
-                        data-testid="button-delete-draft"
-                        className="border-red-300 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30"
-                      >
-                        {deleteInvoiceMutation.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Trash2 className="w-4 h-4 sm:mr-1" />}
-                        <span className="hidden sm:inline">Delete</span>
-                      </Button>
-                    )}
                   </>
+                )}
+
+                {invoiceId && isAdmin && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const hasPayments = existingInvoice?.type === "invoice" && status !== "draft";
+                      const warning = hasPayments
+                        ? `Delete this ${typeLabel} (${existingInvoice?.invoiceNumber})?\n\nThis will also remove any linked payments and reverse stock. This cannot be undone.`
+                        : `Delete this ${typeLabel} (${existingInvoice?.invoiceNumber})? This cannot be undone.`;
+                      if (confirm(warning)) {
+                        deleteInvoiceMutation.mutate();
+                      }
+                    }}
+                    disabled={deleteInvoiceMutation.isPending}
+                    data-testid="button-delete-draft"
+                    className="border-red-300 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30"
+                  >
+                    {deleteInvoiceMutation.isPending ? <Loader2 className="w-4 h-4 sm:mr-1 animate-spin" /> : <Trash2 className="w-4 h-4 sm:mr-1" />}
+                    <span className="hidden sm:inline">Delete</span>
+                  </Button>
                 )}
               </>
             )}
