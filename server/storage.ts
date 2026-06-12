@@ -48,6 +48,7 @@ export interface IStorage {
   updateItem(id: string, data: Partial<InsertItem>): Promise<Item | undefined>;
 
   getCustomers(): Promise<Customer[]>;
+  deleteCustomer(id: string): Promise<void>;
   getCustomer(id: string): Promise<Customer | undefined>;
   getNextCustomerCode(): Promise<string>;
   findDuplicateCustomer(name: string, email?: string | null, taxId?: string | null, excludeId?: string): Promise<Customer[]>;
@@ -276,6 +277,10 @@ export class DatabaseStorage implements IStorage {
   async updateCustomer(id: string, data: Partial<InsertCustomer>) {
     const [cust] = await db.update(customers).set(data).where(eq(customers.id, id)).returning();
     return cust;
+  }
+  async deleteCustomer(id: string) {
+    await db.delete(customerDeliveryLocations).where(eq(customerDeliveryLocations.customerId, id));
+    await db.delete(customers).where(eq(customers.id, id));
   }
 
   async getCustomerDeliveryLocations(customerId: string) {

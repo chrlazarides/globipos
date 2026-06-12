@@ -1130,10 +1130,31 @@ export async function registerRoutes(
   });
 
   app.patch("/api/customers/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
     try {
       const cust = await storage.updateCustomer(req.params.id, req.body);
       if (!cust) return res.status(404).json({ message: "Customer not found" });
       res.json(cust);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/customers/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    try {
+      const cust = await db.select({ id: customers.id, name: customers.name }).from(customers).where(eq(customers.id, req.params.id)).limit(1);
+      if (!cust.length) return res.status(404).json({ message: "Customer not found" });
+      const linked = await db.select({ id: invoices.id }).from(invoices).where(eq(invoices.customerId, req.params.id)).limit(1);
+      if (linked.length > 0) {
+        return res.status(400).json({ message: "Cannot delete: customer has invoices. Remove them first or mark the customer inactive." });
+      }
+      await storage.deleteCustomer(req.params.id);
+      res.json({ ok: true });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }

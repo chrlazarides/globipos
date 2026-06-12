@@ -59,6 +59,8 @@ export default function Customers() {
   const { toast } = useToast();
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+  const { data: currentUser } = useQuery<{ id: string; username: string; role: string }>({ queryKey: ["/api/auth/me"] });
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "superuser";
   const priceLevelNames = usePriceLevels();
 
   const createCustomer = useMutation({
@@ -88,6 +90,19 @@ export default function Customers() {
       toast({ title: "Customer updated successfully" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteCustomer = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/customers/${id}`, {});
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+      toast({ title: "Customer deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Cannot delete customer", description: e.message, variant: "destructive" }),
   });
 
   const handleRowClick = (customer: Customer) => {
@@ -197,6 +212,36 @@ export default function Customers() {
       header: "Status",
       cell: (row) => <Badge variant={row.active ? "default" : "secondary"}>{row.active ? "Active" : "Inactive"}</Badge>,
     },
+    ...(isAdmin ? [{
+      key: "actions",
+      header: "",
+      cell: (row: Customer) => (
+        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <Button
+            size="icon"
+            variant="ghost"
+            data-testid={`button-edit-customer-${row.id}`}
+            onClick={() => handleRowClick(row)}
+          >
+            <Pencil className="w-4 h-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+            disabled={deleteCustomer.isPending}
+            data-testid={`button-delete-customer-${row.id}`}
+            onClick={() => {
+              if (confirm(`Delete customer "${row.name}" (${row.code})?\n\nCustomers with invoices cannot be deleted — mark them inactive instead.`)) {
+                deleteCustomer.mutate(row.id);
+              }
+            }}
+          >
+            <Trash2 className="w-4 h-4" />
+          </Button>
+        </div>
+      ),
+    }] : []),
   ];
 
   const handleImportSuccess = () => {
