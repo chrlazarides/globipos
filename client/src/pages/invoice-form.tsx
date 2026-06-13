@@ -1446,6 +1446,7 @@ export default function InvoiceForm() {
                           )}
                         </TableCell>
                         <TableCell className="text-right text-sm text-muted-foreground" data-testid={`text-line-vat-${idx}`}>
+                          <span className="text-xs text-muted-foreground">{parseFloat(taxRate).toFixed(0)}%</span>{" "}
                           {"\u20AC"}{(parseFloat(line.total) * vatLineFactor * (parseFloat(taxRate) / 100)).toFixed(2)}
                         </TableCell>
                         <TableCell className="text-right font-medium text-sm">
@@ -1677,7 +1678,7 @@ export default function InvoiceForm() {
                       {!isViewMode && <span />}
                       <div className="text-right">
                         <span className="text-sm font-semibold">{"\u20AC"}{parseFloat(line.total).toFixed(2)}</span>
-                        <p className="text-xs text-muted-foreground">VAT: {"\u20AC"}{(parseFloat(line.total) * vatLineFactor * (parseFloat(taxRate) / 100)).toFixed(2)}</p>
+                        <p className="text-xs text-muted-foreground">VAT {parseFloat(taxRate).toFixed(0)}%: {"\u20AC"}{(parseFloat(line.total) * vatLineFactor * (parseFloat(taxRate) / 100)).toFixed(2)}</p>
                       </div>
                     </div>
                   </div>
@@ -1742,18 +1743,6 @@ export default function InvoiceForm() {
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Subtotal</span>
                 <span className="font-medium">€{subtotal.toFixed(2)}</span>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-muted-foreground">VAT Rate (%)</span>
-                <Input
-                  type="text"
-                  inputMode="decimal"
-                  value={taxRate}
-                  onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) setTaxRate(v); }}
-                  className="w-20 text-right"
-                  disabled={isViewMode}
-                  data-testid="input-tax-rate"
-                />
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">VAT</span>
