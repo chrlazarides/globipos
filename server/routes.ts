@@ -1817,13 +1817,17 @@ export async function registerRoutes(
   });
 
   // User Manual PDF
-  app.get("/api/manual", (_req, res) => {
+  app.get("/api/manual", async (_req, res) => {
+    const allSettings = await storage.getSettings();
+    const settingsMap: Record<string, string> = {};
+    for (const s of allSettings) settingsMap[s.key] = s.value;
+    const manualCompanyName = settingsMap["company_name"] || "VinTrade";
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinTrade – Instructions for Use</title>
+<title>${manualCompanyName} – Instructions for Use</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f4f4; color: #1a1a1a; font-size: 13px; line-height: 1.6; }
@@ -1920,8 +1924,8 @@ export async function registerRoutes(
 
   <!-- COVER -->
   <div class="cover">
-    <div class="cover-logo">VinTrade</div>
-    <div class="cover-subtitle">FC Gastronobile Ltd &nbsp;·&nbsp; Wholesale ERP</div>
+    <div class="cover-logo">${manualCompanyName}</div>
+    <div class="cover-subtitle">Wholesale ERP</div>
     <div class="cover-title">Instructions for Use — Complete System Guide</div>
     <div class="cover-meta">For internal use &nbsp;·&nbsp; June 2026</div>
   </div>
@@ -2434,7 +2438,7 @@ export async function registerRoutes(
   </div>
 
   <div class="footer">
-    <p>VinTrade &nbsp;·&nbsp; FC Gastronobile Ltd &nbsp;·&nbsp; Confidential &amp; for Internal Use Only</p>
+    <p>${manualCompanyName} &nbsp;·&nbsp; Confidential &amp; for Internal Use Only</p>
     <p style="margin-top:4px;">Generated ${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" })}</p>
   </div>
 
