@@ -1553,6 +1553,67 @@ export async function registerRoutes(
 
         if (Math.abs(newTaxAmount - oldTaxAmount) > 0.001 || Math.abs(newTotal - oldTotal) > 0.001) {
           await storage.updateInvoice(inv.id, { taxAmount: newTaxAmount.toFixed(2), total: newTotal.toFixed(2) } as any);
+
+          // Regenerate journal entry for this invoice so accounting stays in sync
+          if (inv.status !== "draft") {
+            await db.execute(sql`
+              DELETE FROM journal_entry_lines
+              WHERE journal_entry_id IN (
+                SELECT id FROM journal_entries
+                WHERE source_type IN ('invoice','credit_note') AND source_id = ${inv.id}
+              )
+            `);
+            await db.execute(sql`
+              DELETE FROM journal_entries
+              WHERE source_type IN ('invoice','credit_note') AND source_id = ${inv.id}
+            `);
+
+            const invNet = newTotal - newTaxAmount;
+            const invDate = typeof inv.date === "string" ? inv.date : new Date(inv.date).toISOString().split("T")[0];
+
+            // Recalculate COGS from current item cost prices
+            let totalCost = 0;
+            for (const li of invItems) {
+              if (li.itemId) {
+                const item = itemMap.get(li.itemId) as any;
+                if (item) {
+                  const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+                  totalCost += parseFloat(item.costPrice) * qty;
+                }
+              }
+            }
+
+            if (inv.type === "invoice") {
+              const jlines: { accountCode: string; debit: number; credit: number; description: string }[] = [
+                { accountCode: "1100", debit: newTotal, credit: 0, description: "Accounts Receivable" },
+                { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+                { accountCode: "2100", debit: 0, credit: newTaxAmount, description: "VAT Payable" },
+              ];
+              if (totalCost > 0) {
+                jlines.push({ accountCode: "5000", debit: totalCost, credit: 0, description: "Cost of Goods Sold" });
+                jlines.push({ accountCode: "1200", debit: 0, credit: totalCost, description: "Inventory" });
+              }
+              await autoCreateJournalEntry({
+                sourceType: "invoice", sourceId: inv.id, date: invDate,
+                description: `Sales Invoice ${inv.invoiceNumber}`, reference: inv.invoiceNumber, lines: jlines,
+              });
+            } else if (inv.type === "credit_note") {
+              const jlines: { accountCode: string; debit: number; credit: number; description: string }[] = [
+                { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+                { accountCode: "2100", debit: newTaxAmount, credit: 0, description: "VAT Payable reversal" },
+                { accountCode: "1100", debit: 0, credit: newTotal, description: "Accounts Receivable reversal" },
+              ];
+              if (totalCost > 0) {
+                jlines.push({ accountCode: "1200", debit: totalCost, credit: 0, description: "Inventory restored" });
+                jlines.push({ accountCode: "5000", debit: 0, credit: totalCost, description: "COGS reversal" });
+              }
+              await autoCreateJournalEntry({
+                sourceType: "credit_note", sourceId: inv.id, date: invDate,
+                description: `Credit Note ${inv.invoiceNumber}`, reference: inv.invoiceNumber, lines: jlines,
+              });
+            }
+          }
+
           updated++;
         }
       }
