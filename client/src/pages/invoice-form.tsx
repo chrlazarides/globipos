@@ -669,10 +669,23 @@ export default function InvoiceForm() {
   const taxAmount = isViewMode ? displayTaxAmount : subtotal * (parseFloat(taxRate) / 100);
   const total = isViewMode ? displayTotal : subtotal + taxAmount;
 
-  // Proportional factor so per-line VATs always sum exactly to taxAmount.
-  // When there is an overall invoice discount, VAT is applied to the discounted
-  // subtotal, so each line's share is scaled down proportionally.
+  // Proportional factor so per-line VATs account for any overall invoice discount.
   const vatLineFactor = linesSubtotal > 0 ? subtotal / linesSubtotal : 1;
+
+  // Resolve the effective VAT rate for a single line: item rate → category rate → invoice rate.
+  const getLineVatRate = (line: typeof lines[0]): number => {
+    if (!line.itemId) return parseFloat(taxRate) || 19;
+    const item = items.find(i => i.id === line.itemId);
+    if (!item) return parseFloat(taxRate) || 19;
+    const catVat = categories.find(c => c.id === (item as any).categoryId)?.vatRate;
+    const resolved = (item as any).vatRate ?? catVat ?? taxRate ?? "19";
+    return parseFloat(String(resolved)) || 19;
+  };
+
+  // Total VAT recalculated on the fly from per-line rates (overrides stored taxAmount for display).
+  const recalcVatTotal = lines.reduce((sum, l) => {
+    return sum + parseFloat(l.total || "0") * vatLineFactor * getLineVatRate(l) / 100;
+  }, 0);
 
   // Determine which list to return to based on document type
   const resolvedDocType = existingInvoice?.type || docType;
@@ -1446,8 +1459,8 @@ export default function InvoiceForm() {
                           )}
                         </TableCell>
                         <TableCell className="text-right text-sm text-muted-foreground" data-testid={`text-line-vat-${idx}`}>
-                          <span className="text-xs text-muted-foreground">{parseFloat(taxRate).toFixed(0)}%</span>{" "}
-                          {"\u20AC"}{(parseFloat(line.total) * vatLineFactor * (parseFloat(taxRate) / 100)).toFixed(2)}
+                          <span className="text-xs text-muted-foreground">{getLineVatRate(line).toFixed(0)}%</span>{" "}
+                          {"\u20AC"}{(parseFloat(line.total) * vatLineFactor * getLineVatRate(line) / 100).toFixed(2)}
                         </TableCell>
                         <TableCell className="text-right font-medium text-sm">
                           {"\u20AC"}{parseFloat(line.total).toFixed(2)}
@@ -1678,7 +1691,7 @@ export default function InvoiceForm() {
                       {!isViewMode && <span />}
                       <div className="text-right">
                         <span className="text-sm font-semibold">{"\u20AC"}{parseFloat(line.total).toFixed(2)}</span>
-                        <p className="text-xs text-muted-foreground">VAT {parseFloat(taxRate).toFixed(0)}%: {"\u20AC"}{(parseFloat(line.total) * vatLineFactor * (parseFloat(taxRate) / 100)).toFixed(2)}</p>
+                        <p className="text-xs text-muted-foreground">VAT {getLineVatRate(line).toFixed(0)}%: {"\u20AC"}{(parseFloat(line.total) * vatLineFactor * getLineVatRate(line) / 100).toFixed(2)}</p>
                       </div>
                     </div>
                   </div>
@@ -1746,7 +1759,7 @@ export default function InvoiceForm() {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">VAT</span>
-                <span data-testid="text-vat-total">€{taxAmount.toFixed(2)}</span>
+                <span data-testid="text-vat-total">€{recalcVatTotal.toFixed(2)}</span>
               </div>
               <Separator />
               <div className="flex justify-between text-lg font-bold">

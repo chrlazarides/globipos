@@ -1652,12 +1652,20 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
+      const allCategories = await storage.getCategories();
+      const catMap: Record<string, any> = {};
+      allCategories.forEach((c: any) => { catMap[c.id] = c; });
+
       const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
         if (li.itemId) {
           const item = await storage.getItem(li.itemId);
-          return { ...li, barcode: item?.barcode || null };
+          const catVat = item?.categoryId ? catMap[item.categoryId]?.vatRate : null;
+          const lineVatRate = item?.vatRate != null ? parseFloat(String(item.vatRate))
+                            : catVat != null ? parseFloat(String(catVat))
+                            : parseFloat(inv.taxRate || "19");
+          return { ...li, barcode: item?.barcode || null, lineVatRate };
         }
-        return { ...li, barcode: null };
+        return { ...li, barcode: null, lineVatRate: parseFloat(inv.taxRate || "19") };
       }));
 
       let deliveryAddress: string | null = null;
@@ -1704,12 +1712,20 @@ export async function registerRoutes(
       const companyName = settingsMap.company_name || "FC GASTRONOBILE LTD";
       const subject = `${typeLabel} ${inv.invoiceNumber} from ${companyName}`;
 
+      const allCategories2 = await storage.getCategories();
+      const catMap2: Record<string, any> = {};
+      allCategories2.forEach((c: any) => { catMap2[c.id] = c; });
+
       const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
         if (li.itemId) {
           const item = await storage.getItem(li.itemId);
-          return { ...li, barcode: item?.barcode || null };
+          const catVat = item?.categoryId ? catMap2[item.categoryId]?.vatRate : null;
+          const lineVatRate = item?.vatRate != null ? parseFloat(String(item.vatRate))
+                            : catVat != null ? parseFloat(String(catVat))
+                            : parseFloat(inv.taxRate || "19");
+          return { ...li, barcode: item?.barcode || null, lineVatRate };
         }
-        return { ...li, barcode: null };
+        return { ...li, barcode: null, lineVatRate: parseFloat(inv.taxRate || "19") };
       }));
 
       let deliveryAddress: string | null = null;
@@ -5423,8 +5439,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   const unitDisplayLabels: Record<string, string> = { pc: "pc", bottle: "btl", pack: "pk", "6-pack": "6pk", "12-pack": "12pk" };
 
   const invTaxRate = parseFloat(inv.taxRate || "19");
-  // Proportional factor: ensures sum of per-line VATs = stored taxAmount exactly,
-  // even when an overall invoice discount has been applied.
+  // Proportional factor for overall invoice discount distribution
   const pdfLinesSubtotal = items.reduce((s: number, li: any) => s + parseFloat(li.total || "0"), 0);
   const pdfSubtotal = parseFloat(inv.subtotal || "0");
   const vatLineFactor = pdfLinesSubtotal > 0 ? pdfSubtotal / pdfLinesSubtotal : 1;
@@ -5435,7 +5450,9 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     const unitLabel = unitDisplayLabels[unit] || unit;
     const discPercent = parseFloat(li.discountPercent || "0");
     const discAmount = parseFloat(li.discount || "0");
-    const lineVat = (parseFloat(li.total) * vatLineFactor * invTaxRate / 100).toFixed(2);
+    // Use per-line item VAT rate (enriched from item catalogue), fall back to invoice rate
+    const lineRate = li.lineVatRate != null ? li.lineVatRate : invTaxRate;
+    const lineVat = (parseFloat(li.total) * vatLineFactor * lineRate / 100).toFixed(2);
 
     return `
     <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
@@ -5619,8 +5636,11 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
           <span>${currencySymbol}${parseFloat(inv.subtotal).toFixed(2)}</span>
         </div>
         <div class="totals-row tax">
-          <span>VAT (${inv.taxRate}%)</span>
-          <span>${currencySymbol}${parseFloat(inv.taxAmount).toFixed(2)}</span>
+          <span>VAT</span>
+          <span>${currencySymbol}${items.reduce((s: number, li: any) => {
+            const lr = li.lineVatRate != null ? li.lineVatRate : invTaxRate;
+            return s + parseFloat(li.total || "0") * vatLineFactor * lr / 100;
+          }, 0).toFixed(2)}</span>
         </div>
         <div class="totals-row grand">
           <span>Total</span>
