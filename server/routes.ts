@@ -1530,7 +1530,7 @@ export async function registerRoutes(
       let updated = 0;
       for (const inv of allInvoices) {
         if (inv.status === "cancelled") continue;
-        const invItems = await storage.getInvoiceItems(inv.id);
+        const invItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
         if (!invItems.length) continue;
 
         const linesSubtotal = invItems.reduce((s: number, li: any) => s + parseFloat(li.total || "0"), 0);
