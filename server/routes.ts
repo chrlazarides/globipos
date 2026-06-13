@@ -2119,7 +2119,9 @@ export async function registerRoutes(
     <div class="tip"><strong>Tip:</strong> Price Contracts (Section 9) can further override prices for specific customers or categories on top of the price level.</div>
 
     <h3 class="sub-title" id="cat-vat">3.3 VAT on Items</h3>
-    <p>Set <strong>VAT Rate</strong> to "Inherit from category" on most items — this way you only need to maintain VAT in one place (the category). Explicit per-item rates are available for exceptions. See Section 12 for full VAT configuration details.</p>
+    <p>Each item has an optional <strong>VAT Rate</strong> field. When you select or change a category on an item, the VAT rate is automatically filled in from the category — so in most cases you never need to set it manually.</p>
+    <p>The system resolves VAT on every invoice line in this order: <strong>item rate → category rate → 19% fallback</strong>. Explicit per-item overrides are available for exceptions (e.g. an item taxed differently from its category).</p>
+    <div class="tip"><strong>Tip — Bulk Sync:</strong> Click the <strong>Sync VAT</strong> button in the Item Catalog toolbar to push each category's VAT rate onto all its items at once. A confirmation toast tells you how many items were updated. Use this after changing a category's VAT rate to keep all items in sync.</div>
 
     <h3 class="sub-title" id="cat-stock">3.4 Stock Tracking</h3>
     <p>Stock is tracked in <strong>individual bottles/units</strong>. The Items list shows both the bottle count and the pack equivalent (e.g. "48 btl / 4 cs" for a 12-bottle case item). Stock adjusts automatically when:</p>
@@ -2148,7 +2150,8 @@ export async function registerRoutes(
     <p>Categories support one level of nesting. A parent can have many children; children cannot have sub-children. Example: Parent "Wines" → Children "Wines – Red", "Wines – White", "Wines – Rosé".</p>
 
     <h3 class="sub-title" id="cat-vat2">4.3 Assigning VAT Rates</h3>
-    <p>Set the <strong>VAT Rate</strong> field on each category. All items assigned to that category and set to "Inherit from category" will use this rate on invoices. See Section 12 for the full Cyprus VAT rate table.</p>
+    <p>Set the <strong>VAT Rate</strong> field on each category. When a new item is created or edited and a category is selected, the item's VAT rate is automatically populated from the category rate.</p>
+    <p>If you update a category's VAT rate and want to push it to all existing items in that category, click <strong>Sync VAT</strong> in the Item Catalog toolbar — this updates every item whose rate no longer matches its category. See Section 12 for the full Cyprus VAT rate table.</p>
   </div>
 
   <!-- ═══ SECTION 5: CUSTOMERS ═══ -->
