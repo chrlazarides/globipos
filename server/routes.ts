@@ -843,6 +843,29 @@ export async function registerRoutes(
     return body;
   }
 
+  // Bulk-sync: set each item's vatRate from its category's vatRate (where category has one set)
+  app.post("/api/items/sync-vat-from-categories", async (_req, res) => {
+    try {
+      const [allItems, allCategories] = await Promise.all([storage.getItems(), storage.getCategories()]);
+      const catMap = new Map(allCategories.map((c: any) => [c.id, c]));
+      let updated = 0;
+      for (const item of allItems) {
+        if (!item.categoryId) continue;
+        const cat = catMap.get(item.categoryId) as any;
+        if (!cat || cat.vatRate == null || cat.vatRate === "") continue;
+        const catRate = parseFloat(cat.vatRate);
+        const itemRate = (item as any).vatRate != null ? parseFloat((item as any).vatRate) : null;
+        if (itemRate !== catRate) {
+          await storage.updateItem(item.id, { vatRate: String(catRate) } as any);
+          updated++;
+        }
+      }
+      res.json({ updated });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/items", async (req, res) => {
     try {
       sanitizeItemNumericFields(req.body);

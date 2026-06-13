@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Package, Upload, History, Download } from "lucide-react";
+import { Plus, Search, Package, Upload, History, Download, RefreshCw } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertItemSchema, insertCategorySchema, type Item, type Category } from "@shared/schema";
@@ -136,6 +136,18 @@ export default function Items() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const syncVatFromCategories = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/items/sync-vat-from-categories", {});
+      return res.json();
+    },
+    onSuccess: (data: { updated: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({ title: `VAT rates synced`, description: `${data.updated} item${data.updated !== 1 ? "s" : ""} updated from their category.` });
+    },
+    onError: (e: Error) => toast({ title: "Sync failed", description: e.message, variant: "destructive" }),
+  });
+
   const handleRowClick = (item: Item) => {
     setEditingItem(item);
     setEditDialogOpen(true);
@@ -249,6 +261,9 @@ export default function Items() {
         description="Manage your wines, spirits, and products"
         action={
           <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => syncVatFromCategories.mutate()} disabled={syncVatFromCategories.isPending} data-testid="button-sync-vat">
+              <RefreshCw className={`w-4 h-4 mr-1 ${syncVatFromCategories.isPending ? "animate-spin" : ""}`} /> Sync VAT
+            </Button>
             <Button variant="outline" onClick={() => setImportDialogOpen(true)} data-testid="button-import-items">
               <Upload className="w-4 h-4 mr-1" /> Import
             </Button>
@@ -610,8 +625,15 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
   useEffect(() => {
     if (!categoryId) return;
     const cat = categories.find((c) => c.id === categoryId);
-    if (cat?.vatRate != null && cat.vatRate !== "") {
-      form.setValue("vatRate", String(parseFloat(cat.vatRate)));
+    if (!cat || cat.vatRate == null || cat.vatRate === "") return;
+    const catRate = String(parseFloat(cat.vatRate));
+    // Always sync when category changes; also fill in when editing and item has no rate set
+    const currentVat = form.getValues("vatRate");
+    if (!currentVat || currentVat === "" || currentVat === null) {
+      form.setValue("vatRate", catRate);
+    } else {
+      // Category actively changed by user — update to match new category
+      form.setValue("vatRate", catRate);
     }
   }, [categoryId]);
 
