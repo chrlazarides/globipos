@@ -5422,12 +5422,15 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
 
   const unitDisplayLabels: Record<string, string> = { pc: "pc", bottle: "btl", pack: "pk", "6-pack": "6pk", "12-pack": "12pk" };
 
+  const invTaxRate = parseFloat(inv.taxRate || "19");
+
   const itemRows = items.map((li: any, idx: number) => {
     const qty = li.quantity != null && Number(li.quantity) > 0 ? Number(li.quantity) : (li.quantity != null ? li.quantity : "—");
     const unit = li.saleUnit || "pc";
     const unitLabel = unitDisplayLabels[unit] || unit;
     const discPercent = parseFloat(li.discountPercent || "0");
     const discAmount = parseFloat(li.discount || "0");
+    const lineVat = (parseFloat(li.total) * invTaxRate / 100).toFixed(2);
 
     return `
     <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
@@ -5437,6 +5440,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
       <td class="cell right">${currencySymbol}${parseFloat(li.unitPrice).toFixed(2)}</td>
       ${hasDiscountPercent ? `<td class="cell right">${discPercent > 0 ? discPercent.toFixed(1) + "%" : "-"}</td>` : ""}
       ${hasDiscount ? `<td class="cell right">${discAmount > 0 ? currencySymbol + discAmount.toFixed(2) : "-"}</td>` : ""}
+      <td class="cell right vat-col">${currencySymbol}${lineVat}</td>
       <td class="cell right bold">${currencySymbol}${parseFloat(li.total).toFixed(2)}</td>
     </tr>`;
   }).join("");
@@ -5488,6 +5492,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .totals-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; }
   .totals-row.subtotal { color: #555; }
   .totals-row.tax { color: #555; }
+  .vat-col { color: #555; font-style: italic; }
   .totals-row.grand { font-size: 18px; font-weight: 800; color: #1a1a1a; padding-top: 12px; margin-top: 4px; border-top: 2px solid #1a1a1a; }
   .notes-box { padding: 16px 20px; background: #f5f5f5; border-radius: 6px; border-left: 3px solid #1a1a1a; margin-bottom: 32px; }
   .notes-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; margin-bottom: 4px; }
@@ -5583,6 +5588,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
           <th class="right">Unit Price</th>
           ${hasDiscountPercent ? '<th class="right">Disc %</th>' : ""}
           ${hasDiscount ? '<th class="right">Discount</th>' : ""}
+          <th class="right">VAT</th>
           <th class="right">Total</th>
         </tr>
       </thead>

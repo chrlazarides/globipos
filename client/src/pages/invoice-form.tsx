@@ -1213,6 +1213,7 @@ export default function InvoiceForm() {
                       <TableHead>Item · Qty · Unit</TableHead>
                       <TableHead className="w-[200px]">Unit Price</TableHead>
                       <TableHead className="w-[180px]">Discount</TableHead>
+                      <TableHead className="w-[100px] text-right">VAT</TableHead>
                       <TableHead className="w-[130px] text-right">Total</TableHead>
                       {!isViewMode && <TableHead className="w-[50px]" />}
                     </TableRow>
@@ -1438,6 +1439,9 @@ export default function InvoiceForm() {
                               )}
                             </div>
                           )}
+                        </TableCell>
+                        <TableCell className="text-right text-sm text-muted-foreground" data-testid={`text-line-vat-${idx}`}>
+                          {"\u20AC"}{(parseFloat(line.total) * (parseFloat(taxRate) / 100)).toFixed(2)}
                         </TableCell>
                         <TableCell className="text-right font-medium text-sm">
                           {"\u20AC"}{parseFloat(line.total).toFixed(2)}
@@ -1666,7 +1670,10 @@ export default function InvoiceForm() {
                       )}
                       {isViewMode && parseFloat(line.discount) <= 0 && <span />}
                       {!isViewMode && <span />}
-                      <span className="text-sm font-semibold">{"\u20AC"}{parseFloat(line.total).toFixed(2)}</span>
+                      <div className="text-right">
+                        <span className="text-sm font-semibold">{"\u20AC"}{parseFloat(line.total).toFixed(2)}</span>
+                        <p className="text-xs text-muted-foreground">VAT: {"\u20AC"}{(parseFloat(line.total) * (parseFloat(taxRate) / 100)).toFixed(2)}</p>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1732,7 +1739,7 @@ export default function InvoiceForm() {
                 <span className="font-medium">€{subtotal.toFixed(2)}</span>
               </div>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-muted-foreground">Tax (%)</span>
+                <span className="text-sm text-muted-foreground">VAT Rate (%)</span>
                 <Input
                   type="text"
                   inputMode="decimal"
@@ -1744,8 +1751,8 @@ export default function InvoiceForm() {
                 />
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Tax Amount</span>
-                <span>€{taxAmount.toFixed(2)}</span>
+                <span className="text-muted-foreground">VAT</span>
+                <span data-testid="text-vat-total">€{taxAmount.toFixed(2)}</span>
               </div>
               <Separator />
               <div className="flex justify-between text-lg font-bold">
