@@ -5423,6 +5423,11 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   const unitDisplayLabels: Record<string, string> = { pc: "pc", bottle: "btl", pack: "pk", "6-pack": "6pk", "12-pack": "12pk" };
 
   const invTaxRate = parseFloat(inv.taxRate || "19");
+  // Proportional factor: ensures sum of per-line VATs = stored taxAmount exactly,
+  // even when an overall invoice discount has been applied.
+  const pdfLinesSubtotal = items.reduce((s: number, li: any) => s + parseFloat(li.total || "0"), 0);
+  const pdfSubtotal = parseFloat(inv.subtotal || "0");
+  const vatLineFactor = pdfLinesSubtotal > 0 ? pdfSubtotal / pdfLinesSubtotal : 1;
 
   const itemRows = items.map((li: any, idx: number) => {
     const qty = li.quantity != null && Number(li.quantity) > 0 ? Number(li.quantity) : (li.quantity != null ? li.quantity : "—");
@@ -5430,7 +5435,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     const unitLabel = unitDisplayLabels[unit] || unit;
     const discPercent = parseFloat(li.discountPercent || "0");
     const discAmount = parseFloat(li.discount || "0");
-    const lineVat = (parseFloat(li.total) * invTaxRate / 100).toFixed(2);
+    const lineVat = (parseFloat(li.total) * vatLineFactor * invTaxRate / 100).toFixed(2);
 
     return `
     <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">

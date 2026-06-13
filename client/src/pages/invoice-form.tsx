@@ -669,6 +669,11 @@ export default function InvoiceForm() {
   const taxAmount = isViewMode ? displayTaxAmount : subtotal * (parseFloat(taxRate) / 100);
   const total = isViewMode ? displayTotal : subtotal + taxAmount;
 
+  // Proportional factor so per-line VATs always sum exactly to taxAmount.
+  // When there is an overall invoice discount, VAT is applied to the discounted
+  // subtotal, so each line's share is scaled down proportionally.
+  const vatLineFactor = linesSubtotal > 0 ? subtotal / linesSubtotal : 1;
+
   // Determine which list to return to based on document type
   const resolvedDocType = existingInvoice?.type || docType;
   const backUrl = resolvedDocType === "credit_note" ? "/credit-notes"
@@ -1441,7 +1446,7 @@ export default function InvoiceForm() {
                           )}
                         </TableCell>
                         <TableCell className="text-right text-sm text-muted-foreground" data-testid={`text-line-vat-${idx}`}>
-                          {"\u20AC"}{(parseFloat(line.total) * (parseFloat(taxRate) / 100)).toFixed(2)}
+                          {"\u20AC"}{(parseFloat(line.total) * vatLineFactor * (parseFloat(taxRate) / 100)).toFixed(2)}
                         </TableCell>
                         <TableCell className="text-right font-medium text-sm">
                           {"\u20AC"}{parseFloat(line.total).toFixed(2)}
@@ -1672,7 +1677,7 @@ export default function InvoiceForm() {
                       {!isViewMode && <span />}
                       <div className="text-right">
                         <span className="text-sm font-semibold">{"\u20AC"}{parseFloat(line.total).toFixed(2)}</span>
-                        <p className="text-xs text-muted-foreground">VAT: {"\u20AC"}{(parseFloat(line.total) * (parseFloat(taxRate) / 100)).toFixed(2)}</p>
+                        <p className="text-xs text-muted-foreground">VAT: {"\u20AC"}{(parseFloat(line.total) * vatLineFactor * (parseFloat(taxRate) / 100)).toFixed(2)}</p>
                       </div>
                     </div>
                   </div>
