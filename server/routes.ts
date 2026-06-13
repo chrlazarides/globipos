@@ -2316,8 +2316,10 @@ export async function registerRoutes(
     </div>
 
     <h3 class="sub-title" id="inv-lineitems">6.3 Line Items &amp; VAT</h3>
-    <p>Each line item has: Item, Description, Quantity, Unit Price, Discount %, VAT Rate, Line Total. VAT is resolved automatically: item rate → category rate → 19% fallback. The invoice totals show Subtotal, VAT amount, and Grand Total.</p>
+    <p>Each line item has: Item, Description, Quantity, Unit Price, Discount %, VAT Rate, Line Total. VAT is resolved per-line automatically in this order: <strong>item's own rate → category rate → 19% fallback</strong>. The invoice totals always show: <strong>Subtotal + VAT = Grand Total</strong> using the per-line rates — the displayed totals and the PDF are always consistent.</p>
+    <p>When an invoice is saved (non-draft), the system posts double-entry journal entries automatically — the Revenue and VAT Payable amounts in those entries reflect the correct per-line VAT.</p>
     <div class="tip"><strong>Tip:</strong> Active Price Contracts apply discounts automatically when you select an item for a customer with a matching contract.</div>
+    <div class="tip"><strong>Tip — Recalc VAT (existing invoices):</strong> If you changed category or item VAT rates after invoices were already saved, click <strong>Recalc VAT</strong> (calculator icon) in the Invoices toolbar. This recalculates and stores the correct <em>taxAmount</em> and <em>total</em> on every invoice, <strong>and regenerates the corresponding journal entries</strong> so that financial reports (P&amp;L, Balance Sheet, Trial Balance) and customer statements are all updated in one step.</div>
 
     <h3 class="sub-title" id="inv-delivery">6.4 Delivery Location on Invoice</h3>
     <p>The <strong>Delivery Location</strong> field prints a "Deliver To" block on the invoice, separate from the "Bill To" billing address. If the customer has saved delivery locations, they appear as a dropdown — otherwise type a free-text location name. The saved location's address (if stored) prints automatically beneath the location name.</p>
@@ -2443,13 +2445,15 @@ export async function registerRoutes(
     <h3 class="sub-title" id="acc-journal">11.2 Journal Entries</h3>
     <p>The <strong>Journal Entries</strong> list shows all double-entry postings in the system. Automated entries are created for:</p>
     <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
-      <li style="margin-bottom:5px;"><strong>Sales Invoices</strong> — Dr Accounts Receivable / Cr Revenue &amp; VAT Payable</li>
+      <li style="margin-bottom:5px;"><strong>Sales Invoices</strong> — Dr Accounts Receivable / Cr Revenue &amp; VAT Payable (amounts use per-line VAT rates)</li>
+      <li style="margin-bottom:5px;"><strong>Credit Notes</strong> — reverses the original invoice journal entry</li>
       <li style="margin-bottom:5px;"><strong>Customer Payments</strong> — Dr Bank/Cash / Cr Accounts Receivable</li>
       <li style="margin-bottom:5px;"><strong>Purchase Invoices</strong> — Dr Inventory / Cr Accounts Payable</li>
       <li style="margin-bottom:5px;"><strong>Supplier Payments</strong> — Dr Accounts Payable / Cr Bank/Cash</li>
       <li style="margin-bottom:5px;"><strong>Expenses</strong> — Dr Expense Account / Cr Bank/Cash</li>
     </ul>
     <p>Manual journal entries can be added for adjustments. Each entry requires balanced debits and credits.</p>
+    <div class="note"><strong>Keeping journals in sync:</strong> Automated invoice journal entries are generated at the time of saving. If you later use <strong>Recalc VAT</strong> (Invoices toolbar) to correct per-line VAT on existing invoices, journal entries for affected invoices are automatically deleted and recreated with the corrected amounts — no manual repost is needed. Use <strong>Accounting → Repost Journals</strong> only for a full global repost of all transactions.</div>
 
     <h3 class="sub-title" id="acc-expenses">11.3 Expenses</h3>
     <p>Record business expenses in <strong>Expenses</strong> (Accounting section). Enter the date, description, amount, expense category, and payment method. A journal entry is posted automatically.</p>
@@ -2479,7 +2483,7 @@ export async function registerRoutes(
         <tr><td><strong>Box 6</strong></td><td>Total taxable turnover</td></tr>
       </tbody>
     </table>
-    <div class="note"><strong>Important:</strong> The VAT return reads from <em>posted journal entries</em>, not raw invoices. Ensure all transactions for the period are saved and no invoices are left in Draft before running the return.</div>
+    <div class="note"><strong>Important:</strong> The VAT return reads directly from stored invoice and purchase invoice records (not journal entries). Ensure all transactions for the period are saved and no invoices are left in <em>Draft</em> status before running the return. If you have recently run <strong>Recalc VAT</strong>, the corrected <em>taxAmount</em> values are picked up automatically — no further action is needed before generating the return.</div>
   </div>
 
   <!-- ═══ SECTION 12: VAT CONFIGURATION ═══ -->
@@ -2499,13 +2503,14 @@ export async function registerRoutes(
     <div class="warning"><strong>Important:</strong> Alcoholic beverages are standard-rated at <strong>19%</strong> in Cyprus — they do not qualify for the 5% food rate. Verify rates with your tax advisor before processing.</div>
 
     <h3 class="sub-title" id="vat-setup">12.2 Setting Up VAT</h3>
-    <p>The recommended workflow:</p>
+    <p>The recommended workflow for a new or migrated installation:</p>
     <div class="steps">
       <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Categories</strong> and set the correct VAT Rate on each category (e.g. 19% on Wines, 5% on Olive Oils).</div></div>
-      <div class="step"><div class="step-num">2</div><div class="step-text">On each item, leave <strong>VAT Rate</strong> set to "Inherit from category".</div></div>
-      <div class="step"><div class="step-num">3</div><div class="step-text">For exceptions only (e.g. one item in a category with a different rate), set an explicit rate on that specific item.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">On each item, leave <strong>VAT Rate</strong> set to "Inherit from category". For exceptions only (e.g. an item taxed differently from its category), set an explicit rate on that specific item.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">In the <strong>Item Catalog</strong> toolbar, click <strong>Sync VAT</strong> to push each category's rate onto all its items at once (useful after changing a category's rate).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Go to <strong>Invoices</strong> and click <strong>Recalc VAT</strong> (calculator icon) in the toolbar. This updates stored VAT totals on all existing invoices using per-line item rates, <strong>and regenerates their journal entries</strong>. Customer statements, financial reports (P&amp;L, Balance Sheet, Trial Balance), and the VAT Return will all reflect the corrected figures immediately after.</div></div>
     </div>
-    <p>The VAT rate resolves on each invoice line in this order: item's own rate → category's rate → 19% system default.</p>
+    <p>The VAT rate resolves on each invoice line in this order: item's own rate → category's rate → 19% system default. New invoices saved after completing these steps will always use the correct rates from creation.</p>
   </div>
 
   <!-- ═══ SECTION 13: SETTINGS ═══ -->
