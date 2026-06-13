@@ -1807,11 +1807,11 @@ export async function registerRoutes(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinTrade – User Manual</title>
+<title>VinTrade – Instructions for Use</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f4f4; color: #1a1a1a; font-size: 13px; line-height: 1.6; }
-  .page { max-width: 860px; margin: 24px auto; background: #fff; padding: 48px 56px; box-shadow: 0 2px 24px rgba(0,0,0,0.08); border-radius: 4px; }
+  .page { max-width: 900px; margin: 24px auto; background: #fff; padding: 48px 56px; box-shadow: 0 2px 24px rgba(0,0,0,0.08); border-radius: 4px; }
   .no-print { text-align: center; margin-bottom: 20px; padding: 10px; }
   .no-print button { padding: 10px 28px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; margin: 0 6px; }
   .btn-print { background: #6b1f2a; color: #fff; }
@@ -1906,7 +1906,7 @@ export async function registerRoutes(
   <div class="cover">
     <div class="cover-logo">VinTrade</div>
     <div class="cover-subtitle">FC Gastronobile Ltd &nbsp;·&nbsp; Wholesale ERP</div>
-    <div class="cover-title">User Manual — VAT, Product Categories &amp; Invoice Management</div>
+    <div class="cover-title">Instructions for Use — Complete System Guide</div>
     <div class="cover-meta">For internal use &nbsp;·&nbsp; June 2026</div>
   </div>
 
@@ -1914,253 +1914,507 @@ export async function registerRoutes(
   <div class="toc">
     <div class="toc-title">Contents</div>
     <ol>
-      <li><a href="#vat">VAT Configuration</a>
+      <li><a href="#start">Getting Started</a>
         <ol class="sub">
-          <li><a href="#vat-rates">Cyprus VAT Rate Reference</a></li>
-          <li><a href="#vat-category">Assigning VAT to a Category</a></li>
-          <li><a href="#vat-item">VAT on Individual Items</a></li>
-          <li><a href="#vat-invoice">How VAT Appears on Invoices</a></li>
+          <li><a href="#start-login">Logging In &amp; Two-Factor Authentication</a></li>
+          <li><a href="#start-nav">Navigating the System</a></li>
+          <li><a href="#start-roles">User Roles &amp; Permissions</a></li>
+        </ol>
+      </li>
+      <li><a href="#dashboard">Dashboard</a></li>
+      <li><a href="#catalogue">Items &amp; Catalogue</a>
+        <ol class="sub">
+          <li><a href="#cat-create">Creating &amp; Editing Items</a></li>
+          <li><a href="#cat-pricing">Price Levels</a></li>
+          <li><a href="#cat-vat">VAT on Items</a></li>
+          <li><a href="#cat-stock">Stock Tracking</a></li>
         </ol>
       </li>
       <li><a href="#categories">Product Categories</a>
         <ol class="sub">
-          <li><a href="#cat-create">Creating a Category</a></li>
+          <li><a href="#cat-manage">Creating &amp; Managing Categories</a></li>
           <li><a href="#cat-hierarchy">Parent–Child Hierarchy</a></li>
-          <li><a href="#cat-edit">Editing &amp; Deleting Categories</a></li>
+          <li><a href="#cat-vat2">Assigning VAT Rates</a></li>
         </ol>
       </li>
-      <li><a href="#invoices">Invoice Management</a>
+      <li><a href="#customers">Customers</a>
+        <ol class="sub">
+          <li><a href="#cust-create">Creating a Customer</a></li>
+          <li><a href="#cust-delivery">Delivery Locations</a></li>
+          <li><a href="#cust-statements">Statements &amp; Balances</a></li>
+        </ol>
+      </li>
+      <li><a href="#invoices">Sales Documents</a>
         <ol class="sub">
           <li><a href="#inv-types">Document Types</a></li>
           <li><a href="#inv-create">Creating an Invoice</a></li>
-          <li><a href="#inv-fields">Invoice Fields Reference</a></li>
-          <li><a href="#inv-lineitems">Line Items</a></li>
-          <li><a href="#inv-delivery">Delivery Location</a></li>
+          <li><a href="#inv-lineitems">Line Items &amp; VAT</a></li>
+          <li><a href="#inv-delivery">Delivery Location on Invoice</a></li>
           <li><a href="#inv-status">Status Workflow</a></li>
           <li><a href="#inv-email">Sending by Email</a></li>
           <li><a href="#inv-print">Printing &amp; Downloading</a></li>
-          <li><a href="#inv-convert">Converting Proforma / Quotation to Invoice</a></li>
+          <li><a href="#inv-convert">Converting to Invoice</a></li>
         </ol>
       </li>
+      <li><a href="#payments">Customer Payments</a></li>
+      <li><a href="#suppliers">Suppliers &amp; Purchasing</a>
+        <ol class="sub">
+          <li><a href="#sup-records">Supplier Records</a></li>
+          <li><a href="#sup-invoices">Purchase Invoices</a></li>
+          <li><a href="#sup-payments">Supplier Payments</a></li>
+        </ol>
+      </li>
+      <li><a href="#pricing">Pricing Contracts &amp; Offers</a>
+        <ol class="sub">
+          <li><a href="#pricing-contracts">Price Contracts</a></li>
+          <li><a href="#pricing-offers">Seasonal Offers</a></li>
+        </ol>
+      </li>
+      <li><a href="#reports">Reports &amp; Statements</a></li>
+      <li><a href="#accounting">Accounting</a>
+        <ol class="sub">
+          <li><a href="#acc-coa">Chart of Accounts</a></li>
+          <li><a href="#acc-journal">Journal Entries</a></li>
+          <li><a href="#acc-expenses">Expenses</a></li>
+          <li><a href="#acc-reports">Financial Reports</a></li>
+          <li><a href="#acc-vat">Cyprus VAT 4 Return</a></li>
+        </ol>
+      </li>
+      <li><a href="#vat">VAT Configuration</a>
+        <ol class="sub">
+          <li><a href="#vat-rates">Cyprus VAT Rate Reference</a></li>
+          <li><a href="#vat-setup">Setting Up VAT</a></li>
+        </ol>
+      </li>
+      <li><a href="#settings">Settings &amp; Administration</a>
+        <ol class="sub">
+          <li><a href="#set-company">Company Details</a></li>
+          <li><a href="#set-email">Email Configuration</a></li>
+          <li><a href="#set-users">User Management</a></li>
+          <li><a href="#set-backup">Backups</a></li>
+        </ol>
+      </li>
+      <li><a href="#offline">Offline Mode &amp; Mobile App</a></li>
     </ol>
   </div>
 
-  <!-- ═══════════════════════════════ SECTION 1 ═══════════════════════════════ -->
-  <div class="section" id="vat">
-    <h2 class="section-title">1 · VAT Configuration</h2>
+  <!-- ═══ SECTION 1: GETTING STARTED ═══ -->
+  <div class="section" id="start">
+    <h2 class="section-title">1 · Getting Started</h2>
 
-    <p>VinTrade tracks VAT (Value Added Tax) at the category level and allows per-item overrides.
-    VAT amounts are calculated automatically on every invoice line and rolled up into the invoice totals.</p>
+    <h3 class="sub-title" id="start-login">1.1 Logging In &amp; Two-Factor Authentication</h3>
+    <p>VinTrade uses username/password login protected by mandatory two-factor authentication (2FA).</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the VinTrade URL in your browser. You will see the Sign In screen.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Enter your <strong>Username</strong> and <strong>Password</strong>, then click <strong>Sign In</strong>.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text"><strong>First login only — 2FA setup:</strong> You will be taken to a setup screen. Open your authenticator app (Google Authenticator, Authy, etc.), scan the QR code, enter the 6-digit code to confirm, and click <strong>Enable 2FA</strong>.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text"><strong>Subsequent logins:</strong> After entering your password, enter the current 6-digit code from your authenticator app.</div></div>
+    </div>
+    <div class="tip"><strong>Tip:</strong> If you lose access to your authenticator app, ask an Administrator or Superuser to reset your 2FA from <strong>Settings → Users</strong>. You will be prompted to re-enrol on your next login.</div>
 
-    <h3 class="sub-title" id="vat-rates">1.1 Cyprus VAT Rate Reference</h3>
+    <h3 class="sub-title" id="start-nav">1.2 Navigating the System</h3>
+    <p>The left-hand sidebar organises all modules into groups:</p>
     <table>
-      <thead><tr><th>Rate</th><th>Type</th><th>Applies To</th><th>VinTrade Code</th></tr></thead>
+      <thead><tr><th>Group</th><th>Modules</th></tr></thead>
       <tbody>
-        <tr><td><strong>19%</strong></td><td>Standard</td><td>Most goods &amp; services not listed below</td><td><span class="badge badge-red">19</span></td></tr>
-        <tr><td><strong>9%</strong></td><td>Reduced</td><td>Hotels, restaurants, catering, passenger transport</td><td><span class="badge badge-amber">9</span></td></tr>
-        <tr><td><strong>5%</strong></td><td>Reduced</td><td>Food, non-alcoholic beverages, books, pharma, certain agricultural goods</td><td><span class="badge badge-green">5</span></td></tr>
-        <tr><td><strong>0%</strong></td><td>Zero-rated</td><td>Exports, intra-EU supplies, certain financial services</td><td><span class="badge badge-grey">0</span></td></tr>
+        <tr><td><strong>Overview</strong></td><td>Dashboard, Items, Categories, Customers, Customer Statements, Email Log</td></tr>
+        <tr><td><strong>Sales</strong></td><td>Invoices, Credit Notes, Proforma, Quotations, Customer Payments</td></tr>
+        <tr><td><strong>Purchasing</strong></td><td>Suppliers, Purchase Invoices, Supplier Payments</td></tr>
+        <tr><td><strong>Pricing</strong></td><td>Price Contracts, Seasonal Offers</td></tr>
+        <tr><td><strong>Accounting</strong></td><td>Chart of Accounts, Journal Entries, Expenses, Financial Reports, Audit Grid</td></tr>
+        <tr><td><strong>Analytics</strong></td><td>Reports</td></tr>
+        <tr><td><strong>System</strong></td><td>Import Data, Settings</td></tr>
+        <tr><td><strong>Admin</strong></td><td>Activity Log (Admins/Superusers only)</td></tr>
       </tbody>
     </table>
-    <div class="note"><strong>Note:</strong> Verify rates with your tax advisor before issuing documents — VAT legislation can change. The 5% rate applies to many food products but <em>not</em> to alcoholic beverages (which are standard-rated at 19%).</div>
+    <p>Click any sidebar item to navigate. On mobile, tap the menu icon (top-left) to open the sidebar.</p>
 
-    <h3 class="sub-title" id="vat-category">1.2 Assigning VAT to a Category</h3>
-    <p>The recommended workflow is to set VAT at the <strong>category level</strong> once, and let items inherit it automatically.</p>
-    <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">In the sidebar, click <strong>Categories</strong> (under Overview).</div></div>
-      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>Edit</strong> on the category you want to configure.</div></div>
-      <div class="step"><div class="step-num">3</div><div class="step-text">In the <strong>VAT Rate</strong> field, select the applicable rate: 0%, 5%, 9%, or 19%.</div></div>
-      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save</strong>. All items in this category that are set to "Inherit from category" will immediately use this rate.</div></div>
-    </div>
-    <div class="tip"><strong>Tip:</strong> Leave the VAT Rate blank on a category only if items will each be set individually. "No VAT set" on a category means items must declare their own rate or will fall back to 19% system default.</div>
-
-    <h3 class="sub-title" id="vat-item">1.3 VAT on Individual Items</h3>
-    <p>Each item has a <strong>VAT Rate</strong> field with three options:</p>
-    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
-      <li style="margin-bottom:6px;"><strong>Inherit from category</strong> — uses whatever rate is set on the item's category. This is the default for new items and the recommended setting.</li>
-      <li style="margin-bottom:6px;"><strong>0% / 5% / 9% / 19%</strong> — overrides the category rate for this item specifically.</li>
-    </ul>
-    <p>To change an item's VAT rate:</p>
-    <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Items</strong> in the sidebar.</div></div>
-      <div class="step"><div class="step-num">2</div><div class="step-text">Find the item and click <strong>Edit</strong>.</div></div>
-      <div class="step"><div class="step-num">3</div><div class="step-text">Scroll to the <strong>VAT Rate</strong> dropdown and select the desired rate (or "Inherit from category").</div></div>
-      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save Item</strong>.</div></div>
-    </div>
-
-    <h3 class="sub-title" id="vat-invoice">1.4 How VAT Appears on Invoices</h3>
-    <p>When you add a line item to an invoice, the system resolves the VAT rate in this order:</p>
-    <ol style="padding-left:22px; margin-bottom:12px; color:#333;">
-      <li style="margin-bottom:5px;">Item's own VAT rate (if explicitly set, not "Inherit")</li>
-      <li style="margin-bottom:5px;">Category's VAT rate</li>
-      <li style="margin-bottom:5px;">System fallback: <strong>19%</strong></li>
-    </ol>
-    <p>The invoice totals section shows:</p>
-    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
-      <li style="margin-bottom:5px;"><strong>Subtotal</strong> — sum of all line totals before VAT</li>
-      <li style="margin-bottom:5px;"><strong>VAT</strong> — calculated VAT amount</li>
-      <li style="margin-bottom:5px;"><strong>Total</strong> — subtotal + VAT</li>
-    </ul>
-    <div class="note"><strong>Important for VAT Returns:</strong> The Accounting module's Cyprus VAT 4 Return report reads VAT from posted journal entries, which are generated automatically when invoices are finalised. Ensure invoices are saved with the correct VAT rates before the VAT period closes.</div>
+    <h3 class="sub-title" id="start-roles">1.3 User Roles &amp; Permissions</h3>
+    <table>
+      <thead><tr><th>Role</th><th>Access</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-red">Superuser</span></td><td>Full access to everything, including Settings, user management, and all admin functions. Cannot be restricted.</td></tr>
+        <tr><td><span class="badge badge-amber">Admin</span></td><td>Full access to all modules. Can manage Staff users, reset 2FA, and access Settings.</td></tr>
+        <tr><td><span class="badge badge-grey">Staff</span></td><td>Access limited to modules permitted by an Admin. Can be restricted to any combination of the 12 available modules.</td></tr>
+      </tbody>
+    </table>
+    <div class="note"><strong>Note:</strong> Settings page access (for non-Superusers) requires a separate password entered each time you navigate to Settings.</div>
   </div>
 
-  <!-- ═══════════════════════════════ SECTION 2 ═══════════════════════════════ -->
+  <!-- ═══ SECTION 2: DASHBOARD ═══ -->
+  <div class="section" id="dashboard">
+    <h2 class="section-title">2 · Dashboard</h2>
+    <p>The Dashboard (home screen) shows a real-time summary of business activity. The key stat cards display:</p>
+    <ul class="field-list">
+      <li><span class="field-name">Total Revenue</span><span class="field-desc">Sum of all paid and sent invoices in the current period.</span></li>
+      <li><span class="field-name">Outstanding</span><span class="field-desc">Total value of unpaid (sent/overdue) invoices.</span></li>
+      <li><span class="field-name">Overdue</span><span class="field-desc">Value of invoices past their due date with no payment recorded.</span></li>
+      <li><span class="field-name">Customers</span><span class="field-desc">Total active customer accounts.</span></li>
+    </ul>
+    <p>Below the stat cards, the dashboard shows recent invoices and top customers by revenue. Click any invoice row to open it directly.</p>
+  </div>
+
+  <!-- ═══ SECTION 3: ITEMS & CATALOGUE ═══ -->
+  <div class="section" id="catalogue">
+    <h2 class="section-title">3 · Items &amp; Catalogue</h2>
+    <p>The Items module is the product catalogue — every item you sell or purchase must be set up here first.</p>
+
+    <h3 class="sub-title" id="cat-create">3.1 Creating &amp; Editing Items</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Items</strong> in the sidebar.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Item</strong>.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Fill in the required fields (Name, Unit of Measure) and any optional fields.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Assign the item to a <strong>Category</strong> — this determines its default VAT rate and organises it in reports.</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Enter prices for each <strong>Price Level</strong> (1–5). Customers are assigned a price level which determines which price they see on invoices.</div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text">Set the <strong>VAT Rate</strong> — choose "Inherit from category" (recommended) or an explicit rate.</div></div>
+      <div class="step"><div class="step-num">7</div><div class="step-text">Optionally add a <strong>Barcode</strong> for mobile scanning during order entry.</div></div>
+      <div class="step"><div class="step-num">8</div><div class="step-text">Click <strong>Save Item</strong>.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="cat-pricing">3.2 Price Levels</h3>
+    <p>VinTrade supports 5 price levels per item (Level 1 = standard retail, higher levels for trade/wholesale tiers). Each customer is assigned one price level. When creating an invoice, the correct price is loaded automatically.</p>
+    <div class="tip"><strong>Tip:</strong> Price Contracts (Section 9) can further override prices for specific customers or categories on top of the price level.</div>
+
+    <h3 class="sub-title" id="cat-vat">3.3 VAT on Items</h3>
+    <p>Set <strong>VAT Rate</strong> to "Inherit from category" on most items — this way you only need to maintain VAT in one place (the category). Explicit per-item rates are available for exceptions. See Section 12 for full VAT configuration details.</p>
+
+    <h3 class="sub-title" id="cat-stock">3.4 Stock Tracking</h3>
+    <p>Stock is tracked in <strong>individual bottles/units</strong>. The Items list shows both the bottle count and the pack equivalent (e.g. "48 btl / 4 cs" for a 12-bottle case item). Stock adjusts automatically when:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Invoices</strong> are saved — stock decreases by quantity sold</li>
+      <li style="margin-bottom:5px;"><strong>Credit Notes</strong> are saved — stock returns</li>
+      <li style="margin-bottom:5px;"><strong>Purchase Invoices</strong> are saved — stock increases</li>
+    </ul>
+    <div class="note"><strong>Note:</strong> Proforma and Quotation documents do NOT affect stock levels.</div>
+  </div>
+
+  <!-- ═══ SECTION 4: CATEGORIES ═══ -->
   <div class="section" id="categories">
-    <h2 class="section-title">2 · Product Categories</h2>
+    <h2 class="section-title">4 · Product Categories</h2>
+    <p>Categories organise your item catalogue and carry the default VAT rate for all items in them.</p>
 
-    <p>Categories organise your item catalogue and carry the default VAT rate for all items within them.
-    They support a two-level hierarchy: top-level (parent) categories and subcategories (children).</p>
-
-    <h3 class="sub-title" id="cat-create">2.1 Creating a Category</h3>
+    <h3 class="sub-title" id="cat-manage">4.1 Creating &amp; Managing Categories</h3>
     <div class="steps">
       <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Categories</strong> in the sidebar.</div></div>
-      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Category</strong> (top-right).</div></div>
-      <div class="step"><div class="step-num">3</div><div class="step-text">Fill in the fields (see table below) and click <strong>Create Category</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Category</strong>. Enter a Name, optional Code, Description, Parent Category, and VAT Rate.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Click <strong>Create Category</strong>.</div></div>
     </div>
-    <table>
-      <thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead>
-      <tbody>
-        <tr><td><strong>Name</strong></td><td>Yes</td><td>Display name, e.g. "Olive Oils", "Wines – Red".</td></tr>
-        <tr><td><strong>Code</strong></td><td>No</td><td>Short internal code used in reports and imports, e.g. "OIL", "WINE-R".</td></tr>
-        <tr><td><strong>Description</strong></td><td>No</td><td>Free text description for internal reference.</td></tr>
-        <tr><td><strong>Parent Category</strong></td><td>No</td><td>Select a parent to nest this as a subcategory (one level only).</td></tr>
-        <tr><td><strong>VAT Rate</strong></td><td>No</td><td>Default VAT rate applied to all items in this category. Leave blank to require per-item setup.</td></tr>
-      </tbody>
-    </table>
+    <p>To edit, click <strong>Edit</strong> on any row. To delete, click the delete icon — ensure no active items use the category first.</p>
 
-    <h3 class="sub-title" id="cat-hierarchy">2.2 Parent–Child Hierarchy</h3>
-    <p>Categories support a <strong>single level of nesting</strong>: a parent can have multiple children; a child cannot itself be a parent.</p>
-    <p>Example structure:</p>
-    <table>
-      <thead><tr><th>Level</th><th>Example</th><th>VAT Rate</th></tr></thead>
-      <tbody>
-        <tr><td>Parent</td><td>Wines</td><td>19%</td></tr>
-        <tr><td>&nbsp;&nbsp;└ Child</td><td>Wines – Red</td><td><em>inherited → 19%</em></td></tr>
-        <tr><td>&nbsp;&nbsp;└ Child</td><td>Wines – White</td><td><em>inherited → 19%</em></td></tr>
-        <tr><td>Parent</td><td>Food Products</td><td>5%</td></tr>
-        <tr><td>&nbsp;&nbsp;└ Child</td><td>Olive Oils</td><td><em>inherited → 5%</em></td></tr>
-        <tr><td>&nbsp;&nbsp;└ Child</td><td>Pasta &amp; Grains</td><td>9%</td></tr>
-      </tbody>
-    </table>
-    <div class="tip"><strong>Tip:</strong> When a child category has its own VAT rate set, that rate takes precedence for items in that child. Items still resolve their own rate first — child category rate second — parent category rate third.</div>
+    <h3 class="sub-title" id="cat-hierarchy">4.2 Parent–Child Hierarchy</h3>
+    <p>Categories support one level of nesting. A parent can have many children; children cannot have sub-children. Example: Parent "Wines" → Children "Wines – Red", "Wines – White", "Wines – Rosé".</p>
 
-    <h3 class="sub-title" id="cat-edit">2.3 Editing &amp; Deleting Categories</h3>
-    <p>On the Categories page, each row has <strong>Edit</strong> and <strong>Delete</strong> actions on the right.</p>
-    <div class="warning"><strong>Warning:</strong> Deleting a category is permanent. Items assigned to a deleted category will lose their category assignment. Ensure no active items are in the category before deleting.</div>
+    <h3 class="sub-title" id="cat-vat2">4.3 Assigning VAT Rates</h3>
+    <p>Set the <strong>VAT Rate</strong> field on each category. All items assigned to that category and set to "Inherit from category" will use this rate on invoices. See Section 12 for the full Cyprus VAT rate table.</p>
   </div>
 
-  <!-- ═══════════════════════════════ SECTION 3 ═══════════════════════════════ -->
+  <!-- ═══ SECTION 5: CUSTOMERS ═══ -->
+  <div class="section" id="customers">
+    <h2 class="section-title">5 · Customers</h2>
+
+    <h3 class="sub-title" id="cust-create">5.1 Creating a Customer</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Customers</strong> in the sidebar, then <strong>+ New Customer</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Enter the customer's <strong>Name</strong> and <strong>Code</strong> (short identifier used in lists).</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Fill in contact details: email, phone, address, city, Tax ID (for VAT invoices).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Set <strong>Payment Terms</strong>: Cash, Net 7, Net 14, Net 30, Net 60, or Net 90 days.</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Set <strong>Price Level</strong> (1–5) — determines which item price the customer sees on invoices.</div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text">Optionally set a <strong>Credit Limit</strong>. The system warns when invoicing would exceed this.</div></div>
+      <div class="step"><div class="step-num">7</div><div class="step-text">Click <strong>Save Customer</strong>.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="cust-delivery">5.2 Delivery Locations</h3>
+    <p>Each customer can have multiple saved delivery addresses (e.g. different branches or venues).</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the customer record and switch to the <strong>Delivery Locations</strong> tab.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ Add Location</strong>. Enter the location name, full address, and optionally GPS co-ordinates.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Check <strong>Set as Default</strong> to have this location pre-selected on new invoices.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Saved locations appear as a dropdown on the invoice form. The address is printed as a "Deliver To" block on the invoice document.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="cust-statements">5.3 Statements &amp; Balances</h3>
+    <p>The <strong>Customer Statements</strong> page (Overview → Customer Statements) generates printable account statements showing all invoices, payments, and the outstanding balance. Statements can be emailed directly to the customer.</p>
+    <p>The customer's <strong>Current Balance</strong> field on the customer record updates automatically as invoices and payments are posted.</p>
+  </div>
+
+  <!-- ═══ SECTION 6: SALES DOCUMENTS ═══ -->
   <div class="section" id="invoices">
-    <h2 class="section-title">3 · Invoice Management</h2>
+    <h2 class="section-title">6 · Sales Documents</h2>
 
-    <h3 class="sub-title" id="inv-types">3.1 Document Types</h3>
+    <h3 class="sub-title" id="inv-types">6.1 Document Types</h3>
     <table>
-      <thead><tr><th>Type</th><th>Purpose</th><th>Affects Stock?</th><th>Affects Accounting?</th></tr></thead>
+      <thead><tr><th>Type</th><th>Purpose</th><th>Affects Stock</th><th>Affects Accounting</th></tr></thead>
       <tbody>
-        <tr><td><span class="badge badge-blue">Invoice</span></td><td>Standard sales document — triggers payment obligation.</td><td>Yes – reduces stock</td><td>Yes – posts journal entries</td></tr>
-        <tr><td><span class="badge badge-red">Credit Note</span></td><td>Reversal or refund document issued against a prior invoice.</td><td>Yes – restores stock</td><td>Yes – reverses journal entries</td></tr>
-        <tr><td><span class="badge badge-amber">Proforma</span></td><td>Preliminary invoice for customer approval / advance payment.</td><td>No</td><td>No</td></tr>
-        <tr><td><span class="badge badge-grey">Quotation</span></td><td>Price offer, no legal obligation until accepted.</td><td>No</td><td>No</td></tr>
+        <tr><td><span class="badge badge-blue">Invoice</span></td><td>Standard sales document — creates a payment obligation.</td><td>Yes — reduces stock</td><td>Yes — posts journal entries</td></tr>
+        <tr><td><span class="badge badge-red">Credit Note</span></td><td>Reversal or refund against a prior invoice.</td><td>Yes — restores stock</td><td>Yes — reverses entries</td></tr>
+        <tr><td><span class="badge badge-amber">Proforma</span></td><td>Preliminary invoice for approval or advance payment.</td><td>No</td><td>No</td></tr>
+        <tr><td><span class="badge badge-grey">Quotation</span></td><td>Price offer with no legal obligation until accepted.</td><td>No</td><td>No</td></tr>
       </tbody>
     </table>
-    <div class="tip"><strong>Tip:</strong> Proforma and Quotation documents can be <strong>converted to an Invoice</strong> with one click once accepted. The original document is preserved.</div>
 
-    <h3 class="sub-title" id="inv-create">3.2 Creating an Invoice</h3>
+    <h3 class="sub-title" id="inv-create">6.2 Creating an Invoice</h3>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Invoices</strong> in the sidebar (Sales section).</div></div>
-      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Invoice</strong>.</div></div>
-      <div class="step"><div class="step-num">3</div><div class="step-text">Select a <strong>Customer</strong> — this populates payment terms, price level, and default delivery location.</div></div>
-      <div class="step"><div class="step-num">4</div><div class="step-text">Verify or change <strong>Invoice Date</strong> and <strong>Due Date</strong>.</div></div>
-      <div class="step"><div class="step-num">5</div><div class="step-text">Set the <strong>Delivery Location</strong> if different from the billing address.</div></div>
-      <div class="step"><div class="step-num">6</div><div class="step-text">Add line items using the <strong>+ Add Item</strong> button. Search by name or scan a barcode.</div></div>
-      <div class="step"><div class="step-num">7</div><div class="step-text">Adjust quantities, unit prices, and discounts as needed.</div></div>
-      <div class="step"><div class="step-num">8</div><div class="step-text">Add a <strong>Note</strong> if required (appears on the printed document).</div></div>
-      <div class="step"><div class="step-num">9</div><div class="step-text">Click <strong>Save Invoice</strong>. The invoice is created in <em>Draft</em> status.</div></div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Invoices</strong> → <strong>+ New Invoice</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Select the <strong>Customer</strong>. Payment terms, price level, and default delivery location auto-populate.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Confirm <strong>Invoice Date</strong> and <strong>Due Date</strong> (auto-calculated from payment terms).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Set the <strong>Delivery Location</strong> if required (see §6.4).</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Click <strong>+ Add Item</strong> for each product. Type to search or scan a barcode.</div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text">Adjust <strong>Quantity</strong>, <strong>Unit Price</strong>, and <strong>Discount %</strong> on each line as needed.</div></div>
+      <div class="step"><div class="step-num">7</div><div class="step-text">Add a <strong>Note</strong> if required (prints at the bottom of the document).</div></div>
+      <div class="step"><div class="step-num">8</div><div class="step-text">Click <strong>Save Invoice</strong>. The invoice is created in <em>Draft</em> status.</div></div>
     </div>
 
-    <h3 class="sub-title" id="inv-fields">3.3 Invoice Fields Reference</h3>
-    <ul class="field-list">
-      <li><span class="field-name">Customer</span><span class="field-desc">The customer account this invoice is billed to. Required.</span></li>
-      <li><span class="field-name">Document Type</span><span class="field-desc">Invoice / Credit Note / Proforma / Quotation.</span></li>
-      <li><span class="field-name">Invoice Date</span><span class="field-desc">The date of issue. Defaults to today.</span></li>
-      <li><span class="field-name">Due Date</span><span class="field-desc">Payment due date. Auto-calculated from the customer's payment terms (e.g. Net 30 = today + 30 days). Editable.</span></li>
-      <li><span class="field-name">Delivery Location</span><span class="field-desc">The physical delivery address. Printed as a "Deliver To" block on the document. See §3.5.</span></li>
-      <li><span class="field-name">Reference / PO Number</span><span class="field-desc">Optional customer purchase order reference for cross-referencing.</span></li>
-      <li><span class="field-name">Currency</span><span class="field-desc">Document currency (configured globally in Settings).</span></li>
-      <li><span class="field-name">Notes</span><span class="field-desc">Free-text notes printed at the bottom of the document.</span></li>
-      <li><span class="field-name">Status</span><span class="field-desc">Draft · Sent · Paid · Overdue · Cancelled. See §3.6.</span></li>
-    </ul>
+    <h3 class="sub-title" id="inv-lineitems">6.3 Line Items &amp; VAT</h3>
+    <p>Each line item has: Item, Description, Quantity, Unit Price, Discount %, VAT Rate, Line Total. VAT is resolved automatically: item rate → category rate → 19% fallback. The invoice totals show Subtotal, VAT amount, and Grand Total.</p>
+    <div class="tip"><strong>Tip:</strong> Active Price Contracts apply discounts automatically when you select an item for a customer with a matching contract.</div>
 
-    <h3 class="sub-title" id="inv-lineitems">3.4 Line Items</h3>
-    <p>Each line on an invoice represents one product. The columns are:</p>
-    <ul class="field-list">
-      <li><span class="field-name">Item</span><span class="field-desc">Lookup from the Items catalogue. Type to search or scan barcode.</span></li>
-      <li><span class="field-name">Description</span><span class="field-desc">Auto-filled from item name. Can be overridden.</span></li>
-      <li><span class="field-name">Quantity</span><span class="field-desc">Number of units (bottles / packs).</span></li>
-      <li><span class="field-name">Unit Price</span><span class="field-desc">Auto-filled from the customer's price level. Editable.</span></li>
-      <li><span class="field-name">Discount %</span><span class="field-desc">Optional percentage discount on this line.</span></li>
-      <li><span class="field-name">VAT Rate</span><span class="field-desc">Inherited from item → category → default 19%. Shown and editable per line.</span></li>
-      <li><span class="field-name">Line Total</span><span class="field-desc">Qty × Unit Price − Discount (excl. VAT).</span></li>
-    </ul>
-    <div class="tip"><strong>Tip:</strong> If a customer has an active Price Contract, discounts from that contract are applied automatically when you select an item.</div>
+    <h3 class="sub-title" id="inv-delivery">6.4 Delivery Location on Invoice</h3>
+    <p>The <strong>Delivery Location</strong> field prints a "Deliver To" block on the invoice, separate from the "Bill To" billing address. If the customer has saved delivery locations, they appear as a dropdown — otherwise type a free-text location name. The saved location's address (if stored) prints automatically beneath the location name.</p>
 
-    <h3 class="sub-title" id="inv-delivery">3.5 Delivery Location</h3>
-    <p>The <strong>Delivery Location</strong> field identifies where goods are to be physically delivered.
-    It is printed on the invoice as a separate <em>"Deliver To"</em> block, distinct from the billing address.</p>
-    <p>There are two ways to set the delivery location:</p>
+    <h3 class="sub-title" id="inv-status">6.5 Status Workflow</h3>
+    <table>
+      <thead><tr><th>Status</th><th>Meaning</th><th>How to Advance</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-grey">Draft</span></td><td>Saved, not yet sent.</td><td>Click <strong>Mark Sent</strong> or use the <strong>Send</strong> email button (auto-advances).</td></tr>
+        <tr><td><span class="badge badge-blue">Sent</span></td><td>Issued to the customer.</td><td>Record a payment (auto-marks Paid) or click <strong>Mark Overdue</strong>.</td></tr>
+        <tr><td><span class="badge badge-amber">Overdue</span></td><td>Due date passed, unpaid.</td><td>Record a payment or click <strong>Reopen</strong> to revert to Draft.</td></tr>
+        <tr><td><span class="badge badge-green">Paid</span></td><td>Payment received in full.</td><td>Final state. Use <strong>Reopen</strong> only if needed to correct.</td></tr>
+        <tr><td><span class="badge badge-red">Cancelled</span></td><td>Voided — excluded from all reports.</td><td>Use <strong>Reopen</strong> to restore if cancelled in error.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title" id="inv-email">6.6 Sending by Email</h3>
+    <p>Click the <strong>Send</strong> (paper-plane icon) button in the invoice toolbar.</p>
     <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
-      <li style="margin-bottom:6px;"><strong>Saved locations</strong> — if the customer has delivery locations saved on their record (go to Customers → Edit → Delivery Locations tab), they appear as a dropdown. The <em>default</em> location is pre-selected automatically on new invoices.</li>
-      <li style="margin-bottom:6px;"><strong>Free text</strong> — type any location name directly. If a saved location record includes an address, that address is printed under the location name on the document.</li>
+      <li style="margin-bottom:6px;">If the customer has an email on file, the document is sent immediately and status advances to <em>Sent</em>.</li>
+      <li style="margin-bottom:6px;">If no email is stored, a popover appears — type the recipient address and click <strong>Send Now</strong>.</li>
     </ul>
-    <div class="note"><strong>Note:</strong> To add or manage a customer's saved delivery locations, open the customer record, switch to the <strong>Delivery Locations</strong> tab, and use <strong>+ Add Location</strong>. Each location can store a name, full address, and GPS co-ordinates, and one can be marked as the default.</div>
+    <p>All sent emails are logged in <strong>Email Log</strong> (Overview section).</p>
+    <div class="note"><strong>Requirement:</strong> Email sending requires a Resend API key configured in <strong>Settings → Email</strong>.</div>
 
-    <h3 class="sub-title" id="inv-status">3.6 Status Workflow</h3>
+    <h3 class="sub-title" id="inv-print">6.7 Printing &amp; Downloading</h3>
     <table>
-      <thead><tr><th>Status</th><th>Meaning</th><th>Transitions Available</th></tr></thead>
+      <thead><tr><th>Button</th><th>Action</th></tr></thead>
       <tbody>
-        <tr><td><span class="badge badge-grey">Draft</span></td><td>Invoice saved but not yet sent to customer.</td><td>Mark Sent · Cancel</td></tr>
-        <tr><td><span class="badge badge-blue">Sent</span></td><td>Invoice emailed or handed to customer.</td><td>Mark Paid · Mark Overdue · Reopen (→ Draft)</td></tr>
-        <tr><td><span class="badge badge-amber">Overdue</span></td><td>Due date has passed without payment.</td><td>Mark Paid · Reopen</td></tr>
-        <tr><td><span class="badge badge-green">Paid</span></td><td>Payment received in full.</td><td>Reopen</td></tr>
-        <tr><td><span class="badge badge-red">Cancelled</span></td><td>Invoice voided — excluded from reports and VAT.</td><td>Reopen</td></tr>
-      </tbody>
-    </table>
-    <div class="note"><strong>Note:</strong> Sending an invoice by email (§3.7) automatically advances a <em>Draft</em> invoice to <em>Sent</em>.</div>
-    <p>Payments received are recorded separately via <strong>Customer Payments</strong>. Recording a payment in full marks the invoice as Paid automatically.</p>
-
-    <h3 class="sub-title" id="inv-email">3.7 Sending by Email</h3>
-    <p>The <strong>Send</strong> button (<em>paper-plane icon</em>) in the invoice toolbar emails the document to the customer.</p>
-    <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Open a saved invoice.</div></div>
-      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>Send</strong> in the top toolbar.
-        <ul style="margin-top:6px; padding-left:18px; color:#555; font-size:12px;">
-          <li>If the customer has an email address on file, the email is sent immediately.</li>
-          <li>If no email is stored, a small popover appears — type the recipient address and click <strong>Send Now</strong>.</li>
-        </ul>
-      </div></div>
-      <div class="step"><div class="step-num">3</div><div class="step-text">A confirmation toast appears and the invoice status advances to <em>Sent</em>.</div></div>
-    </div>
-    <p>All sent emails are recorded in <strong>Email Log</strong> (Overview section in sidebar) with the to-address, subject, timestamp, and success/failure status.</p>
-    <div class="note"><strong>Email provider setup:</strong> Email sending requires a Resend API key configured in <strong>Settings → Email</strong>. Contact the system administrator if the Send button is not working.</div>
-
-    <h3 class="sub-title" id="inv-print">3.8 Printing &amp; Downloading</h3>
-    <table>
-      <thead><tr><th>Action</th><th>Button</th><th>Result</th></tr></thead>
-      <tbody>
-        <tr><td><strong>View / Print</strong></td><td>Printer icon</td><td>Opens document in a new browser tab with a Print button. Use browser Print → Save as PDF to create a PDF file.</td></tr>
-        <tr><td><strong>Download</strong></td><td>Download icon</td><td>Downloads the document as an <code>.html</code> file. Open in any browser and print to PDF.</td></tr>
-        <tr><td><strong>Send Email</strong></td><td>Send (paper-plane) icon</td><td>Emails the document directly to the customer (see §3.7).</td></tr>
+        <tr><td>Printer icon</td><td>Opens the document in a new tab with a Print button. Use browser <strong>Print → Save as PDF</strong> to create a PDF.</td></tr>
+        <tr><td>Download icon</td><td>Downloads as an HTML file. Open in any browser and print to PDF.</td></tr>
+        <tr><td>Send icon</td><td>Emails the document (see §6.6).</td></tr>
       </tbody>
     </table>
 
-    <h3 class="sub-title" id="inv-convert">3.9 Converting Proforma or Quotation to Invoice</h3>
+    <h3 class="sub-title" id="inv-convert">6.8 Converting Proforma / Quotation to Invoice</h3>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Open the Proforma or Quotation document.</div></div>
-      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>Create Invoice</strong> in the toolbar (appears only on Proforma / Quotation documents).</div></div>
-      <div class="step"><div class="step-num">3</div><div class="step-text">A new invoice is pre-filled with the same customer, lines, and amounts. Review and adjust as needed.</div></div>
-      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save Invoice</strong> to finalise. The original Proforma/Quotation is preserved unchanged.</div></div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the Proforma or Quotation.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>Create Invoice</strong> in the toolbar (only shown on Proforma / Quotation documents).</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Review the pre-filled invoice, adjust if needed, and click <strong>Save Invoice</strong>.</div></div>
     </div>
-    <div class="tip"><strong>Tip:</strong> Once converted, the Proforma/Quotation is not automatically linked to the new invoice in any "parent" relationship — it simply served as the template. Both documents are independently accessible in their respective lists.</div>
+    <p>The original Proforma or Quotation is preserved unchanged. Both documents are independently accessible in their respective lists.</p>
+  </div>
+
+  <!-- ═══ SECTION 7: CUSTOMER PAYMENTS ═══ -->
+  <div class="section" id="payments">
+    <h2 class="section-title">7 · Customer Payments</h2>
+    <p>Record payments received from customers against their invoices.</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Customer Payments</strong> (Sales section) or open the invoice and click <strong>+ Record Payment</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Select the <strong>Customer</strong> and the <strong>Invoice</strong> being paid.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Enter the <strong>Amount</strong>, <strong>Date</strong>, and <strong>Payment Method</strong> (Cash, Bank Transfer, Cheque, Card).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save Payment</strong>. If the payment covers the full invoice amount, the invoice status changes to <em>Paid</em> automatically.</div></div>
+    </div>
+    <p>Partial payments are supported — the invoice remains <em>Sent</em> with a reduced outstanding balance until fully paid. Customer balances update in real time.</p>
+    <div class="tip"><strong>Tip:</strong> The Accounting module automatically generates double-entry journal entries (Debit: Bank/Cash; Credit: Accounts Receivable) when a payment is recorded.</div>
+  </div>
+
+  <!-- ═══ SECTION 8: SUPPLIERS & PURCHASING ═══ -->
+  <div class="section" id="suppliers">
+    <h2 class="section-title">8 · Suppliers &amp; Purchasing</h2>
+
+    <h3 class="sub-title" id="sup-records">8.1 Supplier Records</h3>
+    <p>Go to <strong>Suppliers</strong> (Purchasing section) to manage your supplier list. Each record stores: Name, Code, contact details, Tax ID, IBAN / bank details, payment terms, and notes. The <strong>Current Balance</strong> shows the total outstanding owed to this supplier.</p>
+
+    <h3 class="sub-title" id="sup-invoices">8.2 Purchase Invoices</h3>
+    <p>Record goods received from suppliers via <strong>Purchase Invoices</strong>.</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Purchase Invoices</strong> → <strong>+ New Purchase Invoice</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Select the <strong>Supplier</strong> and enter the <strong>Invoice Number</strong> from the supplier's document.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Set the <strong>Invoice Date</strong> and <strong>Due Date</strong>.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Add line items — select the stock items received and enter quantities and unit costs.</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Click <strong>Save</strong>. Stock levels increase by the purchased quantities automatically.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="sup-payments">8.3 Supplier Payments</h3>
+    <p>Record outgoing payments to suppliers via <strong>Supplier Payments</strong> (Purchasing section). Select the supplier, the purchase invoice, amount, date, and payment method. The supplier balance updates accordingly.</p>
+  </div>
+
+  <!-- ═══ SECTION 9: PRICING ═══ -->
+  <div class="section" id="pricing">
+    <h2 class="section-title">9 · Pricing Contracts &amp; Offers</h2>
+
+    <h3 class="sub-title" id="pricing-contracts">9.1 Price Contracts</h3>
+    <p>Price Contracts allow custom pricing rules for specific customers, overriding standard price levels.</p>
+    <p>A contract can include:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Percentage or fixed discount</strong> applied to all items, a specific category, or a specific brand.</li>
+      <li style="margin-bottom:5px;"><strong>Minimum quantity rules</strong> — discount only applies above a certain quantity per line.</li>
+      <li style="margin-bottom:5px;"><strong>Special item prices</strong> — override the unit price for specific items regardless of price level.</li>
+      <li style="margin-bottom:5px;"><strong>Purchase goal / voucher</strong> — a spend threshold that unlocks a reward (% or fixed discount voucher) when reached.</li>
+    </ul>
+    <p>To create a contract: go to <strong>Price Contracts</strong> (Pricing section) → <strong>+ New Contract</strong>, select the customer, set the date range, and add rules.</p>
+    <div class="tip"><strong>Tip:</strong> When an invoice is created for a customer with an active contract, matching discounts are applied to line items automatically.</div>
+
+    <h3 class="sub-title" id="pricing-offers">9.2 Seasonal Offers</h3>
+    <p><strong>Seasonal Offers</strong> (Pricing section) work like price contracts but apply to all customers (or a selected group) during a set time window. Use them for promotions, clearance, or seasonal pricing.</p>
+  </div>
+
+  <!-- ═══ SECTION 10: REPORTS ═══ -->
+  <div class="section" id="reports">
+    <h2 class="section-title">10 · Reports &amp; Statements</h2>
+    <p>Go to <strong>Reports</strong> (Analytics section) for sales analytics and <strong>Customer Statements</strong> (Overview section) for account statements.</p>
+    <table>
+      <thead><tr><th>Report</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Sales Summary</strong></td><td>Total revenue, volume, and invoice count by date range, customer, or item.</td></tr>
+        <tr><td><strong>Profit Margin Analysis</strong></td><td>Compares selling price to cost price; shows gross margin % per item or category.</td></tr>
+        <tr><td><strong>Customer Statements</strong></td><td>Per-customer account statement with all invoices, payments, and aging analysis (current / 30 / 60 / 90+ days). Printable and emailable.</td></tr>
+      </tbody>
+    </table>
+    <div class="tip"><strong>Tip:</strong> Use the date range filters on the Reports page to compare performance across periods (e.g. this month vs. last month).</div>
+  </div>
+
+  <!-- ═══ SECTION 11: ACCOUNTING ═══ -->
+  <div class="section" id="accounting">
+    <h2 class="section-title">11 · Accounting</h2>
+    <p>VinTrade includes a full double-entry bookkeeping module. Journal entries are generated automatically when invoices, payments, and expenses are posted — you do not need to create them manually in normal operation.</p>
+
+    <h3 class="sub-title" id="acc-coa">11.1 Chart of Accounts</h3>
+    <p>Go to <strong>Chart of Accounts</strong> (Accounting section) to view the account structure. Accounts are pre-configured for Cyprus business reporting standards. Each account has a type (Asset, Liability, Equity, Revenue, Expense) and a normal balance (Debit or Credit).</p>
+
+    <h3 class="sub-title" id="acc-journal">11.2 Journal Entries</h3>
+    <p>The <strong>Journal Entries</strong> list shows all double-entry postings in the system. Automated entries are created for:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Sales Invoices</strong> — Dr Accounts Receivable / Cr Revenue &amp; VAT Payable</li>
+      <li style="margin-bottom:5px;"><strong>Customer Payments</strong> — Dr Bank/Cash / Cr Accounts Receivable</li>
+      <li style="margin-bottom:5px;"><strong>Purchase Invoices</strong> — Dr Inventory / Cr Accounts Payable</li>
+      <li style="margin-bottom:5px;"><strong>Supplier Payments</strong> — Dr Accounts Payable / Cr Bank/Cash</li>
+      <li style="margin-bottom:5px;"><strong>Expenses</strong> — Dr Expense Account / Cr Bank/Cash</li>
+    </ul>
+    <p>Manual journal entries can be added for adjustments. Each entry requires balanced debits and credits.</p>
+
+    <h3 class="sub-title" id="acc-expenses">11.3 Expenses</h3>
+    <p>Record business expenses in <strong>Expenses</strong> (Accounting section). Enter the date, description, amount, expense category, and payment method. A journal entry is posted automatically.</p>
+
+    <h3 class="sub-title" id="acc-reports">11.4 Financial Reports</h3>
+    <p>Go to <strong>Financial Reports</strong> (Accounting section) for:</p>
+    <table>
+      <thead><tr><th>Report</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Trial Balance</strong></td><td>All account balances at a given date — confirms debits equal credits.</td></tr>
+        <tr><td><strong>Profit &amp; Loss</strong></td><td>Revenue minus expenses for a period — shows net profit or loss.</td></tr>
+        <tr><td><strong>Balance Sheet</strong></td><td>Assets, Liabilities, and Equity at a point in time.</td></tr>
+        <tr><td><strong>General Ledger</strong></td><td>All transactions per account in detail — useful for audit and reconciliation.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title" id="acc-vat">11.5 Cyprus VAT 4 Return</h3>
+    <p>The <strong>Cyprus VAT 4 Return</strong> report (Financial Reports tab) pre-populates the official VAT 4 boxes from posted journal entries for the selected tax period:</p>
+    <table>
+      <thead><tr><th>Box</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Box 1</strong></td><td>Output VAT — VAT charged on sales</td></tr>
+        <tr><td><strong>Box 2</strong></td><td>Input VAT — VAT on purchases (reclaimable)</td></tr>
+        <tr><td><strong>Box 3</strong></td><td>Net VAT payable (Box 1 minus Box 2)</td></tr>
+        <tr><td><strong>Box 4</strong></td><td>Zero-rated supplies</td></tr>
+        <tr><td><strong>Box 5</strong></td><td>Exempt supplies</td></tr>
+        <tr><td><strong>Box 6</strong></td><td>Total taxable turnover</td></tr>
+      </tbody>
+    </table>
+    <div class="note"><strong>Important:</strong> The VAT return reads from <em>posted journal entries</em>, not raw invoices. Ensure all transactions for the period are saved and no invoices are left in Draft before running the return.</div>
+  </div>
+
+  <!-- ═══ SECTION 12: VAT CONFIGURATION ═══ -->
+  <div class="section" id="vat">
+    <h2 class="section-title">12 · VAT Configuration</h2>
+
+    <h3 class="sub-title" id="vat-rates">12.1 Cyprus VAT Rate Reference</h3>
+    <table>
+      <thead><tr><th>Rate</th><th>Type</th><th>Applies To</th></tr></thead>
+      <tbody>
+        <tr><td><strong>19%</strong></td><td>Standard</td><td>Most goods and services (default fallback in VinTrade)</td></tr>
+        <tr><td><strong>9%</strong></td><td>Reduced</td><td>Hotels, restaurants, catering, passenger transport</td></tr>
+        <tr><td><strong>5%</strong></td><td>Reduced</td><td>Food (non-alcoholic), books, pharmaceuticals, certain agricultural goods</td></tr>
+        <tr><td><strong>0%</strong></td><td>Zero-rated</td><td>Exports, intra-EU B2B supplies</td></tr>
+      </tbody>
+    </table>
+    <div class="warning"><strong>Important:</strong> Alcoholic beverages are standard-rated at <strong>19%</strong> in Cyprus — they do not qualify for the 5% food rate. Verify rates with your tax advisor before processing.</div>
+
+    <h3 class="sub-title" id="vat-setup">12.2 Setting Up VAT</h3>
+    <p>The recommended workflow:</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Categories</strong> and set the correct VAT Rate on each category (e.g. 19% on Wines, 5% on Olive Oils).</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">On each item, leave <strong>VAT Rate</strong> set to "Inherit from category".</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">For exceptions only (e.g. one item in a category with a different rate), set an explicit rate on that specific item.</div></div>
+    </div>
+    <p>The VAT rate resolves on each invoice line in this order: item's own rate → category's rate → 19% system default.</p>
+  </div>
+
+  <!-- ═══ SECTION 13: SETTINGS ═══ -->
+  <div class="section" id="settings">
+    <h2 class="section-title">13 · Settings &amp; Administration</h2>
+    <p>Go to <strong>Settings</strong> (System section in sidebar). Non-Superusers must enter a settings password each time.</p>
+
+    <h3 class="sub-title" id="set-company">13.1 Company Details</h3>
+    <p>Set your company name, address, phone, email, Tax ID, registration number, IBAN, and bank details. These appear on all printed/emailed documents (invoices, statements).</p>
+
+    <h3 class="sub-title" id="set-email">13.2 Email Configuration</h3>
+    <p>VinTrade uses <strong>Resend</strong> to send invoice emails and <strong>Resend</strong> for daily backup emails. To configure:</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Settings → Email</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Enter your Resend API key (starts with <code>re_</code>) in the <strong>Resend API Key</strong> field.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Enter the <strong>From Email</strong> address (must be a verified domain in your Resend account).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save</strong> then use <strong>Send Test Email</strong> to verify the configuration.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="set-users">13.3 User Management</h3>
+    <p>Accessible from <strong>Settings → Users</strong> (Admins and Superusers only).</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Create users</strong> — set username, password, role (admin/staff), and module permissions.</li>
+      <li style="margin-bottom:5px;"><strong>Module permissions</strong> (Staff only) — select which of the 12 modules the user can access. Leave blank for full access.</li>
+      <li style="margin-bottom:5px;"><strong>Reset 2FA</strong> — forces the user to re-enrol their authenticator on next login.</li>
+      <li style="margin-bottom:5px;"><strong>Deactivate</strong> — prevents a user from logging in without deleting their history.</li>
+    </ul>
+
+    <h3 class="sub-title" id="set-backup">13.4 Backups</h3>
+    <p>VinTrade includes an automated backup system:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Automatic daily backup</strong> — if enabled in Settings, the system emails a backup file to the configured backup email address every 24 hours.</li>
+      <li style="margin-bottom:5px;"><strong>Full backup</strong> — exports all data. <strong>Differential backup</strong> — exports only new transactions since the last backup (used automatically when within 8 days of the last backup).</li>
+      <li style="margin-bottom:5px;"><strong>Manual backup</strong> — trigger a backup immediately from Settings → Backup.</li>
+      <li style="margin-bottom:5px;"><strong>Restore</strong> — upload a backup file to restore data. Supports full restore (wipe and replace) or differential merge (add new records without overwriting existing ones).</li>
+    </ul>
+    <div class="warning"><strong>Warning:</strong> A full restore permanently overwrites all current data. Always download a fresh backup before performing a full restore.</div>
+  </div>
+
+  <!-- ═══ SECTION 14: OFFLINE & PWA ═══ -->
+  <div class="section" id="offline">
+    <h2 class="section-title">14 · Offline Mode &amp; Mobile App</h2>
+
+    <h3 class="sub-title">14.1 Installing as a Mobile / Desktop App (PWA)</h3>
+    <p>VinTrade can be installed as a Progressive Web App on your phone or computer for an app-like experience:</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open VinTrade in your browser (Chrome on Android, or Safari on iPhone).</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Look for the <strong>Install App</strong> button in the VinTrade sidebar (bottom), or use your browser's "Add to Home Screen" / "Install" option.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Confirm the installation. The app icon appears on your home screen / taskbar.</div></div>
+    </div>
+
+    <h3 class="sub-title">14.2 Offline Invoicing</h3>
+    <p>When your device loses internet connection, VinTrade automatically switches to <strong>Offline Mode</strong> (shown by an amber "Offline Mode" banner in the sidebar).</p>
+    <p>In offline mode you can:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Create new invoices</strong> — items and customers are available from the local cache.</li>
+      <li style="margin-bottom:5px;"><strong>View cached data</strong> — previously loaded items, customers, and settings.</li>
+    </ul>
+    <p>Invoices created offline are queued locally. A counter in the sidebar shows pending items (e.g. "2 pending sync"). When your connection is restored, queued invoices sync to the server automatically.</p>
+    <div class="note"><strong>Note:</strong> Offline mode uses data cached from your last online session. If items or customers were added since your last sync, they will not be available offline until you go back online.</div>
   </div>
 
   <div class="footer">
