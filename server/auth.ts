@@ -82,6 +82,7 @@ const PUBLIC_PATHS = [
   "/api/auth/2fa/setup-initial",
   "/portal",
   "/api/portal",
+  "/api/manual",
 ];
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {

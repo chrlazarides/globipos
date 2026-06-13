@@ -206,6 +206,16 @@ export function AppSidebar() {
             </div>
           </div>
         )}
+        <a
+          href="/api/manual"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 px-3 py-2 rounded-md text-xs font-medium text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+          data-testid="link-user-manual"
+        >
+          <BookOpen className="w-3.5 h-3.5" />
+          <span>User Manual</span>
+        </a>
         <div className="flex items-center gap-2 text-xs text-sidebar-foreground/50">
           <Wine className="w-3 h-3" />
           <span>{companyName} v1.0</span>
