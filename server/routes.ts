@@ -1800,6 +1800,381 @@ export async function registerRoutes(
     }
   });
 
+  // User Manual PDF
+  app.get("/api/manual", (_req, res) => {
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VinTrade – User Manual</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f4f4; color: #1a1a1a; font-size: 13px; line-height: 1.6; }
+  .page { max-width: 860px; margin: 24px auto; background: #fff; padding: 48px 56px; box-shadow: 0 2px 24px rgba(0,0,0,0.08); border-radius: 4px; }
+  .no-print { text-align: center; margin-bottom: 20px; padding: 10px; }
+  .no-print button { padding: 10px 28px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; margin: 0 6px; }
+  .btn-print { background: #6b1f2a; color: #fff; }
+  .btn-print:hover { background: #4a1520; }
+  .btn-close { background: #e5e5e5; color: #333; }
+
+  /* Cover */
+  .cover { text-align: center; padding: 32px 0 40px; border-bottom: 3px solid #6b1f2a; margin-bottom: 40px; }
+  .cover-logo { font-size: 36px; font-weight: 900; color: #6b1f2a; letter-spacing: -1px; }
+  .cover-subtitle { font-size: 14px; color: #888; margin-top: 6px; text-transform: uppercase; letter-spacing: 2px; }
+  .cover-title { font-size: 22px; font-weight: 700; color: #1a1a1a; margin-top: 20px; }
+  .cover-meta { font-size: 12px; color: #aaa; margin-top: 8px; }
+
+  /* TOC */
+  .toc { background: #fafafa; border: 1px solid #e5e5e5; border-radius: 6px; padding: 24px 28px; margin-bottom: 40px; }
+  .toc-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; font-weight: 700; margin-bottom: 14px; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin-bottom: 6px; }
+  .toc a { color: #6b1f2a; text-decoration: none; font-weight: 500; }
+  .toc a:hover { text-decoration: underline; }
+  .toc .sub { padding-left: 18px; font-size: 12px; color: #555; list-style: lower-alpha; }
+
+  /* Sections */
+  .section { margin-bottom: 48px; }
+  h2.section-title { font-size: 18px; font-weight: 800; color: #6b1f2a; border-bottom: 2px solid #6b1f2a; padding-bottom: 8px; margin-bottom: 20px; }
+  h3.sub-title { font-size: 14px; font-weight: 700; color: #1a1a1a; margin: 24px 0 10px; }
+  h4.sub-sub { font-size: 13px; font-weight: 700; color: #444; margin: 16px 0 8px; }
+  p { margin-bottom: 10px; color: #333; }
+
+  /* Steps */
+  .steps { counter-reset: step-counter; margin: 12px 0 16px 0; }
+  .step { display: flex; gap: 14px; margin-bottom: 10px; align-items: flex-start; }
+  .step-num { background: #6b1f2a; color: #fff; font-size: 11px; font-weight: 700; border-radius: 50%; min-width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; margin-top: 2px; flex-shrink: 0; }
+  .step-text { color: #333; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 12px; }
+  thead th { background: #6b1f2a; color: #fff; padding: 9px 12px; text-align: left; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  tbody td { padding: 9px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+  tbody tr:nth-child(even) { background: #fdfcfb; }
+
+  /* Tips / callouts */
+  .tip { background: #f0f7ed; border-left: 4px solid #4a8a3a; border-radius: 4px; padding: 12px 16px; margin: 14px 0; font-size: 12px; color: #2d5a20; }
+  .tip strong { font-weight: 700; }
+  .note { background: #fdf5e6; border-left: 4px solid #b5860a; border-radius: 4px; padding: 12px 16px; margin: 14px 0; font-size: 12px; color: #7a5800; }
+  .note strong { font-weight: 700; }
+  .warning { background: #fef2f2; border-left: 4px solid #c0392b; border-radius: 4px; padding: 12px 16px; margin: 14px 0; font-size: 12px; color: #7a2020; }
+
+  /* Badge */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+  .badge-red { background: #fde8e8; color: #c0392b; }
+  .badge-green { background: #e8f5e9; color: #2e7d32; }
+  .badge-blue { background: #e3f2fd; color: #1565c0; }
+  .badge-grey { background: #f5f5f5; color: #555; }
+  .badge-amber { background: #fff8e1; color: #b5860a; }
+
+  /* Path crumbs */
+  .path { background: #f5f5f5; border-radius: 4px; padding: 4px 10px; font-size: 12px; color: #444; font-family: 'Courier New', monospace; display: inline-block; margin: 4px 0; }
+
+  /* Field list */
+  .field-list { list-style: none; padding: 0; margin: 10px 0 16px; }
+  .field-list li { padding: 7px 0; border-bottom: 1px dashed #eee; display: flex; gap: 12px; }
+  .field-list li:last-child { border-bottom: none; }
+  .field-name { font-weight: 600; min-width: 170px; color: #1a1a1a; }
+  .field-desc { color: #555; }
+
+  /* Footer */
+  .footer { text-align: center; padding-top: 32px; border-top: 1px solid #eee; margin-top: 40px; font-size: 11px; color: #bbb; }
+
+  @page { margin: 15mm 18mm; size: A4; }
+  @media print {
+    body { background: #fff; }
+    .page { padding: 0; box-shadow: none; max-width: 100%; margin: 0; }
+    .no-print { display: none !important; }
+    h2.section-title { break-before: page; }
+    h2.section-title:first-of-type { break-before: avoid; }
+    thead th { background: #6b1f2a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .step-num { background: #6b1f2a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .tip { background: #f0f7ed !important; border-left-color: #4a8a3a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .note { background: #fdf5e6 !important; border-left-color: #b5860a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="no-print">
+  <button class="btn-print" onclick="window.print()">Print / Save as PDF</button>
+  <button class="btn-close" onclick="window.close()">Close</button>
+</div>
+<div class="page">
+
+  <!-- COVER -->
+  <div class="cover">
+    <div class="cover-logo">VinTrade</div>
+    <div class="cover-subtitle">FC Gastronobile Ltd &nbsp;·&nbsp; Wholesale ERP</div>
+    <div class="cover-title">User Manual — VAT, Product Categories &amp; Invoice Management</div>
+    <div class="cover-meta">For internal use &nbsp;·&nbsp; June 2026</div>
+  </div>
+
+  <!-- TOC -->
+  <div class="toc">
+    <div class="toc-title">Contents</div>
+    <ol>
+      <li><a href="#vat">VAT Configuration</a>
+        <ol class="sub">
+          <li><a href="#vat-rates">Cyprus VAT Rate Reference</a></li>
+          <li><a href="#vat-category">Assigning VAT to a Category</a></li>
+          <li><a href="#vat-item">VAT on Individual Items</a></li>
+          <li><a href="#vat-invoice">How VAT Appears on Invoices</a></li>
+        </ol>
+      </li>
+      <li><a href="#categories">Product Categories</a>
+        <ol class="sub">
+          <li><a href="#cat-create">Creating a Category</a></li>
+          <li><a href="#cat-hierarchy">Parent–Child Hierarchy</a></li>
+          <li><a href="#cat-edit">Editing &amp; Deleting Categories</a></li>
+        </ol>
+      </li>
+      <li><a href="#invoices">Invoice Management</a>
+        <ol class="sub">
+          <li><a href="#inv-types">Document Types</a></li>
+          <li><a href="#inv-create">Creating an Invoice</a></li>
+          <li><a href="#inv-fields">Invoice Fields Reference</a></li>
+          <li><a href="#inv-lineitems">Line Items</a></li>
+          <li><a href="#inv-delivery">Delivery Location</a></li>
+          <li><a href="#inv-status">Status Workflow</a></li>
+          <li><a href="#inv-email">Sending by Email</a></li>
+          <li><a href="#inv-print">Printing &amp; Downloading</a></li>
+          <li><a href="#inv-convert">Converting Proforma / Quotation to Invoice</a></li>
+        </ol>
+      </li>
+    </ol>
+  </div>
+
+  <!-- ═══════════════════════════════ SECTION 1 ═══════════════════════════════ -->
+  <div class="section" id="vat">
+    <h2 class="section-title">1 · VAT Configuration</h2>
+
+    <p>VinTrade tracks VAT (Value Added Tax) at the category level and allows per-item overrides.
+    VAT amounts are calculated automatically on every invoice line and rolled up into the invoice totals.</p>
+
+    <h3 class="sub-title" id="vat-rates">1.1 Cyprus VAT Rate Reference</h3>
+    <table>
+      <thead><tr><th>Rate</th><th>Type</th><th>Applies To</th><th>VinTrade Code</th></tr></thead>
+      <tbody>
+        <tr><td><strong>19%</strong></td><td>Standard</td><td>Most goods &amp; services not listed below</td><td><span class="badge badge-red">19</span></td></tr>
+        <tr><td><strong>9%</strong></td><td>Reduced</td><td>Hotels, restaurants, catering, passenger transport</td><td><span class="badge badge-amber">9</span></td></tr>
+        <tr><td><strong>5%</strong></td><td>Reduced</td><td>Food, non-alcoholic beverages, books, pharma, certain agricultural goods</td><td><span class="badge badge-green">5</span></td></tr>
+        <tr><td><strong>0%</strong></td><td>Zero-rated</td><td>Exports, intra-EU supplies, certain financial services</td><td><span class="badge badge-grey">0</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note"><strong>Note:</strong> Verify rates with your tax advisor before issuing documents — VAT legislation can change. The 5% rate applies to many food products but <em>not</em> to alcoholic beverages (which are standard-rated at 19%).</div>
+
+    <h3 class="sub-title" id="vat-category">1.2 Assigning VAT to a Category</h3>
+    <p>The recommended workflow is to set VAT at the <strong>category level</strong> once, and let items inherit it automatically.</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">In the sidebar, click <strong>Categories</strong> (under Overview).</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>Edit</strong> on the category you want to configure.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">In the <strong>VAT Rate</strong> field, select the applicable rate: 0%, 5%, 9%, or 19%.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save</strong>. All items in this category that are set to "Inherit from category" will immediately use this rate.</div></div>
+    </div>
+    <div class="tip"><strong>Tip:</strong> Leave the VAT Rate blank on a category only if items will each be set individually. "No VAT set" on a category means items must declare their own rate or will fall back to 19% system default.</div>
+
+    <h3 class="sub-title" id="vat-item">1.3 VAT on Individual Items</h3>
+    <p>Each item has a <strong>VAT Rate</strong> field with three options:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:6px;"><strong>Inherit from category</strong> — uses whatever rate is set on the item's category. This is the default for new items and the recommended setting.</li>
+      <li style="margin-bottom:6px;"><strong>0% / 5% / 9% / 19%</strong> — overrides the category rate for this item specifically.</li>
+    </ul>
+    <p>To change an item's VAT rate:</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Items</strong> in the sidebar.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Find the item and click <strong>Edit</strong>.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Scroll to the <strong>VAT Rate</strong> dropdown and select the desired rate (or "Inherit from category").</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save Item</strong>.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="vat-invoice">1.4 How VAT Appears on Invoices</h3>
+    <p>When you add a line item to an invoice, the system resolves the VAT rate in this order:</p>
+    <ol style="padding-left:22px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;">Item's own VAT rate (if explicitly set, not "Inherit")</li>
+      <li style="margin-bottom:5px;">Category's VAT rate</li>
+      <li style="margin-bottom:5px;">System fallback: <strong>19%</strong></li>
+    </ol>
+    <p>The invoice totals section shows:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Subtotal</strong> — sum of all line totals before VAT</li>
+      <li style="margin-bottom:5px;"><strong>VAT</strong> — calculated VAT amount</li>
+      <li style="margin-bottom:5px;"><strong>Total</strong> — subtotal + VAT</li>
+    </ul>
+    <div class="note"><strong>Important for VAT Returns:</strong> The Accounting module's Cyprus VAT 4 Return report reads VAT from posted journal entries, which are generated automatically when invoices are finalised. Ensure invoices are saved with the correct VAT rates before the VAT period closes.</div>
+  </div>
+
+  <!-- ═══════════════════════════════ SECTION 2 ═══════════════════════════════ -->
+  <div class="section" id="categories">
+    <h2 class="section-title">2 · Product Categories</h2>
+
+    <p>Categories organise your item catalogue and carry the default VAT rate for all items within them.
+    They support a two-level hierarchy: top-level (parent) categories and subcategories (children).</p>
+
+    <h3 class="sub-title" id="cat-create">2.1 Creating a Category</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Categories</strong> in the sidebar.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Category</strong> (top-right).</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Fill in the fields (see table below) and click <strong>Create Category</strong>.</div></div>
+    </div>
+    <table>
+      <thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Name</strong></td><td>Yes</td><td>Display name, e.g. "Olive Oils", "Wines – Red".</td></tr>
+        <tr><td><strong>Code</strong></td><td>No</td><td>Short internal code used in reports and imports, e.g. "OIL", "WINE-R".</td></tr>
+        <tr><td><strong>Description</strong></td><td>No</td><td>Free text description for internal reference.</td></tr>
+        <tr><td><strong>Parent Category</strong></td><td>No</td><td>Select a parent to nest this as a subcategory (one level only).</td></tr>
+        <tr><td><strong>VAT Rate</strong></td><td>No</td><td>Default VAT rate applied to all items in this category. Leave blank to require per-item setup.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title" id="cat-hierarchy">2.2 Parent–Child Hierarchy</h3>
+    <p>Categories support a <strong>single level of nesting</strong>: a parent can have multiple children; a child cannot itself be a parent.</p>
+    <p>Example structure:</p>
+    <table>
+      <thead><tr><th>Level</th><th>Example</th><th>VAT Rate</th></tr></thead>
+      <tbody>
+        <tr><td>Parent</td><td>Wines</td><td>19%</td></tr>
+        <tr><td>&nbsp;&nbsp;└ Child</td><td>Wines – Red</td><td><em>inherited → 19%</em></td></tr>
+        <tr><td>&nbsp;&nbsp;└ Child</td><td>Wines – White</td><td><em>inherited → 19%</em></td></tr>
+        <tr><td>Parent</td><td>Food Products</td><td>5%</td></tr>
+        <tr><td>&nbsp;&nbsp;└ Child</td><td>Olive Oils</td><td><em>inherited → 5%</em></td></tr>
+        <tr><td>&nbsp;&nbsp;└ Child</td><td>Pasta &amp; Grains</td><td>9%</td></tr>
+      </tbody>
+    </table>
+    <div class="tip"><strong>Tip:</strong> When a child category has its own VAT rate set, that rate takes precedence for items in that child. Items still resolve their own rate first — child category rate second — parent category rate third.</div>
+
+    <h3 class="sub-title" id="cat-edit">2.3 Editing &amp; Deleting Categories</h3>
+    <p>On the Categories page, each row has <strong>Edit</strong> and <strong>Delete</strong> actions on the right.</p>
+    <div class="warning"><strong>Warning:</strong> Deleting a category is permanent. Items assigned to a deleted category will lose their category assignment. Ensure no active items are in the category before deleting.</div>
+  </div>
+
+  <!-- ═══════════════════════════════ SECTION 3 ═══════════════════════════════ -->
+  <div class="section" id="invoices">
+    <h2 class="section-title">3 · Invoice Management</h2>
+
+    <h3 class="sub-title" id="inv-types">3.1 Document Types</h3>
+    <table>
+      <thead><tr><th>Type</th><th>Purpose</th><th>Affects Stock?</th><th>Affects Accounting?</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-blue">Invoice</span></td><td>Standard sales document — triggers payment obligation.</td><td>Yes – reduces stock</td><td>Yes – posts journal entries</td></tr>
+        <tr><td><span class="badge badge-red">Credit Note</span></td><td>Reversal or refund document issued against a prior invoice.</td><td>Yes – restores stock</td><td>Yes – reverses journal entries</td></tr>
+        <tr><td><span class="badge badge-amber">Proforma</span></td><td>Preliminary invoice for customer approval / advance payment.</td><td>No</td><td>No</td></tr>
+        <tr><td><span class="badge badge-grey">Quotation</span></td><td>Price offer, no legal obligation until accepted.</td><td>No</td><td>No</td></tr>
+      </tbody>
+    </table>
+    <div class="tip"><strong>Tip:</strong> Proforma and Quotation documents can be <strong>converted to an Invoice</strong> with one click once accepted. The original document is preserved.</div>
+
+    <h3 class="sub-title" id="inv-create">3.2 Creating an Invoice</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Invoices</strong> in the sidebar (Sales section).</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Invoice</strong>.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Select a <strong>Customer</strong> — this populates payment terms, price level, and default delivery location.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Verify or change <strong>Invoice Date</strong> and <strong>Due Date</strong>.</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Set the <strong>Delivery Location</strong> if different from the billing address.</div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text">Add line items using the <strong>+ Add Item</strong> button. Search by name or scan a barcode.</div></div>
+      <div class="step"><div class="step-num">7</div><div class="step-text">Adjust quantities, unit prices, and discounts as needed.</div></div>
+      <div class="step"><div class="step-num">8</div><div class="step-text">Add a <strong>Note</strong> if required (appears on the printed document).</div></div>
+      <div class="step"><div class="step-num">9</div><div class="step-text">Click <strong>Save Invoice</strong>. The invoice is created in <em>Draft</em> status.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="inv-fields">3.3 Invoice Fields Reference</h3>
+    <ul class="field-list">
+      <li><span class="field-name">Customer</span><span class="field-desc">The customer account this invoice is billed to. Required.</span></li>
+      <li><span class="field-name">Document Type</span><span class="field-desc">Invoice / Credit Note / Proforma / Quotation.</span></li>
+      <li><span class="field-name">Invoice Date</span><span class="field-desc">The date of issue. Defaults to today.</span></li>
+      <li><span class="field-name">Due Date</span><span class="field-desc">Payment due date. Auto-calculated from the customer's payment terms (e.g. Net 30 = today + 30 days). Editable.</span></li>
+      <li><span class="field-name">Delivery Location</span><span class="field-desc">The physical delivery address. Printed as a "Deliver To" block on the document. See §3.5.</span></li>
+      <li><span class="field-name">Reference / PO Number</span><span class="field-desc">Optional customer purchase order reference for cross-referencing.</span></li>
+      <li><span class="field-name">Currency</span><span class="field-desc">Document currency (configured globally in Settings).</span></li>
+      <li><span class="field-name">Notes</span><span class="field-desc">Free-text notes printed at the bottom of the document.</span></li>
+      <li><span class="field-name">Status</span><span class="field-desc">Draft · Sent · Paid · Overdue · Cancelled. See §3.6.</span></li>
+    </ul>
+
+    <h3 class="sub-title" id="inv-lineitems">3.4 Line Items</h3>
+    <p>Each line on an invoice represents one product. The columns are:</p>
+    <ul class="field-list">
+      <li><span class="field-name">Item</span><span class="field-desc">Lookup from the Items catalogue. Type to search or scan barcode.</span></li>
+      <li><span class="field-name">Description</span><span class="field-desc">Auto-filled from item name. Can be overridden.</span></li>
+      <li><span class="field-name">Quantity</span><span class="field-desc">Number of units (bottles / packs).</span></li>
+      <li><span class="field-name">Unit Price</span><span class="field-desc">Auto-filled from the customer's price level. Editable.</span></li>
+      <li><span class="field-name">Discount %</span><span class="field-desc">Optional percentage discount on this line.</span></li>
+      <li><span class="field-name">VAT Rate</span><span class="field-desc">Inherited from item → category → default 19%. Shown and editable per line.</span></li>
+      <li><span class="field-name">Line Total</span><span class="field-desc">Qty × Unit Price − Discount (excl. VAT).</span></li>
+    </ul>
+    <div class="tip"><strong>Tip:</strong> If a customer has an active Price Contract, discounts from that contract are applied automatically when you select an item.</div>
+
+    <h3 class="sub-title" id="inv-delivery">3.5 Delivery Location</h3>
+    <p>The <strong>Delivery Location</strong> field identifies where goods are to be physically delivered.
+    It is printed on the invoice as a separate <em>"Deliver To"</em> block, distinct from the billing address.</p>
+    <p>There are two ways to set the delivery location:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:6px;"><strong>Saved locations</strong> — if the customer has delivery locations saved on their record (go to Customers → Edit → Delivery Locations tab), they appear as a dropdown. The <em>default</em> location is pre-selected automatically on new invoices.</li>
+      <li style="margin-bottom:6px;"><strong>Free text</strong> — type any location name directly. If a saved location record includes an address, that address is printed under the location name on the document.</li>
+    </ul>
+    <div class="note"><strong>Note:</strong> To add or manage a customer's saved delivery locations, open the customer record, switch to the <strong>Delivery Locations</strong> tab, and use <strong>+ Add Location</strong>. Each location can store a name, full address, and GPS co-ordinates, and one can be marked as the default.</div>
+
+    <h3 class="sub-title" id="inv-status">3.6 Status Workflow</h3>
+    <table>
+      <thead><tr><th>Status</th><th>Meaning</th><th>Transitions Available</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-grey">Draft</span></td><td>Invoice saved but not yet sent to customer.</td><td>Mark Sent · Cancel</td></tr>
+        <tr><td><span class="badge badge-blue">Sent</span></td><td>Invoice emailed or handed to customer.</td><td>Mark Paid · Mark Overdue · Reopen (→ Draft)</td></tr>
+        <tr><td><span class="badge badge-amber">Overdue</span></td><td>Due date has passed without payment.</td><td>Mark Paid · Reopen</td></tr>
+        <tr><td><span class="badge badge-green">Paid</span></td><td>Payment received in full.</td><td>Reopen</td></tr>
+        <tr><td><span class="badge badge-red">Cancelled</span></td><td>Invoice voided — excluded from reports and VAT.</td><td>Reopen</td></tr>
+      </tbody>
+    </table>
+    <div class="note"><strong>Note:</strong> Sending an invoice by email (§3.7) automatically advances a <em>Draft</em> invoice to <em>Sent</em>.</div>
+    <p>Payments received are recorded separately via <strong>Customer Payments</strong>. Recording a payment in full marks the invoice as Paid automatically.</p>
+
+    <h3 class="sub-title" id="inv-email">3.7 Sending by Email</h3>
+    <p>The <strong>Send</strong> button (<em>paper-plane icon</em>) in the invoice toolbar emails the document to the customer.</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open a saved invoice.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>Send</strong> in the top toolbar.
+        <ul style="margin-top:6px; padding-left:18px; color:#555; font-size:12px;">
+          <li>If the customer has an email address on file, the email is sent immediately.</li>
+          <li>If no email is stored, a small popover appears — type the recipient address and click <strong>Send Now</strong>.</li>
+        </ul>
+      </div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">A confirmation toast appears and the invoice status advances to <em>Sent</em>.</div></div>
+    </div>
+    <p>All sent emails are recorded in <strong>Email Log</strong> (Overview section in sidebar) with the to-address, subject, timestamp, and success/failure status.</p>
+    <div class="note"><strong>Email provider setup:</strong> Email sending requires a Resend API key configured in <strong>Settings → Email</strong>. Contact the system administrator if the Send button is not working.</div>
+
+    <h3 class="sub-title" id="inv-print">3.8 Printing &amp; Downloading</h3>
+    <table>
+      <thead><tr><th>Action</th><th>Button</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td><strong>View / Print</strong></td><td>Printer icon</td><td>Opens document in a new browser tab with a Print button. Use browser Print → Save as PDF to create a PDF file.</td></tr>
+        <tr><td><strong>Download</strong></td><td>Download icon</td><td>Downloads the document as an <code>.html</code> file. Open in any browser and print to PDF.</td></tr>
+        <tr><td><strong>Send Email</strong></td><td>Send (paper-plane) icon</td><td>Emails the document directly to the customer (see §3.7).</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title" id="inv-convert">3.9 Converting Proforma or Quotation to Invoice</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the Proforma or Quotation document.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>Create Invoice</strong> in the toolbar (appears only on Proforma / Quotation documents).</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">A new invoice is pre-filled with the same customer, lines, and amounts. Review and adjust as needed.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save Invoice</strong> to finalise. The original Proforma/Quotation is preserved unchanged.</div></div>
+    </div>
+    <div class="tip"><strong>Tip:</strong> Once converted, the Proforma/Quotation is not automatically linked to the new invoice in any "parent" relationship — it simply served as the template. Both documents are independently accessible in their respective lists.</div>
+  </div>
+
+  <div class="footer">
+    <p>VinTrade &nbsp;·&nbsp; FC Gastronobile Ltd &nbsp;·&nbsp; Confidential &amp; for Internal Use Only</p>
+    <p style="margin-top:4px;">Generated ${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" })}</p>
+  </div>
+
+</div>
+</body>
+</html>`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  });
+
   app.get("/api/email-status", async (_req, res) => {
     try {
       const status = await getEmailStatus();
