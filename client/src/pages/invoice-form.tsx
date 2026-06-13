@@ -660,14 +660,12 @@ export default function InvoiceForm() {
   const discAmt = parseFloat(overallDiscountAmount) || 0;
   const computedDiscount = discPct > 0 ? linesSubtotal * (discPct / 100) : discAmt;
 
-  const displaySubtotal = isViewMode && existingInvoice ? parseFloat(existingInvoice.subtotal) : linesSubtotal - computedDiscount;
-  const displayTaxAmount = isViewMode && existingInvoice ? parseFloat(existingInvoice.taxAmount) : displaySubtotal * (parseFloat(taxRate) / 100);
-  const displayTotal = isViewMode && existingInvoice ? parseFloat(existingInvoice.total) : displaySubtotal + displayTaxAmount;
   const displayDiscount = isViewMode && existingInvoice ? parseFloat(existingInvoice.discountAmount || "0") : computedDiscount;
 
-  const subtotal = isViewMode ? displaySubtotal : linesSubtotal - computedDiscount;
-  const taxAmount = isViewMode ? displayTaxAmount : subtotal * (parseFloat(taxRate) / 100);
-  const total = isViewMode ? displayTotal : subtotal + taxAmount;
+  // Subtotal: use stored value in view mode, recompute in edit mode
+  const subtotal = isViewMode && existingInvoice
+    ? parseFloat(existingInvoice.subtotal)
+    : linesSubtotal - computedDiscount;
 
   // Proportional factor so per-line VATs account for any overall invoice discount.
   const vatLineFactor = linesSubtotal > 0 ? subtotal / linesSubtotal : 1;
@@ -682,10 +680,14 @@ export default function InvoiceForm() {
     return parseFloat(String(resolved)) || 19;
   };
 
-  // Total VAT recalculated on the fly from per-line rates (overrides stored taxAmount for display).
+  // VAT total recalculated on the fly from per-line rates — used for both display and saving.
   const recalcVatTotal = lines.reduce((sum, l) => {
     return sum + parseFloat(l.total || "0") * vatLineFactor * getLineVatRate(l) / 100;
   }, 0);
+
+  // Authoritative totals: always use recalculated VAT so display and saved values are consistent.
+  const taxAmount = recalcVatTotal;
+  const total = subtotal + recalcVatTotal;
 
   // Determine which list to return to based on document type
   const resolvedDocType = existingInvoice?.type || docType;

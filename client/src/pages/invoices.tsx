@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, Link } from "wouter";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
@@ -9,11 +9,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, FileText, WifiOff, Wifi, Loader2, Trash2, RefreshCw } from "lucide-react";
+import { Plus, Search, FileText, WifiOff, Wifi, Loader2, Trash2, RefreshCw, Calculator } from "lucide-react";
 import { StatusBadge } from "./dashboard";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { offlineStore } from "@/lib/offline-store";
-import { queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { Invoice } from "@shared/schema";
 
 interface InvoiceWithCustomer extends Invoice {
@@ -27,6 +28,19 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
   const [, navigate] = useLocation();
   const { isOnline, pendingCount, syncing, syncPending, refreshPendingCount } = useOnlineStatus();
   const [pendingInvoices, setPendingInvoices] = useState<any[]>([]);
+  const { toast } = useToast();
+
+  const recalcVatMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/invoices/recalculate-vat-totals", {});
+      return res.json();
+    },
+    onSuccess: (data: { updated: number; total: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices/type", docType] });
+      toast({ title: "VAT totals recalculated", description: `${data.updated} of ${data.total} invoice${data.total !== 1 ? "s" : ""} updated.` });
+    },
+    onError: (e: Error) => toast({ title: "Recalculation failed", description: e.message, variant: "destructive" }),
+  });
 
   useEffect(() => {
     offlineStore.getPendingInvoices().then(p => setPendingInvoices(p)).catch(() => {});
@@ -107,11 +121,18 @@ export default function Invoices({ docType = "invoice" }: { docType?: string }) 
         title={typeLabel[docType] || "Invoices"}
         description={`Manage your ${(typeLabel[docType] || "invoices").toLowerCase()}`}
         action={
-          <Link href={`/invoices/new?type=${docType}`}>
-            <Button data-testid="button-new-invoice">
-              <Plus className="w-4 h-4 mr-1" /> New {docType === "credit_note" ? "Credit Note" : docType === "proforma" ? "Proforma" : docType === "quotation" ? "Quotation" : "Invoice"}
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            {docType === "invoice" && (
+              <Button variant="outline" onClick={() => recalcVatMutation.mutate()} disabled={recalcVatMutation.isPending} data-testid="button-recalc-vat" title="Recalculate stored VAT totals from item rates">
+                <Calculator className={`w-4 h-4 mr-1 ${recalcVatMutation.isPending ? "animate-spin" : ""}`} /> Recalc VAT
+              </Button>
+            )}
+            <Link href={`/invoices/new?type=${docType}`}>
+              <Button data-testid="button-new-invoice">
+                <Plus className="w-4 h-4 mr-1" /> New {docType === "credit_note" ? "Credit Note" : docType === "proforma" ? "Proforma" : docType === "quotation" ? "Quotation" : "Invoice"}
+              </Button>
+            </Link>
+          </div>
         }
       />
 

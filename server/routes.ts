@@ -1518,6 +1518,50 @@ export async function registerRoutes(
     }
   });
 
+  // Bulk recalculate stored taxAmount + total for all invoices using per-line item VAT rates
+  app.post("/api/invoices/recalculate-vat-totals", async (_req, res) => {
+    try {
+      const allInvoices = await storage.getInvoices();
+      const allItems = await storage.getItems();
+      const allCategories = await storage.getCategories();
+      const itemMap = new Map(allItems.map((i: any) => [i.id, i]));
+      const catMap = new Map(allCategories.map((c: any) => [c.id, c]));
+
+      let updated = 0;
+      for (const inv of allInvoices) {
+        if (inv.status === "cancelled") continue;
+        const invItems = await storage.getInvoiceItems(inv.id);
+        if (!invItems.length) continue;
+
+        const linesSubtotal = invItems.reduce((s: number, li: any) => s + parseFloat(li.total || "0"), 0);
+        const storedSubtotal = parseFloat(inv.subtotal);
+        const vatLineFactor = linesSubtotal > 0 ? storedSubtotal / linesSubtotal : 1;
+        const fallbackRate = parseFloat(inv.taxRate || "19");
+
+        const recalcVat = invItems.reduce((s: number, li: any) => {
+          const item = li.itemId ? itemMap.get(li.itemId) as any : null;
+          const catVat = item?.categoryId ? (catMap.get(item.categoryId) as any)?.vatRate : null;
+          const rateStr = item?.vatRate ?? catVat ?? inv.taxRate ?? "19";
+          const rate = parseFloat(String(rateStr)) || fallbackRate;
+          return s + parseFloat(li.total || "0") * vatLineFactor * rate / 100;
+        }, 0);
+
+        const newTaxAmount = parseFloat(recalcVat.toFixed(2));
+        const newTotal = parseFloat((storedSubtotal + recalcVat).toFixed(2));
+        const oldTaxAmount = parseFloat(inv.taxAmount);
+        const oldTotal = parseFloat(inv.total);
+
+        if (Math.abs(newTaxAmount - oldTaxAmount) > 0.001 || Math.abs(newTotal - oldTotal) > 0.001) {
+          await storage.updateInvoice(inv.id, { taxAmount: newTaxAmount.toFixed(2), total: newTotal.toFixed(2) } as any);
+          updated++;
+        }
+      }
+      res.json({ updated, total: allInvoices.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/invoices", async (req, res) => {
     try {
       const { items: lineItems, invoiceNumber: customNumber, ...invoiceData } = req.body;
@@ -5674,7 +5718,10 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
         </div>
         <div class="totals-row grand">
           <span>Total</span>
-          <span>${currencySymbol}${parseFloat(inv.total).toFixed(2)}</span>
+          <span>${currencySymbol}${(parseFloat(inv.subtotal) + items.reduce((s: number, li: any) => {
+            const lr = li.lineVatRate != null ? li.lineVatRate : invTaxRate;
+            return s + parseFloat(li.total || "0") * vatLineFactor * lr / 100;
+          }, 0)).toFixed(2)}</span>
         </div>
       </div>
     </div>
