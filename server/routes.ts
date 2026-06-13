@@ -1659,7 +1659,15 @@ export async function registerRoutes(
         }
         return { ...li, barcode: null };
       }));
-      const enrichedInv = { ...inv, items: enrichedItems };
+
+      let deliveryAddress: string | null = null;
+      if (inv.deliveryLocation && inv.customerId) {
+        const deliveryLocs = await storage.getCustomerDeliveryLocations(inv.customerId);
+        const matchedLoc = deliveryLocs.find((l: any) => l.name === inv.deliveryLocation);
+        if (matchedLoc?.address) deliveryAddress = matchedLoc.address;
+      }
+
+      const enrichedInv = { ...inv, items: enrichedItems, deliveryAddress };
 
       const html = generateInvoiceHtml(enrichedInv, customer, typeLabel, autoPrint, settingsMap);
 
@@ -1703,7 +1711,15 @@ export async function registerRoutes(
         }
         return { ...li, barcode: null };
       }));
-      const enrichedInv = { ...inv, items: enrichedItems };
+
+      let deliveryAddress: string | null = null;
+      if (inv.deliveryLocation && inv.customerId) {
+        const deliveryLocs = await storage.getCustomerDeliveryLocations(inv.customerId);
+        const matchedLoc = deliveryLocs.find((l: any) => l.name === inv.deliveryLocation);
+        if (matchedLoc?.address) deliveryAddress = matchedLoc.address;
+      }
+
+      const enrichedInv = { ...inv, items: enrichedItems, deliveryAddress };
 
       const html = generateInvoiceHtml(enrichedInv, customer, typeLabel, false, settingsMap);
 
@@ -4905,12 +4921,19 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
         <div class="party-label">Bill To</div>
         <div class="party-name">${customer?.name || "N/A"}</div>
         <div class="party-detail">
-          ${(inv as any).deliveryLocation ? `<strong>${(inv as any).deliveryLocation}</strong><br>` : (customer as any)?.location ? `<strong>${(customer as any).location}</strong><br>` : ""}
           ${customer?.address ? customer.address + "<br>" : ""}
           ${customer?.city || ""}
           ${customer?.taxId ? "<br>Tax ID: " + customer.taxId : ""}
         </div>
       </div>
+      ${(inv as any).deliveryLocation ? `
+      <div class="party">
+        <div class="party-label">Deliver To</div>
+        <div class="party-name">${(inv as any).deliveryLocation}</div>
+        <div class="party-detail">
+          ${(inv as any).deliveryAddress ? (inv as any).deliveryAddress.replace(/\n/g, "<br>") + "<br>" : ""}
+        </div>
+      </div>` : ""}
       <div class="party" style="text-align:right;">
         <div class="party-label">Document Details</div>
         <div class="party-detail">
