@@ -5827,7 +5827,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     </div>` : ""}
 
     <div class="footer">
-      <p>${companyName} - Wholesale Wine & Spirits</p>
+      <p>${companyName} - Mediterranean Fine Foods</p>
       <p>${invoiceFooter}</p>
     </div>
   </div>
