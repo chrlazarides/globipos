@@ -10,9 +10,27 @@ import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLogin
 import { db } from "./db";
 import { sql, and, eq, gte, lte, desc } from "drizzle-orm";
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser } from "./auth";
 import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
 import QRCode from "qrcode";
+
+// ─── LOGO BASE64 (embedded so it shows in emails, print, and offline) ────────
+function getLogoDataUrl(): string {
+  const candidates = [
+    path.resolve(__dirname, "public", "logo.png"),
+    path.resolve(process.cwd(), "client", "public", "logo.png"),
+  ];
+  for (const p of candidates) {
+    try {
+      const data = fs.readFileSync(p);
+      return `data:image/png;base64,${data.toString("base64")}`;
+    } catch { /* try next */ }
+  }
+  return "/logo.png"; // fallback if file not found
+}
+const LOGO_DATA_URL = getLogoDataUrl();
 
 // ─── HTML ESCAPING HELPER ────────────────────────────────────────────────────
 function escHtml(str: unknown): string {
@@ -5697,7 +5715,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     <div class="header">
       <div class="brand">
         <div class="brand-top">
-          <img src="/logo.png" alt="Logo" class="brand-logo" />
+          <img src="${LOGO_DATA_URL}" alt="Logo" class="brand-logo" />
           <div class="brand-name">${companyName}</div>
         </div>
         <div class="brand-detail">
@@ -5965,7 +5983,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
     <tr>
       <td style="width:55%;vertical-align:top;">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
-          <img src="/logo.png" alt="" style="height:44px;width:auto;object-fit:contain;" />
+          <img src="${LOGO_DATA_URL}" alt="" style="height:44px;width:auto;object-fit:contain;" />
           <div>
             <div style="font-size:18px;font-weight:800;color:#1a1a1a;line-height:1.1;">${companyName}</div>
             ${companyRegNo ? `<div style="font-size:10px;color:#888;margin-top:2px;">Reg. No: ${companyRegNo}</div>` : ""}
