@@ -33,6 +33,7 @@ interface LineItem {
   discountPercent: string;
   discount: string;
   total: string;
+  catalogPrice?: string;
 }
 
 type PriceHistoryEntry = {
@@ -555,6 +556,8 @@ export default function InvoiceForm() {
               updated[index].discount = "0";
             }
           }
+          // Store the auto-resolved price as the catalog baseline for override detection
+          updated[index].catalogPrice = updated[index].unitPrice;
         }
       }
       if (field === "discountPercent") {
@@ -644,6 +647,7 @@ export default function InvoiceForm() {
           discountPercent,
           discount,
           total: lineTotal,
+          catalogPrice: unitPrice,
         };
         return [...filtered, newLine];
       });
@@ -1347,6 +1351,9 @@ export default function InvoiceForm() {
                           )}
                         </TableCell>
                         <TableCell>
+                          {isViewMode ? (
+                            <div className="text-sm font-medium">€{parseFloat(line.unitPrice).toFixed(2)}</div>
+                          ) : (
                           <div className="space-y-1">
                             <div className="flex items-center gap-1">
                               <Input
@@ -1354,16 +1361,57 @@ export default function InvoiceForm() {
                                 inputMode="decimal"
                                 value={line.unitPrice}
                                 onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
-                                disabled={isViewMode}
+                                onFocus={(e) => e.target.select()}
                                 data-testid={`input-line-price-${idx}`}
                               />
-                              {line.itemId && !isViewMode && (
+                              {line.itemId && (
                                 <ItemPriceHistoryPopover
                                   itemId={line.itemId}
                                   itemName={line.description || items.find(i => i.id === line.itemId)?.name || ""}
                                 />
                               )}
                             </div>
+                            {(() => {
+                              const isPriceOverridden = line.itemId && line.catalogPrice != null &&
+                                Math.abs(parseFloat(line.unitPrice || "0") - parseFloat(line.catalogPrice)) > 0.001;
+                              if (!isPriceOverridden) return null;
+                              return (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  <span className="text-xs px-1.5 py-0.5 rounded border bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800 leading-tight">
+                                    ✏️ Override · catalog €{parseFloat(line.catalogPrice!).toFixed(2)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs text-muted-foreground underline hover:text-foreground"
+                                    onClick={() => updateLine(idx, "unitPrice", line.catalogPrice!)}
+                                    data-testid={`button-restore-price-${idx}`}
+                                  >Restore</button>
+                                </div>
+                              );
+                            })()}
+                            {line.itemId && customerId && (() => {
+                              const isPriceOverridden = line.catalogPrice != null &&
+                                Math.abs(parseFloat(line.unitPrice || "0") - parseFloat(line.catalogPrice)) > 0.001;
+                              const hasManualDiscount = manualDiscountLines.has(idx) && parseFloat(line.discount) > 0;
+                              if (!isPriceOverridden && !hasManualDiscount) return null;
+                              const qty = line.quantity || 1;
+                              const effPrice = isPriceOverridden
+                                ? parseFloat(line.unitPrice) || 0
+                                : (parseFloat(line.unitPrice) * qty - parseFloat(line.discount)) / qty;
+                              return (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 w-full px-1.5 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800"
+                                  data-testid={`button-save-contract-price-${idx}`}
+                                  disabled={quickSaveMutation.isPending}
+                                  onClick={() => quickSaveMutation.mutate({ custId: customerId, itemId: line.itemId, fixedPrice: Math.max(0, effPrice) })}
+                                >
+                                  {quickSaveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : "💾 "}Save to contract
+                                </Button>
+                              );
+                            })()}
                             {line.itemId && customerId && (() => {
                               const _item = items.find(i => i.id === line.itemId);
                               if (!_item) return null;
@@ -1389,6 +1437,7 @@ export default function InvoiceForm() {
                               );
                             })()}
                           </div>
+                          )}
                         </TableCell>
                         <TableCell>
                           {isViewMode ? (
@@ -1440,23 +1489,6 @@ export default function InvoiceForm() {
                                 />
                                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">{"\u20AC"}</span>
                               </div>
-                              {line.itemId && customerId && manualDiscountLines.has(idx) && parseFloat(line.discount) > 0 && (
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-6 w-full px-1.5 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800"
-                                  data-testid={`button-save-contract-price-${idx}`}
-                                  disabled={quickSaveMutation.isPending}
-                                  onClick={() => {
-                                    const qty = line.quantity || 1;
-                                    const effPrice = (parseFloat(line.unitPrice) * qty - parseFloat(line.discount)) / qty;
-                                    quickSaveMutation.mutate({ custId: customerId, itemId: line.itemId, fixedPrice: Math.max(0, effPrice) });
-                                  }}
-                                >
-                                  {quickSaveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : "💾 "}Save price to contract
-                                </Button>
-                              )}
                             </div>
                           )}
                         </TableCell>
@@ -1607,6 +1639,7 @@ export default function InvoiceForm() {
                             inputMode="decimal"
                             value={line.unitPrice}
                             onChange={(e) => { const v = e.target.value; if (v === "" || /^\d*\.?\d*$/.test(v)) updateLine(idx, "unitPrice", v); }}
+                            onFocus={(e) => e.target.select()}
                             disabled={isViewMode}
                           />
                           {line.itemId && !isViewMode && (
@@ -1616,6 +1649,23 @@ export default function InvoiceForm() {
                             />
                           )}
                         </div>
+                        {!isViewMode && (() => {
+                          const isPriceOverridden = line.itemId && line.catalogPrice != null &&
+                            Math.abs(parseFloat(line.unitPrice || "0") - parseFloat(line.catalogPrice)) > 0.001;
+                          if (!isPriceOverridden) return null;
+                          return (
+                            <div className="flex items-center gap-1 flex-wrap mt-1">
+                              <span className="text-xs px-1.5 py-0.5 rounded border bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800 leading-tight">
+                                ✏️ Override · catalog €{parseFloat(line.catalogPrice!).toFixed(2)}
+                              </span>
+                              <button
+                                type="button"
+                                className="text-xs text-muted-foreground underline hover:text-foreground"
+                                onClick={() => updateLine(idx, "unitPrice", line.catalogPrice!)}
+                              >Restore</button>
+                            </div>
+                          );
+                        })()}
                         {line.itemId && customerId && (() => {
                           const _item = items.find(i => i.id === line.itemId);
                           if (!_item) return null;
@@ -1668,22 +1718,28 @@ export default function InvoiceForm() {
                       </div>
                     )}
 
-                    {!isViewMode && line.itemId && customerId && manualDiscountLines.has(idx) && parseFloat(line.discount) > 0 && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 w-full px-1.5 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800"
-                        disabled={quickSaveMutation.isPending}
-                        onClick={() => {
-                          const qty = line.quantity || 1;
-                          const effPrice = (parseFloat(line.unitPrice) * qty - parseFloat(line.discount)) / qty;
-                          quickSaveMutation.mutate({ custId: customerId, itemId: line.itemId, fixedPrice: Math.max(0, effPrice) });
-                        }}
-                      >
-                        {quickSaveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : "💾 "}Save price to contract
-                      </Button>
-                    )}
+                    {!isViewMode && line.itemId && customerId && (() => {
+                      const isPriceOverridden = line.catalogPrice != null &&
+                        Math.abs(parseFloat(line.unitPrice || "0") - parseFloat(line.catalogPrice)) > 0.001;
+                      const hasManualDiscount = manualDiscountLines.has(idx) && parseFloat(line.discount) > 0;
+                      if (!isPriceOverridden && !hasManualDiscount) return null;
+                      const qty = line.quantity || 1;
+                      const effPrice = isPriceOverridden
+                        ? parseFloat(line.unitPrice) || 0
+                        : (parseFloat(line.unitPrice) * qty - parseFloat(line.discount)) / qty;
+                      return (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 w-full px-1.5 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800"
+                          disabled={quickSaveMutation.isPending}
+                          onClick={() => quickSaveMutation.mutate({ custId: customerId, itemId: line.itemId, fixedPrice: Math.max(0, effPrice) })}
+                        >
+                          {quickSaveMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : "💾 "}Save to contract
+                        </Button>
+                      );
+                    })()}
 
                     <div className="flex items-center justify-between pt-1">
                       {isViewMode && parseFloat(line.discount) > 0 && (
