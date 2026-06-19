@@ -5620,7 +5620,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
       <td class="cell right">${currencySymbol}${parseFloat(li.unitPrice).toFixed(2)}</td>
       ${hasDiscountPercent ? `<td class="cell right">${discPercent > 0 ? discPercent.toFixed(1) + "%" : "-"}</td>` : ""}
       ${hasDiscount ? `<td class="cell right">${discAmount > 0 ? currencySymbol + discAmount.toFixed(2) : "-"}</td>` : ""}
-      <td class="cell right vat-col"><span style="font-size:10px;color:#999;">${invTaxRate.toFixed(0)}%</span> ${currencySymbol}${lineVat}</td>
+      <td class="cell right vat-col"><span style="font-size:10px;color:#999;">${lineRate.toFixed(0)}%</span> ${currencySymbol}${lineVat}</td>
       <td class="cell right bold">${currencySymbol}${parseFloat(li.total).toFixed(2)}</td>
     </tr>`;
   }).join("");
