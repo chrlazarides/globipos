@@ -19,7 +19,7 @@ import QRCode from "qrcode";
 // ─── LOGO BASE64 (embedded so it shows in emails, print, and offline) ────────
 function getLogoDataUrl(): string {
   const candidates = [
-    path.resolve(__dirname, "public", "logo.png"),
+    path.resolve(process.cwd(), "dist", "public", "logo.png"),
     path.resolve(process.cwd(), "client", "public", "logo.png"),
   ];
   for (const p of candidates) {
