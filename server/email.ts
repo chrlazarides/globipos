@@ -137,7 +137,7 @@ export async function sendTestEmail(
       html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
         <h2 style="color:#374151;margin-top:0;">Email Test Successful</h2>
         <p style="color:#374151;">This is a test email sent from your <strong>VinTrade</strong> system to confirm email delivery is working correctly.</p>
-        <p style="color:#6b7280;font-size:13px;">Sent via Resend · From: ${fromEmail}</p>
+        <p style="color:#6b7280;font-size:13px;">Sent via Resend · From: ${escHtml(fromEmail)}</p>
       </div>`,
     });
     return { success: true, fromEmail };

@@ -118,16 +118,18 @@ export default function Customers() {
     cash: "Cash", credit_7: "7 Days", credit_14: "14 Days", credit_30: "30 Days", credit_60: "60 Days", credit_90: "90 Days",
   };
 
+  const escHtml = (s: unknown) => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
   const handlePrint = () => {
     const rows = filtered.map((c) => `
       <tr>
-        <td>${c.name}</td>
-        <td>${c.code}</td>
-        <td>${[c.contactFirstName, c.contactLastName].filter(Boolean).join(" ") || "-"}</td>
-        <td>${c.phone || "-"}</td>
-        <td>${c.email || "-"}</td>
-        <td>${c.city || "-"}</td>
-        <td>${paymentTermsLabel[c.paymentTerms] || c.paymentTerms}</td>
+        <td>${escHtml(c.name)}</td>
+        <td>${escHtml(c.code)}</td>
+        <td>${escHtml([c.contactFirstName, c.contactLastName].filter(Boolean).join(" ") || "-")}</td>
+        <td>${escHtml(c.phone || "-")}</td>
+        <td>${escHtml(c.email || "-")}</td>
+        <td>${escHtml(c.city || "-")}</td>
+        <td>${escHtml(paymentTermsLabel[c.paymentTerms] || c.paymentTerms)}</td>
         <td style="text-align:right">€${parseFloat(c.currentBalance).toFixed(2)}</td>
         <td>${c.active ? "Active" : "Inactive"}</td>
       </tr>`).join("");
