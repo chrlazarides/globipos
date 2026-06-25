@@ -1,0 +1,210 @@
+1. Security: Vite/Babel dependency upgrade
+File: package.json
+
+Upgrade vite to ^8.1.0
+Upgrade @vitejs/plugin-react to ^6.0.3
+Upgrade @tailwindcss/vite to ^4.3.1
+File: vite.config.ts
+
+Add cssMinify: "esbuild" inside the build config block
+File: client/src/index.css
+
+Find the CSS rule .border.toggle-elevate::before and change it to [class~="border"].toggle-elevate::before
+File: server/index.ts
+
+After the Express app is created, add: app.set("trust proxy", 1);
+2. Bug fix: Profit calculation
+Problem: costPrice is stored per-pack (e.g. €300 for a case of 12). The old code multiplied pack cost × bottle-expanded quantity, inflating COGS by up to 12×.
+
+Fix: Replace every COGS/profit calculation with:
+
+costPerBottle = costPrice / packSize
+cost = costPerBottle × bottleQty
+
+Apply this fix in all of these locations:
+
+server/routes.ts
+
+Customer analytics profit block (inside customer detail route)
+Invoice COGS journal entry creation
+Credit note COGS journal entry creation
+Batch journal recalculation loop
+Per-invoice journal regeneration loop
+server/storage.ts
+
+Monthly trend profit calculation
+getSalesReport — per-invoice profit
+getItemSalesReport — per-line COGS: change costPrice × qty to (costPrice / packSize) × qty
+3. Dashboard: Two new financial stat cards
+server/storage.ts — getDashboardStats() method
+
+Add two new aggregate queries:
+
+unpaidThisMonth: SUM(total) of invoices where status NOT IN ('paid','cancelled') AND dueDate >= first day of current month AND dueDate < first day of next month
+overdueOver1Month: SUM(total) of invoices where status NOT IN ('paid','cancelled') AND dueDate < first day of current month
+Return both values in the stats object.
+
+client/src/pages/dashboard.tsx
+
+Add two new stat cards to the overview grid (expand to 6-column grid on xl screens):
+
+"Due This Month" — shows unpaidThisMonth in €
+"Overdue >1 Month" — shows overdueOver1Month in €, styled red when non-zero
+4. Invoice: Price breakdown display
+server/routes.ts — generateInvoiceHtml() function
+
+In the line items table:
+
+Rename the "Unit Price" column header to "List Price"
+Remove the "Discount Amount" column
+Add a "Net Price" column showing listPrice × (1 − discPercent/100)
+Show discount % with an amber pill/badge style
+Only render the Net Price column when at least one line has a non-zero discount
+client/src/pages/invoice-form.tsx — view mode line items
+
+For the price summary shown below each line item in view mode, change from:
+
+Disc: X% (€Y)
+
+to:
+
+€{listPrice}  −{discPct}%  €{netPrice}
+
+where netPrice = unitPrice × (1 − discountPercent/100). Style the discount badge with amber colouring. Only show this row if discountPercent > 0.
+
+5. Purchase Invoices: Supplier payables summary
+server/storage.ts
+
+Add interface method and implementation for getPurchaseInvoiceSummary():
+
+Runs 3 aggregate queries against purchase_invoices:
+totalOutstanding + totalCount: all rows where status NOT IN ('paid','cancelled')
+dueThisMonth: unpaid rows where dueDate is in the current calendar month
+overdue + overdueCount: unpaid rows where dueDate IS NOT NULL AND dueDate < first of current month
+Returns: { totalOutstanding, totalCount, dueThisMonth, overdue, overdueCount }
+server/routes.ts
+
+Add GET /api/purchase-invoices/summary before the GET /api/purchase-invoices/:id route (to avoid the wildcard swallowing it):
+
+app.get("/api/purchase-invoices/summary", async (_req, res) => {
+  const summary = await storage.getPurchaseInvoiceSummary();
+  res.json(summary);
+});
+
+client/src/pages/purchase-invoices.tsx
+
+Add useQuery for /api/purchase-invoices/summary
+Add 3 stat cards above the Dialog, in a grid-cols-1 sm:grid-cols-3 layout:
+Total Outstanding (primary colour, CreditCard icon) — shows totalOutstanding + invoice count
+Due This Month (blue, Clock icon) — shows dueThisMonth
+Overdue (red when > 0, AlertTriangle icon) — shows overdue + count of overdue invoices
+6. Items: Stock reorder suggestions panel
+server/storage.ts
+
+Add interface method and implementation for getStockSuggestions():
+
+Compute sixtyDaysAgo = today − 60 days
+Fetch all active items (id, name, sku, stockQuantity, reorderLevel, packSize, categoryName)
+Fetch all non-cancelled invoices of type "invoice" where date >= sixtyDaysAgo
+For each invoice line item, convert to bottles: qty = saleUnit === "pack" ? quantity × packSize : quantity
+Build salesMap[itemId] = totalBottlesSold
+For each item:
+avgMonthly = salesMap[id] / 2
+Include item if stockQuantity <= reorderLevel OR (avgMonthly > 0 AND stockQuantity < avgMonthly × 2)
+suggestedQty = max(reorderLevel − stock, ceil(avgMonthly × 2 − stock))
+urgency = "critical" if out of stock or below reorder with sales, "warning" if below reorder without sales, "info" otherwise
+Sort: critical → warning → info, ties by ascending stockQuantity
+server/routes.ts
+
+Add GET /api/items/stock-suggestions before GET /api/items/:id:
+
+app.get("/api/items/stock-suggestions", async (_req, res) => {
+  const suggestions = await storage.getStockSuggestions();
+  res.json(suggestions);
+});
+
+client/src/pages/items.tsx
+
+Add useQuery for /api/items/stock-suggestions
+Add const [showSuggestions, setShowSuggestions] = useState(true)
+Before the main items Card, render a collapsible amber-bordered Card:
+Header row: AlertTriangle icon + "Reorder Suggestions" label + count badge + chevron toggle
+Only render when stockSuggestions.length > 0
+Collapsible body: a table with columns: Item (name + SKU + category), In Stock, Reorder At, Avg/Month, Suggested Order
+Red dot for critical urgency, amber dot for warning
+Footer note: "Based on sales over the last 60 days. Suggested order = 2 months of average sales minus current stock."
+7. Pricing page: Savings badge on customer-level price row
+client/src/pages/pricing.tsx — Auto-Saved Prices contract rows
+
+In the "Cust. Level" column cell, add a second badge showing saves €X.XX vs Level N when:
+
+custLevelPrice is available and not null
+fixedPrice < custLevelPrice (genuine saving)
+The row is not stale (isStale === false)
+Style: border-blue-400 / text-blue-700 / bg-blue-50 (+ dark mode equivalents) to distinguish from the existing green retail-savings badge on the Fixed Price column.
+
+8. Pricing page: Remember last sort option
+client/src/pages/pricing.tsx
+
+Persist the selected sort option to localStorage under a stable key (e.g. pricing_sort_option)
+On mount, read from localStorage and initialise the sort state with the stored value
+On sort change, write the new value to localStorage
+9. Invoice form: Auto-close override popover on line change
+client/src/pages/invoice-form.tsx
+
+When the user selects a different line item (item changes in the line item selector), automatically close/clear any open override popover for that line. Also close it when a line is removed from the invoice.
+
+10. Email logs: Show from-address column
+client/src/pages/email-logs.tsx
+
+Add a "From" column to the email log table's columns array, positioned between BCC and Status:
+
+Display row.fromEmail or "—" if null/empty
+Add data-testid="text-email-from-{id}"
+The fromEmail field is already stored in the DB and returned by the API — only the visible column was missing.
+
+11. Email logs: Search by reply-to address
+client/src/pages/email-logs.tsx
+
+Extend the client-side search filter to also match against row.replyTo (or equivalent reply-to field) in addition to the existing search fields.
+
+12. Date pickers: Persist both dates when one changes
+Date range pickers across the app
+
+When the user picks a new FROM date, preserve the existing TO date (don't reset it). When the user picks a new TO date, preserve the existing FROM date.
+
+13. Date pickers: Scrollable on small screens
+All calendar PopoverContent wrappers across the app
+
+Apply max-w-[calc(100vw-16px)] overflow-auto to every PopoverContent that contains a Calendar component. Files to update:
+
+client/src/pages/reports.tsx (4 popovers)
+client/src/pages/items.tsx (1 popover)
+client/src/pages/general-ledger.tsx (1 popover)
+client/src/pages/accounting-reports.tsx (2 popovers)
+client/src/pages/accounting-audit.tsx (1 popover)
+client/src/pages/chart-of-accounts.tsx (1 popover)
+14. Date pickers: Keyboard shortcut to clear dates
+Date picker components
+
+Add an Escape key handler (and optionally a visible clear button) on calendar popovers so the user can clear the selected date without opening the calendar.
+
+15. Invoice form: Override notice in view mode
+client/src/pages/invoice-form.tsx
+
+When opening a saved invoice in view mode, detect contract overrides (both fixed-price and percentage-discount) and show the override notice inline, just as it appears in edit mode.
+
+16. Invoice form: Override notice for percentage-discount contracts
+client/src/pages/invoice-form.tsx
+
+Extend the contract override detection and notice to cover percentage-discount contracts, not just fixed-price contracts:
+
+On load and on blur, compare line.discountPercent against the contract's expected discount % (tolerance: 0.01%)
+Flag diverging lines with overrideType: "percentage" and store contractDiscountPercent
+Override notice text: show "Contract discount: X.X%" for percentage overrides vs "Contract price: €X.XX" for fixed-price
+Undo action for percentage overrides: restore discountPercent to contract value and recalculate total (do not touch unitPrice)
+17. Seasonal Offers page: Keep active tab in URL
+client/src/pages/seasonal-offers.tsx (or equivalent)
+
+Persist the active tab (e.g. ?tab=active) in the URL query string so that reloading or navigating back lands on the same tab.
+
