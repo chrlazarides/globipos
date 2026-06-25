@@ -101,21 +101,31 @@ app.use((req, res, next) => {
   await seedDatabase().catch(e => console.error("Seed error:", e));
   await ensureDefaultSettings().catch(e => console.error("Settings init error:", e));
 
-  // One-time opening balance migration — runs idempotently (only updates rows still at 0.00)
+  // Schema migration: add opening_balance column if it doesn't exist
   try {
     await db.execute(sql`
-      UPDATE customers SET current_balance = '9559.06'
-        WHERE code = 'CUST0001' AND current_balance = '0.00';
-      UPDATE customers SET current_balance = '1756.27'
-        WHERE code = 'THEOSKEPASTI' AND current_balance = '0.00';
-      UPDATE customers SET current_balance = '584.57'
-        WHERE code = 'MINTHIS' AND current_balance = '0.00';
-      UPDATE customers SET current_balance = '2792.24'
-        WHERE code = 'MLPK' AND current_balance = '0.00';
-      UPDATE customers SET current_balance = '6830.43'
-        WHERE code = 'MAR-AZUL-AYN' AND current_balance = '0.00';
-      UPDATE customers SET current_balance = '2728.63'
-        WHERE code = 'MAR-AZUL-NIC' AND current_balance = '0.00';
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS opening_balance NUMERIC(12,2) NOT NULL DEFAULT 0;
+    `);
+  } catch (e) {
+    console.error("[migration] opening_balance column error:", e);
+  }
+
+  // One-time opening balance migration — sets carry-over balances from previous system
+  // Idempotent: only sets where opening_balance is still 0
+  try {
+    await db.execute(sql`
+      UPDATE customers SET opening_balance = 9559.06
+        WHERE code = 'CUST0001' AND opening_balance = 0;
+      UPDATE customers SET opening_balance = 1756.27
+        WHERE code = 'THEOSKEPASTI' AND opening_balance = 0;
+      UPDATE customers SET opening_balance = 584.57
+        WHERE code = 'MINTHIS' AND opening_balance = 0;
+      UPDATE customers SET opening_balance = 2792.24
+        WHERE code = 'MLPK' AND opening_balance = 0;
+      UPDATE customers SET opening_balance = 6830.43
+        WHERE code = 'MAR-AZUL-AYN' AND opening_balance = 0;
+      UPDATE customers SET opening_balance = 2728.63
+        WHERE code = 'MAR-AZUL-NIC' AND opening_balance = 0;
     `);
     console.log("[migration] Opening balances applied.");
   } catch (e) {

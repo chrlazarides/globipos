@@ -230,6 +230,7 @@ export class DatabaseStorage implements IStorage {
     }
 
     return custs.map(c => {
+      const openingBalance = parseFloat(String(c.openingBalance ?? "0")) || 0;
       const custInvs = allInvs.filter(i => i.customerId === c.id && i.type === "invoice");
       const custCns = allInvs.filter(i => i.customerId === c.id && i.type === "credit_note");
       const totalInvoiced = custInvs.reduce((s, i) => s + parseFloat(i.total), 0);
@@ -240,7 +241,7 @@ export class DatabaseStorage implements IStorage {
         if (i.status === "paid") return s + parseFloat(i.total);
         return s;
       }, 0);
-      const liveBalance = Math.max(0, totalInvoiced - totalCredits - totalPaid);
+      const liveBalance = Math.max(0, openingBalance + totalInvoiced - totalCredits - totalPaid);
       return { ...c, currentBalance: liveBalance.toFixed(2) };
     });
   }
@@ -1280,12 +1281,14 @@ export class DatabaseStorage implements IStorage {
           };
         });
 
-      const totalBalance = aging.withinTermsFuture + aging.dueThisMonth + aging.overdue1_30 + aging.overdue31_60 + aging.overdue60plus;
+      const openingBalance = parseFloat(String(cust.openingBalance ?? "0")) || 0;
+      const totalBalance = openingBalance + aging.withinTermsFuture + aging.dueThisMonth + aging.overdue1_30 + aging.overdue31_60 + aging.overdue60plus;
 
       statements.push({
         customerId: cust.id,
         customerName: cust.name,
         paymentTerms: cust.paymentTerms || "cash",
+        openingBalance: openingBalance.toFixed(2),
         totalInvoiced: totalInvoiced.toFixed(2),
         totalCredits: totalCredits.toFixed(2),
         totalPaid: totalPaid.toFixed(2),

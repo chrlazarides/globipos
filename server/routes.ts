@@ -5905,8 +5905,9 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
   }
   activities.sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  // Running balance
-  let runningBalance = 0;
+  // Running balance — starts from opening balance (carry-over from previous system)
+  const openingBal = parseFloat(statement?.openingBalance || "0");
+  let runningBalance = openingBal;
   const activityRows = activities.map((a, idx) => {
     if (a.type === "payment") {
       runningBalance -= a.amount;
@@ -5926,6 +5927,17 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       <td style="padding:8px 10px;font-size:12px;text-align:right;font-weight:700;color:${runningBalance > 0 ? "#1a1a1a" : "#2e7d32"};">${fmt(Math.abs(runningBalance))}${runningBalance < 0 ? "&nbsp;CR" : ""}</td>
     </tr>`;
   }).join("");
+
+  const bfwdRow = openingBal > 0
+    ? `<tr style="background:#f0f4ff;">
+        <td style="padding:8px 10px;font-size:11px;color:#555;white-space:nowrap;">—</td>
+        <td style="padding:8px 10px;font-size:11px;font-weight:600;color:#1a1a1a;">B/F</td>
+        <td style="padding:8px 10px;font-size:11px;color:#555;font-style:italic;">Balance Brought Forward (previous system)</td>
+        <td style="padding:8px 10px;font-size:11px;color:#555;text-align:center;">—</td>
+        <td style="padding:8px 10px;font-size:11px;text-align:right;font-weight:600;color:#1a1a1a;">${fmt(openingBal)}</td>
+        <td style="padding:8px 10px;font-size:12px;text-align:right;font-weight:700;color:#1a1a1a;">${fmt(openingBal)}</td>
+      </tr>`
+    : "";
 
   // Aging grid columns: Current | 1-30 | 31-60 | 61-90 | >90 | Amount Due
   const agCurrent = parseFloat(ag.withinTermsFuture || "0") + parseFloat(ag.dueThisMonth || "0");
@@ -6036,7 +6048,7 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
       </tr>
     </thead>
     <tbody>
-      ${activityRows || `<tr><td colspan="6" style="padding:16px;text-align:center;color:#999;font-size:12px;">No activity</td></tr>`}
+      ${bfwdRow}${activityRows || `<tr><td colspan="6" style="padding:16px;text-align:center;color:#999;font-size:12px;">No activity</td></tr>`}
       <!-- Total row -->
       <tr style="border-top:2px solid #1a1a1a;">
         <td colspan="4" style="padding:10px;font-size:11px;font-weight:700;text-align:right;text-transform:uppercase;letter-spacing:0.5px;color:#555;">Total Balance Due</td>

@@ -88,6 +88,7 @@ export const customers = pgTable("customers", {
   paymentTerms: text("payment_terms").notNull().default("cash"),
   creditLimit: numeric("credit_limit", { precision: 12, scale: 2 }).notNull().default("0"),
   currentBalance: numeric("current_balance", { precision: 12, scale: 2 }).notNull().default("0"),
+  openingBalance: numeric("opening_balance", { precision: 12, scale: 2 }).notNull().default("0"),
   priceLevel: integer("price_level").notNull().default(1),
   notes: text("notes"),
   location: text("location"),
