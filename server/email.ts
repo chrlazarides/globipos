@@ -42,6 +42,11 @@ async function getFromEmail(): Promise<string> {
   return 'onboarding@resend.dev';
 }
 
+async function getReplyToEmail(): Promise<string | null> {
+  const val = await getSettingValue('resend_reply_to');
+  return val && val.trim() ? val.trim() : null;
+}
+
 interface EmailPayload {
   from: string;
   to: string | string[];
@@ -49,11 +54,6 @@ interface EmailPayload {
   html: string;
   reply_to?: string;
   attachments?: Array<{ filename: string; content: string }>;
-}
-
-async function getReplyToEmail(): Promise<string | null> {
-  const companyEmail = await getSettingValue('company_email');
-  return companyEmail || null;
 }
 
 async function sendEmailPayload(payload: EmailPayload): Promise<void> {
@@ -91,10 +91,12 @@ export async function getEmailStatus(): Promise<{
   source: 'db' | 'connector' | 'none';
   hasDbApiKey: boolean;
   dbFromEmail: string;
+  dbReplyTo: string;
   error?: string;
 }> {
   const dbApiKey = await getSettingValue('resend_api_key');
   const dbFromEmail = await getSettingValue('resend_from_email') || '';
+  const dbReplyTo = await getSettingValue('resend_reply_to') || '';
   const hasDbApiKey = !!(dbApiKey && dbApiKey.startsWith('re_'));
 
   try {
@@ -116,6 +118,7 @@ export async function getEmailStatus(): Promise<{
       source,
       hasDbApiKey,
       dbFromEmail,
+      dbReplyTo,
     };
   } catch (e: any) {
     return {
@@ -126,6 +129,7 @@ export async function getEmailStatus(): Promise<{
       source: 'none',
       hasDbApiKey,
       dbFromEmail,
+      dbReplyTo,
       error: e.message,
     };
   }

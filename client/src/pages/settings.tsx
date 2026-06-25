@@ -116,6 +116,7 @@ export default function SettingsPage() {
   const [sendingTest, setSendingTest] = useState(false);
   const [configApiKey, setConfigApiKey] = useState("");
   const [configFromEmail, setConfigFromEmail] = useState("");
+  const [configReplyTo, setConfigReplyTo] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingEmailConfig, setSavingEmailConfig] = useState(false);
 
@@ -128,6 +129,10 @@ export default function SettingsPage() {
     configuredFrom: string;
     actualFrom: string;
     usingFallback: boolean;
+    hasDbApiKey?: boolean;
+    dbFromEmail?: string;
+    dbReplyTo?: string;
+    source?: string;
     error?: string;
   }>({
     queryKey: ["/api/email-status"],
@@ -385,6 +390,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (emailStatus) {
       setConfigFromEmail(emailStatus.dbFromEmail || "");
+      setConfigReplyTo(emailStatus.dbReplyTo || "");
     }
   }, [emailStatus]);
 
@@ -394,6 +400,7 @@ export default function SettingsPage() {
       const res = await apiRequest("POST", "/api/email/save-config", {
         apiKey: configApiKey || undefined,
         fromEmail: configFromEmail,
+        replyTo: configReplyTo,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to save");
@@ -1154,6 +1161,17 @@ export default function SettingsPage() {
                       data-testid="input-resend-from-email"
                     />
                     <p className="text-xs text-muted-foreground">Must be a verified domain in Resend</p>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Reply-To Address <span className="text-muted-foreground/60">(optional)</span></Label>
+                    <Input
+                      type="email"
+                      placeholder="support@yourdomain.com"
+                      value={configReplyTo}
+                      onChange={(e) => setConfigReplyTo(e.target.value)}
+                      data-testid="input-resend-reply-to"
+                    />
+                    <p className="text-xs text-muted-foreground">Customers will reply to this address</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">

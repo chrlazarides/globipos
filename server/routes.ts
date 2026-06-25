@@ -2663,7 +2663,7 @@ export async function registerRoutes(
 
   app.post("/api/email/save-config", requireAdmin, async (req, res) => {
     try {
-      const { apiKey, fromEmail } = req.body;
+      const { apiKey, fromEmail, replyTo } = req.body;
       if (apiKey !== undefined) {
         if (apiKey && !apiKey.startsWith('re_')) {
           return res.status(400).json({ message: "Invalid Resend API key — it must start with 're_'" });
@@ -2672,6 +2672,9 @@ export async function registerRoutes(
       }
       if (fromEmail !== undefined) {
         await storage.upsertSetting('resend_from_email', fromEmail || '', 'Resend From Email', 'email');
+      }
+      if (replyTo !== undefined) {
+        await storage.upsertSetting('resend_reply_to', replyTo || '', 'Resend Reply-To Email', 'email');
       }
       res.json({ success: true });
     } catch (e: any) {
