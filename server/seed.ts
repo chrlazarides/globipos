@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS = [
 ];
 
 // Known stale/wrong company names that should be reset to default
-const INVALID_COMPANY_NAMES = ["ALBANIA POWER", "Demo Company", "Test Company", "Your Company Name", "VINERIA DI MARE Trading"];
+const INVALID_COMPANY_NAMES = ["ALBANIA POWER", "Demo Company", "Test Company", "Your Company Name", "VINERIA DI MARE Trading", "Vineria Di Mare Trading Ltd"];
 
 export async function ensureDefaultSettings() {
   try {

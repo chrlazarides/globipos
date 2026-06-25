@@ -1967,7 +1967,7 @@ export async function registerRoutes(
     const allSettings = await storage.getSettings();
     const settingsMap: Record<string, string> = {};
     for (const s of allSettings) settingsMap[s.key] = s.value;
-    const manualCompanyName = settingsMap["company_name"] || "VinTrade";
+    const manualCompanyName = settingsMap["company_name"] || "Mediterranean Fine Foods";
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2169,9 +2169,9 @@ export async function registerRoutes(
     <h2 class="section-title">1 · Getting Started</h2>
 
     <h3 class="sub-title" id="start-login">1.1 Logging In &amp; Two-Factor Authentication</h3>
-    <p>VinTrade uses username/password login protected by mandatory two-factor authentication (2FA).</p>
+    <p>Mediterranean Fine Foods uses username/password login protected by mandatory two-factor authentication (2FA).</p>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Open the VinTrade URL in your browser. You will see the Sign In screen.</div></div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the Mediterranean Fine Foods URL in your browser. You will see the Sign In screen.</div></div>
       <div class="step"><div class="step-num">2</div><div class="step-text">Enter your <strong>Username</strong> and <strong>Password</strong>, then click <strong>Sign In</strong>.</div></div>
       <div class="step"><div class="step-num">3</div><div class="step-text"><strong>First login only — 2FA setup:</strong> You will be taken to a setup screen. Open your authenticator app (Google Authenticator, Authy, etc.), scan the QR code, enter the 6-digit code to confirm, and click <strong>Enable 2FA</strong>.</div></div>
       <div class="step"><div class="step-num">4</div><div class="step-text"><strong>Subsequent logins:</strong> After entering your password, enter the current 6-digit code from your authenticator app.</div></div>
@@ -2238,7 +2238,7 @@ export async function registerRoutes(
     </div>
 
     <h3 class="sub-title" id="cat-pricing">3.2 Price Levels</h3>
-    <p>VinTrade supports 5 price levels per item (Level 1 = standard retail, higher levels for trade/wholesale tiers). Each customer is assigned one price level. When creating an invoice, the correct price is loaded automatically.</p>
+    <p>Mediterranean Fine Foods supports 5 price levels per item (Level 1 = standard retail, higher levels for trade/wholesale tiers). Each customer is assigned one price level. When creating an invoice, the correct price is loaded automatically.</p>
     <div class="tip"><strong>Tip:</strong> Price Contracts (Section 9) can further override prices for specific customers or categories on top of the price level.</div>
 
     <h3 class="sub-title" id="cat-vat">3.3 VAT on Items</h3>
@@ -2455,7 +2455,7 @@ export async function registerRoutes(
   <!-- ═══ SECTION 11: ACCOUNTING ═══ -->
   <div class="section" id="accounting">
     <h2 class="section-title">11 · Accounting</h2>
-    <p>VinTrade includes a full double-entry bookkeeping module. Journal entries are generated automatically when invoices, payments, and expenses are posted — you do not need to create them manually in normal operation.</p>
+    <p>Mediterranean Fine Foods includes a full double-entry bookkeeping module. Journal entries are generated automatically when invoices, payments, and expenses are posted — you do not need to create them manually in normal operation.</p>
 
     <h3 class="sub-title" id="acc-coa">11.1 Chart of Accounts</h3>
     <p>Go to <strong>Chart of Accounts</strong> (Accounting section) to view the account structure. Accounts are pre-configured for Cyprus business reporting standards. Each account has a type (Asset, Liability, Equity, Revenue, Expense) and a normal balance (Debit or Credit).</p>
@@ -2512,7 +2512,7 @@ export async function registerRoutes(
     <table>
       <thead><tr><th>Rate</th><th>Type</th><th>Applies To</th></tr></thead>
       <tbody>
-        <tr><td><strong>19%</strong></td><td>Standard</td><td>Most goods and services (default fallback in VinTrade)</td></tr>
+        <tr><td><strong>19%</strong></td><td>Standard</td><td>Most goods and services (default fallback in Mediterranean Fine Foods)</td></tr>
         <tr><td><strong>9%</strong></td><td>Reduced</td><td>Hotels, restaurants, catering, passenger transport</td></tr>
         <tr><td><strong>5%</strong></td><td>Reduced</td><td>Food (non-alcoholic), books, pharmaceuticals, certain agricultural goods</td></tr>
         <tr><td><strong>0%</strong></td><td>Zero-rated</td><td>Exports, intra-EU B2B supplies</td></tr>
@@ -2540,7 +2540,7 @@ export async function registerRoutes(
     <p>Set your company name, address, phone, email, Tax ID, registration number, IBAN, and bank details. These appear on all printed/emailed documents (invoices, statements).</p>
 
     <h3 class="sub-title" id="set-email">13.2 Email Configuration</h3>
-    <p>VinTrade uses <strong>Resend</strong> to send invoice emails and <strong>Resend</strong> for daily backup emails. To configure:</p>
+    <p>Mediterranean Fine Foods uses <strong>Resend</strong> to send invoice emails and <strong>Resend</strong> for daily backup emails. To configure:</p>
     <div class="steps">
       <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Settings → Email</strong>.</div></div>
       <div class="step"><div class="step-num">2</div><div class="step-text">Enter your Resend API key (starts with <code>re_</code>) in the <strong>Resend API Key</strong> field.</div></div>
@@ -2558,7 +2558,7 @@ export async function registerRoutes(
     </ul>
 
     <h3 class="sub-title" id="set-backup">13.4 Backups</h3>
-    <p>VinTrade includes an automated backup system:</p>
+    <p>Mediterranean Fine Foods includes an automated backup system:</p>
     <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
       <li style="margin-bottom:5px;"><strong>Automatic daily backup</strong> — if enabled in Settings, the system emails a backup file to the configured backup email address every 24 hours.</li>
       <li style="margin-bottom:5px;"><strong>Full backup</strong> — exports all data. <strong>Differential backup</strong> — exports only new transactions since the last backup (used automatically when within 8 days of the last backup).</li>
@@ -2573,15 +2573,15 @@ export async function registerRoutes(
     <h2 class="section-title">14 · Offline Mode &amp; Mobile App</h2>
 
     <h3 class="sub-title">14.1 Installing as a Mobile / Desktop App (PWA)</h3>
-    <p>VinTrade can be installed as a Progressive Web App on your phone or computer for an app-like experience:</p>
+    <p>Mediterranean Fine Foods can be installed as a Progressive Web App on your phone or computer for an app-like experience:</p>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Open VinTrade in your browser (Chrome on Android, or Safari on iPhone).</div></div>
-      <div class="step"><div class="step-num">2</div><div class="step-text">Look for the <strong>Install App</strong> button in the VinTrade sidebar (bottom), or use your browser's "Add to Home Screen" / "Install" option.</div></div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the app in your browser (Chrome on Android, or Safari on iPhone).</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Look for the <strong>Install App</strong> button in the sidebar (bottom), or use your browser's "Add to Home Screen" / "Install" option.</div></div>
       <div class="step"><div class="step-num">3</div><div class="step-text">Confirm the installation. The app icon appears on your home screen / taskbar.</div></div>
     </div>
 
     <h3 class="sub-title">14.2 Offline Invoicing</h3>
-    <p>When your device loses internet connection, VinTrade automatically switches to <strong>Offline Mode</strong> (shown by an amber "Offline Mode" banner in the sidebar).</p>
+    <p>When your device loses internet connection, Mediterranean Fine Foods automatically switches to <strong>Offline Mode</strong> (shown by an amber "Offline Mode" banner in the sidebar).</p>
     <p>In offline mode you can:</p>
     <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
       <li style="margin-bottom:5px;"><strong>Create new invoices</strong> — items and customers are available from the local cache.</li>
@@ -3023,7 +3023,7 @@ export async function registerRoutes(
       const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
-      const companyName = settingsMap["companyName"] || "Vineria Di Mare Trading Ltd";
+      const companyName = settingsMap["companyName"] || "Mediterranean Fine Foods";
 
       const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
       const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });

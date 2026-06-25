@@ -166,7 +166,7 @@ app.use((req, res, next) => {
       const since = (lastDate && hoursSinceLast < 192) ? lastDate.toISOString() : undefined;
       const json = await generateBackupJson(since);
       const parsed = JSON.parse(json);
-      const result = await sendBackupEmail(toEmail, companySetting?.value || "VinTrade", json, date);
+      const result = await sendBackupEmail(toEmail, companySetting?.value || "Mediterranean Fine Foods", json, date);
       if (result.success) {
         await storage.upsertSetting("backup_last_date", now.toISOString(), "Last Backup Date", "backup");
         console.log(`[backup] ${parsed.backupType} backup sent to ${toEmail} (${Object.values(parsed.tableCounts).reduce((s: number, v: any) => s + v, 0)} records)`);
