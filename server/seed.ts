@@ -71,11 +71,6 @@ export async function ensureDefaultSettings() {
       await db.update(systemSettings).set({ value: "true" }).where(eq(systemSettings.key, "backup_auto"));
     }
 
-    // One-time: clear any TOTP secrets so users locked out by 2FA can log in
-    await db.update(users)
-      .set({ totpEnabled: false, totpSecret: null })
-      .where(eq(users.totpEnabled, true));
-
     // Ensure at least one active admin user exists
     const activeAdmins = await db.select({ id: users.id }).from(users)
       .where(and(eq(users.role, "admin"), eq(users.active, true)));
