@@ -2422,14 +2422,13 @@ export class DatabaseStorage implements IStorage {
         const packSize = parseFloat(String(item.packSize || 1));
         const salesIn60Days = salesMap.get(item.id) || 0;
         const avgMonthly = Math.round((salesIn60Days / 2) * 10) / 10;
-        // Suggested = max(reorderLevel - stock, ceil(2 months supply - stock)), ≥0, rounded to pack
-        const rawBase = Math.max(reorder - qty, avgMonthly * 2 - qty, 0);
-        const suggestedOrder = packSize > 1
-          ? Math.ceil(rawBase / packSize) * packSize
-          : Math.ceil(rawBase);
+        // Suggested = 2× avg monthly, rounded up to nearest pack
+        const rawBase = avgMonthly * 2;
+        const suggestedOrder = rawBase > 0
+          ? (packSize > 1 ? Math.ceil(rawBase / packSize) * packSize : Math.ceil(rawBase))
+          : 0;
         let urgency: "critical" | "warning" | "info";
         if (qty <= 0) urgency = "critical";
-        else if (qty < reorder && avgMonthly > 0) urgency = "critical";
         else if (qty < reorder) urgency = "warning";
         else urgency = "info";
         return {
