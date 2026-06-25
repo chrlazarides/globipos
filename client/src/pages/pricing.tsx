@@ -69,6 +69,7 @@ export default function Pricing() {
   const [activeTab, setActiveTab] = useState<"contracts" | "auto-saved">(
     _pricingSearchParams.get("tab") === "auto-saved" ? "auto-saved" : "contracts"
   );
+  const [sortBy, setSortBy] = useState<string>(() => localStorage.getItem("pricing_sort_option") || "name");
   const { toast } = useToast();
 
   const { data: contracts = [], isLoading } = useQuery<ContractWithMeta[]>({ queryKey: ["/api/price-contracts"] });
@@ -228,8 +229,46 @@ export default function Pricing() {
 
       {activeTab === "contracts" && (
         <Card>
-          <CardContent className="p-4">
-            <DataTable columns={columns} data={manualContracts} isLoading={isLoading} emptyMessage="No manual price contracts found" />
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-center justify-end gap-2">
+              <span className="text-xs text-muted-foreground">Sort by:</span>
+              <Select
+                value={sortBy}
+                onValueChange={(v) => {
+                  setSortBy(v);
+                  localStorage.setItem("pricing_sort_option", v);
+                }}
+              >
+                <SelectTrigger className="w-40 h-7 text-xs" data-testid="select-pricing-sort">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="name">Name (A–Z)</SelectItem>
+                  <SelectItem value="customer">Customer (A–Z)</SelectItem>
+                  <SelectItem value="end_date">End Date (soonest)</SelectItem>
+                  <SelectItem value="status">Status (active first)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <DataTable
+              columns={columns}
+              data={[...manualContracts].sort((a, b) => {
+                if (sortBy === "customer") return (a.customerName || "").localeCompare(b.customerName || "");
+                if (sortBy === "end_date") return new Date(a.endDate).getTime() - new Date(b.endDate).getTime();
+                if (sortBy === "status") {
+                  const now = new Date();
+                  const statusScore = (c: ContractWithMeta) => {
+                    if (!c.active) return 3;
+                    if (new Date(c.endDate) < now) return 2;
+                    return 1;
+                  };
+                  return statusScore(a) - statusScore(b);
+                }
+                return (a.name || "").localeCompare(b.name || "");
+              })}
+              isLoading={isLoading}
+              emptyMessage="No manual price contracts found"
+            />
           </CardContent>
         </Card>
       )}
@@ -891,18 +930,26 @@ function AutoSavedPrices({ contracts, allItems, isLoading }: {
                 <p className="text-sm text-muted-foreground px-4 pb-4">No saved prices in this contract.</p>
               ) : (
                 <div className="divide-y">
-                  <div className="grid grid-cols-[2fr_1fr_auto] gap-3 px-4 py-2 text-xs font-medium text-muted-foreground bg-muted/30">
+                  <div className="grid grid-cols-[2fr_1fr_1fr_auto] gap-3 px-4 py-2 text-xs font-medium text-muted-foreground bg-muted/30">
                     <span>Item</span>
                     <span>Fixed Price</span>
+                    <span>Cust. Level</span>
                     <span />
                   </div>
                   {items.map(ci => {
                     const item = allItems.find(it => it.id === ci.itemId);
                     const isEditing = editingItemId === ci.id;
+                    const priceLevel = contract.priceLevel || 1;
+                    const priceKey = `price${priceLevel}` as keyof typeof item;
+                    const custLevelPrice = item ? parseFloat(String(item[priceKey] || (item as any).price1 || 0)) : null;
+                    const fixedPrice = parseFloat(String(ci.specialPrice));
+                    const saves = custLevelPrice != null && !isNaN(custLevelPrice) && custLevelPrice > 0 && fixedPrice < custLevelPrice
+                      ? custLevelPrice - fixedPrice
+                      : null;
                     return (
                       <div
                         key={ci.id}
-                        className="grid grid-cols-[2fr_1fr_auto] gap-3 items-center px-4 py-2.5"
+                        className="grid grid-cols-[2fr_1fr_1fr_auto] gap-3 items-center px-4 py-2.5"
                         data-testid={`auto-price-row-${ci.id}`}
                       >
                         <div>
@@ -927,9 +974,23 @@ function AutoSavedPrices({ contracts, allItems, isLoading }: {
                           </div>
                         ) : (
                           <span className="text-sm font-semibold text-green-700 dark:text-green-400">
-                            {"\u20AC"}{parseFloat(String(ci.specialPrice)).toFixed(2)}
+                            {"\u20AC"}{fixedPrice.toFixed(2)}
                           </span>
                         )}
+                        <div className="space-y-0.5">
+                          {custLevelPrice != null && !isNaN(custLevelPrice) && custLevelPrice > 0 ? (
+                            <>
+                              <span className="text-sm text-muted-foreground">{"\u20AC"}{custLevelPrice.toFixed(2)}</span>
+                              {saves != null && (
+                                <span className="block text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 leading-tight whitespace-nowrap" data-testid={`badge-saves-${ci.id}`}>
+                                  saves €{saves.toFixed(2)} vs L{priceLevel}
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">—</span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-0.5">
                           {isEditing ? (
                             <>
@@ -1049,7 +1110,14 @@ function PricePreview({ rules, allItems, categories, priceLevel }: {
               {item.brand && <span className="text-xs text-muted-foreground ml-1">- {item.brand}</span>}
             </div>
             <span>{"\u20AC"}{retailPrice.toFixed(2)}</span>
-            <span>{"\u20AC"}{levelPrice.toFixed(2)}</span>
+            <div className="space-y-0.5">
+              <span>{"\u20AC"}{levelPrice.toFixed(2)}</span>
+              {isValid && (
+                <span className="block text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 leading-tight whitespace-nowrap">
+                  saves €{(levelPrice - discountedPrice).toFixed(2)} vs L{priceLevel}
+                </span>
+              )}
+            </div>
             <span className={isValid ? "text-green-600 font-medium" : "text-destructive"}>{"\u20AC"}{discountedPrice.toFixed(2)}</span>
             <span className="text-xs">
               {rule.discountType === "percentage" ? `${rule.discountValue}%` : `\u20AC${rule.discountValue}`}

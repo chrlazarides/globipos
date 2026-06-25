@@ -154,6 +154,9 @@ export interface IStorage {
   getTrialBalance(): Promise<{ accounts: any[]; totalDebits: string; totalCredits: string }>;
   getProfitAndLoss(from: string, to: string): Promise<{ revenue: any[]; expenses: any[]; totalRevenue: string; totalExpenses: string; netIncome: string }>;
   getBalanceSheet(asOf: string): Promise<{ assets: any[]; liabilities: any[]; equity: any[]; totalAssets: string; totalLiabilities: string; totalEquity: string }>;
+
+  getPurchaseInvoiceSummary(): Promise<{ totalOutstanding: string; totalCount: number; dueThisMonth: string; overdue: string; overdueCount: number }>;
+  getStockSuggestions(): Promise<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -685,12 +688,36 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(invoices.createdAt))
       .limit(5);
 
+    const now2 = new Date();
+    const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
+    const lastDay2 = new Date(now2.getFullYear(), now2.getMonth() + 1, 0).getDate();
+    const monthEnd = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-${String(lastDay2).padStart(2, "0")}`;
+    const [unpaidThisMonthRow] = await db.select({ total: sql<string>`coalesce(sum(cast(${invoices.total} as numeric)), 0)` }).from(invoices).where(
+      and(
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
+        sql`${invoices.dueDate} IS NOT NULL`,
+        gte(invoices.dueDate, monthStart),
+        lte(invoices.dueDate, monthEnd),
+      )
+    );
+    const [overdueOver1MonthRow] = await db.select({ total: sql<string>`coalesce(sum(cast(${invoices.total} as numeric)), 0)` }).from(invoices).where(
+      and(
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
+        sql`${invoices.dueDate} IS NOT NULL`,
+        sql`${invoices.dueDate} < ${monthStart}`,
+      )
+    );
+
     return {
       totalItems: itemCount?.count || 0,
       totalCustomers: custCount?.count || 0,
       totalInvoices: invCount?.count || 0,
       overdueInvoices: overdueCount?.count || 0,
       totalRevenue: revenueRow?.total || "0",
+      unpaidThisMonth: parseFloat(unpaidThisMonthRow?.total || "0").toFixed(2),
+      overdueOver1Month: parseFloat(overdueOver1MonthRow?.total || "0").toFixed(2),
       lowStockItems,
       recentInvoices: recentInvs.map(r => ({ ...r, customerName: r.customerName || "Unknown" })),
     };
@@ -769,9 +796,10 @@ export class DatabaseStorage implements IStorage {
         const qty = parseFloat(String(row.quantity || 0));
         const cost = row.itemId ? (itemCostMap[row.itemId] || 0) : 0;
         const packSize = row.itemId ? (itemPackMap[row.itemId] || 1) : 1;
+        const costPerBottle = packSize > 0 ? cost / packSize : cost;
         // Match getSalesReport: if sold in packs, multiply qty by packSize for cost
         const effectiveQty = row.saleUnit === "pack" ? qty * packSize : qty;
-        const lineCost = effectiveQty * cost;
+        const lineCost = effectiveQty * costPerBottle;
         invItemCosts[row.invoiceId] = (invItemCosts[row.invoiceId] || 0) + lineCost;
       }
     }
@@ -902,7 +930,7 @@ export class DatabaseStorage implements IStorage {
         if (li.itemId) {
           const item = await db.select({ costPrice: items.costPrice, packSize: items.packSize }).from(items).where(eq(items.id, li.itemId)).limit(1);
           if (item.length > 0) {
-            const costPerUnit = parseFloat(item[0].costPrice);
+            const costPerUnit = parseFloat(item[0].costPrice) / (item[0].packSize || 1);
             const saleInPacks = li.saleUnit === "pack" ? li.quantity * (item[0].packSize || 1) : li.quantity;
             totalCost += costPerUnit * saleInPacks;
           }
@@ -1035,7 +1063,7 @@ export class DatabaseStorage implements IStorage {
       const e = itemMap[li.itemId];
       const qty = li.saleUnit === "pack" ? li.quantity * d.packSize : li.quantity;
       const rev = parseFloat(li.total);
-      const cos = d.costPrice * qty;
+      const cos = (d.costPrice / (d.packSize || 1)) * qty;
       e.qtySold += qty;
       e.revenue += rev;
       e.cost += cos;
@@ -2294,6 +2322,133 @@ export class DatabaseStorage implements IStorage {
       totalLiabilities: totalLiabilities.toFixed(2),
       totalEquity: totalEquity.toFixed(2),
     };
+  }
+
+  async getPurchaseInvoiceSummary() {
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+    const thisMonthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const nextMonthStart = (() => {
+      const d = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+    })();
+
+    const unpaidInvoices = await db.select().from(purchaseInvoices).where(
+      sql`${purchaseInvoices.status} NOT IN ('paid', 'cancelled')`
+    );
+
+    let totalOutstanding = 0;
+    let dueThisMonth = 0;
+    let overdue = 0;
+    let overdueCount = 0;
+    for (const inv of unpaidInvoices) {
+      const amt = parseFloat(String(inv.total || 0));
+      totalOutstanding += amt;
+      if (inv.dueDate) {
+        if (inv.dueDate < thisMonthStart) {
+          overdue += amt;
+          overdueCount++;
+        } else if (inv.dueDate >= thisMonthStart && inv.dueDate < nextMonthStart) {
+          dueThisMonth += amt;
+        }
+      }
+    }
+
+    const [countRow] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(purchaseInvoices)
+      .where(sql`${purchaseInvoices.status} NOT IN ('paid', 'cancelled')`);
+
+    return {
+      totalOutstanding: totalOutstanding.toFixed(2),
+      totalCount: Number(countRow?.count || 0),
+      dueThisMonth: dueThisMonth.toFixed(2),
+      overdue: overdue.toFixed(2),
+      overdueCount,
+    };
+  }
+
+  async getStockSuggestions() {
+    const allItems = await db.select().from(items).where(eq(items.active, true));
+    const allCategories = await db.select().from(categories);
+    const catMap = new Map(allCategories.map(c => [c.id, c.name]));
+
+    // Compute 60-day sales volumes per item from invoice lines
+    const sixtyDaysAgo = new Date();
+    sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+    const sixtyDaysAgoStr = sixtyDaysAgo.toISOString().split("T")[0];
+
+    // Join items to get packSize for unit conversion (pack sales → bottle equivalents)
+    const salesRows = await db
+      .select({
+        itemId: invoiceItems.itemId,
+        quantity: invoiceItems.quantity,
+        saleUnit: invoiceItems.saleUnit,
+        packSize: items.packSize,
+      })
+      .from(invoiceItems)
+      .innerJoin(invoices, eq(invoiceItems.invoiceId, invoices.id))
+      .innerJoin(items, eq(invoiceItems.itemId, items.id))
+      .where(
+        and(
+          eq(invoices.type, "invoice"),
+          sql`${invoices.status} != 'cancelled'`,
+          sql`${invoices.date} >= ${sixtyDaysAgoStr}`,
+        )
+      );
+
+    // Aggregate bottle-equivalent quantities per item
+    const bottlesMap = new Map<string, number>();
+    for (const row of salesRows) {
+      if (!row.itemId) continue;
+      const qty = parseFloat(String(row.quantity || 0));
+      const ps = parseFloat(String(row.packSize || 1));
+      const bottles = row.saleUnit === "pack" ? qty * ps : qty;
+      bottlesMap.set(row.itemId, (bottlesMap.get(row.itemId) || 0) + bottles);
+    }
+    const salesMap = bottlesMap;
+
+    const candidates = allItems.filter(item => {
+      const qty = parseFloat(String(item.stockQuantity || 0));
+      const reorder = parseFloat(String(item.reorderLevel || 0));
+      const avgMonthly = (salesMap.get(item.id) || 0) / 2; // 60 days = 2 months
+      return qty <= reorder || qty < avgMonthly * 2;
+    });
+
+    return candidates
+      .map(item => {
+        const qty = parseFloat(String(item.stockQuantity || 0));
+        const reorder = parseFloat(String(item.reorderLevel || 0));
+        const packSize = parseFloat(String(item.packSize || 1));
+        const salesIn60Days = salesMap.get(item.id) || 0;
+        const avgMonthly = Math.round((salesIn60Days / 2) * 10) / 10;
+        // Suggested = max(reorderLevel - stock, ceil(2 months supply - stock)), ≥0, rounded to pack
+        const rawBase = Math.max(reorder - qty, avgMonthly * 2 - qty, 0);
+        const suggestedOrder = packSize > 1
+          ? Math.ceil(rawBase / packSize) * packSize
+          : Math.ceil(rawBase);
+        let urgency: "critical" | "warning" | "info";
+        if (qty <= 0) urgency = "critical";
+        else if (qty < reorder && avgMonthly > 0) urgency = "critical";
+        else if (qty < reorder) urgency = "warning";
+        else urgency = "info";
+        return {
+          id: item.id,
+          name: item.name,
+          sku: item.sku,
+          stockQuantity: qty,
+          reorderLevel: reorder,
+          categoryName: item.categoryId ? catMap.get(item.categoryId) : undefined,
+          avgMonthly,
+          suggestedOrder,
+          urgency,
+        };
+      })
+      .sort((a, b) => {
+        const order = { critical: 0, warning: 1, info: 2 };
+        if (order[a.urgency] !== order[b.urgency]) return order[a.urgency] - order[b.urgency];
+        return a.stockQuantity - b.stockQuantity;
+      });
   }
 }
 

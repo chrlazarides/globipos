@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Package, Upload, History, Download, RefreshCw } from "lucide-react";
+import { Plus, Search, Package, Upload, History, Download, RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertItemSchema, insertCategorySchema, type Item, type Category } from "@shared/schema";
@@ -73,8 +73,10 @@ export default function Items() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const { toast } = useToast();
 
+  const [stockSuggestionsOpen, setStockSuggestionsOpen] = useState(true);
   const { data: items = [], isLoading: itemsLoading } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
+  const { data: stockSuggestions = [] } = useQuery<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>({ queryKey: ["/api/items/stock-suggestions"] });
   const priceLevelNames = usePriceLevels();
 
   const createItem = useMutation({
@@ -325,6 +327,69 @@ export default function Items() {
           <DataTable columns={columns} data={filtered} isLoading={itemsLoading} emptyMessage="No items found" onRowClick={handleRowClick} />
         </CardContent>
       </Card>
+
+      {stockSuggestions.length > 0 && (
+        <Card>
+          <CardHeader
+            className="p-4 pb-0 cursor-pointer select-none"
+            onClick={() => setStockSuggestionsOpen(v => !v)}
+            data-testid="button-toggle-stock-suggestions"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-500" />
+                <CardTitle className="text-sm font-semibold">Stock Suggestions</CardTitle>
+                <Badge variant="destructive" className="text-xs px-1.5 py-0">{stockSuggestions.length}</Badge>
+              </div>
+              {stockSuggestionsOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">Items at or below reorder level — based on last 60 days of sales</p>
+          </CardHeader>
+          {stockSuggestionsOpen && (
+            <CardContent className="p-4 pt-2">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-2 pr-4 font-medium text-muted-foreground w-4"></th>
+                      <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Item</th>
+                      <th className="text-left py-2 pr-4 font-medium text-muted-foreground hidden sm:table-cell">Category</th>
+                      <th className="text-right py-2 pr-4 font-medium text-muted-foreground">In Stock</th>
+                      <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Reorder At</th>
+                      <th className="text-right py-2 pr-4 font-medium text-muted-foreground hidden md:table-cell">Avg/Month</th>
+                      <th className="text-right py-2 font-medium text-muted-foreground">Suggested Order</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stockSuggestions.map(s => (
+                      <tr key={s.id} className="border-b last:border-0 hover:bg-muted/40 transition-colors" data-testid={`row-stock-suggestion-${s.id}`}>
+                        <td className="py-2 pr-2">
+                          <span className={`inline-block w-2 h-2 rounded-full ${s.urgency === "critical" ? "bg-destructive" : s.urgency === "warning" ? "bg-amber-500" : "bg-blue-400"}`} title={s.urgency} />
+                        </td>
+                        <td className="py-2 pr-4">
+                          <p className="font-medium">{s.name}</p>
+                          <p className="text-muted-foreground">{s.sku}</p>
+                        </td>
+                        <td className="py-2 pr-4 text-muted-foreground hidden sm:table-cell">{s.categoryName || "—"}</td>
+                        <td className="py-2 pr-4 text-right tabular-nums">
+                          <span className={s.stockQuantity <= 0 ? "text-destructive font-medium" : s.urgency === "warning" ? "text-amber-600 dark:text-amber-400 font-medium" : "font-medium"}>
+                            {s.stockQuantity}
+                          </span>
+                        </td>
+                        <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">{s.reorderLevel}</td>
+                        <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground hidden md:table-cell">{s.avgMonthly > 0 ? s.avgMonthly : "—"}</td>
+                        <td className="py-2 text-right tabular-nums">
+                          {s.suggestedOrder > 0 ? <span className="font-medium text-primary">{s.suggestedOrder}</span> : <span className="text-muted-foreground">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      )}
 
       {categories.length > 0 && (
         <Card>

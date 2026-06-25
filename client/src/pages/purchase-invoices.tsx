@@ -40,12 +40,21 @@ interface LineItem {
   salePrice: string;
 }
 
+interface PurchaseSummary {
+  totalOutstanding: string;
+  totalCount: number;
+  dueThisMonth: string;
+  overdue: string;
+  overdueCount: number;
+}
+
 export default function PurchaseInvoices() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const { toast } = useToast();
 
   const { data: invoices = [], isLoading } = useQuery<PurchaseInvoiceWithSupplier[]>({ queryKey: ["/api/purchase-invoices"] });
+  const { data: summary } = useQuery<PurchaseSummary>({ queryKey: ["/api/purchase-invoices/summary"] });
   const { data: currentUser } = useQuery<{ id: string; username: string; role: string }>({ queryKey: ["/api/auth/me"] });
   const isAdmin = currentUser?.role === "admin" || currentUser?.role === "superuser";
 
@@ -158,6 +167,49 @@ export default function PurchaseInvoices() {
           </Button>
         }
       />
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground mb-1">Total Outstanding</p>
+            {summary ? (
+              <>
+                <p className="text-2xl font-bold tabular-nums">€{parseFloat(summary.totalOutstanding).toFixed(2)}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{summary.totalCount} invoice{summary.totalCount !== 1 ? "s" : ""}</p>
+              </>
+            ) : (
+              <div className="h-7 w-24 bg-muted animate-pulse rounded mt-1" />
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground mb-1">Due This Month</p>
+            {summary ? (
+              <p className="text-2xl font-bold tabular-nums text-amber-600 dark:text-amber-400">€{parseFloat(summary.dueThisMonth).toFixed(2)}</p>
+            ) : (
+              <div className="h-7 w-24 bg-muted animate-pulse rounded mt-1" />
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs text-muted-foreground mb-1">Overdue</p>
+            {summary ? (
+              <>
+                <p className={`text-2xl font-bold tabular-nums ${parseFloat(summary.overdue) > 0 ? "text-destructive" : ""}`}>
+                  €{parseFloat(summary.overdue).toFixed(2)}
+                </p>
+                {summary.overdueCount > 0 && (
+                  <p className="text-xs text-destructive mt-0.5">{summary.overdueCount} invoice{summary.overdueCount !== 1 ? "s" : ""}</p>
+                )}
+              </>
+            ) : (
+              <div className="h-7 w-24 bg-muted animate-pulse rounded mt-1" />
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       <Dialog open={formOpen} onOpenChange={(open) => { if (!open) handleClose(); else setFormOpen(true); }}>
         <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">

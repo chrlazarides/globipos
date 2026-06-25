@@ -240,7 +240,7 @@
   }
 
   /* If there's a 1px border, adjust the inset so that it covers that parent's border */
-  .border.toggle-elevate::before {
+  [class~="border"].toggle-elevate::before {
     inset: -1px;
   }
 

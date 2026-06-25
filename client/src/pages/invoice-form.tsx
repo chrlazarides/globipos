@@ -34,6 +34,8 @@ interface LineItem {
   discount: string;
   total: string;
   catalogPrice?: string;
+  catalogDiscountPercent?: string;
+  overrideType?: "percentage" | "fixed_price";
 }
 
 type PriceHistoryEntry = {
@@ -461,6 +463,30 @@ export default function InvoiceForm() {
     }
   }, [customerId, invoiceDate, customers]);
 
+  // In view mode: compute catalogPrice + catalogDiscountPercent for override detection
+  useEffect(() => {
+    if (!isViewMode || !customerId || !items.length || !customers.length) return;
+    setLines(prev => prev.map(line => {
+      if (!line.itemId) return line;
+      const item = items.find(i => i.id === line.itemId);
+      if (!item) return line;
+      const customer = customers.find(c => c.id === customerId);
+      const level = customer?.priceLevel || 1;
+      const priceKey = `price${level}` as keyof Item;
+      let catalogPrice = String(item[priceKey] || item.price1);
+      let catalogDiscountPercent = "0";
+      const contractDisc = findContractDiscount(customerId, item, line.quantity);
+      if (contractDisc) {
+        if (contractDisc.type === "fixed_price") {
+          catalogPrice = String(contractDisc.value);
+        } else if (contractDisc.type === "percentage") {
+          catalogDiscountPercent = String(contractDisc.value);
+        }
+      }
+      return { ...line, catalogPrice, catalogDiscountPercent };
+    }));
+  }, [isViewMode, customerId, items, customers, allContracts, findContractDiscount]);
+
   useEffect(() => {
     if (!customerId || isViewMode) return;
     // When editing an existing invoice, only re-apply contract prices if
@@ -515,6 +541,7 @@ export default function InvoiceForm() {
   }, []);
 
   const updateLine = (index: number, field: keyof LineItem, value: any) => {
+    if (field === "itemId") setEmailPopoverOpen(false);
     setLines((prev) => {
       const updated = [...prev];
       updated[index] = { ...updated[index], [field]: value };
@@ -657,7 +684,10 @@ export default function InvoiceForm() {
   };
 
   const addLine = () => setLines((prev) => [...prev, { itemId: "", description: "", quantity: 1, saleUnit: "pc", unitPrice: "0", discountPercent: "0", discount: "0", total: "0" }]);
-  const removeLine = (index: number) => setLines((prev) => prev.filter((_, i) => i !== index));
+  const removeLine = (index: number) => {
+    setEmailPopoverOpen(false);
+    setLines((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const linesSubtotal = lines.reduce((sum, l) => sum + (parseFloat(l.total) || 0), 0);
   const discPct = parseFloat(overallDiscountPercent) || 0;
@@ -692,6 +722,10 @@ export default function InvoiceForm() {
   // Authoritative totals: always use recalculated VAT so display and saved values are consistent.
   const taxAmount = recalcVatTotal;
   const total = subtotal + recalcVatTotal;
+
+  // In view mode use stored DB values for VAT/Total so display matches accounting records exactly.
+  const displayVat = isViewMode && existingInvoice ? parseFloat(existingInvoice.taxAmount || "0") : recalcVatTotal;
+  const displayTotal = isViewMode && existingInvoice ? parseFloat(existingInvoice.total || "0") : total;
 
   // Determine which list to return to based on document type
   const resolvedDocType = existingInvoice?.type || docType;
@@ -1352,7 +1386,16 @@ export default function InvoiceForm() {
                         </TableCell>
                         <TableCell>
                           {isViewMode ? (
-                            <div className="text-sm font-medium">€{parseFloat(line.unitPrice).toFixed(2)}</div>
+                            <div className="space-y-1">
+                              <div className="text-sm font-medium">€{parseFloat(line.unitPrice).toFixed(2)}</div>
+                              {line.catalogPrice && Math.abs(parseFloat(line.unitPrice || "0") - parseFloat(line.catalogPrice)) > 0.001 && (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  <span className="text-xs px-1.5 py-0.5 rounded border bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800 leading-tight">
+                                    ✏️ Override · catalog €{parseFloat(line.catalogPrice).toFixed(2)}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                           ) : (
                           <div className="space-y-1">
                             <div className="flex items-center gap-1">
@@ -1366,6 +1409,7 @@ export default function InvoiceForm() {
                               />
                               {line.itemId && (
                                 <ItemPriceHistoryPopover
+                                  key={line.itemId}
                                   itemId={line.itemId}
                                   itemName={line.description || items.find(i => i.id === line.itemId)?.name || ""}
                                 />
@@ -1442,11 +1486,19 @@ export default function InvoiceForm() {
                         <TableCell>
                           {isViewMode ? (
                             <div className="text-sm space-y-0.5">
-                              {parseFloat(line.discount) > 0 ? (
-                                <>
-                                  <p>{parseFloat(line.discountPercent || "0").toFixed(1)}%</p>
-                                  <p className="text-muted-foreground">{"\u20AC"}{parseFloat(line.discount).toFixed(2)}</p>
-                                </>
+                              {parseFloat(line.discountPercent || "0") > 0 ? (
+                                <div className="space-y-1">
+                                  <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800">
+                                    <span>€{parseFloat(line.unitPrice).toFixed(2)}</span>
+                                    <span>−{parseFloat(line.discountPercent || "0").toFixed(1)}%</span>
+                                    <span>€{line.quantity > 0 ? (parseFloat(line.total) / line.quantity).toFixed(2) : parseFloat(line.total).toFixed(2)}</span>
+                                  </span>
+                                  {line.catalogDiscountPercent && parseFloat(line.catalogDiscountPercent) > 0 && Math.abs(parseFloat(line.discountPercent || "0") - parseFloat(line.catalogDiscountPercent)) > 0.01 && (
+                                    <div className="text-xs px-1.5 py-0.5 rounded border bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800">
+                                      Contract discount: {parseFloat(line.catalogDiscountPercent).toFixed(1)}%
+                                    </div>
+                                  )}
+                                </div>
                               ) : (
                                 <span className="text-muted-foreground">-</span>
                               )}
@@ -1489,6 +1541,28 @@ export default function InvoiceForm() {
                                 />
                                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">{"\u20AC"}</span>
                               </div>
+                              {(() => {
+                                const isDiscountOverridden = line.catalogDiscountPercent &&
+                                  parseFloat(line.catalogDiscountPercent) > 0 &&
+                                  Math.abs(parseFloat(line.discountPercent || "0") - parseFloat(line.catalogDiscountPercent)) > 0.01;
+                                if (!isDiscountOverridden) return null;
+                                return (
+                                  <div className="flex items-center gap-1 flex-wrap">
+                                    <span className="text-xs px-1.5 py-0.5 rounded border bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800 leading-tight">
+                                      Contract discount: {parseFloat(line.catalogDiscountPercent!).toFixed(1)}%
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-muted-foreground underline hover:text-foreground"
+                                      onClick={() => {
+                                        updateLine(idx, "discountPercent", line.catalogDiscountPercent!);
+                                        setManualDiscountLines(prev => { const s = new Set(prev); s.delete(idx); return s; });
+                                      }}
+                                      data-testid={`button-restore-disc-pct-${idx}`}
+                                    >Restore</button>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           )}
                         </TableCell>
@@ -1644,6 +1718,7 @@ export default function InvoiceForm() {
                           />
                           {line.itemId && !isViewMode && (
                             <ItemPriceHistoryPopover
+                              key={line.itemId}
                               itemId={line.itemId}
                               itemName={line.description || items.find(i => i.id === line.itemId)?.name || ""}
                             />
@@ -1742,10 +1817,14 @@ export default function InvoiceForm() {
                     })()}
 
                     <div className="flex items-center justify-between pt-1">
-                      {isViewMode && parseFloat(line.discount) > 0 && (
-                        <span className="text-xs text-muted-foreground">Disc: {parseFloat(line.discountPercent || "0").toFixed(1)}% ({"\u20AC"}{parseFloat(line.discount).toFixed(2)})</span>
+                      {isViewMode && parseFloat(line.discountPercent || "0") > 0 && (
+                        <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800">
+                          <span>€{parseFloat(line.unitPrice).toFixed(2)}</span>
+                          <span>−{parseFloat(line.discountPercent || "0").toFixed(1)}%</span>
+                          <span>€{line.quantity > 0 ? (parseFloat(line.total) / line.quantity).toFixed(2) : parseFloat(line.total).toFixed(2)}</span>
+                        </span>
                       )}
-                      {isViewMode && parseFloat(line.discount) <= 0 && <span />}
+                      {isViewMode && parseFloat(line.discountPercent || "0") <= 0 && <span />}
                       {!isViewMode && <span />}
                       <div className="text-right">
                         <span className="text-sm font-semibold">{"\u20AC"}{parseFloat(line.total).toFixed(2)}</span>
@@ -1817,12 +1896,12 @@ export default function InvoiceForm() {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">VAT</span>
-                <span data-testid="text-vat-total">€{recalcVatTotal.toFixed(2)}</span>
+                <span data-testid="text-vat-total">€{displayVat.toFixed(2)}</span>
               </div>
               <Separator />
               <div className="flex justify-between text-lg font-bold">
                 <span>Total</span>
-                <span data-testid="text-invoice-total">€{total.toFixed(2)}</span>
+                <span data-testid="text-invoice-total">€{displayTotal.toFixed(2)}</span>
               </div>
             </CardContent>
           </Card>

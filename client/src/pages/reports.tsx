@@ -1171,21 +1171,23 @@ export default function Reports() {
                         {savingsFrom ? savingsFrom : <span className="text-muted-foreground">Pick a date</span>}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
-                        mode="single"
-                        selected={savingsFrom ? new Date(savingsFrom + "T12:00:00") : undefined}
-                        onSelect={(date) => {
-                          if (date) {
-                            const y = date.getFullYear();
-                            const m = String(date.getMonth() + 1).padStart(2, "0");
-                            const d = String(date.getDate()).padStart(2, "0");
-                            setSavingsFrom(`${y}-${m}-${d}`);
-                          }
-                          setSavingsFromOpen(false);
-                        }}
-                        initialFocus
-                      />
+                    <PopoverContent className="w-auto p-0 max-w-[calc(100vw-16px)] overflow-auto" align="start">
+                      <div onKeyDown={(e) => { if (e.key === "Escape") { setSavingsFrom(""); } }}>
+                        <Calendar
+                          mode="single"
+                          selected={savingsFrom ? new Date(savingsFrom + "T12:00:00") : undefined}
+                          onSelect={(date) => {
+                            if (date) {
+                              const y = date.getFullYear();
+                              const m = String(date.getMonth() + 1).padStart(2, "0");
+                              const d = String(date.getDate()).padStart(2, "0");
+                              setSavingsFrom(`${y}-${m}-${d}`);
+                            }
+                            setSavingsFromOpen(false);
+                          }}
+                          initialFocus
+                        />
+                      </div>
                     </PopoverContent>
                   </Popover>
                 </div>
@@ -1202,21 +1204,23 @@ export default function Reports() {
                         {savingsTo ? savingsTo : <span className="text-muted-foreground">Pick a date</span>}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
-                        mode="single"
-                        selected={savingsTo ? new Date(savingsTo + "T12:00:00") : undefined}
-                        onSelect={(date) => {
-                          if (date) {
-                            const y = date.getFullYear();
-                            const m = String(date.getMonth() + 1).padStart(2, "0");
-                            const d = String(date.getDate()).padStart(2, "0");
-                            setSavingsTo(`${y}-${m}-${d}`);
-                          }
-                          setSavingsToOpen(false);
-                        }}
-                        initialFocus
-                      />
+                    <PopoverContent className="w-auto p-0 max-w-[calc(100vw-16px)] overflow-auto" align="start">
+                      <div onKeyDown={(e) => { if (e.key === "Escape") { setSavingsTo(""); } }}>
+                        <Calendar
+                          mode="single"
+                          selected={savingsTo ? new Date(savingsTo + "T12:00:00") : undefined}
+                          onSelect={(date) => {
+                            if (date) {
+                              const y = date.getFullYear();
+                              const m = String(date.getMonth() + 1).padStart(2, "0");
+                              const d = String(date.getDate()).padStart(2, "0");
+                              setSavingsTo(`${y}-${m}-${d}`);
+                            }
+                            setSavingsToOpen(false);
+                          }}
+                          initialFocus
+                        />
+                      </div>
                     </PopoverContent>
                   </Popover>
                 </div>

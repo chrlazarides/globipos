@@ -10,6 +10,7 @@ import { db } from "./db";
 import { sql } from "drizzle-orm";
 
 const app = express();
+app.set("trust proxy", 1);
 const httpServer = createServer(app);
 
 declare module "http" {

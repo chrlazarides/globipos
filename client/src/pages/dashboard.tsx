@@ -4,7 +4,7 @@ import { StatCard } from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Package, Users, FileText, Euro, AlertTriangle, TrendingUp, BarChart3, GitFork } from "lucide-react";
+import { Package, Users, FileText, Euro, AlertTriangle, TrendingUp, BarChart3, GitFork, Clock, Calendar } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import {
@@ -81,6 +81,8 @@ export default function Dashboard() {
     lowStockItems: Item[];
     recentInvoices: (Invoice & { customerName: string })[];
     overdueInvoices: number;
+    unpaidThisMonth: string;
+    overdueOver1Month: string;
   }>({ queryKey: ["/api/dashboard/stats"] });
 
   const { data: charts, isLoading: chartsLoading } = useQuery<{
@@ -93,15 +95,15 @@ export default function Dashboard() {
   if (isLoading) {
     return (
       <div className="p-6 space-y-6">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-28" />)}
         </div>
         <Skeleton className="h-64 w-full" />
       </div>
     );
   }
 
-  const s = stats || { totalItems: 0, totalCustomers: 0, totalInvoices: 0, totalRevenue: "0.00", lowStockItems: [], recentInvoices: [], overdueInvoices: 0 };
+  const s = stats || { totalItems: 0, totalCustomers: 0, totalInvoices: 0, totalRevenue: "0.00", lowStockItems: [], recentInvoices: [], overdueInvoices: 0, unpaidThisMonth: "0.00", overdueOver1Month: "0.00" };
   const c = charts || { monthlySales: [], topCustomers: [], invoiceStatus: [], paretoCustomers: [] };
 
   const totalRevNum = parseFloat(s.totalRevenue);
@@ -131,11 +133,13 @@ export default function Dashboard() {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard title="Total Items" value={String(s.totalItems)} icon={Package} description="Active products" />
         <StatCard title="Customers" value={String(s.totalCustomers)} icon={Users} description="Active accounts" />
         <StatCard title="Invoices" value={String(s.totalInvoices)} icon={FileText} description={`${s.overdueInvoices} overdue`} />
         <StatCard title="Cash Collected" value={`€${totalRevNum.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={Euro} />
+        <StatCard title="Due This Month" value={`€${parseFloat(s.unpaidThisMonth || "0").toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={Calendar} description="Unpaid, due in current month" />
+        <StatCard title="Overdue >1 Month" value={`€${parseFloat(s.overdueOver1Month || "0").toLocaleString("el-CY", { minimumFractionDigits: 2 })}`} icon={Clock} description="Overdue before start of current month" variant={parseFloat(s.overdueOver1Month || "0") > 0 ? "danger" : "default"} />
       </div>
 
       {/* Main Chart — Sales & Profit (multi-dimensional) */}

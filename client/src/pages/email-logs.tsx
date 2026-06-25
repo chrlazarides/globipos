@@ -19,7 +19,9 @@ export default function EmailLogs() {
     return (
       (log.customerName || "").toLowerCase().includes(term) ||
       log.toEmail.toLowerCase().includes(term) ||
-      log.subject.toLowerCase().includes(term)
+      log.subject.toLowerCase().includes(term) ||
+      (log.fromEmail || "").toLowerCase().includes(term) ||
+      (log.replyTo || "").toLowerCase().includes(term)
     );
   });
 
@@ -54,6 +56,15 @@ export default function EmailLogs() {
       cell: (row) => <span className="text-sm" data-testid={`text-email-subject-${row.id}`}>{row.subject}</span>,
     },
     {
+      key: "from",
+      header: "From",
+      cell: (row) => (
+        <span className="text-sm text-muted-foreground" data-testid={`text-email-from-${row.id}`}>
+          {row.fromEmail || "—"}
+        </span>
+      ),
+    },
+    {
       key: "status",
       header: "Status",
       cell: (row) => (
@@ -83,7 +94,7 @@ export default function EmailLogs() {
           <div className="mb-4 relative max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Search by customer, email, or subject..."
+              placeholder="Search by customer, email, subject, or from..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9"

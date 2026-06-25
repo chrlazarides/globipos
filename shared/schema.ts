@@ -285,6 +285,7 @@ export const emailLogs = pgTable("email_logs", {
   customerName: text("customer_name"),
   toEmail: text("to_email").notNull(),
   fromEmail: text("from_email"),
+  replyTo: text("reply_to"),
   subject: text("subject").notNull(),
   status: text("status").notNull().default("sent"),
   errorMessage: text("error_message"),

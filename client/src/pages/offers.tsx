@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
@@ -25,9 +26,20 @@ const offerFormSchema = insertSeasonalOfferSchema.extend({
   endDate: z.string().min(1),
 });
 
+type OffersTab = "all" | "active" | "upcoming" | "ended";
+
 export default function Offers() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [location, navigate] = useLocation();
   const { toast } = useToast();
+
+  const urlParams = new URLSearchParams(location.includes("?") ? location.split("?")[1] : "");
+  const rawTab = urlParams.get("tab");
+  const activeTab: OffersTab = (["all", "active", "upcoming", "ended"].includes(rawTab ?? "") ? rawTab : "all") as OffersTab;
+
+  const setTab = (tab: OffersTab) => {
+    navigate(tab === "all" ? "/offers" : `/offers?tab=${tab}`);
+  };
 
   const { data: offers = [], isLoading } = useQuery<SeasonalOffer[]>({ queryKey: ["/api/seasonal-offers"] });
 
@@ -43,6 +55,27 @@ export default function Offers() {
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  const now = new Date();
+
+  const getOfferStatus = (row: SeasonalOffer) => {
+    const start = new Date(row.startDate);
+    const end = new Date(row.endDate);
+    if (row.active && start <= now && end >= now) return "active";
+    if (row.active && start > now) return "upcoming";
+    return "ended";
+  };
+
+  const filteredOffers = activeTab === "all"
+    ? offers
+    : offers.filter(o => getOfferStatus(o) === activeTab);
+
+  const tabCounts = {
+    all: offers.length,
+    active: offers.filter(o => getOfferStatus(o) === "active").length,
+    upcoming: offers.filter(o => getOfferStatus(o) === "upcoming").length,
+    ended: offers.filter(o => getOfferStatus(o) === "ended").length,
+  };
 
   const columns: Column<SeasonalOffer>[] = [
     {
@@ -92,14 +125,10 @@ export default function Offers() {
       key: "status",
       header: "Status",
       cell: (row) => {
-        const now = new Date();
-        const start = new Date(row.startDate);
-        const end = new Date(row.endDate);
-        const isActive = row.active && start <= now && end >= now;
-        const isUpcoming = row.active && start > now;
+        const s = getOfferStatus(row);
         return (
-          <Badge variant={isActive ? "default" : isUpcoming ? "secondary" : "outline"}>
-            {isActive ? "Live" : isUpcoming ? "Upcoming" : "Ended"}
+          <Badge variant={s === "active" ? "default" : s === "upcoming" ? "secondary" : "outline"}>
+            {s === "active" ? "Live" : s === "upcoming" ? "Upcoming" : "Ended"}
           </Badge>
         );
       },
@@ -124,9 +153,25 @@ export default function Offers() {
         }
       />
 
+      <div className="flex gap-1 border-b">
+        {(["all", "active", "upcoming", "ended"] as OffersTab[]).map(tab => (
+          <button
+            key={tab}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors capitalize ${activeTab === tab ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setTab(tab)}
+            data-testid={`tab-offers-${tab}`}
+          >
+            {tab === "all" ? "All" : tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {tabCounts[tab] > 0 && (
+              <Badge variant="secondary" className="ml-2 text-xs">{tabCounts[tab]}</Badge>
+            )}
+          </button>
+        ))}
+      </div>
+
       <Card>
         <CardContent className="p-4">
-          <DataTable columns={columns} data={offers} isLoading={isLoading} emptyMessage="No seasonal offers found" />
+          <DataTable columns={columns} data={filteredOffers} isLoading={isLoading} emptyMessage="No seasonal offers found" />
         </CardContent>
       </Card>
     </div>

@@ -7,11 +7,12 @@ interface StatCardProps {
   description?: string;
   icon: LucideIcon;
   trend?: { value: number; label: string };
+  variant?: "default" | "danger";
 }
 
-export function StatCard({ title, value, description, icon: Icon, trend }: StatCardProps) {
+export function StatCard({ title, value, description, icon: Icon, trend, variant }: StatCardProps) {
   return (
-    <Card>
+    <Card className={variant === "danger" ? "border-destructive/50 bg-destructive/5 dark:bg-destructive/10" : ""}>
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">

@@ -806,14 +806,19 @@ export async function registerRoutes(
     res.json(brands);
   });
 
-  app.get("/api/items/:id", async (req, res) => {
-    const item = await storage.getItem(req.params.id);
-    if (!item) return res.status(404).json({ message: "Item not found" });
-    res.json(item);
+  app.get("/api/items/stock-suggestions", async (_req, res) => {
+    const suggestions = await storage.getStockSuggestions();
+    res.json(suggestions);
   });
 
   app.get("/api/items/barcode/:barcode", async (req, res) => {
     const item = await storage.getItemByBarcode(req.params.barcode);
+    if (!item) return res.status(404).json({ message: "Item not found" });
+    res.json(item);
+  });
+
+  app.get("/api/items/:id", async (req, res) => {
+    const item = await storage.getItem(req.params.id);
     if (!item) return res.status(404).json({ message: "Item not found" });
     res.json(item);
   });
@@ -1122,7 +1127,7 @@ export async function registerRoutes(
             const itm = await db.select({ costPrice: items.costPrice, packSize: items.packSize }).from(items).where(eq(items.id, li.itemId)).limit(1);
             if (itm.length > 0) {
               const units = li.saleUnit === "pack" ? li.quantity * (itm[0].packSize || 1) : li.quantity;
-              totalCost += parseFloat(itm[0].costPrice) * units;
+              totalCost += (parseFloat(itm[0].costPrice) / (itm[0].packSize || 1)) * units;
             }
           }
         }
@@ -1601,7 +1606,7 @@ export async function registerRoutes(
                 const item = itemMap.get(li.itemId) as any;
                 if (item) {
                   const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
-                  totalCost += parseFloat(item.costPrice) * qty;
+                  totalCost += (parseFloat(item.costPrice) / (item.packSize || 1)) * qty;
                 }
               }
             }
@@ -1713,7 +1718,7 @@ export async function registerRoutes(
           if (li.itemId) {
             const item = await storage.getItem(li.itemId);
             if (item) {
-              const costPerUnit = parseFloat(item.costPrice);
+              const costPerUnit = parseFloat(item.costPrice) / (item.packSize || 1);
               const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
               totalCost += costPerUnit * qty;
             }
@@ -1744,7 +1749,7 @@ export async function registerRoutes(
           if (li.itemId) {
             const item = await storage.getItem(li.itemId);
             if (item) {
-              const costPerUnit = parseFloat(item.costPrice);
+              const costPerUnit = parseFloat(item.costPrice) / (item.packSize || 1);
               const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
               totalCost += costPerUnit * qty;
             }
@@ -3807,6 +3812,11 @@ export async function registerRoutes(
     res.json(costs);
   });
 
+  app.get("/api/purchase-invoices/summary", async (_req, res) => {
+    const summary = await storage.getPurchaseInvoiceSummary();
+    res.json(summary);
+  });
+
   app.get("/api/purchase-invoices/:id", async (req, res) => {
     const inv = await storage.getPurchaseInvoice(req.params.id);
     if (!inv) return res.status(404).json({ message: "Purchase invoice not found" });
@@ -4542,9 +4552,10 @@ export async function registerRoutes(
           if (li.itemId) {
             const item = allItems.find(i => i.id === li.itemId);
             if (item) {
-              const costPerUnit = parseFloat(item.costPrice);
-              const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
-              totalCost += costPerUnit * qty;
+              const packSize = Number(item.packSize) > 1 ? Number(item.packSize) : 1;
+              const costPerBottle = parseFloat(item.costPrice) / packSize;
+              const qty = (li.saleUnit === "pack" && packSize > 1) ? li.quantity * packSize : li.quantity;
+              totalCost += costPerBottle * qty;
             }
           }
         }
@@ -5321,9 +5332,10 @@ export async function registerRoutes(
           if (li.itemId) {
             const item = await storage.getItem(li.itemId);
             if (item) {
-              const costPerUnit = parseFloat(item.costPrice);
-              const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
-              totalCost += costPerUnit * qty;
+              const packSize = Number(item.packSize) > 1 ? Number(item.packSize) : 1;
+              const costPerBottle = parseFloat(item.costPrice) / packSize;
+              const qty = (li.saleUnit === "pack" && packSize > 1) ? li.quantity * packSize : li.quantity;
+              totalCost += costPerBottle * qty;
             }
           }
         }
@@ -5668,6 +5680,18 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   const pdfSubtotal = parseFloat(inv.subtotal || "0");
   const vatLineFactor = pdfLinesSubtotal > 0 ? pdfSubtotal / pdfLinesSubtotal : 1;
 
+  // Build per-rate VAT breakdown for display in totals (uses current item rates)
+  const vatByRate = new Map<number, number>();
+  for (const li of items as any[]) {
+    const lr: number = li.lineVatRate != null ? li.lineVatRate : invTaxRate;
+    const lineVatAmt = parseFloat(li.total || "0") * vatLineFactor * lr / 100;
+    vatByRate.set(lr, (vatByRate.get(lr) || 0) + lineVatAmt);
+  }
+  const multipleVatRates = vatByRate.size > 1;
+  // Authoritative stored totals — always use these for VAT and Grand Total lines
+  const storedVat = parseFloat(String(inv.taxAmount || "0"));
+  const storedTotal = parseFloat(String(inv.total || "0"));
+
   const itemRows = items.map((li: any, idx: number) => {
     const qty = li.quantity != null && Number(li.quantity) > 0 ? Number(li.quantity) : (li.quantity != null ? li.quantity : "—");
     const unit = li.saleUnit || "pc";
@@ -5684,8 +5708,8 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
       ${hasBarcodes ? `<td class="cell barcode-cell">${li.barcode || "-"}</td>` : ""}
       <td class="cell center">${qty} ${unitLabel}</td>
       <td class="cell right">${currencySymbol}${parseFloat(li.unitPrice).toFixed(2)}</td>
-      ${hasDiscountPercent ? `<td class="cell right">${discPercent > 0 ? discPercent.toFixed(1) + "%" : "-"}</td>` : ""}
-      ${hasDiscount ? `<td class="cell right">${discAmount > 0 ? currencySymbol + discAmount.toFixed(2) : "-"}</td>` : ""}
+      ${hasDiscountPercent ? `<td class="cell right">${discPercent > 0 ? `<span class="disc-pill">${discPercent.toFixed(1)}%</span>` : "-"}</td>` : ""}
+      ${hasDiscountPercent ? `<td class="cell right">${currencySymbol}${(Number(li.quantity) > 0 ? parseFloat(li.total) / Number(li.quantity) : parseFloat(li.unitPrice)).toFixed(2)}</td>` : ""}
       <td class="cell right vat-col"><span style="font-size:10px;color:#999;">${lineRate.toFixed(0)}%</span> ${currencySymbol}${lineVat}</td>
       <td class="cell right bold">${currencySymbol}${parseFloat(li.total).toFixed(2)}</td>
     </tr>`;
@@ -5733,6 +5757,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   .bold { font-weight: 600; }
   .alt-row { background: #fdfcfb; }
   .barcode-cell { font-family: 'Courier New', Courier, monospace; font-size: 11px; letter-spacing: 0.5px; color: #555; }
+  .disc-pill { display: inline-block; background: #fef3c7; color: #b45309; border: 1px solid #fcd34d; border-radius: 9999px; padding: 1px 7px; font-size: 10px; font-weight: 600; }
   .totals-section { display: flex; justify-content: flex-end; margin-bottom: 28px; }
   .totals-box { width: 280px; }
   .totals-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; }
@@ -5831,9 +5856,9 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
           <th>Description</th>
           ${hasBarcodes ? '<th>Barcode</th>' : ""}
           <th class="center">Qty</th>
-          <th class="right">Unit Price</th>
+          <th class="right">List Price</th>
           ${hasDiscountPercent ? '<th class="right">Disc %</th>' : ""}
-          ${hasDiscount ? '<th class="right">Discount</th>' : ""}
+          ${hasDiscountPercent ? '<th class="right">Net Price</th>' : ""}
           <th class="right">VAT</th>
           <th class="right">Total</th>
         </tr>
@@ -5859,19 +5884,16 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
           <span>Subtotal</span>
           <span>${currencySymbol}${parseFloat(inv.subtotal).toFixed(2)}</span>
         </div>
-        <div class="totals-row tax">
-          <span>VAT</span>
-          <span>${currencySymbol}${items.reduce((s: number, li: any) => {
-            const lr = li.lineVatRate != null ? li.lineVatRate : invTaxRate;
-            return s + parseFloat(li.total || "0") * vatLineFactor * lr / 100;
-          }, 0).toFixed(2)}</span>
-        </div>
+        ${multipleVatRates
+          ? Array.from(vatByRate.entries()).sort((a, b) => a[0] - b[0]).map(([rate, amt]) =>
+              `<div class="totals-row tax"><span>VAT ${rate.toFixed(0)}%</span><span>${currencySymbol}${amt.toFixed(2)}</span></div>`
+            ).join("") +
+            `<div class="totals-row tax" style="border-top:1px solid #e5e5e5;margin-top:2px;padding-top:4px;"><span><strong>Total VAT</strong></span><span><strong>${currencySymbol}${storedVat.toFixed(2)}</strong></span></div>`
+          : `<div class="totals-row tax"><span>VAT ${invTaxRate.toFixed(0)}%</span><span>${currencySymbol}${storedVat.toFixed(2)}</span></div>`
+        }
         <div class="totals-row grand">
           <span>Total</span>
-          <span>${currencySymbol}${(parseFloat(inv.subtotal) + items.reduce((s: number, li: any) => {
-            const lr = li.lineVatRate != null ? li.lineVatRate : invTaxRate;
-            return s + parseFloat(li.total || "0") * vatLineFactor * lr / 100;
-          }, 0)).toFixed(2)}</span>
+          <span>${currencySymbol}${storedTotal.toFixed(2)}</span>
         </div>
       </div>
     </div>
