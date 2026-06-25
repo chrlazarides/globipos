@@ -59,9 +59,16 @@ export default function EmailLogs() {
       key: "from",
       header: "From",
       cell: (row) => (
-        <span className="text-sm text-muted-foreground" data-testid={`text-email-from-${row.id}`}>
-          {row.fromEmail || "—"}
-        </span>
+        <div>
+          <span className="text-sm text-muted-foreground" data-testid={`text-email-from-${row.id}`}>
+            {row.fromEmail || "—"}
+          </span>
+          {row.replyTo && (
+            <p className="text-xs text-muted-foreground/70 mt-0.5" data-testid={`text-email-replyto-${row.id}`}>
+              Reply-To: {row.replyTo}
+            </p>
+          )}
+        </div>
       ),
     },
     {
@@ -94,7 +101,7 @@ export default function EmailLogs() {
           <div className="mb-4 relative max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Search by customer, email, subject, or from..."
+              placeholder="Search by customer, email, subject, from, or reply-to..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9"

@@ -47,7 +47,13 @@ interface EmailPayload {
   to: string | string[];
   subject: string;
   html: string;
+  reply_to?: string;
   attachments?: Array<{ filename: string; content: string }>;
+}
+
+async function getReplyToEmail(): Promise<string | null> {
+  const companyEmail = await getSettingValue('company_email');
+  return companyEmail || null;
 }
 
 async function sendEmailPayload(payload: EmailPayload): Promise<void> {
@@ -151,14 +157,17 @@ export async function sendInvoiceEmail(
   toEmail: string,
   subject: string,
   htmlContent: string
-): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+): Promise<{ success: boolean; fromEmail: string; replyTo: string | null; error?: string }> {
   try {
     const fromEmail = await getFromEmail();
-    await sendEmailPayload({ from: fromEmail, to: toEmail, subject, html: htmlContent });
-    return { success: true, fromEmail };
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = { from: fromEmail, to: toEmail, subject, html: htmlContent };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true, fromEmail, replyTo };
   } catch (error: any) {
     console.error('Invoice email error:', error?.message || error);
-    return { success: false, fromEmail: '', error: error?.message || 'Failed to send email' };
+    return { success: false, fromEmail: '', replyTo: null, error: error?.message || 'Failed to send email' };
   }
 }
 
