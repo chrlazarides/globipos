@@ -653,6 +653,11 @@ export async function registerRoutes(
         db.select().from(seasonalOffers),
         db.select().from(seasonalOfferItems),
       ]);
+      const companyRow = settingsRows.find((s: any) => s.key === "company_name");
+      const slug = fileSlug(companyRow?.value || "gastronobile");
+      const exportDate = new Date().toISOString().split("T")[0];
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-export-${exportDate}.json"`);
       res.json({
         exportedAt: new Date().toISOString(),
         version: 1,
@@ -3400,6 +3405,9 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  const fileSlug = (name: string) =>
+    (name || "backup").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "backup";
+
   app.get("/api/backup/export", async (req, res) => {
     try {
       const since = req.query.since as string | undefined;
@@ -3407,8 +3415,10 @@ export async function registerRoutes(
       const parsed = JSON.parse(json);
       const date = new Date().toISOString().split("T")[0];
       const tag = parsed.backupType === "differential" ? `diff-since-${since?.slice(0,10) || "unknown"}` : "full";
+      const companySetting = await storage.getSetting("company_name");
+      const slug = fileSlug(companySetting?.value || "gastronobile");
       res.setHeader("Content-Type", "application/json");
-      res.setHeader("Content-Disposition", `attachment; filename="backup-${date}-${tag}.json"`);
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-backup-${date}-${tag}.json"`);
       res.send(json);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -3420,14 +3430,15 @@ export async function registerRoutes(
     try {
       const json = await generateBackupJson(); // full, no since
       const parsed = JSON.parse(json);
-      // Add users (hashed passwords included — superuser only endpoint)
       const usersRows = await db.select().from(users);
       parsed.backupType = "system";
       parsed.data.users = usersRows;
       parsed.tableCounts.users = usersRows.length;
       const date = new Date().toISOString().split("T")[0];
+      const companySetting = await storage.getSetting("company_name");
+      const slug = fileSlug(companySetting?.value || "gastronobile");
       res.setHeader("Content-Type", "application/json");
-      res.setHeader("Content-Disposition", `attachment; filename="gastronobile-system-${date}.json"`);
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-system-${date}.json"`);
       res.send(JSON.stringify(parsed));
     } catch (e: any) {
       res.status(500).json({ message: e.message });

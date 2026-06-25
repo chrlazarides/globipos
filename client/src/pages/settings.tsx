@@ -274,11 +274,14 @@ export default function SettingsPage() {
     try {
       const res = await fetch("/api/admin/export", { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || `export-${new Date().toISOString().slice(0,10)}.json`;
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `gastronobile-export-${new Date().toISOString().slice(0,10)}.json`;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
       toast({ title: "Export complete", description: "Import this file in the production app to migrate your data." });
