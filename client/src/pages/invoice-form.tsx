@@ -727,6 +727,16 @@ export default function InvoiceForm() {
   const displayVat = isViewMode && existingInvoice ? parseFloat(existingInvoice.taxAmount || "0") : recalcVatTotal;
   const displayTotal = isViewMode && existingInvoice ? parseFloat(existingInvoice.total || "0") : total;
 
+  // Per-rate VAT breakdown (mirrors the PDF totals box logic)
+  const vatByRate = new Map<number, number>();
+  for (const l of lines) {
+    const rate = getLineVatRate(l);
+    const lineVat = parseFloat(l.total || "0") * vatLineFactor * rate / 100;
+    vatByRate.set(rate, (vatByRate.get(rate) || 0) + lineVat);
+  }
+  const multipleVatRates = vatByRate.size > 1;
+  const sortedVatRates = Array.from(vatByRate.entries()).sort((a, b) => a[0] - b[0]);
+
   // Determine which list to return to based on document type
   const resolvedDocType = existingInvoice?.type || docType;
   const backUrl = resolvedDocType === "credit_note" ? "/credit-notes"
@@ -1894,10 +1904,27 @@ export default function InvoiceForm() {
                 <span className="text-muted-foreground">Subtotal</span>
                 <span className="font-medium">€{subtotal.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">VAT</span>
-                <span data-testid="text-vat-total">€{displayVat.toFixed(2)}</span>
-              </div>
+              {multipleVatRates ? (
+                <>
+                  {sortedVatRates.map(([rate, amt]) => (
+                    <div key={rate} className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">VAT {rate.toFixed(0)}%</span>
+                      <span>€{amt.toFixed(2)}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between text-sm font-medium border-t pt-1">
+                    <span className="text-muted-foreground">Total VAT</span>
+                    <span data-testid="text-vat-total">€{displayVat.toFixed(2)}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">
+                    VAT {sortedVatRates[0] ? sortedVatRates[0][0].toFixed(0) : parseFloat(taxRate || "19").toFixed(0)}%
+                  </span>
+                  <span data-testid="text-vat-total">€{displayVat.toFixed(2)}</span>
+                </div>
+              )}
               <Separator />
               <div className="flex justify-between text-lg font-bold">
                 <span>Total</span>
