@@ -133,10 +133,10 @@ export async function sendTestEmail(
     await sendEmailPayload({
       from: fromEmail,
       to: toEmail,
-      subject: 'Mediterranean Fine Foods — Email Test',
+      subject: 'Gastro Nobile — Email Test',
       html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
         <h2 style="color:#374151;margin-top:0;">Email Test Successful</h2>
-        <p style="color:#374151;">This is a test email sent from your <strong>Mediterranean Fine Foods</strong> system to confirm email delivery is working correctly.</p>
+        <p style="color:#374151;">This is a test email sent from your <strong>Gastro Nobile</strong> system to confirm email delivery is working correctly.</p>
         <p style="color:#6b7280;font-size:13px;">Sent via Resend · From: ${escHtml(fromEmail)}</p>
       </div>`,
     });
@@ -242,7 +242,7 @@ export async function sendLoginAlertEmail(
           <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Browser</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${escHtml(userAgent)}</td></tr>
         </table>
         <p style="color:#374151;">If this was not you, log in immediately and deactivate this account.</p>
-        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Mediterranean Fine Foods.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Gastro Nobile.</p>
       </div>`,
     });
   } catch (error: any) {
@@ -276,7 +276,7 @@ export async function sendFailedLoginAlertEmail(
           <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(timestamp)}</td></tr>
         </table>
         <p style="color:#374151;">The IP has been temporarily blocked. Review your system if this activity is unexpected.</p>
-        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Mediterranean Fine Foods.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Gastro Nobile.</p>
       </div>`,
     });
   } catch (error: any) {
@@ -310,7 +310,7 @@ export async function sendNewAdminAlertEmail(
           <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(timestamp)}</td></tr>
         </table>
         <p style="color:#374151;">If you did not create this user, log in immediately and deactivate them.</p>
-        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Mediterranean Fine Foods.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Gastro Nobile.</p>
       </div>`,
     });
   } catch (error: any) {

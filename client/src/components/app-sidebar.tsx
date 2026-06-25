@@ -113,7 +113,7 @@ export function AppSidebar() {
   const [pendingCount, setPendingCount] = useState(0);
   const { isInstallable, isInstalled, install } = usePwaInstall();
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
-  const companyName = settings.find(s => s.key === "company_name")?.value || "Mediterranean Fine Foods";
+  const companyName = settings.find(s => s.key === "company_name")?.value || "Gastro Nobile";
   const { user, logout } = useAuth();
 
   useEffect(() => {
@@ -142,7 +142,7 @@ export function AppSidebar() {
       <SidebarHeader className="px-3 py-3">
         <div className="flex flex-col items-start gap-1">
           <div className="w-full rounded-lg bg-white px-3 py-2 flex items-center justify-start">
-            <img src="/logo.png" alt="Mediterranean Fine Foods" className="h-14 w-auto object-contain" />
+            <img src="/logo.png" alt="Gastro Nobile" className="h-14 w-auto object-contain" />
           </div>
         </div>
         {!isOnline && (

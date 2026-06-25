@@ -1,6 +1,6 @@
 {
-  "name": "Mediterranean Fine Foods",
-  "short_name": "MFF",
+  "name": "Gastro Nobile",
+  "short_name": "Gastro Nobile",
   "description": "Wholesale wine and spirits invoicing and inventory management",
   "start_url": "/invoices/new",
   "display": "standalone",

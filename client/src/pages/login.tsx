@@ -130,7 +130,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
 
   const logo = (
     <div className="flex justify-center mb-8">
-      <img src="/logo.png" alt="Mediterranean Fine Foods" className="h-20 w-auto object-contain" />
+      <img src="/logo.png" alt="Gastro Nobile" className="h-20 w-auto object-contain" />
     </div>
   );
 
