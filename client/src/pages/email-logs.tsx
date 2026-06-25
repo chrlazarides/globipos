@@ -59,17 +59,20 @@ export default function EmailLogs() {
       key: "from",
       header: "From",
       cell: (row) => (
-        <div>
-          <span className="text-sm text-muted-foreground" data-testid={`text-email-from-${row.id}`}>
-            {row.fromEmail || "—"}
-          </span>
-          {row.replyTo && (
-            <p className="text-xs text-muted-foreground/70 mt-0.5" data-testid={`text-email-replyto-${row.id}`}>
-              Reply-To: {row.replyTo}
-            </p>
-          )}
-        </div>
+        <span className="text-sm text-muted-foreground" data-testid={`text-email-from-${row.id}`}>
+          {row.fromEmail || "—"}
+        </span>
       ),
+    },
+    {
+      key: "replyTo",
+      header: "Reply-To",
+      cell: (row) =>
+        row.replyTo ? (
+          <span className="text-sm text-muted-foreground" data-testid={`text-email-replyto-${row.id}`}>
+            {row.replyTo}
+          </span>
+        ) : null,
     },
     {
       key: "status",
