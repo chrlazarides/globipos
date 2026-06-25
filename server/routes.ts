@@ -2562,15 +2562,41 @@ export async function registerRoutes(
       <li style="margin-bottom:5px;"><strong>Deactivate</strong> — prevents a user from logging in without deleting their history.</li>
     </ul>
 
-    <h3 class="sub-title" id="set-backup">13.4 Backups</h3>
-    <p>Gastro Nobile includes an automated backup system:</p>
-    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
-      <li style="margin-bottom:5px;"><strong>Automatic daily backup</strong> — if enabled in Settings, the system emails a backup file to the configured backup email address every 24 hours.</li>
-      <li style="margin-bottom:5px;"><strong>Full backup</strong> — exports all data. <strong>Differential backup</strong> — exports only new transactions since the last backup (used automatically when within 8 days of the last backup).</li>
-      <li style="margin-bottom:5px;"><strong>Manual backup</strong> — trigger a backup immediately from Settings → Backup.</li>
-      <li style="margin-bottom:5px;"><strong>Restore</strong> — upload a backup file to restore data. Supports full restore (wipe and replace) or differential merge (add new records without overwriting existing ones).</li>
-    </ul>
-    <div class="warning"><strong>Warning:</strong> A full restore permanently overwrites all current data. Always download a fresh backup before performing a full restore.</div>
+    <h3 class="sub-title" id="set-backup">13.4 Backups &amp; Recovery</h3>
+    <p>Go to <strong>Settings → Backup &amp; Recovery</strong>. The system provides four types of export and a full restore capability.</p>
+
+    <h4 style="margin:14px 0 6px; font-size:13px; color:#1a1a1a;">Data Backups (daily / on-demand)</h4>
+    <table>
+      <thead><tr><th>Type</th><th>What it exports</th><th>When to use</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Full Backup</strong></td><td>Every record in the database — customers, items, invoices, payments, accounting, settings, etc.</td><td>First backup, monthly snapshot, or before a major data change.</td></tr>
+        <tr><td><strong>Differential</strong></td><td>Only transaction records created <em>since the last backup date</em> (invoices, payments, journal entries, expenses, purchase invoices), plus all config tables in full.</td><td>Day-to-day backups — much smaller file. The button is disabled until a full backup has been run first.</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:8px;">All backup filenames include the company name and date automatically, e.g. <code>fc-gastronobile-ltd-backup-2026-06-25-full.json</code>.</p>
+
+    <h4 style="margin:14px 0 6px; font-size:13px; color:#1a1a1a;">Full System Export (server migration)</h4>
+    <p>Available to <span class="badge badge-red">Superuser</span> only via the <strong>Download System Export</strong> button. This produces a single file containing <em>everything</em> in a Full Backup <strong>plus all user accounts</strong> (usernames, roles, permissions, 2FA configuration, and hashed passwords). Use this when migrating the application to a new server — restoring it brings up the new instance with all data and all users intact, with no need to recreate accounts manually.</p>
+    <div class="warning"><strong>Security:</strong> The system export file contains hashed passwords. Treat it like a sensitive credential — store it securely and do not share it.</div>
+
+    <h4 style="margin:14px 0 6px; font-size:13px; color:#1a1a1a;">Automatic Daily Backup</h4>
+    <p>Enable under <strong>Settings → Backup &amp; Recovery → Automatic Daily Backup</strong>. Enter a backup email address and toggle the switch on. Every 24 hours the system automatically sends a differential backup (or a full backup if more than 8 days have passed since the last one) to that address.</p>
+
+    <h4 style="margin:14px 0 6px; font-size:13px; color:#1a1a1a;">Restoring from a Backup</h4>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Load Backup File…</strong> and select a <code>.json</code> backup or system export file.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">The system inspects the file and shows its type (Full / Differential / System), date, and a record count per table. Verify this is the correct file before proceeding.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Click <strong>Restore (Replace All)</strong> for a full or system restore, or <strong>Merge (Differential)</strong> for a differential restore.</div></div>
+    </div>
+    <table style="margin-top:8px;">
+      <thead><tr><th>Restore mode</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Full restore</strong></td><td>Wipes all current data and replaces it with the backup. User accounts and passwords on the current server are <em>preserved</em> (not overwritten).</td></tr>
+        <tr><td><strong>Differential merge</strong></td><td>Inserts new records from the backup without removing any existing data. Safe to run on a live system.</td></tr>
+        <tr><td><strong>System restore</strong></td><td>Same as full restore, but also upserts user accounts from the export. Your own active session is preserved.</td></tr>
+      </tbody>
+    </table>
+    <div class="warning" style="margin-top:10px;"><strong>Warning:</strong> A full or system restore permanently overwrites all current data. Always download a fresh backup immediately before performing one.</div>
   </div>
 
   <!-- ═══ SECTION 14: OFFLINE & PWA ═══ -->
