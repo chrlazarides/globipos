@@ -3415,6 +3415,25 @@ export async function registerRoutes(
     }
   });
 
+  // ─── SYSTEM EXPORT (superuser only) — full data + users, ready for new server ─
+  app.get("/api/backup/system-export", requireSuperuser, async (_req, res) => {
+    try {
+      const json = await generateBackupJson(); // full, no since
+      const parsed = JSON.parse(json);
+      // Add users (hashed passwords included — superuser only endpoint)
+      const usersRows = await db.select().from(users);
+      parsed.backupType = "system";
+      parsed.data.users = usersRows;
+      parsed.tableCounts.users = usersRows.length;
+      const date = new Date().toISOString().split("T")[0];
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="gastronobile-system-${date}.json"`);
+      res.send(JSON.stringify(parsed));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/backup/send-email", async (req, res) => {
     try {
       const emailSetting = await storage.getSetting("backup_email");
@@ -3538,6 +3557,16 @@ export async function registerRoutes(
         await insertNew(journalEntries, d.journalEntries || []);
         await insertNew(journalEntryLines, d.journalEntryLines || []);
         await insertNew(expenses, d.expenses || []);
+      }
+
+      // System export: restore users (upsert by id, never overwrite the calling user's own record)
+      if (d.users?.length) {
+        for (const u of d.users) {
+          await db.insert(users).values(u).onConflictDoUpdate({
+            target: users.id,
+            set: { username: u.username, email: u.email, role: u.role, active: u.active, permissions: u.permissions, totpSecret: u.totpSecret, totpEnabled: u.totpEnabled },
+          }).catch(() => {});
+        }
       }
 
       const totalRecords = Object.values(payload.tableCounts || {}).reduce((s: number, v: any) => s + (Number(v) || 0), 0);

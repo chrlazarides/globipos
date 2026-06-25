@@ -13,7 +13,7 @@ import {
   Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags,
   Database, Lock, Unlock, Shield, Download, Upload,
   Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff, Users,
-  RotateCcw, GitCommit, FileCheck, Info, Trash2,
+  RotateCcw, GitCommit, FileCheck, Info, Trash2, Server,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { SystemSetting } from "@shared/schema";
@@ -40,7 +40,7 @@ const groupLabels: Record<string, string> = {
 
 const groupOrder = ["company", "tax", "invoicing", "pricing", "inventory", "portal"];
 const HIDDEN_GROUPS = ["security", "backup"];
-const SESSION_KEY = "vintrade_settings_auth";
+const SESSION_KEY = "gastronobile_settings_auth";
 
 export default function SettingsPage() {
   const { user: currentUser } = useAuth();
@@ -278,7 +278,7 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `vintrade-export-${new Date().toISOString().slice(0,10)}.json`;
+      a.download = `gastronobile-export-${new Date().toISOString().slice(0,10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
       toast({ title: "Export complete", description: "Import this file in the production app to migrate your data." });
@@ -359,6 +359,10 @@ export default function SettingsPage() {
     } finally {
       setRestoring(false);
     }
+  };
+
+  const handleSystemExport = () => {
+    window.open("/api/backup/system-export", "_blank");
   };
 
   const handleEmailBackup = async () => {
@@ -925,6 +929,26 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
+
+          {/* Full System Export — server migration */}
+          {isSuperuser && (
+            <div className="border-t pt-4 space-y-3">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Full System Export</h4>
+              <p className="text-xs text-muted-foreground">
+                Downloads a complete snapshot — all data <strong>plus user accounts</strong> — ready to restore on a new server.
+                Use this when migrating to a different host. Superuser only.
+              </p>
+              <div className="flex flex-wrap gap-2 items-center">
+                <Button variant="outline" size="sm" onClick={handleSystemExport} data-testid="button-system-export">
+                  <Server className="w-4 h-4 mr-2" />
+                  Download System Export
+                </Button>
+              </div>
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                ⚠ This file contains hashed passwords. Store it securely and do not share.
+              </p>
+            </div>
+          )}
 
           {/* Migrate to Production */}
           <div className="border-t pt-4 space-y-3">
