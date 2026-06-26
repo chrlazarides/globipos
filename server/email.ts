@@ -61,8 +61,12 @@ async function sendEmailPayload(payload: EmailPayload): Promise<void> {
 
   if (dbApiKey && dbApiKey.startsWith('re_')) {
     // Use Resend SDK directly with the stored API key
+    // Resend SDK uses camelCase `replyTo`; our internal payload uses snake_case `reply_to`
     const client = new Resend(dbApiKey);
-    const result = await client.emails.send(payload as any);
+    const { reply_to, ...rest } = payload;
+    const sdkPayload: any = { ...rest };
+    if (reply_to) sdkPayload.replyTo = reply_to;
+    const result = await client.emails.send(sdkPayload);
     if ((result as any).error) {
       throw new Error((result as any).error.message || 'Resend API error');
     }
