@@ -41,7 +41,7 @@ export default function PortalLogin({ onLogin }: PortalLoginProps) {
         <CardHeader className="text-center pb-2">
           <div className="flex items-center justify-center gap-2 mb-2">
             <div className="w-24 h-24 overflow-hidden flex items-center justify-center">
-              <img src="/logo.png" alt="Logo" className="w-[200%] h-[200%] object-contain" />
+              <img src="/api/public/logo" alt="Logo" className="w-[200%] h-[200%] object-contain" onError={(e) => { e.currentTarget.src = "/logo.png"; }} />
             </div>
           </div>
           <h1 className="text-xl font-semibold">{companyName} Portal</h1>

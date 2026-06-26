@@ -32,7 +32,12 @@ function getLogoDataUrl(): string {
   }
   return "/logo.png"; // fallback if file not found
 }
-const LOGO_DATA_URL = getLogoDataUrl();
+// Derived per-request from DB settings (company_logo), falls back to file
+function resolveLogoDataUrl(settings: Record<string, string>): string {
+  const custom = settings.company_logo;
+  if (custom && custom.startsWith("data:image/")) return custom;
+  return getLogoDataUrl();
+}
 
 // ─── HTML ESCAPING HELPER ────────────────────────────────────────────────────
 function escHtml(str: unknown): string {
@@ -6035,6 +6040,7 @@ export async function registerRoutes(
 }
 
 function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPrint: boolean = false, settings: Record<string, string> = {}) {
+  const LOGO_DATA_URL = resolveLogoDataUrl(settings);
   const items = inv.items || [];
   const hasDiscountPercent = items.some((li: any) => parseFloat(li.discountPercent || "0") > 0);
   const hasDiscount = items.some((li: any) => parseFloat(li.discount || "0") > 0);
@@ -6306,6 +6312,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
 }
 
 function generateStatementHtml(customer: any, statement: any, autoPrint: boolean = false, settings: Record<string, string> = {}) {
+  const LOGO_DATA_URL = resolveLogoDataUrl(settings);
   const companyName = settings.company_name || "FC GASTRONOBILE LTD";
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";

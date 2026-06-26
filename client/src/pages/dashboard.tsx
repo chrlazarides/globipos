@@ -120,7 +120,7 @@ export default function Dashboard() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 overflow-hidden flex-shrink-0 flex items-center justify-center" data-testid="img-dashboard-logo">
-            <img src="/logo.png" alt="Logo" className="w-[200%] h-[200%] object-contain" />
+            <img src="/api/public/logo" alt="Logo" className="w-[200%] h-[200%] object-contain" onError={(e) => { e.currentTarget.src = "/logo.png"; }} />
           </div>
           <div>
             <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">{companyName}</h1>
