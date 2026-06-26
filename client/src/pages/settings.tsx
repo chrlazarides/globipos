@@ -227,6 +227,26 @@ export default function SettingsPage() {
     }
   };
 
+  const resizeLogo = (dataUrl: string, maxW = 600, maxH = 300): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        const ratio = Math.min(maxW / width, maxH / height, 1);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { resolve(dataUrl); return; }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -234,24 +254,25 @@ export default function SettingsPage() {
       toast({ title: "Invalid file", description: "Please select an image file.", variant: "destructive" });
       return;
     }
-    if (file.size > 2 * 1024 * 1024) {
-      toast({ title: "File too large", description: "Logo must be under 2MB.", variant: "destructive" });
+    if (file.size > 10 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Logo must be under 10MB.", variant: "destructive" });
       return;
     }
     setLogoUploading(true);
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
+      const rawDataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result as string);
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
+      const dataUrl = await resizeLogo(rawDataUrl);
       await apiRequest("PUT", "/api/settings", {
         settings: [{ key: "company_logo", value: dataUrl, label: "Company Logo", group: "company" }],
       });
       setValues(prev => ({ ...prev, company_logo: dataUrl }));
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
-      toast({ title: "Logo uploaded", description: "Your company logo has been saved." });
+      toast({ title: "Logo uploaded", description: "Your company logo has been saved and auto-resized." });
     } catch (err: any) {
       toast({ title: "Upload failed", description: err.message, variant: "destructive" });
     } finally {
