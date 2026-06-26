@@ -13,8 +13,9 @@ import {
   Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags,
   Database, Lock, Unlock, Shield, Download, Upload,
   Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff, Users,
-  RotateCcw, GitCommit, FileCheck, Info, Trash2, Server, Archive,
+  RotateCcw, GitCommit, FileCheck, Info, Trash2, Server, Archive, BookOpen,
 } from "lucide-react";
+import { Link } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import type { SystemSetting } from "@shared/schema";
 import { useAuth } from "@/App";
@@ -994,6 +995,14 @@ export default function SettingsPage() {
                 <strong>System Export</strong> — JSON snapshot for full system restore.{" "}
                 <strong>cPanel Package</strong> — ZIP with SQL dump, <code>.env</code> template, PM2 config and full deployment guide for self-hosting on any cPanel or VPS server.
               </p>
+              <div className="flex items-center gap-2">
+                <Link href="/deploy-guide">
+                  <Button variant="ghost" size="sm" className="text-xs h-7 px-2 text-primary" data-testid="link-deploy-guide">
+                    <BookOpen className="w-3 h-3 mr-1" />
+                    Step-by-step deployment guide →
+                  </Button>
+                </Link>
+              </div>
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 ⚠ Both files contain hashed passwords and sensitive data. Store securely and do not share.
               </p>
