@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LogoImg } from "@/components/logo-img";
 import { Switch, Route, useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Grape, LayoutDashboard, ShoppingCart, FileText, Receipt, LogOut, MessageCircle, Menu, X } from "lucide-react";
@@ -36,7 +37,7 @@ export default function PortalLayout({ customer, onLogout }: PortalLayoutProps) 
         <div className="max-w-7xl mx-auto px-4 py-2 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 overflow-hidden flex-shrink-0 flex items-center justify-center">
-              <img src="/api/public/logo" alt="Logo" className="w-[200%] h-[200%] object-contain" />
+              <LogoImg className="w-[200%] h-[200%] object-contain" alt="Logo" />
             </div>
             <span className="text-sm font-semibold hidden sm:inline">{companyName}</span>
           </div>

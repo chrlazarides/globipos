@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { LogoImg } from "@/components/logo-img";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -120,7 +121,7 @@ export default function Dashboard() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 overflow-hidden flex-shrink-0 flex items-center justify-center" data-testid="img-dashboard-logo">
-            <img src="/api/public/logo" alt="Logo" className="w-[200%] h-[200%] object-contain" />
+            <LogoImg className="w-[200%] h-[200%] object-contain" alt="Logo" />
           </div>
           <div>
             <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">{companyName}</h1>

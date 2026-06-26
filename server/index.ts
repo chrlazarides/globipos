@@ -58,7 +58,10 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(requireAuth);
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/public/")) return next();
+  return requireAuth(req, res, next);
+});
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LogoImg } from "@/components/logo-img";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -41,7 +42,7 @@ export default function PortalLogin({ onLogin }: PortalLoginProps) {
         <CardHeader className="text-center pb-2">
           <div className="flex items-center justify-center gap-2 mb-2">
             <div className="w-24 h-24 overflow-hidden flex items-center justify-center">
-              <img src="/api/public/logo" alt="Logo" className="w-[200%] h-[200%] object-contain" />
+              <LogoImg className="w-[200%] h-[200%] object-contain" alt="Logo" />
             </div>
           </div>
           <h1 className="text-xl font-semibold">{companyName} Portal</h1>

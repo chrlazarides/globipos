@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { LogoImg } from "@/components/logo-img";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -130,12 +131,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
 
   const logo = (
     <div className="flex justify-center mb-8">
-      <img
-        src="/api/public/logo"
-        alt="Company logo"
-        className="h-20 w-auto object-contain"
-        onError={(e) => { e.currentTarget.src = "/logo.png"; }}
-      />
+      <LogoImg className="h-20 w-auto object-contain" alt="Company logo" />
     </div>
   );
 

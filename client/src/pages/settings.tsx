@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { invalidateLogoSrc } from "@/hooks/use-logo-src";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -272,6 +273,7 @@ export default function SettingsPage() {
       });
       setValues(prev => ({ ...prev, company_logo: dataUrl }));
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      invalidateLogoSrc();
       toast({ title: "Logo uploaded", description: "Your company logo has been saved and auto-resized." });
     } catch (err: any) {
       toast({ title: "Upload failed", description: err.message, variant: "destructive" });
@@ -290,6 +292,7 @@ export default function SettingsPage() {
       });
       setValues(prev => ({ ...prev, company_logo: "" }));
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      invalidateLogoSrc();
       toast({ title: "Logo removed", description: "Default logo will be used." });
     } catch (err: any) {
       toast({ title: "Failed to remove logo", description: err.message, variant: "destructive" });

@@ -3,6 +3,7 @@ import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers } from "lucide-react";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
+import { LogoImg } from "@/components/logo-img";
 import {
   Sidebar,
   SidebarContent,
@@ -142,7 +143,7 @@ export function AppSidebar() {
       <SidebarHeader className="px-3 py-3">
         <div className="flex flex-col items-start gap-1">
           <div className="w-full rounded-lg bg-white px-3 py-2 flex items-center justify-start">
-            <img src="/api/public/logo" alt="Gastro Nobile" className="h-14 w-auto object-contain" />
+            <LogoImg className="h-14 w-auto object-contain" alt="Logo" />
           </div>
         </div>
         {!isOnline && (

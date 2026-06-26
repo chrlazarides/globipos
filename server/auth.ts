@@ -83,6 +83,7 @@ const PUBLIC_PATHS = [
   "/portal",
   "/api/portal",
   "/api/manual",
+  "/api/public",
 ];
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
