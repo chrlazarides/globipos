@@ -991,7 +991,7 @@ export default function SettingsPage() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                <strong>System Export</strong> — JSON snapshot for VinTrade restore.{" "}
+                <strong>System Export</strong> — JSON snapshot for full system restore.{" "}
                 <strong>cPanel Package</strong> — ZIP with SQL dump, <code>.env</code> template, PM2 config and full deployment guide for self-hosting on any cPanel or VPS server.
               </p>
               <p className="text-xs text-amber-600 dark:text-amber-400">
