@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
+import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -799,6 +799,7 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
                       data-testid="input-pack-size"
                     />
                   </FormControl>
+                  <FormDescription>Enter any whole number ≥ 1 (e.g. 2, 4, 6, 9, 18)</FormDescription>
                   <FormMessage />
                 </FormItem>
               )} />
