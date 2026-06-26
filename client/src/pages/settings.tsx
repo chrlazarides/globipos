@@ -13,7 +13,7 @@ import {
   Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags,
   Database, Lock, Unlock, Shield, Download, Upload,
   Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff, Users,
-  RotateCcw, GitCommit, FileCheck, Info, Trash2, Server,
+  RotateCcw, GitCommit, FileCheck, Info, Trash2, Server, Archive,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { SystemSetting } from "@shared/schema";
@@ -371,6 +371,31 @@ export default function SettingsPage() {
 
   const handleSystemExport = () => {
     window.open("/api/backup/system-export", "_blank");
+  };
+
+  const [cpanelExporting, setCpanelExporting] = useState(false);
+  const handleCpanelPackage = async () => {
+    setCpanelExporting(true);
+    try {
+      const res = await fetch("/api/backup/cpanel-package");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Export failed" }));
+        throw new Error(err.message || "Export failed");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const cd = res.headers.get("Content-Disposition") || "";
+      const match = cd.match(/filename="([^"]+)"/);
+      a.download = match ? match[1] : "cpanel-package.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setCpanelExporting(false);
+    }
   };
 
   const handleEmailBackup = async () => {
@@ -953,9 +978,24 @@ export default function SettingsPage() {
                   <Server className="w-4 h-4 mr-2" />
                   Download System Export
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCpanelPackage}
+                  disabled={cpanelExporting}
+                  data-testid="button-cpanel-package"
+                  title="Downloads a ZIP with SQL dump, setup script, PM2 config and deployment guide — ready to deploy on any cPanel or VPS host"
+                >
+                  <Archive className={`w-4 h-4 mr-2 ${cpanelExporting ? "animate-pulse" : ""}`} />
+                  {cpanelExporting ? "Building package…" : "cPanel Deployment Package"}
+                </Button>
               </div>
+              <p className="text-xs text-muted-foreground">
+                <strong>System Export</strong> — JSON snapshot for VinTrade restore.{" "}
+                <strong>cPanel Package</strong> — ZIP with SQL dump, <code>.env</code> template, PM2 config and full deployment guide for self-hosting on any cPanel or VPS server.
+              </p>
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                ⚠ This file contains hashed passwords. Store it securely and do not share.
+                ⚠ Both files contain hashed passwords and sensitive data. Store securely and do not share.
               </p>
             </div>
           )}
