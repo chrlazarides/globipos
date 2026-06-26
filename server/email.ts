@@ -144,16 +144,19 @@ export async function sendTestEmail(
 ): Promise<{ success: boolean; fromEmail: string; error?: string }> {
   try {
     const fromEmail = await getFromEmail();
-    await sendEmailPayload({
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
       from: fromEmail,
       to: toEmail,
       subject: 'Gastro Nobile — Email Test',
       html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
         <h2 style="color:#374151;margin-top:0;">Email Test Successful</h2>
         <p style="color:#374151;">This is a test email sent from your <strong>Gastro Nobile</strong> system to confirm email delivery is working correctly.</p>
-        <p style="color:#6b7280;font-size:13px;">Sent via Resend · From: ${escHtml(fromEmail)}</p>
+        <p style="color:#6b7280;font-size:13px;">Sent via Resend · From: ${escHtml(fromEmail)}${replyTo ? ` · Reply-To: ${escHtml(replyTo)}` : ''}</p>
       </div>`,
-    });
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
     return { success: true, fromEmail };
   } catch (error: any) {
     console.error('Test email error:', error?.message || error);
@@ -187,8 +190,9 @@ export async function sendSavingsReportEmail(
 ): Promise<{ success: boolean; fromEmail: string; error?: string }> {
   try {
     const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
     const filename = `savings-report-${customerName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.html`;
-    await sendEmailPayload({
+    const payload: EmailPayload = {
       from: fromEmail,
       to: toEmail,
       subject,
@@ -198,7 +202,9 @@ export async function sendSavingsReportEmail(
         <p style="color:#6b7280;font-size:13px;">Open the attached HTML file in your browser to view the full report with all details.</p>
       </div>`,
       attachments: [{ filename, content: Buffer.from(htmlContent).toString('base64') }],
-    });
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
     return { success: true, fromEmail };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to send savings report email';
@@ -217,6 +223,7 @@ export async function sendBackupEmail(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
     const slug = (companyName || "backup").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "backup";
     const isDiff = backupType === "differential";
     const tag = isDiff ? `diff-since-${(sinceDate || date).slice(0, 10)}` : "full";
@@ -225,7 +232,7 @@ export async function sendBackupEmail(
     const diffNote = isDiff && sinceDate
       ? `<p>This is a <strong>differential backup</strong> — it contains only records created since <strong>${escHtml(new Date(sinceDate).toLocaleString())}</strong>.<br>Keep this file together with your previous full backup for a complete recovery set.</p>`
       : `<p>This is a <strong>full backup</strong> — it contains all data and can be used to restore the system independently.</p>`;
-    await sendEmailPayload({
+    const payload: EmailPayload = {
       from: fromEmail,
       to: toEmail,
       subject: `${companyName} — ${typeLabel} Database Backup ${date}`,
@@ -235,7 +242,9 @@ export async function sendBackupEmail(
              <p>Attached file: <code>${escHtml(filename)}</code></p>
              <p style="color:#666;font-size:12px;">This is an automated backup email. Store this file securely.</p>`,
       attachments: [{ filename, content: Buffer.from(backupJson).toString('base64') }],
-    });
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
     return { success: true };
   } catch (error: any) {
     console.error('Backup email error:', error?.message || error);
@@ -252,7 +261,8 @@ export async function sendLoginAlertEmail(
 ): Promise<void> {
   try {
     const fromEmail = await getFromEmail();
-    await sendEmailPayload({
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
       from: fromEmail,
       to: adminEmails,
       subject: `🔐 Security Alert: ${username} logged in from new location`,
@@ -271,7 +281,9 @@ export async function sendLoginAlertEmail(
         <p style="color:#374151;">If this was not you, log in immediately and deactivate this account.</p>
         <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Gastro Nobile.</p>
       </div>`,
-    });
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
   } catch (error: any) {
     console.error('Login alert email error:', error?.message || error);
   }
@@ -286,7 +298,8 @@ export async function sendFailedLoginAlertEmail(
 ): Promise<void> {
   try {
     const fromEmail = await getFromEmail();
-    await sendEmailPayload({
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
       from: fromEmail,
       to: adminEmails,
       subject: `🚨 Security Alert: ${failCount} failed login attempts from ${ip}`,
@@ -305,7 +318,9 @@ export async function sendFailedLoginAlertEmail(
         <p style="color:#374151;">The IP has been temporarily blocked. Review your system if this activity is unexpected.</p>
         <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Gastro Nobile.</p>
       </div>`,
-    });
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
   } catch (error: any) {
     console.error('Failed login alert email error:', error?.message || error);
   }
@@ -320,7 +335,8 @@ export async function sendNewAdminAlertEmail(
 ): Promise<void> {
   try {
     const fromEmail = await getFromEmail();
-    await sendEmailPayload({
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
       from: fromEmail,
       to: adminEmails,
       subject: `👤 Security Alert: New admin user "${newUsername}" created`,
@@ -339,7 +355,9 @@ export async function sendNewAdminAlertEmail(
         <p style="color:#374151;">If you did not create this user, log in immediately and deactivate them.</p>
         <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Gastro Nobile.</p>
       </div>`,
-    });
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
   } catch (error: any) {
     console.error('New admin alert email error:', error?.message || error);
   }
