@@ -305,6 +305,27 @@ export async function registerRoutes(
     next();
   });
 
+  // Public logo endpoint — no auth required, used on login page
+  app.get("/api/public/logo", async (_req: Request, res: Response) => {
+    try {
+      const settings = await storage.getSettings();
+      const logoSetting = settings.find((s: any) => s.key === "company_logo");
+      if (logoSetting?.value && logoSetting.value.startsWith("data:image/")) {
+        const matches = logoSetting.value.match(/^data:([^;]+);base64,(.+)$/);
+        if (matches) {
+          const mimeType = matches[1];
+          const buffer = Buffer.from(matches[2], "base64");
+          res.setHeader("Content-Type", mimeType);
+          res.setHeader("Cache-Control", "public, max-age=3600");
+          return res.send(buffer);
+        }
+      }
+      res.status(404).json({ message: "No custom logo set" });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   activityMiddleware(app);
 
   // ─── AUTH ───────────────────────────────────────────────────────────────────

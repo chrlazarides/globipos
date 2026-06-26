@@ -56,6 +56,9 @@ export default function SettingsPage() {
   const [seeding, setSeeding] = useState(false);
   const { toast } = useToast();
 
+  // Logo upload
+  const [logoUploading, setLogoUploading] = useState(false);
+
   // Password gate (superusers bypass automatically)
   const [authenticated, setAuthenticated] = useState(isSuperuser);
   const [hasPassword, setHasPassword] = useState(false);
@@ -221,6 +224,56 @@ export default function SettingsPage() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setChangePwLoading(false);
+    }
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Invalid file", description: "Please select an image file.", variant: "destructive" });
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Logo must be under 2MB.", variant: "destructive" });
+      return;
+    }
+    setLogoUploading(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      await apiRequest("PUT", "/api/settings", {
+        settings: [{ key: "company_logo", value: dataUrl, label: "Company Logo", group: "company" }],
+      });
+      setValues(prev => ({ ...prev, company_logo: dataUrl }));
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({ title: "Logo uploaded", description: "Your company logo has been saved." });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setLogoUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    if (!confirm("Remove the custom logo? The default logo will be used instead.")) return;
+    setLogoUploading(true);
+    try {
+      await apiRequest("PUT", "/api/settings", {
+        settings: [{ key: "company_logo", value: "", label: "Company Logo", group: "company" }],
+      });
+      setValues(prev => ({ ...prev, company_logo: "" }));
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({ title: "Logo removed", description: "Default logo will be used." });
+    } catch (err: any) {
+      toast({ title: "Failed to remove logo", description: err.message, variant: "destructive" });
+    } finally {
+      setLogoUploading(false);
     }
   };
 
@@ -679,6 +732,89 @@ export default function SettingsPage() {
         </Card>
       ) : (
         <div className="space-y-6">
+          {/* Company Logo Upload Card */}
+          <Card>
+            <CardHeader className="flex flex-row items-center gap-2 p-4 pb-2">
+              <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10">
+                <Building2 className="w-4 h-4 text-primary" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold">Company Logo</h3>
+                <p className="text-xs text-muted-foreground">Displayed on the login page, invoices, and documents</p>
+              </div>
+            </CardHeader>
+            <CardContent className="p-4 pt-2">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <div className="flex-shrink-0 w-36 h-20 rounded-lg border bg-muted/30 flex items-center justify-center overflow-hidden">
+                  {values["company_logo"] ? (
+                    <img
+                      src={values["company_logo"]}
+                      alt="Company logo"
+                      className="max-w-full max-h-full object-contain p-2"
+                      data-testid="img-company-logo"
+                    />
+                  ) : (
+                    <img
+                      src="/logo.png"
+                      alt="Default logo"
+                      className="max-w-full max-h-full object-contain p-2 opacity-50"
+                      data-testid="img-default-logo"
+                    />
+                  )}
+                </div>
+                <div className="space-y-2 flex-1">
+                  {values["company_logo"] ? (
+                    <p className="text-xs text-green-600 dark:text-green-400 font-medium flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> Custom logo active
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No custom logo — default logo is used</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">PNG, JPG, SVG or WebP · Max 2 MB</p>
+                  <div className="flex gap-2">
+                    <label htmlFor="logo-upload" className="cursor-pointer">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={logoUploading}
+                        asChild
+                        data-testid="button-upload-logo"
+                      >
+                        <span>
+                          <Upload className="w-3.5 h-3.5 mr-1.5" />
+                          {logoUploading ? "Uploading..." : values["company_logo"] ? "Replace Logo" : "Upload Logo"}
+                        </span>
+                      </Button>
+                    </label>
+                    <input
+                      id="logo-upload"
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleLogoUpload}
+                      data-testid="input-logo-upload"
+                    />
+                    {values["company_logo"] && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleRemoveLogo}
+                        disabled={logoUploading}
+                        data-testid="button-remove-logo"
+                        className="text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           {groupOrder.filter(g => grouped[g]).concat(Object.keys(grouped).filter(g => !groupOrder.includes(g))).map((group) => {
             const groupSettings = grouped[group];
             const Icon = groupIcons[group] || Settings2;
