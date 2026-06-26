@@ -211,19 +211,29 @@ export async function sendBackupEmail(
   toEmail: string,
   companyName: string,
   backupJson: string,
-  date: string
+  date: string,
+  backupType?: string,
+  sinceDate?: string | null,
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const fromEmail = await getFromEmail();
-    const filename = `backup-${date}.json`;
+    const slug = (companyName || "backup").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "backup";
+    const isDiff = backupType === "differential";
+    const tag = isDiff ? `diff-since-${(sinceDate || date).slice(0, 10)}` : "full";
+    const filename = `${slug}-backup-${date}-${tag}.json`;
+    const typeLabel = isDiff ? "Differential" : "Full";
+    const diffNote = isDiff && sinceDate
+      ? `<p>This is a <strong>differential backup</strong> — it contains only records created since <strong>${escHtml(new Date(sinceDate).toLocaleString())}</strong>.<br>Keep this file together with your previous full backup for a complete recovery set.</p>`
+      : `<p>This is a <strong>full backup</strong> — it contains all data and can be used to restore the system independently.</p>`;
     await sendEmailPayload({
       from: fromEmail,
       to: toEmail,
-      subject: `${companyName} — Database Backup ${date}`,
+      subject: `${companyName} — ${typeLabel} Database Backup ${date}`,
       html: `<p>Automated database backup for <strong>${escHtml(companyName)}</strong>.</p>
              <p>Date: ${escHtml(date)}</p>
-             <p>The full backup is attached as <code>${escHtml(filename)}</code>.</p>
-             <p style="color:#666;font-size:12px;">This is an automated backup email. Keep this file in a safe place.</p>`,
+             ${diffNote}
+             <p>Attached file: <code>${escHtml(filename)}</code></p>
+             <p style="color:#666;font-size:12px;">This is an automated backup email. Store this file securely.</p>`,
       attachments: [{ filename, content: Buffer.from(backupJson).toString('base64') }],
     });
     return { success: true };

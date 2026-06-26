@@ -3850,7 +3850,7 @@ export async function registerRoutes(
       const since = (lastDate && hoursSinceLast < 192) ? lastDate.toISOString() : undefined;
       const json = await generateBackupJson(since);
       const parsed = JSON.parse(json);
-      const result = await sendBackupEmail(toEmail, companyName, json, date);
+      const result = await sendBackupEmail(toEmail, companyName, json, date, parsed.backupType, parsed.sinceDate);
       if (!result.success) return res.status(500).json({ message: result.error || "Failed to send backup email" });
       await storage.upsertSetting("backup_last_date", new Date().toISOString(), "Last Backup Date", "backup");
       res.json({ success: true, sentTo: toEmail, backupType: parsed.backupType, tableCounts: parsed.tableCounts });
