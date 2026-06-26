@@ -77,6 +77,8 @@ export default function Items() {
   const { data: items = [], isLoading: itemsLoading } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
   const { data: stockSuggestions = [] } = useQuery<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>({ queryKey: ["/api/items/stock-suggestions"] });
+  const { data: allSettings = [] } = useQuery<{ key: string; value: string }[]>({ queryKey: ["/api/settings"] });
+  const weeksOfCover = parseInt(allSettings.find(s => s.key === "reorder_weeks_cover")?.value || "8", 10) || 8;
   const priceLevelNames = usePriceLevels();
 
   const createItem = useMutation({
@@ -344,7 +346,7 @@ export default function Items() {
               </div>
               {stockSuggestionsOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
             </div>
-            <p className="text-xs text-muted-foreground mt-1 mb-3">Items at or below reorder level — based on last 60 days of sales</p>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">Items at or below reorder level — suggested order covers {weeksOfCover} week{weeksOfCover !== 1 ? "s" : ""} based on last 60 days of sales</p>
           </CardHeader>
           {stockSuggestionsOpen && (
             <CardContent className="p-4 pt-2">

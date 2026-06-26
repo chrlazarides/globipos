@@ -2373,6 +2373,11 @@ export class DatabaseStorage implements IStorage {
     const allCategories = await db.select().from(categories);
     const catMap = new Map(allCategories.map(c => [c.id, c.name]));
 
+    // Read configurable weeks of cover (default 8 weeks)
+    const weeksSettingRow = await this.getSetting("reorder_weeks_cover");
+    const weeksOfCover = Math.max(1, parseFloat(weeksSettingRow?.value || "8") || 8);
+    const coverDays = weeksOfCover * 7;
+
     // Compute 60-day sales volumes per item from invoice lines
     const sixtyDaysAgo = new Date();
     sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
@@ -2411,8 +2416,8 @@ export class DatabaseStorage implements IStorage {
     const candidates = allItems.filter(item => {
       const qty = parseFloat(String(item.stockQuantity || 0));
       const reorder = parseFloat(String(item.reorderLevel || 0));
-      const avgMonthly = (salesMap.get(item.id) || 0) / 2; // 60 days = 2 months
-      return qty <= reorder || qty < avgMonthly * 2;
+      const avgDaily = (salesMap.get(item.id) || 0) / 60;
+      return qty <= reorder || qty < avgDaily * coverDays;
     });
 
     return candidates
@@ -2422,8 +2427,9 @@ export class DatabaseStorage implements IStorage {
         const packSize = parseFloat(String(item.packSize || 1));
         const salesIn60Days = salesMap.get(item.id) || 0;
         const avgMonthly = Math.round((salesIn60Days / 2) * 10) / 10;
-        // Suggested = 2× avg monthly, rounded up to nearest pack
-        const rawBase = avgMonthly * 2;
+        // Suggested = enough to cover weeksOfCover weeks at avg daily rate, rounded up to nearest pack
+        const avgDaily = salesIn60Days / 60;
+        const rawBase = avgDaily * coverDays;
         const suggestedOrder = rawBase > 0
           ? (packSize > 1 ? Math.ceil(rawBase / packSize) * packSize : Math.ceil(rawBase))
           : 0;

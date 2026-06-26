@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS = [
   { key: "price_level_4", value: "Price Level 4", label: "Price Level 4 Name", group: "pricing" },
   { key: "price_level_5", value: "Price Level 5", label: "Price Level 5 Name", group: "pricing" },
   { key: "low_stock_threshold", value: "10", label: "Low Stock Alert Threshold", group: "inventory" },
+  { key: "reorder_weeks_cover", value: "8", label: "Reorder Weeks of Cover", group: "inventory" },
   { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
   { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
   { key: "settings_password", value: "", label: "Settings Password Hash", group: "security" },
