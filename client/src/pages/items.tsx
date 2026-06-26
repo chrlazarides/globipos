@@ -131,6 +131,7 @@ export default function Items() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items/stock-suggestions"] });
       setEditDialogOpen(false);
       setEditingItem(null);
       toast({ title: "Item updated successfully" });
@@ -787,20 +788,15 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
               <FormField control={form.control} name="packSize" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Pack Size</FormLabel>
-                  <Select value={String(field.value)} onValueChange={(v) => field.onChange(parseInt(v))}>
-                    <FormControl>
-                      <SelectTrigger data-testid="select-pack-size">
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="1">1 (Single)</SelectItem>
-                      <SelectItem value="3">3-Pack</SelectItem>
-                      <SelectItem value="6">6-Pack</SelectItem>
-                      <SelectItem value="12">12-Pack</SelectItem>
-                      <SelectItem value="24">24-Pack</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      min={1}
+                      {...field}
+                      onChange={(e) => field.onChange(parseInt(e.target.value) || 1)}
+                      data-testid="input-pack-size"
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
