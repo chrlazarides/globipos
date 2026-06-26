@@ -76,7 +76,7 @@ export default function Items() {
   const [stockSuggestionsOpen, setStockSuggestionsOpen] = useState(true);
   const { data: items = [], isLoading: itemsLoading } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
-  const { data: stockSuggestions = [] } = useQuery<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>({ queryKey: ["/api/items/stock-suggestions"] });
+  const { data: stockSuggestions = [] } = useQuery<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; packSize: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>({ queryKey: ["/api/items/stock-suggestions"] });
   const { data: allSettings = [] } = useQuery<{ key: string; value: string }[]>({ queryKey: ["/api/settings"] });
   const weeksOfCover = parseInt(allSettings.find(s => s.key === "reorder_weeks_cover")?.value || "8", 10) || 8;
   const priceLevelNames = usePriceLevels();
@@ -382,7 +382,16 @@ export default function Items() {
                         <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">{s.reorderLevel}</td>
                         <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground hidden md:table-cell">{s.avgMonthly > 0 ? s.avgMonthly : "—"}</td>
                         <td className="py-2 text-right tabular-nums">
-                          {s.suggestedOrder > 0 ? <span className="font-medium text-primary">{s.suggestedOrder}</span> : <span className="text-muted-foreground">—</span>}
+                          {s.suggestedOrder > 0 ? (
+                            <span className="font-medium text-primary">
+                              {s.suggestedOrder}
+                              {s.packSize > 1 && (
+                                <span className="block text-muted-foreground font-normal text-[10px] leading-tight">
+                                  = {Math.ceil(s.suggestedOrder / s.packSize)} pack{Math.ceil(s.suggestedOrder / s.packSize) !== 1 ? "s" : ""} of {s.packSize}
+                                </span>
+                              )}
+                            </span>
+                          ) : <span className="text-muted-foreground">—</span>}
                         </td>
                       </tr>
                     ))}

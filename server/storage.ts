@@ -2443,6 +2443,7 @@ export class DatabaseStorage implements IStorage {
           sku: item.sku,
           stockQuantity: qty,
           reorderLevel: reorder,
+          packSize,
           categoryName: item.categoryId ? catMap.get(item.categoryId) : undefined,
           avgMonthly,
           suggestedOrder,
