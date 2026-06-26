@@ -312,6 +312,11 @@ export async function registerRoutes(
 
   // Public logo endpoint — no auth required, used on login page
   app.get("/api/public/logo", async (_req: Request, res: Response) => {
+    // Always returns an image — custom from DB if set, otherwise the default file.
+    // no-cache so the browser always revalidates after a logo change.
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     try {
       const settings = await storage.getSettings();
       const logoSetting = settings.find((s: any) => s.key === "company_logo");
@@ -321,11 +326,21 @@ export async function registerRoutes(
           const mimeType = matches[1];
           const buffer = Buffer.from(matches[2], "base64");
           res.setHeader("Content-Type", mimeType);
-          res.setHeader("Cache-Control", "public, max-age=3600");
           return res.send(buffer);
         }
       }
-      res.status(404).json({ message: "No custom logo set" });
+      // Fall back to default logo file
+      const defaultCandidates = [
+        path.resolve(process.cwd(), "dist", "public", "logo.png"),
+        path.resolve(process.cwd(), "client", "public", "logo.png"),
+      ];
+      for (const p of defaultCandidates) {
+        if (fs.existsSync(p)) {
+          res.setHeader("Content-Type", "image/png");
+          return res.send(fs.readFileSync(p));
+        }
+      }
+      res.status(404).json({ message: "No logo found" });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
