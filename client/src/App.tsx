@@ -38,6 +38,7 @@ import LoginPage from "@/pages/login";
 import UsersPage from "@/pages/users";
 import ActivityLogsPage from "@/pages/activity-logs";
 import DeployGuide from "@/pages/deploy-guide";
+import VersionControl from "@/pages/version-control";
 import type { Customer } from "@shared/schema";
 import { Loader2 } from "lucide-react";
 
@@ -131,6 +132,7 @@ function AdminRouter() {
       <Route path="/deploy-guide" component={DeployGuide} />
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/users" component={UsersPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/activity-logs" component={ActivityLogsPage} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/version-control" component={VersionControl} />}
       <Route component={NotFound} />
     </Switch>
   );

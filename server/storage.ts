@@ -29,6 +29,8 @@ import {
   type InsertExpense, type Expense,
   customerDeliveryLocations,
   type InsertCustomerDeliveryLocation, type CustomerDeliveryLocation,
+  versionSnapshots,
+  type VersionSnapshot,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -157,6 +159,12 @@ export interface IStorage {
 
   getPurchaseInvoiceSummary(): Promise<{ totalOutstanding: string; totalCount: number; dueThisMonth: string; overdue: string; overdueCount: number }>;
   getStockSuggestions(): Promise<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>;
+
+  // Version Control
+  listVersionSnapshots(): Promise<Omit<VersionSnapshot, "dataSnapshot">[]>;
+  createVersionSnapshot(name: string, description: string, type: string, createdBy: string, dataSnapshot: string, appVersion: string, tableCounts: string): Promise<VersionSnapshot>;
+  getVersionSnapshot(id: string): Promise<VersionSnapshot | undefined>;
+  deleteVersionSnapshot(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2455,6 +2463,35 @@ export class DatabaseStorage implements IStorage {
         if (order[a.urgency] !== order[b.urgency]) return order[a.urgency] - order[b.urgency];
         return a.stockQuantity - b.stockQuantity;
       });
+  }
+
+  // ─── Version Control ──────────────────────────────────────────────────────
+  async listVersionSnapshots() {
+    const rows = await db.select({
+      id: versionSnapshots.id,
+      name: versionSnapshots.name,
+      description: versionSnapshots.description,
+      type: versionSnapshots.type,
+      createdBy: versionSnapshots.createdBy,
+      createdAt: versionSnapshots.createdAt,
+      appVersion: versionSnapshots.appVersion,
+      tableCounts: versionSnapshots.tableCounts,
+    }).from(versionSnapshots).orderBy(desc(versionSnapshots.createdAt));
+    return rows;
+  }
+
+  async createVersionSnapshot(name: string, description: string, type: string, createdBy: string, dataSnapshot: string, appVersion: string, tableCounts: string) {
+    const [row] = await db.insert(versionSnapshots).values({ name, description, type, createdBy, dataSnapshot, appVersion, tableCounts }).returning();
+    return row;
+  }
+
+  async getVersionSnapshot(id: string) {
+    const [row] = await db.select().from(versionSnapshots).where(eq(versionSnapshots.id, id));
+    return row;
+  }
+
+  async deleteVersionSnapshot(id: string) {
+    await db.delete(versionSnapshots).where(eq(versionSnapshots.id, id));
   }
 }
 

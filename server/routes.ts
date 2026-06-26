@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -4042,6 +4042,121 @@ export async function registerRoutes(
         tableCounts: payload.tableCounts || {},
         totalRecords,
       });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ─── Version Control ────────────────────────────────────────────────────────
+  app.get("/api/version-control", requireAdmin, async (_req, res) => {
+    try {
+      const snapshots = await storage.listVersionSnapshots();
+      res.json(snapshots);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/version-control", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { name, description = "", type = "manual" } = req.body;
+      if (!name?.trim()) return res.status(400).json({ message: "Name is required" });
+      const user = (req as any).user;
+      const createdBy = user?.username || "system";
+      const appVersionSetting = await storage.getSetting("app_version");
+      const appVersion = appVersionSetting?.value || "1.0";
+      const json = await generateBackupJson();
+      const parsed = JSON.parse(json);
+      const tableCounts = JSON.stringify(parsed.tableCounts || {});
+      const snap = await storage.createVersionSnapshot(name.trim(), description, type, createdBy, json, appVersion, tableCounts);
+      res.json({ ...snap, dataSnapshot: undefined });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/version-control/:id/download", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const snap = await storage.getVersionSnapshot(req.params.id);
+      if (!snap) return res.status(404).json({ message: "Snapshot not found" });
+      const safeName = snap.name.replace(/[^a-z0-9_\-]/gi, "_").toLowerCase();
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="snapshot_${safeName}_${snap.id.slice(0, 8)}.json"`);
+      res.send(snap.dataSnapshot);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/version-control/:id/rollback", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const snap = await storage.getVersionSnapshot(req.params.id);
+      if (!snap || !snap.dataSnapshot) return res.status(404).json({ message: "Snapshot not found or has no data" });
+      const payload = JSON.parse(snap.dataSnapshot);
+      if (!payload?.data) return res.status(400).json({ message: "Snapshot data is invalid" });
+      const d = payload.data;
+
+      // Full restore: wipe and reimport (same as /api/backup/restore full restore)
+      await db.delete(journalEntryLines);
+      await db.delete(journalEntries);
+      await db.delete(expenses);
+      await db.delete(supplierPayments);
+      await db.delete(purchaseInvoiceItems);
+      await db.delete(purchaseInvoices);
+      await db.delete(payments);
+      await db.delete(invoiceItems);
+      await db.delete(invoices);
+      await db.delete(priceContractRules);
+      await db.delete(priceContractItems);
+      await db.delete(priceContracts);
+      await db.delete(seasonalOfferItems);
+      await db.delete(seasonalOffers);
+      await db.delete(customers);
+      await db.delete(suppliers);
+      await db.delete(items);
+      await db.delete(categories);
+      await db.delete(accounts);
+
+      const ins = async (table: any, rows: any[]) => { if (rows?.length) await db.insert(table).values(rows); };
+      await ins(categories, d.categories);
+      await ins(items, d.items);
+      await ins(customers, d.customers);
+      await ins(suppliers, d.suppliers);
+      await ins(accounts, d.accounts);
+      await ins(priceContracts, d.priceContracts);
+      await ins(priceContractRules, d.priceContractRules);
+      await ins(priceContractItems, d.priceContractItems);
+      await ins(seasonalOffers, d.seasonalOffers);
+      await ins(seasonalOfferItems, d.seasonalOfferItems);
+      await ins(invoices, d.invoices);
+      await ins(invoiceItems, d.invoiceItems);
+      await ins(purchaseInvoices, d.purchaseInvoices);
+      await ins(purchaseInvoiceItems, d.purchaseInvoiceItems);
+      await ins(payments, d.payments);
+      await ins(supplierPayments, d.supplierPayments);
+      await ins(journalEntries, d.journalEntries);
+      await ins(journalEntryLines, d.journalEntryLines);
+      await ins(expenses, d.expenses);
+
+      if (d.settings?.length) {
+        for (const s of d.settings) {
+          if (s.key === "settings_password") continue;
+          await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+        }
+      }
+
+      res.json({ message: "Rollback complete", snapshotName: snap.name, snapshotId: snap.id });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/version-control/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const snap = await storage.getVersionSnapshot(req.params.id);
+      if (!snap) return res.status(404).json({ message: "Snapshot not found" });
+      await storage.deleteVersionSnapshot(req.params.id);
+      res.json({ message: "Snapshot deleted" });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

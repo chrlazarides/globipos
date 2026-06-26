@@ -456,3 +456,20 @@ export const customerDeliveryLocations = pgTable("customer_delivery_locations", 
 export const insertCustomerDeliveryLocationSchema = createInsertSchema(customerDeliveryLocations).omit({ id: true, createdAt: true });
 export type InsertCustomerDeliveryLocation = z.infer<typeof insertCustomerDeliveryLocationSchema>;
 export type CustomerDeliveryLocation = typeof customerDeliveryLocations.$inferSelect;
+
+// ─── Version Control Snapshots ────────────────────────────────────────────────
+export const versionSnapshots = pgTable("version_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description").default(""),
+  type: text("type").notNull().default("manual"), // "manual" | "publish"
+  createdBy: text("created_by").notNull().default("system"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  dataSnapshot: text("data_snapshot"),
+  appVersion: text("app_version").default("1.0"),
+  tableCounts: text("table_counts").default("{}"),
+});
+
+export const insertVersionSnapshotSchema = createInsertSchema(versionSnapshots).omit({ id: true, createdAt: true });
+export type InsertVersionSnapshot = z.infer<typeof insertVersionSnapshotSchema>;
+export type VersionSnapshot = typeof versionSnapshots.$inferSelect;
