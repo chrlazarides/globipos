@@ -6,11 +6,22 @@ import { Card, CardContent } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Search, Mail } from "lucide-react";
+import { Search, Mail, Copy, Check } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import type { EmailLog } from "@shared/schema";
 
 export default function EmailLogs() {
   const [search, setSearch] = useState("");
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+  const { toast } = useToast();
+
+  function copyReplyTo(id: number, address: string) {
+    navigator.clipboard.writeText(address).then(() => {
+      setCopiedId(id);
+      toast({ title: "Copied", description: address });
+      setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 2000);
+    });
+  }
 
   const { data: logs = [], isLoading } = useQuery<EmailLog[]>({ queryKey: ["/api/email-logs"] });
 
@@ -69,9 +80,19 @@ export default function EmailLogs() {
       header: "Reply-To",
       cell: (row) =>
         row.replyTo ? (
-          <span className="text-sm text-muted-foreground" data-testid={`text-email-replyto-${row.id}`}>
-            {row.replyTo}
-          </span>
+          <button
+            onClick={() => copyReplyTo(row.id, row.replyTo!)}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors group"
+            data-testid={`button-copy-replyto-${row.id}`}
+            title="Click to copy"
+          >
+            <span data-testid={`text-email-replyto-${row.id}`}>{row.replyTo}</span>
+            {copiedId === row.id ? (
+              <Check className="w-3.5 h-3.5 text-green-500 shrink-0" />
+            ) : (
+              <Copy className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+            )}
+          </button>
         ) : null,
     },
     {
