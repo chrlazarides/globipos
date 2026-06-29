@@ -67,10 +67,10 @@ function LayoutForm({ initial, onClose }: { initial?: PosLayoutSet; onClose: () 
         <FormField control={form.control} name="locationId" render={({ field }) => (
           <FormItem>
             <FormLabel>Location (optional)</FormLabel>
-            <Select value={field.value ?? ""} onValueChange={v => field.onChange(v || undefined)}>
-              <FormControl><SelectTrigger><SelectValue placeholder="All locations" /></SelectTrigger></FormControl>
+            <Select value={field.value ?? "none"} onValueChange={v => field.onChange(v === "none" ? undefined : v)}>
+              <FormControl><SelectTrigger><SelectValue placeholder="No location filter" /></SelectTrigger></FormControl>
               <SelectContent>
-                <SelectItem value="">All locations</SelectItem>
+                <SelectItem value="none">No location filter</SelectItem>
                 {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
               </SelectContent>
             </Select>

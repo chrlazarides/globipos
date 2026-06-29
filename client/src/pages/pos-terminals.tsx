@@ -100,10 +100,10 @@ function TerminalForm({ initial, onClose }: { initial?: PosTerminal; onClose: ()
         <FormField control={form.control} name="layoutSetId" render={({ field }) => (
           <FormItem>
             <FormLabel>Layout Set (optional)</FormLabel>
-            <Select value={field.value ?? ""} onValueChange={v => field.onChange(v || undefined)}>
+            <Select value={field.value ?? "none"} onValueChange={v => field.onChange(v === "none" ? undefined : v)}>
               <FormControl><SelectTrigger><SelectValue placeholder="No layout assigned" /></SelectTrigger></FormControl>
               <SelectContent>
-                <SelectItem value="">No layout</SelectItem>
+                <SelectItem value="none">No layout assigned</SelectItem>
                 {layouts.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
               </SelectContent>
             </Select>
@@ -141,7 +141,7 @@ export default function PosTerminals() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<PosTerminal | undefined>();
-  const [locationFilter, setLocationFilter] = useState<string>("");
+  const [locationFilter, setLocationFilter] = useState<string>("all");
 
   const { data: terminals = [], isLoading } = useQuery<(PosTerminal & { locationName?: string })[]>({ queryKey: ["/api/pos/terminals"] });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"] });
@@ -152,7 +152,7 @@ export default function PosTerminals() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  const filtered = locationFilter ? terminals.filter(t => t.locationId === locationFilter) : terminals;
+  const filtered = locationFilter !== "all" ? terminals.filter(t => t.locationId === locationFilter) : terminals;
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -165,7 +165,7 @@ export default function PosTerminals() {
           <Select value={locationFilter} onValueChange={setLocationFilter}>
             <SelectTrigger className="w-44"><SelectValue placeholder="All locations" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All locations</SelectItem>
+              <SelectItem value="all">All locations</SelectItem>
               {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
             </SelectContent>
           </Select>

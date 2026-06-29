@@ -176,6 +176,42 @@ export interface IStorage {
   createVersionSnapshot(name: string, description: string, type: string, createdBy: string, dataSnapshot: string, appVersion: string, tableCounts: string): Promise<VersionSnapshot>;
   getVersionSnapshot(id: string): Promise<VersionSnapshot | undefined>;
   deleteVersionSnapshot(id: string): Promise<void>;
+
+  // GlobiPOS
+  getPosLocations(): Promise<PosLocation[]>;
+  getPosLocation(id: string): Promise<PosLocation | undefined>;
+  createPosLocation(data: InsertPosLocation): Promise<PosLocation>;
+  updatePosLocation(id: string, data: Partial<InsertPosLocation>): Promise<PosLocation | undefined>;
+  deletePosLocation(id: string): Promise<void>;
+
+  getPosTerminals(locationId?: string): Promise<PosTerminal[]>;
+  getPosTerminal(id: string): Promise<PosTerminal | undefined>;
+  getPosTerminalByCode(code: string): Promise<PosTerminal | undefined>;
+  createPosTerminal(data: InsertPosTerminal): Promise<PosTerminal>;
+  updatePosTerminal(id: string, data: Partial<InsertPosTerminal & { lastSeenAt?: Date; lastSyncAt?: Date; outboxQueueSize?: number }>): Promise<PosTerminal | undefined>;
+  deletePosTerminal(id: string): Promise<void>;
+
+  getPosLayoutSets(locationId?: string): Promise<PosLayoutSet[]>;
+  getPosLayoutSet(id: string): Promise<PosLayoutSet | undefined>;
+  createPosLayoutSet(data: InsertPosLayoutSet): Promise<PosLayoutSet>;
+  updatePosLayoutSet(id: string, data: Partial<InsertPosLayoutSet>): Promise<PosLayoutSet | undefined>;
+  deletePosLayoutSet(id: string): Promise<void>;
+  getPosLayoutButtons(layoutSetId: string): Promise<PosLayoutButton[]>;
+  upsertPosLayoutButton(data: InsertPosLayoutButton): Promise<PosLayoutButton>;
+  deletePosLayoutButton(id: string): Promise<void>;
+
+  getPosOrders(locationId?: string, terminalId?: string): Promise<PosOrder[]>;
+  getPosOrder(id: string): Promise<PosOrder | undefined>;
+  createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder>;
+
+  createPosShift(data: InsertPosShift & { syncedAt?: Date }): Promise<PosShift>;
+
+  getPosSyncConfig(): Promise<PosSyncConfig[]>;
+  upsertPosSyncConfig(ruleKey: string, label: string, offlineBehavior: string, description?: string): Promise<PosSyncConfig>;
+
+  getPosInbox(terminalId?: string, since?: Date): Promise<PosInbox[]>;
+  createPosInboxItem(data: InsertPosInbox): Promise<PosInbox>;
+  deletePosInboxItem(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2656,7 +2692,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ─── POS Inbox ────────────────────────────────────────────────────────────
-  async getPosInbox(terminalId?: string): Promise<PosInbox[]> {
+  async getPosInbox(terminalId?: string, since?: Date): Promise<PosInbox[]> {
     const now = new Date();
     const rows = await db.select().from(posInbox)
       .where(eq(posInbox.acknowledged, false))
@@ -2664,6 +2700,7 @@ export class DatabaseStorage implements IStorage {
     return rows.filter(r => {
       if (r.expiresAt && r.expiresAt < now) return false;
       if (terminalId && r.terminalId && r.terminalId !== terminalId) return false;
+      if (since && r.createdAt && new Date(r.createdAt) <= since) return false;
       return true;
     });
   }
@@ -2671,8 +2708,8 @@ export class DatabaseStorage implements IStorage {
     const [row] = await db.insert(posInbox).values(data).returning();
     return row;
   }
-  async acknowledgePosInboxItem(id: string): Promise<void> {
-    await db.update(posInbox).set({ acknowledged: true }).where(eq(posInbox.id, id));
+  async deletePosInboxItem(id: string): Promise<void> {
+    await db.delete(posInbox).where(eq(posInbox.id, id));
   }
 }
 

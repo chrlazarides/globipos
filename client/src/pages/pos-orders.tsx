@@ -21,15 +21,15 @@ function statusBadge(status: string) {
 
 export default function PosOrders() {
   const [search, setSearch] = useState("");
-  const [locationFilter, setLocationFilter] = useState("");
-  const [methodFilter, setMethodFilter] = useState("");
+  const [locationFilter, setLocationFilter] = useState("all");
+  const [methodFilter, setMethodFilter] = useState("all");
 
   const { data: orders = [], isLoading } = useQuery<(PosOrder & { locationName?: string; terminalName?: string })[]>({ queryKey: ["/api/pos/orders"] });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"] });
 
   const filtered = orders.filter(o => {
-    if (locationFilter && o.locationId !== locationFilter) return false;
-    if (methodFilter && o.paymentMethod !== methodFilter) return false;
+    if (locationFilter !== "all" && o.locationId !== locationFilter) return false;
+    if (methodFilter !== "all" && o.paymentMethod !== methodFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       if (!o.orderNumber.toLowerCase().includes(q) && !(o.cashierName || "").toLowerCase().includes(q)) return false;
@@ -62,14 +62,14 @@ export default function PosOrders() {
         <Select value={locationFilter} onValueChange={setLocationFilter}>
           <SelectTrigger className="w-44"><SelectValue placeholder="All locations" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All locations</SelectItem>
+            <SelectItem value="all">All locations</SelectItem>
             {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={methodFilter} onValueChange={setMethodFilter}>
           <SelectTrigger className="w-36"><SelectValue placeholder="All methods" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All methods</SelectItem>
+            <SelectItem value="all">All methods</SelectItem>
             <SelectItem value="cash">Cash</SelectItem>
             <SelectItem value="card">Card</SelectItem>
             <SelectItem value="mixed">Mixed</SelectItem>

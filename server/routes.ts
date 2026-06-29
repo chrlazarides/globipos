@@ -6170,91 +6170,88 @@ export async function registerRoutes(
 
   // POS Locations
   app.get("/api/pos/locations", requireAdmin, async (req, res) => {
-    try { res.json(await (storage as any).getPosLocations()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { res.json(await storage.getPosLocations()); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.get("/api/pos/locations/:id", requireAdmin, async (req, res) => {
     try {
-      const loc = await (storage as any).getPosLocation(req.params.id);
+      const loc = await storage.getPosLocation(req.params.id);
       if (!loc) return res.status(404).json({ message: "Not found" });
       res.json(loc);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.post("/api/pos/locations", requireAdmin, async (req, res) => {
     try {
-      
       const data = insertPosLocationSchema.parse(req.body);
-      res.json(await (storage as any).createPosLocation(data));
+      res.json(await storage.createPosLocation(data));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.put("/api/pos/locations/:id", requireAdmin, async (req, res) => {
     try {
-      const loc = await (storage as any).updatePosLocation(req.params.id, req.body);
+      const loc = await storage.updatePosLocation(req.params.id, req.body);
       res.json(loc);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/pos/locations/:id", requireAdmin, async (req, res) => {
-    try { await (storage as any).deletePosLocation(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deletePosLocation(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // POS Terminals
   app.get("/api/pos/terminals", requireAdmin, async (req, res) => {
-    try { res.json(await (storage as any).getPosTerminals(req.query.locationId as string | undefined)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { res.json(await storage.getPosTerminals(req.query.locationId as string | undefined)); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.get("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
     try {
-      const t = await (storage as any).getPosTerminal(req.params.id);
+      const t = await storage.getPosTerminal(req.params.id);
       if (!t) return res.status(404).json({ message: "Not found" });
       res.json(t);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.post("/api/pos/terminals", requireAdmin, async (req, res) => {
     try {
-      
       const data = insertPosTerminalSchema.parse(req.body);
-      res.json(await (storage as any).createPosTerminal(data));
+      res.json(await storage.createPosTerminal(data));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.put("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
     try {
-      const t = await (storage as any).updatePosTerminal(req.params.id, req.body);
+      const t = await storage.updatePosTerminal(req.params.id, req.body);
       res.json(t);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
-    try { await (storage as any).deletePosTerminal(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deletePosTerminal(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // POS Layout Sets
   app.get("/api/pos/layouts", requireAdmin, async (req, res) => {
-    try { res.json(await (storage as any).getPosLayoutSets()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { res.json(await storage.getPosLayoutSets()); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.post("/api/pos/layouts", requireAdmin, async (req, res) => {
     try {
-      
       const data = insertPosLayoutSetSchema.parse(req.body);
-      res.json(await (storage as any).createPosLayoutSet(data));
+      res.json(await storage.createPosLayoutSet(data));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.put("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
-    try { res.json(await (storage as any).updatePosLayoutSet(req.params.id, req.body)); } catch (e: any) { res.status(400).json({ message: e.message }); }
+    try { res.json(await storage.updatePosLayoutSet(req.params.id, req.body)); } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
-    try { await (storage as any).deletePosLayoutSet(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deletePosLayoutSet(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.get("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
-    try { res.json(await (storage as any).getPosLayoutButtons(req.params.id)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { res.json(await storage.getPosLayoutButtons(req.params.id)); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // POS Orders
   app.get("/api/pos/orders", requireAdmin, async (req, res) => {
     try {
       const { locationId, terminalId } = req.query as any;
-      res.json(await (storage as any).getPosOrders(locationId, terminalId));
+      res.json(await storage.getPosOrders(locationId, terminalId));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.get("/api/pos/orders/:id", requireAdmin, async (req, res) => {
     try {
-      const o = await (storage as any).getPosOrder(req.params.id);
+      const o = await storage.getPosOrder(req.params.id);
       if (!o) return res.status(404).json({ message: "Not found" });
       res.json(o);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -6262,106 +6259,125 @@ export async function registerRoutes(
 
   // POS Sync Config
   app.get("/api/pos/sync-config", requireAdmin, async (req, res) => {
-    try { res.json(await (storage as any).getPosSyncConfig()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { res.json(await storage.getPosSyncConfig()); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.put("/api/pos/sync-config/:ruleKey", requireAdmin, async (req, res) => {
     try {
       const { label, offlineBehavior, description } = req.body;
-      res.json(await (storage as any).upsertPosSyncConfig(req.params.ruleKey, label, offlineBehavior, description));
+      res.json(await storage.upsertPosSyncConfig(req.params.ruleKey, label, offlineBehavior, description));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
-  // POS Inbox
+  // POS Inbox (admin management)
   app.get("/api/pos/inbox", requireAdmin, async (req, res) => {
-    try { res.json(await (storage as any).getPosInbox(req.query.terminalId as string | undefined)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { res.json(await storage.getPosInbox(req.query.terminalId as string | undefined)); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
-  app.post("/api/pos/inbox", requireAdmin, async (req, res) => {
+  app.post("/api/pos/inbox-item", requireAdmin, async (req, res) => {
     try {
-      
       const data = insertPosInboxSchema.parse(req.body);
-      res.json(await (storage as any).createPosInboxItem(data));
+      res.json(await storage.createPosInboxItem(data));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
+  app.delete("/api/pos/inbox-item/:id", requireAdmin, async (req, res) => {
+    try { await storage.deletePosInboxItem(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Terminal authentication middleware ──────────────────────────────────────
+  // Terminal-facing sync endpoints require X-Terminal-Code header matching an active terminal in DB.
+  async function requireTerminal(req: Request, res: Response, next: NextFunction) {
+    const code = req.headers["x-terminal-code"] as string | undefined;
+    if (!code) return res.status(401).json({ message: "X-Terminal-Code header required" });
+    const terminal = await storage.getPosTerminalByCode(code);
+    if (!terminal || !terminal.active) return res.status(403).json({ message: "Terminal not authorised" });
+    (req as any).terminal = terminal;
+    next();
+  }
 
   // ─── Sync API (called by Tauri terminal) ────────────────────────────────────
   // Terminal registration — returns config bundle
-  app.post("/api/pos/terminals/register", async (req, res) => {
+  app.post("/api/pos/terminals/register", requireTerminal, async (req, res) => {
     try {
-      const { terminalCode, locationCode } = req.body;
-      if (!terminalCode) return res.status(400).json({ message: "terminalCode required" });
-      const terminal = await (storage as any).getPosTerminalByCode(terminalCode);
-      if (!terminal) return res.status(404).json({ message: "Terminal not found" });
+      const terminal = (req as any).terminal;
       // Update last seen
-      await (storage as any).updatePosTerminal(terminal.id, { lastSeenAt: new Date() });
+      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date() });
       // Build bundle
       const [location, layoutButtons, inboxItems, allItems, cats, syncCfg] = await Promise.all([
-        (storage as any).getPosLocation(terminal.locationId),
-        terminal.layoutSetId ? (storage as any).getPosLayoutButtons(terminal.layoutSetId) : Promise.resolve([]),
-        (storage as any).getPosInbox(terminal.id),
+        storage.getPosLocation(terminal.locationId),
+        terminal.layoutSetId ? storage.getPosLayoutButtons(terminal.layoutSetId) : Promise.resolve([]),
+        storage.getPosInbox(terminal.id),
         storage.getItems(),
         storage.getCategories(),
-        (storage as any).getPosSyncConfig(),
+        storage.getPosSyncConfig(),
       ]);
       res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: allItems, categories: cats }, syncConfig: syncCfg });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // Catalog delta sync
-  app.get("/api/sync/catalog", async (req, res) => {
+  // items/categories tables have no updatedAt column, so full catalog is always returned.
+  // `since` is accepted for API compatibility; active seasonal offers are filtered by date window.
+  app.get("/api/sync/catalog", requireTerminal, async (req, res) => {
     try {
-      const { terminalId, since } = req.query as any;
-      if (terminalId) await (storage as any).updatePosTerminal(terminalId, { lastSeenAt: new Date(), lastSyncAt: new Date() });
+      const terminal = (req as any).terminal;
+      const since = req.query.since as string | undefined;
+      const sinceDate = since ? new Date(since) : null;
+      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), lastSyncAt: new Date() });
       const [allItems, cats, offers] = await Promise.all([
         storage.getItems(),
         storage.getCategories(),
         storage.getSeasonalOffers(),
       ]);
-      const sinceDate = since ? new Date(since) : null;
-      const filteredItems = sinceDate ? allItems : allItems;
-      res.json({ items: filteredItems, categories: cats, seasonalOffers: offers, syncedAt: new Date().toISOString() });
+      // Filter to only currently active seasonal offers
+      const today = new Date().toISOString().slice(0, 10);
+      const activeOffers = offers.filter(o => o.active && o.startDate <= today && o.endDate >= today);
+      // Note: items/categories are always returned in full (no updatedAt column for delta)
+      res.json({ items: allItems, categories: cats, seasonalOffers: activeOffers, syncedAt: new Date().toISOString(), full: true, since: since || null });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  // Inbox delta
-  app.get("/api/sync/inbox", async (req, res) => {
+  // Inbox delta — returns messages created after `since`
+  app.get("/api/sync/inbox", requireTerminal, async (req, res) => {
     try {
-      const { terminalId } = req.query as any;
-      res.json(await (storage as any).getPosInbox(terminalId));
+      const terminal = (req as any).terminal;
+      const since = req.query.since as string | undefined;
+      const sinceDate = since ? new Date(since) : undefined;
+      res.json(await storage.getPosInbox(terminal.id, sinceDate));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // Bills ingest (terminal pushes completed orders)
-  app.post("/api/sync/bills", async (req, res) => {
+  app.post("/api/sync/bills", requireTerminal, async (req, res) => {
     try {
-      const { bills, terminalId } = req.body;
+      const terminal = (req as any).terminal;
+      const { bills } = req.body;
       if (!Array.isArray(bills)) return res.status(400).json({ message: "bills array required" });
       const results: any[] = [];
       for (const bill of bills) {
         try {
           const { lines = [], ...orderData } = bill;
-          const order = await (storage as any).createPosOrder({ ...orderData, syncedAt: new Date() }, lines);
+          const order = await storage.createPosOrder({ ...orderData, syncedAt: new Date() }, lines);
           results.push({ orderNumber: bill.orderNumber, status: "ok", id: order.id });
         } catch (err: any) {
           results.push({ orderNumber: bill.orderNumber, status: "error", message: err.message });
         }
       }
-      if (terminalId) await (storage as any).updatePosTerminal(terminalId, { lastSeenAt: new Date(), lastSyncAt: new Date(), outboxQueueSize: 0 });
+      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), lastSyncAt: new Date(), outboxQueueSize: 0 });
       res.json({ results });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // Shift ingest
-  app.post("/api/sync/shifts", async (req, res) => {
+  app.post("/api/sync/shifts", requireTerminal, async (req, res) => {
     try {
-      
-      const data = insertPosShiftSchema.parse(req.body);
-      const shift = await (storage as any).createPosShift({ ...data, syncedAt: new Date() });
+      const terminal = (req as any).terminal;
+      const data = insertPosShiftSchema.parse({ ...req.body, terminalId: terminal.id });
+      const shift = await storage.createPosShift({ ...data, syncedAt: new Date() });
       res.json({ status: "ok", id: shift.id });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // Customer lookup
-  app.get("/api/pos/customer-lookup", async (req, res) => {
+  app.get("/api/pos/customer-lookup", requireTerminal, async (req, res) => {
     try {
       const q = ((req.query.q as string) || "").toLowerCase().trim();
       if (!q) return res.json([]);
@@ -6380,10 +6396,10 @@ export async function registerRoutes(
   });
 
   // Outbox queue size update (heartbeat from terminal)
-  app.post("/api/pos/terminals/:id/heartbeat", async (req, res) => {
+  app.post("/api/pos/terminals/:id/heartbeat", requireTerminal, async (req, res) => {
     try {
       const { outboxQueueSize = 0 } = req.body;
-      await (storage as any).updatePosTerminal(req.params.id, { lastSeenAt: new Date(), outboxQueueSize });
+      await storage.updatePosTerminal(req.params.id, { lastSeenAt: new Date(), outboxQueueSize });
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

@@ -1,7 +1,7 @@
 {
-  "name": "Gastro Nobile",
-  "short_name": "Gastro Nobile",
-  "description": "Wholesale wine and spirits invoicing and inventory management",
+  "name": "GlobiPOS",
+  "short_name": "GlobiPOS",
+  "description": "Wholesale wine and spirits management and multi-location point of sale system",
   "start_url": "/invoices/new",
   "display": "standalone",
   "background_color": "#1a1a1a",
