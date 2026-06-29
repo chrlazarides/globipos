@@ -6,6 +6,8 @@ import {
   portalOrders, portalOrderItems, systemSettings,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
   emailLogs, accounts, journalEntries, journalEntryLines, expenses,
+  posLocations, posTerminals, posLayoutSets, posLayoutButtons,
+  posOrders, posOrderLines, posShifts, posSyncConfig, posInbox,
   type InsertUser, type User, type InsertCategory, type Category,
   type InsertItem, type Item, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
@@ -31,6 +33,15 @@ import {
   type InsertCustomerDeliveryLocation, type CustomerDeliveryLocation,
   versionSnapshots,
   type VersionSnapshot,
+  type InsertPosLocation, type PosLocation,
+  type InsertPosTerminal, type PosTerminal,
+  type InsertPosLayoutSet, type PosLayoutSet,
+  type InsertPosLayoutButton, type PosLayoutButton,
+  type InsertPosOrder, type PosOrder,
+  type InsertPosOrderLine, type PosOrderLine,
+  type InsertPosShift, type PosShift,
+  type InsertPosSyncConfig, type PosSyncConfig,
+  type InsertPosInbox, type PosInbox,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -2492,6 +2503,176 @@ export class DatabaseStorage implements IStorage {
 
   async deleteVersionSnapshot(id: string) {
     await db.delete(versionSnapshots).where(eq(versionSnapshots.id, id));
+  }
+
+  // ─── POS Locations ────────────────────────────────────────────────────────
+  async getPosLocations(): Promise<PosLocation[]> {
+    return db.select().from(posLocations).orderBy(posLocations.name);
+  }
+  async getPosLocation(id: string): Promise<PosLocation | undefined> {
+    const [row] = await db.select().from(posLocations).where(eq(posLocations.id, id));
+    return row;
+  }
+  async createPosLocation(data: InsertPosLocation): Promise<PosLocation> {
+    const [row] = await db.insert(posLocations).values(data).returning();
+    return row;
+  }
+  async updatePosLocation(id: string, data: Partial<InsertPosLocation>): Promise<PosLocation | undefined> {
+    const [row] = await db.update(posLocations).set(data).where(eq(posLocations.id, id)).returning();
+    return row;
+  }
+  async deletePosLocation(id: string): Promise<void> {
+    await db.delete(posLocations).where(eq(posLocations.id, id));
+  }
+
+  // ─── POS Terminals ────────────────────────────────────────────────────────
+  async getPosTerminals(locationId?: string): Promise<(PosTerminal & { locationName?: string })[]> {
+    const rows = await db.select({
+      id: posTerminals.id, locationId: posTerminals.locationId, name: posTerminals.name,
+      code: posTerminals.code, description: posTerminals.description, hardwareType: posTerminals.hardwareType,
+      layoutSetId: posTerminals.layoutSetId, lastSeenAt: posTerminals.lastSeenAt, lastSyncAt: posTerminals.lastSyncAt,
+      outboxQueueSize: posTerminals.outboxQueueSize, active: posTerminals.active, createdAt: posTerminals.createdAt,
+      locationName: posLocations.name,
+    }).from(posTerminals).leftJoin(posLocations, eq(posTerminals.locationId, posLocations.id))
+      .orderBy(posTerminals.name);
+    if (locationId) return rows.filter(r => r.locationId === locationId);
+    return rows;
+  }
+  async getPosTerminal(id: string): Promise<PosTerminal | undefined> {
+    const [row] = await db.select().from(posTerminals).where(eq(posTerminals.id, id));
+    return row;
+  }
+  async getPosTerminalByCode(code: string): Promise<PosTerminal | undefined> {
+    const [row] = await db.select().from(posTerminals).where(eq(posTerminals.code, code));
+    return row;
+  }
+  async createPosTerminal(data: InsertPosTerminal): Promise<PosTerminal> {
+    const [row] = await db.insert(posTerminals).values(data).returning();
+    return row;
+  }
+  async updatePosTerminal(id: string, data: Partial<InsertPosTerminal & { lastSeenAt?: Date; lastSyncAt?: Date }>): Promise<PosTerminal | undefined> {
+    const [row] = await db.update(posTerminals).set(data as any).where(eq(posTerminals.id, id)).returning();
+    return row;
+  }
+  async deletePosTerminal(id: string): Promise<void> {
+    await db.delete(posTerminals).where(eq(posTerminals.id, id));
+  }
+
+  // ─── POS Layout Sets ──────────────────────────────────────────────────────
+  async getPosLayoutSets(): Promise<PosLayoutSet[]> {
+    return db.select().from(posLayoutSets).orderBy(posLayoutSets.name);
+  }
+  async getPosLayoutSet(id: string): Promise<PosLayoutSet | undefined> {
+    const [row] = await db.select().from(posLayoutSets).where(eq(posLayoutSets.id, id));
+    return row;
+  }
+  async createPosLayoutSet(data: InsertPosLayoutSet): Promise<PosLayoutSet> {
+    const [row] = await db.insert(posLayoutSets).values(data).returning();
+    return row;
+  }
+  async updatePosLayoutSet(id: string, data: Partial<InsertPosLayoutSet>): Promise<PosLayoutSet | undefined> {
+    const [row] = await db.update(posLayoutSets).set(data).where(eq(posLayoutSets.id, id)).returning();
+    return row;
+  }
+  async deletePosLayoutSet(id: string): Promise<void> {
+    await db.delete(posLayoutButtons).where(eq(posLayoutButtons.layoutSetId, id));
+    await db.delete(posLayoutSets).where(eq(posLayoutSets.id, id));
+  }
+  async getPosLayoutButtons(layoutSetId: string): Promise<PosLayoutButton[]> {
+    return db.select().from(posLayoutButtons).where(eq(posLayoutButtons.layoutSetId, layoutSetId)).orderBy(posLayoutButtons.position);
+  }
+  async setPosLayoutButtons(layoutSetId: string, buttons: InsertPosLayoutButton[]): Promise<PosLayoutButton[]> {
+    await db.delete(posLayoutButtons).where(eq(posLayoutButtons.layoutSetId, layoutSetId));
+    if (!buttons.length) return [];
+    const rows = await db.insert(posLayoutButtons).values(buttons).returning();
+    return rows;
+  }
+
+  // ─── POS Orders ───────────────────────────────────────────────────────────
+  async getPosOrders(locationId?: string, terminalId?: string, limit = 200): Promise<(PosOrder & { locationName?: string; terminalName?: string })[]> {
+    const rows = await db.select({
+      id: posOrders.id, orderNumber: posOrders.orderNumber, terminalId: posOrders.terminalId,
+      locationId: posOrders.locationId, shiftId: posOrders.shiftId, customerId: posOrders.customerId,
+      cashierId: posOrders.cashierId, cashierName: posOrders.cashierName,
+      subtotal: posOrders.subtotal, discountAmount: posOrders.discountAmount,
+      vatAmount: posOrders.vatAmount, total: posOrders.total, paymentMethod: posOrders.paymentMethod,
+      amountTendered: posOrders.amountTendered, changeDue: posOrders.changeDue,
+      status: posOrders.status, notes: posOrders.notes, receiptPrinted: posOrders.receiptPrinted,
+      syncedAt: posOrders.syncedAt, createdAt: posOrders.createdAt,
+      locationName: posLocations.name, terminalName: posTerminals.name,
+    }).from(posOrders)
+      .leftJoin(posLocations, eq(posOrders.locationId, posLocations.id))
+      .leftJoin(posTerminals, eq(posOrders.terminalId, posTerminals.id))
+      .orderBy(desc(posOrders.createdAt))
+      .limit(limit);
+    if (locationId) return rows.filter(r => r.locationId === locationId);
+    if (terminalId) return rows.filter(r => r.terminalId === terminalId);
+    return rows;
+  }
+  async getPosOrder(id: string): Promise<(PosOrder & { lines: PosOrderLine[] }) | undefined> {
+    const [order] = await db.select().from(posOrders).where(eq(posOrders.id, id));
+    if (!order) return undefined;
+    const lines = await db.select().from(posOrderLines).where(eq(posOrderLines.orderId, id));
+    return { ...order, lines };
+  }
+  async createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder> {
+    const [order] = await db.insert(posOrders).values(data).returning();
+    if (lines.length) {
+      await db.insert(posOrderLines).values(lines.map(l => ({ ...l, orderId: order.id })));
+    }
+    return order;
+  }
+  async updatePosOrderStatus(id: string, status: string): Promise<void> {
+    await db.update(posOrders).set({ status }).where(eq(posOrders.id, id));
+  }
+
+  // ─── POS Shifts ───────────────────────────────────────────────────────────
+  async getPosShifts(terminalId?: string): Promise<PosShift[]> {
+    const rows = await db.select().from(posShifts).orderBy(desc(posShifts.openedAt));
+    if (terminalId) return rows.filter(r => r.terminalId === terminalId);
+    return rows;
+  }
+  async createPosShift(data: InsertPosShift): Promise<PosShift> {
+    const [row] = await db.insert(posShifts).values(data).returning();
+    return row;
+  }
+  async updatePosShift(id: string, data: Partial<InsertPosShift & { syncedAt?: Date }>): Promise<PosShift | undefined> {
+    const [row] = await db.update(posShifts).set(data as any).where(eq(posShifts.id, id)).returning();
+    return row;
+  }
+
+  // ─── POS Sync Config ──────────────────────────────────────────────────────
+  async getPosSyncConfig(): Promise<PosSyncConfig[]> {
+    return db.select().from(posSyncConfig).orderBy(posSyncConfig.ruleKey);
+  }
+  async upsertPosSyncConfig(ruleKey: string, label: string, offlineBehavior: string, description?: string): Promise<PosSyncConfig> {
+    const existing = await db.select().from(posSyncConfig).where(eq(posSyncConfig.ruleKey, ruleKey));
+    if (existing.length) {
+      const [row] = await db.update(posSyncConfig).set({ label, offlineBehavior, description, updatedAt: new Date() }).where(eq(posSyncConfig.ruleKey, ruleKey)).returning();
+      return row;
+    }
+    const [row] = await db.insert(posSyncConfig).values({ ruleKey, label, offlineBehavior, description }).returning();
+    return row;
+  }
+
+  // ─── POS Inbox ────────────────────────────────────────────────────────────
+  async getPosInbox(terminalId?: string): Promise<PosInbox[]> {
+    const now = new Date();
+    const rows = await db.select().from(posInbox)
+      .where(eq(posInbox.acknowledged, false))
+      .orderBy(desc(posInbox.createdAt));
+    return rows.filter(r => {
+      if (r.expiresAt && r.expiresAt < now) return false;
+      if (terminalId && r.terminalId && r.terminalId !== terminalId) return false;
+      return true;
+    });
+  }
+  async createPosInboxItem(data: InsertPosInbox): Promise<PosInbox> {
+    const [row] = await db.insert(posInbox).values(data).returning();
+    return row;
+  }
+  async acknowledgePosInboxItem(id: string): Promise<void> {
+    await db.update(posInbox).set({ acknowledged: true }).where(eq(posInbox.id, id));
   }
 }
 

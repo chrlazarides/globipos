@@ -39,6 +39,11 @@ import UsersPage from "@/pages/users";
 import ActivityLogsPage from "@/pages/activity-logs";
 import DeployGuide from "@/pages/deploy-guide";
 import VersionControl from "@/pages/version-control";
+import PosLocations from "@/pages/pos-locations";
+import PosTerminals from "@/pages/pos-terminals";
+import PosLayouts from "@/pages/pos-layouts";
+import PosOrders from "@/pages/pos-orders";
+import PosSyncMonitor from "@/pages/pos-sync-monitor";
 import type { Customer } from "@shared/schema";
 import { Loader2 } from "lucide-react";
 
@@ -133,6 +138,11 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/users" component={UsersPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/activity-logs" component={ActivityLogsPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/version-control" component={VersionControl} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/locations" component={PosLocations} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/terminals" component={PosTerminals} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/layouts" component={PosLayouts} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/orders" component={PosOrders} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/sync-monitor" component={PosSyncMonitor} />}
       <Route component={NotFound} />
     </Switch>
   );

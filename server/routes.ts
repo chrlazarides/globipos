@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -460,7 +460,7 @@ export async function registerRoutes(
     try {
       if (!req.user) return res.status(401).json({ message: "Not authenticated" });
       const secret = totpGenerateSecret();
-      const otpauth = totpGenerateURI({ secret, label: req.user.username, issuer: "FC GASTRONOBILE" });
+      const otpauth = totpGenerateURI({ secret, label: req.user.username, issuer: "GlobiPOS" });
       const qrDataUrl = await QRCode.toDataURL(String(otpauth));
       res.json({ secret, qrDataUrl });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -527,7 +527,7 @@ export async function registerRoutes(
         secret = totpGenerateSecret();
         await db.update(users).set({ totpSecret: secret, totpEnabled: false }).where(eq(users.id, userId));
       }
-      const otpauth = totpGenerateURI({ secret, label: user.username, issuer: "FC GASTRONOBILE" });
+      const otpauth = totpGenerateURI({ secret, label: user.username, issuer: "GlobiPOS" });
       const qrDataUrl = await QRCode.toDataURL(String(otpauth));
       res.json({ secret, qrDataUrl });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -697,7 +697,7 @@ export async function registerRoutes(
         db.select().from(seasonalOfferItems),
       ]);
       const companyRow = settingsRows.find((s: any) => s.key === "company_name");
-      const slug = fileSlug(companyRow?.value || "gastronobile");
+      const slug = fileSlug(companyRow?.value || "globi-pos");
       const exportDate = new Date().toISOString().split("T")[0];
       res.setHeader("Content-Type", "application/json");
       res.setHeader("Content-Disposition", `attachment; filename="${slug}-export-${exportDate}.json"`);
@@ -1908,7 +1908,7 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
-      const companyName = settingsMap.company_name || "FC GASTRONOBILE LTD";
+      const companyName = settingsMap.company_name || "GlobiPOS LTD";
       const subject = `${typeLabel} ${inv.invoiceNumber} from ${companyName}`;
 
       const allCategories2 = await storage.getCategories();
@@ -2021,7 +2021,7 @@ export async function registerRoutes(
     const allSettings = await storage.getSettings();
     const settingsMap: Record<string, string> = {};
     for (const s of allSettings) settingsMap[s.key] = s.value;
-    const manualCompanyName = settingsMap["company_name"] || "Gastro Nobile";
+    const manualCompanyName = settingsMap["company_name"] || "GlobiPOS";
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2223,9 +2223,9 @@ export async function registerRoutes(
     <h2 class="section-title">1 · Getting Started</h2>
 
     <h3 class="sub-title" id="start-login">1.1 Logging In &amp; Two-Factor Authentication</h3>
-    <p>Gastro Nobile uses username/password login protected by mandatory two-factor authentication (2FA).</p>
+    <p>GlobiPOS uses username/password login protected by mandatory two-factor authentication (2FA).</p>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Open the Gastro Nobile URL in your browser. You will see the Sign In screen.</div></div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the GlobiPOS URL in your browser. You will see the Sign In screen.</div></div>
       <div class="step"><div class="step-num">2</div><div class="step-text">Enter your <strong>Username</strong> and <strong>Password</strong>, then click <strong>Sign In</strong>.</div></div>
       <div class="step"><div class="step-num">3</div><div class="step-text"><strong>First login only — 2FA setup:</strong> You will be taken to a setup screen. Open your authenticator app (Google Authenticator, Authy, etc.), scan the QR code, enter the 6-digit code to confirm, and click <strong>Enable 2FA</strong>.</div></div>
       <div class="step"><div class="step-num">4</div><div class="step-text"><strong>Subsequent logins:</strong> After entering your password, enter the current 6-digit code from your authenticator app.</div></div>
@@ -2247,7 +2247,7 @@ export async function registerRoutes(
         <tr><td><strong>Admin</strong></td><td>Activity Log (Admins/Superusers only)</td></tr>
       </tbody>
     </table>
-    <p>Click any sidebar item to navigate. On mobile, tap the menu icon (top-left) to open the Gastro Nobile sidebar.</p>
+    <p>Click any sidebar item to navigate. On mobile, tap the menu icon (top-left) to open the GlobiPOS sidebar.</p>
 
     <h3 class="sub-title" id="start-roles">1.3 User Roles &amp; Permissions</h3>
     <table>
@@ -2281,7 +2281,7 @@ export async function registerRoutes(
 
     <h3 class="sub-title" id="cat-create">3.1 Creating &amp; Editing Items</h3>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Items</strong> in the Gastro Nobile sidebar.</div></div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Items</strong> in the GlobiPOS sidebar.</div></div>
       <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Item</strong>.</div></div>
       <div class="step"><div class="step-num">3</div><div class="step-text">Fill in the required fields (Name, Unit of Measure) and any optional fields.</div></div>
       <div class="step"><div class="step-num">4</div><div class="step-text">Assign the item to a <strong>Category</strong> — this determines its default VAT rate and organises it in reports.</div></div>
@@ -2292,7 +2292,7 @@ export async function registerRoutes(
     </div>
 
     <h3 class="sub-title" id="cat-pricing">3.2 Price Levels</h3>
-    <p>Gastro Nobile supports 5 price levels per item (Level 1 = standard retail, higher levels for trade/wholesale tiers). Each customer is assigned one price level. When creating an invoice, the correct price is loaded automatically.</p>
+    <p>GlobiPOS supports 5 price levels per item (Level 1 = standard retail, higher levels for trade/wholesale tiers). Each customer is assigned one price level. When creating an invoice, the correct price is loaded automatically.</p>
     <div class="tip"><strong>Tip:</strong> Price Contracts (Section 9) can further override prices for specific customers or categories on top of the price level.</div>
 
     <h3 class="sub-title" id="cat-vat">3.3 VAT on Items</h3>
@@ -2317,7 +2317,7 @@ export async function registerRoutes(
 
     <h3 class="sub-title" id="cat-manage">4.1 Creating &amp; Managing Categories</h3>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Categories</strong> in the Gastro Nobile sidebar.</div></div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Categories</strong> in the GlobiPOS sidebar.</div></div>
       <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Category</strong>. Enter a Name, optional Code, Description, Parent Category, and VAT Rate.</div></div>
       <div class="step"><div class="step-num">3</div><div class="step-text">Click <strong>Create Category</strong>.</div></div>
     </div>
@@ -2337,7 +2337,7 @@ export async function registerRoutes(
 
     <h3 class="sub-title" id="cust-create">5.1 Creating a Customer</h3>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Customers</strong> in the Gastro Nobile sidebar, then <strong>+ New Customer</strong>.</div></div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Customers</strong> in the GlobiPOS sidebar, then <strong>+ New Customer</strong>.</div></div>
       <div class="step"><div class="step-num">2</div><div class="step-text">Enter the customer's <strong>Name</strong> and <strong>Code</strong> (short identifier used in lists).</div></div>
       <div class="step"><div class="step-num">3</div><div class="step-text">Fill in contact details: email, phone, address, city, Tax ID (for VAT invoices).</div></div>
       <div class="step"><div class="step-num">4</div><div class="step-text">Set <strong>Payment Terms</strong>: Cash, Net 7, Net 14, Net 30, Net 60, or Net 90 days.</div></div>
@@ -2509,7 +2509,7 @@ export async function registerRoutes(
   <!-- ═══ SECTION 11: ACCOUNTING ═══ -->
   <div class="section" id="accounting">
     <h2 class="section-title">11 · Accounting</h2>
-    <p>Gastro Nobile includes a full double-entry bookkeeping module. Journal entries are generated automatically when invoices, payments, and expenses are posted — you do not need to create them manually in normal operation.</p>
+    <p>GlobiPOS includes a full double-entry bookkeeping module. Journal entries are generated automatically when invoices, payments, and expenses are posted — you do not need to create them manually in normal operation.</p>
 
     <h3 class="sub-title" id="acc-coa">11.1 Chart of Accounts</h3>
     <p>Go to <strong>Chart of Accounts</strong> (Accounting section) to view the account structure. Accounts are pre-configured for Cyprus business reporting standards. Each account has a type (Asset, Liability, Equity, Revenue, Expense) and a normal balance (Debit or Credit).</p>
@@ -2566,7 +2566,7 @@ export async function registerRoutes(
     <table>
       <thead><tr><th>Rate</th><th>Type</th><th>Applies To</th></tr></thead>
       <tbody>
-        <tr><td><strong>19%</strong></td><td>Standard</td><td>Most goods and services (default fallback in Gastro Nobile)</td></tr>
+        <tr><td><strong>19%</strong></td><td>Standard</td><td>Most goods and services (default fallback in GlobiPOS)</td></tr>
         <tr><td><strong>9%</strong></td><td>Reduced</td><td>Hotels, restaurants, catering, passenger transport</td></tr>
         <tr><td><strong>5%</strong></td><td>Reduced</td><td>Food (non-alcoholic), books, pharmaceuticals, certain agricultural goods</td></tr>
         <tr><td><strong>0%</strong></td><td>Zero-rated</td><td>Exports, intra-EU B2B supplies</td></tr>
@@ -2594,7 +2594,7 @@ export async function registerRoutes(
     <p>Set your company name, address, phone, email, Tax ID, registration number, IBAN, and bank details. These appear on all printed/emailed documents (invoices, statements).</p>
 
     <h3 class="sub-title" id="set-email">13.2 Email Configuration</h3>
-    <p>Gastro Nobile uses <strong>Resend</strong> to send invoice emails and <strong>Resend</strong> for daily backup emails. To configure:</p>
+    <p>GlobiPOS uses <strong>Resend</strong> to send invoice emails and <strong>Resend</strong> for daily backup emails. To configure:</p>
     <div class="steps">
       <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Settings → Email</strong>.</div></div>
       <div class="step"><div class="step-num">2</div><div class="step-text">Enter your Resend API key (starts with <code>re_</code>) in the <strong>Resend API Key</strong> field.</div></div>
@@ -2622,7 +2622,7 @@ export async function registerRoutes(
         <tr><td><strong>Differential</strong></td><td>Only transaction records created <em>since the last backup date</em> (invoices, payments, journal entries, expenses, purchase invoices), plus all config tables in full.</td><td>Day-to-day backups — much smaller file. The button is disabled until a full backup has been run first.</td></tr>
       </tbody>
     </table>
-    <p style="margin-top:8px;">All backup filenames include the company name and date automatically, e.g. <code>fc-gastronobile-ltd-backup-2026-06-25-full.json</code>.</p>
+    <p style="margin-top:8px;">All backup filenames include the company name and date automatically, e.g. <code>fc-globi-pos-ltd-backup-2026-06-25-full.json</code>.</p>
 
     <h4 style="margin:14px 0 6px; font-size:13px; color:#1a1a1a;">Full System Export (server migration)</h4>
     <p>Available to <span class="badge badge-red">Superuser</span> only via the <strong>Download System Export</strong> button. This produces a single file containing <em>everything</em> in a Full Backup <strong>plus all user accounts</strong> (usernames, roles, permissions, 2FA configuration, and hashed passwords). Use this when migrating the application to a new server — restoring it brings up the new instance with all data and all users intact, with no need to recreate accounts manually.</p>
@@ -2653,21 +2653,21 @@ export async function registerRoutes(
     <h2 class="section-title">14 · Offline Mode &amp; Mobile App</h2>
 
     <h3 class="sub-title">14.1 Installing as a Mobile / Desktop App (PWA)</h3>
-    <p>Gastro Nobile can be installed as a Progressive Web App on your phone or computer for an app-like experience:</p>
+    <p>GlobiPOS can be installed as a Progressive Web App on your phone or computer for an app-like experience:</p>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><div class="step-text">Open Gastro Nobile in your browser (Chrome on Android, or Safari on iPhone).</div></div>
-      <div class="step"><div class="step-num">2</div><div class="step-text">Look for the <strong>Install App</strong> button in the Gastro Nobile sidebar (bottom), or use your browser's "Add to Home Screen" / "Install" option.</div></div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open GlobiPOS in your browser (Chrome on Android, or Safari on iPhone).</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Look for the <strong>Install App</strong> button in the GlobiPOS sidebar (bottom), or use your browser's "Add to Home Screen" / "Install" option.</div></div>
       <div class="step"><div class="step-num">3</div><div class="step-text">Confirm the installation. The app icon appears on your home screen / taskbar.</div></div>
     </div>
 
     <h3 class="sub-title">14.2 Offline Invoicing</h3>
-    <p>When your device loses internet connection, Gastro Nobile automatically switches to <strong>Offline Mode</strong> (shown by an amber "Offline Mode" banner in the Gastro Nobile sidebar).</p>
+    <p>When your device loses internet connection, GlobiPOS automatically switches to <strong>Offline Mode</strong> (shown by an amber "Offline Mode" banner in the GlobiPOS sidebar).</p>
     <p>In offline mode you can:</p>
     <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
       <li style="margin-bottom:5px;"><strong>Create new invoices</strong> — items and customers are available from the local cache.</li>
       <li style="margin-bottom:5px;"><strong>View cached data</strong> — previously loaded items, customers, and settings.</li>
     </ul>
-    <p>Invoices created offline are queued locally. A counter in the Gastro Nobile sidebar shows pending items (e.g. "2 pending sync"). When your connection is restored, queued invoices sync to the server automatically.</p>
+    <p>Invoices created offline are queued locally. A counter in the GlobiPOS sidebar shows pending items (e.g. "2 pending sync"). When your connection is restored, queued invoices sync to the server automatically.</p>
     <div class="note"><strong>Note:</strong> Offline mode uses data cached from your last online session. If items or customers were added since your last sync, they will not be available offline until you go back online.</div>
   </div>
 
@@ -2859,7 +2859,7 @@ export async function registerRoutes(
       const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
-      const companyName = settingsMap["company_name"] || "FC GASTRONOBILE LTD";
+      const companyName = settingsMap["company_name"] || "GlobiPOS LTD";
 
       const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
       const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
@@ -2977,7 +2977,7 @@ export async function registerRoutes(
       const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
-      const companyName = settingsMap["company_name"] || "FC GASTRONOBILE LTD";
+      const companyName = settingsMap["company_name"] || "GlobiPOS LTD";
 
       const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
       const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
@@ -3106,7 +3106,7 @@ export async function registerRoutes(
       const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
-      const companyName = settingsMap["company_name"] || "Gastro Nobile";
+      const companyName = settingsMap["company_name"] || "GlobiPOS";
 
       const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
       const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
@@ -3317,7 +3317,7 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
-      const companyName = settingsMap.company_name || "FC GASTRONOBILE LTD";
+      const companyName = settingsMap.company_name || "GlobiPOS LTD";
       const subject = `Account Statement from ${companyName}`;
       const html = generateStatementHtml(customer, st, false, settingsMap);
 
@@ -3373,10 +3373,10 @@ export async function registerRoutes(
   app.post("/api/settings/seed-defaults", async (_req, res) => {
     try {
       const defaults = [
-        { key: "company_name", value: "FC GASTRONOBILE LTD", label: "Company Name", group: "company" },
+        { key: "company_name", value: "GlobiPOS LTD", label: "Company Name", group: "company" },
         { key: "company_address", value: "Georgiou Pilatou 11, 5510, Famagusta, Cyprus", label: "Company Address", group: "company" },
         { key: "company_phone", value: "", label: "Company Phone", group: "company" },
-        { key: "company_email", value: "gastronobile@gmail.com", label: "Company Email", group: "company" },
+        { key: "company_email", value: "globi-pos@gmail.com", label: "Company Email", group: "company" },
         { key: "company_tax_id", value: "CY60323722T", label: "Company Tax ID (TIN)", group: "company" },
         { key: "company_reg_no", value: "HE 487597", label: "Company Registration No.", group: "company" },
         { key: "company_iban", value: "", label: "Bank IBAN", group: "company" },
@@ -3496,7 +3496,7 @@ export async function registerRoutes(
       const date = new Date().toISOString().split("T")[0];
       const tag = parsed.backupType === "differential" ? `diff-since-${since?.slice(0,10) || "unknown"}` : "full";
       const companySetting = await storage.getSetting("company_name");
-      const slug = fileSlug(companySetting?.value || "gastronobile");
+      const slug = fileSlug(companySetting?.value || "globi-pos");
       res.setHeader("Content-Type", "application/json");
       res.setHeader("Content-Disposition", `attachment; filename="${slug}-backup-${date}-${tag}.json"`);
       res.send(json);
@@ -3516,7 +3516,7 @@ export async function registerRoutes(
       parsed.tableCounts.users = usersRows.length;
       const date = new Date().toISOString().split("T")[0];
       const companySetting = await storage.getSetting("company_name");
-      const slug = fileSlug(companySetting?.value || "gastronobile");
+      const slug = fileSlug(companySetting?.value || "globi-pos");
       res.setHeader("Content-Type", "application/json");
       res.setHeader("Content-Disposition", `attachment; filename="${slug}-system-${date}.json"`);
       res.send(JSON.stringify(parsed));
@@ -3529,7 +3529,7 @@ export async function registerRoutes(
   app.get("/api/backup/cpanel-package", requireSuperuser, async (_req, res) => {
     try {
       const companySetting = await storage.getSetting("company_name");
-      const companyName = companySetting?.value || "FC GASTRONOBILE LTD";
+      const companyName = companySetting?.value || "GlobiPOS LTD";
       const slug = fileSlug(companyName);
       const date = new Date().toISOString().split("T")[0];
       const dbUrl = process.env.DATABASE_URL;
@@ -3883,7 +3883,7 @@ export async function registerRoutes(
       const companySetting = await storage.getSetting("company_name");
       const toEmail = req.body?.email || emailSetting?.value || "";
       if (!toEmail) return res.status(400).json({ message: "No backup email address configured" });
-      const companyName = companySetting?.value || "FC GASTRONOBILE LTD";
+      const companyName = companySetting?.value || "GlobiPOS LTD";
       const date = new Date().toISOString().split("T")[0];
       // Use differential if last backup date is known and within 8 days
       const lastSetting = await storage.getSetting("backup_last_date");
@@ -6166,6 +6166,228 @@ export async function registerRoutes(
     res.json(gl);
   });
 
+  // ─── GlobiPOS Routes ────────────────────────────────────────────────────────
+
+  // POS Locations
+  app.get("/api/pos/locations", requireAdmin, async (req, res) => {
+    try { res.json(await (storage as any).getPosLocations()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/locations/:id", requireAdmin, async (req, res) => {
+    try {
+      const loc = await (storage as any).getPosLocation(req.params.id);
+      if (!loc) return res.status(404).json({ message: "Not found" });
+      res.json(loc);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/locations", requireAdmin, async (req, res) => {
+    try {
+      
+      const data = insertPosLocationSchema.parse(req.body);
+      res.json(await (storage as any).createPosLocation(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.put("/api/pos/locations/:id", requireAdmin, async (req, res) => {
+    try {
+      const loc = await (storage as any).updatePosLocation(req.params.id, req.body);
+      res.json(loc);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/pos/locations/:id", requireAdmin, async (req, res) => {
+    try { await (storage as any).deletePosLocation(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POS Terminals
+  app.get("/api/pos/terminals", requireAdmin, async (req, res) => {
+    try { res.json(await (storage as any).getPosTerminals(req.query.locationId as string | undefined)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
+    try {
+      const t = await (storage as any).getPosTerminal(req.params.id);
+      if (!t) return res.status(404).json({ message: "Not found" });
+      res.json(t);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/terminals", requireAdmin, async (req, res) => {
+    try {
+      
+      const data = insertPosTerminalSchema.parse(req.body);
+      res.json(await (storage as any).createPosTerminal(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.put("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
+    try {
+      const t = await (storage as any).updatePosTerminal(req.params.id, req.body);
+      res.json(t);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
+    try { await (storage as any).deletePosTerminal(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POS Layout Sets
+  app.get("/api/pos/layouts", requireAdmin, async (req, res) => {
+    try { res.json(await (storage as any).getPosLayoutSets()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/layouts", requireAdmin, async (req, res) => {
+    try {
+      
+      const data = insertPosLayoutSetSchema.parse(req.body);
+      res.json(await (storage as any).createPosLayoutSet(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.put("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
+    try { res.json(await (storage as any).updatePosLayoutSet(req.params.id, req.body)); } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
+    try { await (storage as any).deletePosLayoutSet(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
+    try { res.json(await (storage as any).getPosLayoutButtons(req.params.id)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POS Orders
+  app.get("/api/pos/orders", requireAdmin, async (req, res) => {
+    try {
+      const { locationId, terminalId } = req.query as any;
+      res.json(await (storage as any).getPosOrders(locationId, terminalId));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/orders/:id", requireAdmin, async (req, res) => {
+    try {
+      const o = await (storage as any).getPosOrder(req.params.id);
+      if (!o) return res.status(404).json({ message: "Not found" });
+      res.json(o);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POS Sync Config
+  app.get("/api/pos/sync-config", requireAdmin, async (req, res) => {
+    try { res.json(await (storage as any).getPosSyncConfig()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.put("/api/pos/sync-config/:ruleKey", requireAdmin, async (req, res) => {
+    try {
+      const { label, offlineBehavior, description } = req.body;
+      res.json(await (storage as any).upsertPosSyncConfig(req.params.ruleKey, label, offlineBehavior, description));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // POS Inbox
+  app.get("/api/pos/inbox", requireAdmin, async (req, res) => {
+    try { res.json(await (storage as any).getPosInbox(req.query.terminalId as string | undefined)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/inbox", requireAdmin, async (req, res) => {
+    try {
+      
+      const data = insertPosInboxSchema.parse(req.body);
+      res.json(await (storage as any).createPosInboxItem(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ─── Sync API (called by Tauri terminal) ────────────────────────────────────
+  // Terminal registration — returns config bundle
+  app.post("/api/pos/terminals/register", async (req, res) => {
+    try {
+      const { terminalCode, locationCode } = req.body;
+      if (!terminalCode) return res.status(400).json({ message: "terminalCode required" });
+      const terminal = await (storage as any).getPosTerminalByCode(terminalCode);
+      if (!terminal) return res.status(404).json({ message: "Terminal not found" });
+      // Update last seen
+      await (storage as any).updatePosTerminal(terminal.id, { lastSeenAt: new Date() });
+      // Build bundle
+      const [location, layoutButtons, inboxItems, allItems, cats, syncCfg] = await Promise.all([
+        (storage as any).getPosLocation(terminal.locationId),
+        terminal.layoutSetId ? (storage as any).getPosLayoutButtons(terminal.layoutSetId) : Promise.resolve([]),
+        (storage as any).getPosInbox(terminal.id),
+        storage.getItems(),
+        storage.getCategories(),
+        (storage as any).getPosSyncConfig(),
+      ]);
+      res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: allItems, categories: cats }, syncConfig: syncCfg });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Catalog delta sync
+  app.get("/api/sync/catalog", async (req, res) => {
+    try {
+      const { terminalId, since } = req.query as any;
+      if (terminalId) await (storage as any).updatePosTerminal(terminalId, { lastSeenAt: new Date(), lastSyncAt: new Date() });
+      const [allItems, cats, offers] = await Promise.all([
+        storage.getItems(),
+        storage.getCategories(),
+        storage.getSeasonalOffers(),
+      ]);
+      const sinceDate = since ? new Date(since) : null;
+      const filteredItems = sinceDate ? allItems : allItems;
+      res.json({ items: filteredItems, categories: cats, seasonalOffers: offers, syncedAt: new Date().toISOString() });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Inbox delta
+  app.get("/api/sync/inbox", async (req, res) => {
+    try {
+      const { terminalId } = req.query as any;
+      res.json(await (storage as any).getPosInbox(terminalId));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Bills ingest (terminal pushes completed orders)
+  app.post("/api/sync/bills", async (req, res) => {
+    try {
+      const { bills, terminalId } = req.body;
+      if (!Array.isArray(bills)) return res.status(400).json({ message: "bills array required" });
+      const results: any[] = [];
+      for (const bill of bills) {
+        try {
+          const { lines = [], ...orderData } = bill;
+          const order = await (storage as any).createPosOrder({ ...orderData, syncedAt: new Date() }, lines);
+          results.push({ orderNumber: bill.orderNumber, status: "ok", id: order.id });
+        } catch (err: any) {
+          results.push({ orderNumber: bill.orderNumber, status: "error", message: err.message });
+        }
+      }
+      if (terminalId) await (storage as any).updatePosTerminal(terminalId, { lastSeenAt: new Date(), lastSyncAt: new Date(), outboxQueueSize: 0 });
+      res.json({ results });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Shift ingest
+  app.post("/api/sync/shifts", async (req, res) => {
+    try {
+      
+      const data = insertPosShiftSchema.parse(req.body);
+      const shift = await (storage as any).createPosShift({ ...data, syncedAt: new Date() });
+      res.json({ status: "ok", id: shift.id });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Customer lookup
+  app.get("/api/pos/customer-lookup", async (req, res) => {
+    try {
+      const q = ((req.query.q as string) || "").toLowerCase().trim();
+      if (!q) return res.json([]);
+      const all = await storage.getCustomers();
+      const results = all.filter(c => c.active && (
+        c.name.toLowerCase().includes(q) ||
+        c.code.toLowerCase().includes(q) ||
+        (c.phone || "").toLowerCase().includes(q)
+      )).slice(0, 20).map(c => ({
+        id: c.id, name: c.name, code: c.code, phone: c.phone,
+        currentBalance: c.currentBalance, creditLimit: c.creditLimit,
+        priceLevel: c.priceLevel, loyaltyPoints: 0, cashBack: 0,
+      }));
+      res.json(results);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Outbox queue size update (heartbeat from terminal)
+  app.post("/api/pos/terminals/:id/heartbeat", async (req, res) => {
+    try {
+      const { outboxQueueSize = 0 } = req.body;
+      await (storage as any).updatePosTerminal(req.params.id, { lastSeenAt: new Date(), outboxQueueSize });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   return httpServer;
 }
 
@@ -6177,7 +6399,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   const hasBarcodes = items.some((li: any) => li.barcode);
   const overallDiscount = parseFloat(inv.discountAmount || "0");
 
-  const companyName = settings.company_name || "FC GASTRONOBILE LTD";
+  const companyName = settings.company_name || "GlobiPOS LTD";
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";
@@ -6443,7 +6665,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
 
 function generateStatementHtml(customer: any, statement: any, autoPrint: boolean = false, settings: Record<string, string> = {}) {
   const LOGO_DATA_URL = resolveLogoDataUrl(settings);
-  const companyName = settings.company_name || "FC GASTRONOBILE LTD";
+  const companyName = settings.company_name || "GlobiPOS LTD";
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";

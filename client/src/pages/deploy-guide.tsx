@@ -132,7 +132,7 @@ export default function DeployGuide() {
               </tr>
               <tr>
                 <td className="py-2 font-medium">A domain name</td>
-                <td className="py-2 text-muted-foreground">e.g. erp.gastronobile.com — the address users will type</td>
+                <td className="py-2 text-muted-foreground">e.g. erp.globi-pos.com — the address users will type</td>
                 <td className="py-2 text-muted-foreground">Namecheap, GoDaddy, Cloudflare</td>
               </tr>
               <tr>
@@ -206,16 +206,16 @@ export default function DeployGuide() {
           </p>
           <CodeBlock label="Connect to your server via SSH (replace with your server's IP):" code={`ssh root@65.21.42.100`} />
           <CodeBlock label="Install Git if not already installed:" code={`sudo apt update && sudo apt install -y git`} />
-          <CodeBlock label="Download the application code:" code={`git clone https://github.com/YOUR_REPO/vintrade.git /var/www/gastronobile
-cd /var/www/gastronobile`} />
+          <CodeBlock label="Download the application code:" code={`git clone https://github.com/YOUR_REPO/vintrade.git /var/www/globi-pos
+cd /var/www/globi-pos`} />
           <Note type="info">
             <strong>No Git repo?</strong> Use SFTP (FileZilla) or cPanel File Manager to upload the
-            project folder to <code>/home/cpuser/gastronobile/</code>. Then also upload the contents
+            project folder to <code>/home/cpuser/globi-pos/</code>. Then also upload the contents
             of the ZIP file into the same folder.
           </Note>
           <p className="text-muted-foreground">Once the code is uploaded, extract the ZIP contents into the same folder:</p>
-          <CodeBlock label="Upload the ZIP to the server, then extract it:" code={`cd /var/www/gastronobile
-unzip ~/fc-gastronobile-ltd-cpanel-*.zip -d ./deploy-files
+          <CodeBlock label="Upload the ZIP to the server, then extract it:" code={`cd /var/www/globi-pos
+unzip ~/fc-globi-pos-ltd-cpanel-*.zip -d ./deploy-files
 cp deploy-files/database.sql .
 cp deploy-files/.env.example .
 cp deploy-files/ecosystem.config.js .
@@ -254,23 +254,23 @@ sudo apt install -y postgresql postgresql-client
 
 # Open the PostgreSQL command line
 sudo -u postgres psql`} />
-              <CodeBlock label="Inside the PostgreSQL prompt, run these commands (change the password!):" code={`CREATE DATABASE gastronobile;
+              <CodeBlock label="Inside the PostgreSQL prompt, run these commands (change the password!):" code={`CREATE DATABASE globi-pos;
 CREATE USER gastro_user WITH ENCRYPTED PASSWORD 'ChangeThisPassword123!';
-GRANT ALL PRIVILEGES ON DATABASE gastronobile TO gastro_user;
+GRANT ALL PRIVILEGES ON DATABASE globi-pos TO gastro_user;
 \\q`} />
               <p className="text-muted-foreground text-xs mt-1">
                 Your connection string will be:{" "}
-                <code className="bg-muted px-1 rounded">postgresql://gastro_user:ChangeThisPassword123!@localhost:5432/gastronobile</code>
+                <code className="bg-muted px-1 rounded">postgresql://gastro_user:ChangeThisPassword123!@localhost:5432/globi-pos</code>
               </p>
             </div>
             <div>
               <p className="font-medium text-xs mb-1">Option B — On cPanel:</p>
               <ol className="list-decimal list-inside space-y-1 text-muted-foreground text-xs">
                 <li>Log into cPanel → click <strong>PostgreSQL Databases</strong></li>
-                <li>Under "Create New Database" type a name (e.g. <code>gastronobile</code>) → click <strong>Create Database</strong></li>
+                <li>Under "Create New Database" type a name (e.g. <code>globi-pos</code>) → click <strong>Create Database</strong></li>
                 <li>Under "Add New User" create a user with a strong password</li>
                 <li>Under "Add User to Database" connect the user to the database — select <strong>All Privileges</strong></li>
-                <li>Your connection string: <code>postgresql://cpuser_YOURUSER:PASSWORD@localhost:5432/cpuser_gastronobile</code></li>
+                <li>Your connection string: <code>postgresql://cpuser_YOURUSER:PASSWORD@localhost:5432/cpuser_globi-pos</code></li>
               </ol>
             </div>
           </div>
@@ -282,7 +282,7 @@ GRANT ALL PRIVILEGES ON DATABASE gastronobile TO gastro_user;
             This loads all your existing data (customers, invoices, items, accounts, users) into the
             new database. It also creates the full schema automatically.
           </p>
-          <CodeBlock label="Replace the connection string with yours from Step 5:" code={`psql "postgresql://gastro_user:ChangeThisPassword123!@localhost:5432/gastronobile" < database.sql`} />
+          <CodeBlock label="Replace the connection string with yours from Step 5:" code={`psql "postgresql://gastro_user:ChangeThisPassword123!@localhost:5432/globi-pos" < database.sql`} />
           <p className="text-muted-foreground">
             This will run for a few seconds and then finish silently if successful. If you see errors
             about roles or ownership, they are harmless — the data still imports correctly.
@@ -303,7 +303,7 @@ GRANT ALL PRIVILEGES ON DATABASE gastronobile TO gastro_user;
           <CodeBlock label="Copy the template:" code={`cp .env.example .env
 nano .env`} />
           <p className="text-muted-foreground">Fill in these two required values:</p>
-          <CodeBlock label="Your .env file should look like this (replace all placeholder values):" code={`DATABASE_URL=postgresql://gastro_user:ChangeThisPassword123!@localhost:5432/gastronobile
+          <CodeBlock label="Your .env file should look like this (replace all placeholder values):" code={`DATABASE_URL=postgresql://gastro_user:ChangeThisPassword123!@localhost:5432/globi-pos
 
 # Generate a random secret with the command below, then paste it here:
 SESSION_SECRET=paste_your_64_character_hex_string_here
@@ -345,7 +345,7 @@ PORT=3000`} />
           <CodeBlock label="Save the process list so PM2 restores it after a reboot:" code={`pm2 save`} />
           <CodeBlock label="Set PM2 to start on system boot (run the command it prints):" code={`pm2 startup`} />
           <CodeBlock label="Check the app is running (should show 'online' in green):" code={`pm2 status`} />
-          <CodeBlock label="See live logs to confirm everything started correctly:" code={`pm2 logs fc-gastronobile-ltd --lines 20`} />
+          <CodeBlock label="See live logs to confirm everything started correctly:" code={`pm2 logs fc-globi-pos-ltd --lines 20`} />
           <Note type="success">
             The app is now running on <strong>port 3000</strong>. Next step makes it available on your
             domain with HTTPS.
@@ -378,7 +378,7 @@ sudo apt update && sudo apt install caddy`} />
             <div>
               <Badge variant="secondary" className="mb-2">Alternative — Nginx + Certbot</Badge>
               <CodeBlock label="Install Nginx and Certbot:" code={`sudo apt install -y nginx certbot python3-certbot-nginx`} />
-              <CodeBlock label="Create a site config:" code={`sudo nano /etc/nginx/sites-available/gastronobile`} />
+              <CodeBlock label="Create a site config:" code={`sudo nano /etc/nginx/sites-available/globi-pos`} />
               <CodeBlock label="Paste this (replace yourdomain.com):" code={`server {
     listen 80;
     server_name yourdomain.com;
@@ -391,7 +391,7 @@ sudo apt update && sudo apt install caddy`} />
         proxy_cache_bypass $http_upgrade;
     }
 }`} />
-              <CodeBlock code={`sudo ln -s /etc/nginx/sites-available/gastronobile /etc/nginx/sites-enabled/
+              <CodeBlock code={`sudo ln -s /etc/nginx/sites-available/globi-pos /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d yourdomain.com`} />
             </div>
@@ -417,7 +417,7 @@ sudo certbot --nginx -d yourdomain.com`} />
             <li>Verify your sending domain in Resend (add DNS records they give you — takes ~5 minutes)</li>
             <li>In Resend, go to <strong>API Keys → Create API Key</strong> → copy it</li>
             <li>In this app go to <strong>Settings → Email</strong></li>
-            <li>Paste the API key, set a From name (e.g. <em>Gastro Nobile</em>) and From email</li>
+            <li>Paste the API key, set a From name (e.g. <em>GlobiPOS</em>) and From email</li>
             <li>Click <strong>Send Test Email</strong> to verify it works</li>
           </ol>
           <Note type="info">
@@ -441,7 +441,7 @@ sudo certbot --nginx -d yourdomain.com`} />
             The system sends a differential backup (only new records) automatically every 24 hours.
             If more than 8 days have passed since the last backup, it sends a full backup instead.
             Backup files are named with the date and type, e.g.{" "}
-            <code className="text-xs bg-muted px-1 rounded">fc-gastronobile-ltd-backup-2026-06-26-full.json</code>
+            <code className="text-xs bg-muted px-1 rounded">fc-globi-pos-ltd-backup-2026-06-26-full.json</code>
           </Note>
         </Step>
 
@@ -464,11 +464,11 @@ sudo certbot --nginx -d yourdomain.com`} />
               </tr>
             </thead>
             <tbody className="divide-y font-mono">
-              <tr><td className="py-2 font-sans font-medium">See live app logs</td><td className="py-2 text-green-700 dark:text-green-400">pm2 logs fc-gastronobile-ltd</td></tr>
-              <tr><td className="py-2 font-sans font-medium">Restart the app</td><td className="py-2 text-green-700 dark:text-green-400">pm2 restart fc-gastronobile-ltd</td></tr>
-              <tr><td className="py-2 font-sans font-medium">Stop the app</td><td className="py-2 text-green-700 dark:text-green-400">pm2 stop fc-gastronobile-ltd</td></tr>
+              <tr><td className="py-2 font-sans font-medium">See live app logs</td><td className="py-2 text-green-700 dark:text-green-400">pm2 logs fc-globi-pos-ltd</td></tr>
+              <tr><td className="py-2 font-sans font-medium">Restart the app</td><td className="py-2 text-green-700 dark:text-green-400">pm2 restart fc-globi-pos-ltd</td></tr>
+              <tr><td className="py-2 font-sans font-medium">Stop the app</td><td className="py-2 text-green-700 dark:text-green-400">pm2 stop fc-globi-pos-ltd</td></tr>
               <tr><td className="py-2 font-sans font-medium">Check app status</td><td className="py-2 text-green-700 dark:text-green-400">pm2 status</td></tr>
-              <tr><td className="py-2 font-sans font-medium">Update to new version</td><td className="py-2 text-green-700 dark:text-green-400">git pull && npm run build && pm2 restart fc-gastronobile-ltd</td></tr>
+              <tr><td className="py-2 font-sans font-medium">Update to new version</td><td className="py-2 text-green-700 dark:text-green-400">git pull && npm run build && pm2 restart fc-globi-pos-ltd</td></tr>
               <tr><td className="py-2 font-sans font-medium">Reboot server safely</td><td className="py-2 text-green-700 dark:text-green-400">sudo reboot (PM2 auto-restarts the app)</td></tr>
             </tbody>
           </table>

@@ -29,7 +29,7 @@ export default function PortalLayout({ customer, onLogout }: PortalLayoutProps) 
   const [location] = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
-  const companyName = settings.find(s => s.key === "company_name")?.value || "Gastro Nobile";
+  const companyName = settings.find(s => s.key === "company_name")?.value || "GlobiPOS";
 
   return (
     <div className="min-h-screen bg-background">

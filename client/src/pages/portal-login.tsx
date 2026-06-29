@@ -17,7 +17,7 @@ export default function PortalLogin({ onLogin }: PortalLoginProps) {
   const [code, setCode] = useState("");
   const [accessCode, setAccessCode] = useState("");
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
-  const companyName = settings.find(s => s.key === "company_name")?.value || "Gastro Nobile";
+  const companyName = settings.find(s => s.key === "company_name")?.value || "GlobiPOS";
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 

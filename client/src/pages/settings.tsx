@@ -42,7 +42,7 @@ const groupLabels: Record<string, string> = {
 
 const groupOrder = ["company", "tax", "invoicing", "pricing", "inventory", "portal"];
 const HIDDEN_GROUPS = ["security", "backup"];
-const SESSION_KEY = "gastronobile_settings_auth";
+const SESSION_KEY = "globi-pos_settings_auth";
 
 export default function SettingsPage() {
   const { user: currentUser } = useAuth();

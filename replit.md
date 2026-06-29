@@ -1,13 +1,13 @@
-# VinTrade - Wholesale Wine & Spirits Management System
+# GlobiPOS - Wholesale Wine & Spirits Management System + Multi-Location POS
 
 ## Overview
-VinTrade is a comprehensive stock and invoicing system designed for wholesale customers in the wine and spirits industry. It streamlines operations from item catalog management and customer accounts to diverse document types (invoices, credit notes, proforma, quotations), advanced pricing contracts, and seasonal offers. Key capabilities include robust reporting, mobile barcode scanning for efficient order creation, and integrated accounting with double-entry bookkeeping, financial reports, and VAT returns. The system also supports offline functionality and is deployable as a Progressive Web App (PWA).
+GlobiPOS is a comprehensive stock, invoicing, and point-of-sale system for wholesale and retail operations in the wine and spirits industry. It streamlines operations from item catalog management and customer accounts to diverse document types (invoices, credit notes, proforma, quotations), advanced pricing contracts, and seasonal offers. Key capabilities include robust reporting, mobile barcode scanning for efficient order creation, integrated accounting with double-entry bookkeeping, financial reports, and VAT returns, plus a full multi-location POS platform. The system also supports offline functionality and is deployable as a Progressive Web App (PWA).
 
 ## User Preferences
 I prefer iterative development with clear communication on major changes. Please ask before implementing significant architectural shifts or feature additions. I like seeing high-level summaries of progress and potential next steps. I prefer detailed explanations for complex technical decisions.
 
 ## System Architecture
-VinTrade is built with a modern web stack:
+GlobiPOS is built with a modern web stack:
 - **Frontend**: React, TypeScript, Vite, utilizing Shadcn/ui for components, TanStack Query for data fetching, and Wouter for routing.
 - **Backend**: An Express.js REST API.
 - **Database**: PostgreSQL, managed with Drizzle ORM.

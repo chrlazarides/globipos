@@ -473,3 +473,171 @@ export const versionSnapshots = pgTable("version_snapshots", {
 export const insertVersionSnapshotSchema = createInsertSchema(versionSnapshots).omit({ id: true, createdAt: true });
 export type InsertVersionSnapshot = z.infer<typeof insertVersionSnapshotSchema>;
 export type VersionSnapshot = typeof versionSnapshots.$inferSelect;
+
+// ─── GlobiPOS Tables ──────────────────────────────────────────────────────────
+export const posLocations = pgTable("pos_locations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  address: text("address"),
+  phone: text("phone"),
+  timezone: text("timezone").notNull().default("Europe/Nicosia"),
+  currencyCode: text("currency_code").notNull().default("EUR"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posTerminals = pgTable("pos_terminals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  locationId: varchar("location_id").notNull(),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  description: text("description"),
+  hardwareType: text("hardware_type").notNull().default("desktop"), // desktop | tablet | mobile
+  layoutSetId: varchar("layout_set_id"),
+  lastSeenAt: timestamp("last_seen_at"),
+  lastSyncAt: timestamp("last_sync_at"),
+  outboxQueueSize: integer("outbox_queue_size").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posLayoutSets = pgTable("pos_layout_sets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  locationId: varchar("location_id"),
+  columns: integer("columns").notNull().default(4),
+  rows: integer("rows").notNull().default(5),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posLayoutButtons = pgTable("pos_layout_buttons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  layoutSetId: varchar("layout_set_id").notNull(),
+  position: integer("position").notNull(),
+  label: text("label").notNull(),
+  color: text("color").default("#6b7280"),
+  icon: text("icon"),
+  buttonType: text("button_type").notNull().default("item"), // item | category | action | empty
+  itemId: varchar("item_id"),
+  categoryId: varchar("category_id"),
+  actionCode: text("action_code"),
+});
+
+export const posOrders = pgTable("pos_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderNumber: text("order_number").notNull().unique(),
+  terminalId: varchar("terminal_id").notNull(),
+  locationId: varchar("location_id").notNull(),
+  shiftId: varchar("shift_id"),
+  customerId: varchar("customer_id"),
+  cashierId: text("cashier_id"),
+  cashierName: text("cashier_name"),
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
+  discountAmount: numeric("discount_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+  paymentMethod: text("payment_method").notNull().default("cash"),
+  amountTendered: numeric("amount_tendered", { precision: 12, scale: 2 }).default("0"),
+  changeDue: numeric("change_due", { precision: 12, scale: 2 }).default("0"),
+  status: text("status").notNull().default("completed"), // completed | voided | held
+  notes: text("notes"),
+  receiptPrinted: boolean("receipt_printed").notNull().default(false),
+  syncedAt: timestamp("synced_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posOrderLines = pgTable("pos_order_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderId: varchar("order_id").notNull(),
+  itemId: varchar("item_id"),
+  description: text("description").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  quantity: numeric("quantity", { precision: 10, scale: 3 }).notNull(),
+  unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
+  discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).notNull().default("0"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+});
+
+export const posShifts = pgTable("pos_shifts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  terminalId: varchar("terminal_id").notNull(),
+  locationId: varchar("location_id").notNull(),
+  cashierId: text("cashier_id"),
+  cashierName: text("cashier_name"),
+  openedAt: timestamp("opened_at").notNull(),
+  closedAt: timestamp("closed_at"),
+  openingFloat: numeric("opening_float", { precision: 12, scale: 2 }).notNull().default("0"),
+  closingCash: numeric("closing_cash", { precision: 12, scale: 2 }),
+  totalSales: numeric("total_sales", { precision: 12, scale: 2 }).notNull().default("0"),
+  totalCash: numeric("total_cash", { precision: 12, scale: 2 }).notNull().default("0"),
+  totalCard: numeric("total_card", { precision: 12, scale: 2 }).notNull().default("0"),
+  totalVoids: numeric("total_voids", { precision: 12, scale: 2 }).notNull().default("0"),
+  transactionCount: integer("transaction_count").notNull().default(0),
+  status: text("status").notNull().default("open"), // open | closed
+  notes: text("notes"),
+  syncedAt: timestamp("synced_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posSyncConfig = pgTable("pos_sync_config", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ruleKey: text("rule_key").notNull().unique(), // e.g. loyalty_earn_offline, loyalty_redeem_offline
+  label: text("label").notNull(),
+  offlineBehavior: text("offline_behavior").notNull().default("allow"), // allow | block | warn_allow
+  description: text("description"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const posInbox = pgTable("pos_inbox", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  terminalId: varchar("terminal_id"), // null = all terminals
+  locationId: varchar("location_id"), // null = all locations
+  itemType: text("item_type").notNull(), // price_change | special_offer | layout_update | manager_message
+  payload: text("payload").notNull(), // JSON
+  startsAt: timestamp("starts_at"),
+  expiresAt: timestamp("expires_at"),
+  acknowledged: boolean("acknowledged").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// POS Insert schemas
+export const insertPosLocationSchema = createInsertSchema(posLocations).omit({ id: true, createdAt: true });
+export type InsertPosLocation = z.infer<typeof insertPosLocationSchema>;
+export type PosLocation = typeof posLocations.$inferSelect;
+
+export const insertPosTerminalSchema = createInsertSchema(posTerminals).omit({ id: true, createdAt: true, lastSeenAt: true, lastSyncAt: true });
+export type InsertPosTerminal = z.infer<typeof insertPosTerminalSchema>;
+export type PosTerminal = typeof posTerminals.$inferSelect;
+
+export const insertPosLayoutSetSchema = createInsertSchema(posLayoutSets).omit({ id: true, createdAt: true });
+export type InsertPosLayoutSet = z.infer<typeof insertPosLayoutSetSchema>;
+export type PosLayoutSet = typeof posLayoutSets.$inferSelect;
+
+export const insertPosLayoutButtonSchema = createInsertSchema(posLayoutButtons).omit({ id: true });
+export type InsertPosLayoutButton = z.infer<typeof insertPosLayoutButtonSchema>;
+export type PosLayoutButton = typeof posLayoutButtons.$inferSelect;
+
+export const insertPosOrderSchema = createInsertSchema(posOrders).omit({ id: true, createdAt: true, syncedAt: true });
+export type InsertPosOrder = z.infer<typeof insertPosOrderSchema>;
+export type PosOrder = typeof posOrders.$inferSelect;
+
+export const insertPosOrderLineSchema = createInsertSchema(posOrderLines).omit({ id: true });
+export type InsertPosOrderLine = z.infer<typeof insertPosOrderLineSchema>;
+export type PosOrderLine = typeof posOrderLines.$inferSelect;
+
+export const insertPosShiftSchema = createInsertSchema(posShifts).omit({ id: true, createdAt: true, syncedAt: true });
+export type InsertPosShift = z.infer<typeof insertPosShiftSchema>;
+export type PosShift = typeof posShifts.$inferSelect;
+
+export const insertPosSyncConfigSchema = createInsertSchema(posSyncConfig).omit({ id: true, updatedAt: true });
+export type InsertPosSyncConfig = z.infer<typeof insertPosSyncConfigSchema>;
+export type PosSyncConfig = typeof posSyncConfig.$inferSelect;
+
+export const insertPosInboxSchema = createInsertSchema(posInbox).omit({ id: true, createdAt: true });
+export type InsertPosInbox = z.infer<typeof insertPosInboxSchema>;
+export type PosInbox = typeof posInbox.$inferSelect;

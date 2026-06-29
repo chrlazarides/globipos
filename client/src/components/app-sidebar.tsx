@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio } from "lucide-react";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { LogoImg } from "@/components/logo-img";
 import {
@@ -71,6 +71,14 @@ const adminNav = [
   { title: "Version Control", url: "/version-control", icon: GitBranch, module: "_admin" },
 ];
 
+const posNav = [
+  { title: "Locations", url: "/pos/locations", icon: MapPin, module: "_admin" },
+  { title: "Terminals", url: "/pos/terminals", icon: Monitor, module: "_admin" },
+  { title: "Layouts", url: "/pos/layouts", icon: LayoutGrid, module: "_admin" },
+  { title: "POS Orders", url: "/pos/orders", icon: ShoppingBag, module: "_admin" },
+  { title: "Sync Monitor", url: "/pos/sync-monitor", icon: Radio, module: "_admin" },
+];
+
 type NavItem = { title: string; url: string; icon: any; module: string };
 
 function NavSection({ label, items }: { label: string; items: NavItem[] }) {
@@ -115,7 +123,7 @@ export function AppSidebar() {
   const [pendingCount, setPendingCount] = useState(0);
   const { isInstallable, isInstalled, install } = usePwaInstall();
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
-  const companyName = settings.find(s => s.key === "company_name")?.value || "Gastro Nobile";
+  const companyName = settings.find(s => s.key === "company_name")?.value || "GlobiPOS";
   const { user, logout } = useAuth();
 
   useEffect(() => {
@@ -167,6 +175,7 @@ export function AppSidebar() {
         <NavSection label="Accounting" items={filter(accountingNav)} />
         <NavSection label="Analytics" items={filter(reportNav)} />
         <NavSection label="System" items={filter(systemNav)} />
+        {isAdmin && <NavSection label="GlobiPOS" items={posNav} />}
         {isAdmin && <NavSection label="Admin" items={adminNav} />}
       </SidebarContent>
       <SidebarFooter className="p-4 space-y-2">
