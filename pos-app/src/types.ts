@@ -1,0 +1,184 @@
+// ── Product & Catalog ─────────────────────────────────────────────────────────
+
+export interface Product {
+  id: string;
+  server_id: string;
+  name: string;
+  sku: string;
+  barcode?: string;
+  description?: string;
+  category_id?: string;
+  price1: number;
+  price2: number;
+  price3: number;
+  price4: number;
+  price5: number;
+  cost_price: number;
+  vat_rate: number;
+  unit_type: string;
+  pack_size: number;
+  stock_quantity: number;
+  active: boolean;
+  updated_at?: string;
+  timed_price?: number | null; // from price_overrides join
+}
+
+export interface Category {
+  id: string;
+  server_id: string;
+  name: string;
+  description?: string;
+  parent_id?: string;
+  vat_rate: number;
+  active: boolean;
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+
+export type ButtonType = "item" | "category" | "action" | "empty";
+
+export interface LayoutButton {
+  position: number;
+  label: string;
+  color: string;
+  icon?: string;
+  button_type: ButtonType;
+  item_id?: string;
+  category_id?: string;
+  action_code?: string;
+}
+
+// ── Order Engine ──────────────────────────────────────────────────────────────
+
+export interface OrderLine {
+  id: string;
+  order_id: string;
+  product_id?: string;
+  description: string;
+  sku?: string;
+  qty: number;
+  unit_price: number;
+  override_price?: number;
+  line_discount_pct: number;    // % discount on this line
+  line_discount_fixed: number;  // fixed € discount on this line
+  vat_rate: number;
+  line_total: number;           // after all discounts, excl VAT
+  vat_amount: number;
+  note?: string;
+  voided: boolean;
+}
+
+export interface Order {
+  id: string;
+  order_number: string;
+  status: "active" | "held" | "completed" | "voided";
+  customer_id?: string;
+  cashier_id: string;
+  cashier_name: string;
+  price_level: number;          // 1-5
+  order_discount_pct: number;   // % discount applied to order
+  order_discount_fixed: number; // fixed € discount applied to order
+  subtotal: number;             // sum of line totals before order discount
+  discount_amount: number;      // total discount (line + order)
+  vat_amount: number;
+  total: number;
+  note?: string;
+  payment_method?: string;
+  amount_tendered?: number;
+  change_due?: number;
+  created_at: string;
+}
+
+// ── Computed line amounts ─────────────────────────────────────────────────────
+
+export interface LineAmounts {
+  effectiveUnitPrice: number;   // after override_price / price level
+  lineSubtotal: number;         // effectiveUnitPrice × qty
+  lineDiscount: number;         // fixed + % applied
+  lineNet: number;              // lineSubtotal - lineDiscount
+  vatAmount: number;
+  lineTotal: number;            // lineNet + vatAmount
+}
+
+// ── Cashier / Session ─────────────────────────────────────────────────────────
+
+export interface CashierSession {
+  cashier_id: string;
+  cashier_name: string;
+  role: "cashier" | "supervisor" | "manager";
+  pin_hash: string;
+  permissions: string[];
+}
+
+// ── Terminal Config ───────────────────────────────────────────────────────────
+
+export interface TerminalConfig {
+  server_url: string;
+  terminal_code: string;
+  terminal_id: string;
+  terminal_name: string;
+  location_id: string;
+  location_name: string;
+  price_level: number;
+}
+
+// ── Sync ──────────────────────────────────────────────────────────────────────
+
+export interface SyncStatus {
+  online: boolean;
+  syncing: boolean;
+  last_catalog_sync?: string;
+  last_inbox_sync?: string;
+  outbox_pending: number;
+  outbox_failed: number;
+}
+
+export interface FallbackRule {
+  rule_key: string;
+  label: string;
+  offline_behavior: "allow" | "block" | "block_with_message";
+  description?: string;
+}
+
+// ── Numpad context ────────────────────────────────────────────────────────────
+
+export type NumpadMode =
+  | "qty"
+  | "price_override"
+  | "line_discount_pct"
+  | "line_discount_fixed"
+  | "order_discount_pct"
+  | "order_discount_fixed"
+  | "amount_tendered"
+  | "price_check";
+
+// ── Action codes ──────────────────────────────────────────────────────────────
+
+export type ActionCode =
+  | "CLEAR_ORDER"
+  | "VOID_ORDER"
+  | "HOLD_ORDER"
+  | "RECALL_ORDER"
+  | "ADD_NOTE"
+  | "ADD_LINE_NOTE"
+  | "REPEAT_LAST"
+  | "PRICE_CHECK"
+  | "LINE_DISCOUNT_PCT"
+  | "LINE_DISCOUNT_FIXED"
+  | "ORDER_DISCOUNT_PCT"
+  | "ORDER_DISCOUNT_FIXED"
+  | "PRICE_OVERRIDE"
+  | "PRICE_LEVEL_1"
+  | "PRICE_LEVEL_2"
+  | "PRICE_LEVEL_3"
+  | "PRICE_LEVEL_4"
+  | "PRICE_LEVEL_5"
+  | "REMOVE_DISCOUNT"
+  | "TAX_OVERRIDE"
+  | "PROMO_CODE"
+  | "MANUAL_PROMO"
+  | "PAY_CASH"
+  | "PAY_CARD"
+  | "OPEN_DRAWER"
+  | "END_SHIFT"
+  | "FALLBACK_RULES";

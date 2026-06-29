@@ -1,0 +1,2 @@
+- [Tauri 2.0 SQLite pattern](tauri-sqlite-pattern.md) — use sqlx directly in Rust; tauri-plugin-sql is frontend-only in v2
+- [Tauri 2.0 async state init](tauri-async-state.md) — block_on in setup() hook for async DB init; std::sync::Mutex locks must drop before any .await

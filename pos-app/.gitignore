@@ -1,0 +1,12 @@
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Node
+node_modules/
+dist/
+
+# Misc
+.DS_Store
+*.local
+.env
