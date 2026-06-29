@@ -2623,6 +2623,17 @@ export class DatabaseStorage implements IStorage {
     const rows = await db.insert(posLayoutButtons).values(buttons).returning();
     return rows;
   }
+  async upsertPosLayoutButton(data: InsertPosLayoutButton): Promise<PosLayoutButton> {
+    if ((data as any).id) {
+      const [row] = await db.update(posLayoutButtons).set(data).where(eq(posLayoutButtons.id, (data as any).id)).returning();
+      return row;
+    }
+    const [row] = await db.insert(posLayoutButtons).values(data).returning();
+    return row;
+  }
+  async deletePosLayoutButton(id: string): Promise<void> {
+    await db.delete(posLayoutButtons).where(eq(posLayoutButtons.id, id));
+  }
 
   // ─── POS Orders ───────────────────────────────────────────────────────────
   async getPosOrders(locationId?: string, terminalId?: string, limit = 200): Promise<(PosOrder & { locationName?: string; terminalName?: string })[]> {

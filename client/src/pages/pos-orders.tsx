@@ -87,12 +87,12 @@ function OrderDetailDialog({ order, onClose }: { order: OrderWithMeta; onClose: 
                 ) : lines.map((line, i) => (
                   <tr key={line.id ?? i} data-testid={`row-orderline-${line.id ?? i}`}>
                     <td className="px-3 py-2">
-                      <div className="font-medium">{(line as any).itemName || line.itemId}</div>
-                      {line.notes && <div className="text-xs text-muted-foreground">{line.notes}</div>}
+                      <div className="font-medium">{line.description}</div>
+                      {line.sku && <div className="text-xs text-muted-foreground">{line.sku}</div>}
                     </td>
                     <td className="px-3 py-2 text-right">{line.quantity}</td>
                     <td className="px-3 py-2 text-right">€{parseFloat(line.unitPrice).toFixed(2)}</td>
-                    <td className="px-3 py-2 text-right font-semibold">€{parseFloat(line.lineTotal).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right font-semibold">€{parseFloat(line.total).toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -103,8 +103,8 @@ function OrderDetailDialog({ order, onClose }: { order: OrderWithMeta; onClose: 
             {order.discountAmount && parseFloat(order.discountAmount) > 0 && (
               <div className="text-muted-foreground">Discount: −€{parseFloat(order.discountAmount).toFixed(2)}</div>
             )}
-            {order.taxAmount && parseFloat(order.taxAmount) > 0 && (
-              <div className="text-muted-foreground">Tax: €{parseFloat(order.taxAmount).toFixed(2)}</div>
+            {order.vatAmount && parseFloat(order.vatAmount) > 0 && (
+              <div className="text-muted-foreground">VAT: €{parseFloat(order.vatAmount).toFixed(2)}</div>
             )}
             <div className="font-bold text-base">Total: €{parseFloat(order.total).toFixed(2)}</div>
           </div>

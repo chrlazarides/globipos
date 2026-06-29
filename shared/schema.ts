@@ -46,6 +46,7 @@ export const categories = pgTable("categories", {
   parentId: varchar("parent_id"),
   vatRate: numeric("vat_rate", { precision: 5, scale: 2 }),
   active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
 
 export const items = pgTable("items", {
@@ -72,6 +73,7 @@ export const items = pgTable("items", {
   origin: text("origin"),
   vintage: text("vintage"),
   active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
 
 export const customers = pgTable("customers", {

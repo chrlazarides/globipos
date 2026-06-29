@@ -6325,9 +6325,8 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  // Catalog delta sync
-  // items/categories tables have no updatedAt column, so full catalog is always returned.
-  // `since` is accepted for API compatibility; active seasonal offers are filtered by date window.
+  // Catalog delta sync — filters items/categories by updatedAt > since, active seasonal offers by date window.
+  // When `since` is omitted, a full catalog is returned (full: true).
   app.get("/api/sync/catalog", requireTerminal, async (req, res) => {
     try {
       const terminal = (req as any).terminal;
@@ -6339,11 +6338,17 @@ export async function registerRoutes(
         storage.getCategories(),
         storage.getSeasonalOffers(),
       ]);
+      // Delta: only items/categories updated since sinceDate
+      const items = sinceDate
+        ? allItems.filter(item => item.updatedAt && new Date(item.updatedAt) > sinceDate)
+        : allItems;
+      const categories = sinceDate
+        ? cats.filter(cat => cat.updatedAt && new Date(cat.updatedAt) > sinceDate)
+        : cats;
       // Filter to only currently active seasonal offers
       const today = new Date().toISOString().slice(0, 10);
       const activeOffers = offers.filter(o => o.active && o.startDate <= today && o.endDate >= today);
-      // Note: items/categories are always returned in full (no updatedAt column for delta)
-      res.json({ items: allItems, categories: cats, seasonalOffers: activeOffers, syncedAt: new Date().toISOString(), full: true, since: since || null });
+      res.json({ items, categories, seasonalOffers: activeOffers, syncedAt: new Date().toISOString(), full: !sinceDate, since: since || null });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
