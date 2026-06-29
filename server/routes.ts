@@ -6294,10 +6294,22 @@ export async function registerRoutes(
   }
 
   // ─── Sync API (called by Tauri terminal) ────────────────────────────────────
-  // Terminal registration — returns config bundle
-  app.post("/api/pos/terminals/register", requireTerminal, async (req, res) => {
+  // Terminal registration — bootstrap call; accepts terminalCode + locationCode from body.
+  // No X-Terminal-Code header required (this IS the bootstrap before the terminal has a session).
+  app.post("/api/pos/terminals/register", async (req, res) => {
     try {
-      const terminal = (req as any).terminal;
+      const { terminalCode, locationCode } = req.body;
+      if (!terminalCode) return res.status(400).json({ message: "terminalCode required" });
+      const terminal = await storage.getPosTerminalByCode(terminalCode);
+      if (!terminal) return res.status(404).json({ message: "Terminal not found" });
+      if (!terminal.active) return res.status(403).json({ message: "Terminal is not active" });
+      // Optionally validate locationCode if provided
+      if (locationCode) {
+        const locs = await storage.getPosLocations();
+        const loc = locs.find(l => l.code === locationCode || l.id === locationCode);
+        if (!loc) return res.status(404).json({ message: `Location '${locationCode}' not found` });
+        if (terminal.locationId !== loc.id) return res.status(403).json({ message: "Terminal is not assigned to that location" });
+      }
       // Update last seen
       await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date() });
       // Build bundle
@@ -6346,6 +6358,7 @@ export async function registerRoutes(
   });
 
   // Bills ingest (terminal pushes completed orders)
+  // terminalId and locationId are always overridden from the authenticated terminal context — never trusted from payload.
   app.post("/api/sync/bills", requireTerminal, async (req, res) => {
     try {
       const terminal = (req as any).terminal;
@@ -6354,8 +6367,14 @@ export async function registerRoutes(
       const results: any[] = [];
       for (const bill of bills) {
         try {
-          const { lines = [], ...orderData } = bill;
-          const order = await storage.createPosOrder({ ...orderData, syncedAt: new Date() }, lines);
+          const { lines = [], terminalId: _tid, locationId: _lid, ...orderData } = bill;
+          // Enforce server-side context — ignore any payload terminal/location IDs
+          const order = await storage.createPosOrder({
+            ...orderData,
+            terminalId: terminal.id,
+            locationId: terminal.locationId,
+            syncedAt: new Date(),
+          }, lines);
           results.push({ orderNumber: bill.orderNumber, status: "ok", id: order.id });
         } catch (err: any) {
           results.push({ orderNumber: bill.orderNumber, status: "error", message: err.message });
@@ -6396,10 +6415,13 @@ export async function registerRoutes(
   });
 
   // Outbox queue size update (heartbeat from terminal)
+  // Terminal can only update its own record — req.params.id must match authenticated terminal.
   app.post("/api/pos/terminals/:id/heartbeat", requireTerminal, async (req, res) => {
     try {
+      const terminal = (req as any).terminal;
+      if (req.params.id !== terminal.id) return res.status(403).json({ message: "Forbidden: terminal mismatch" });
       const { outboxQueueSize = 0 } = req.body;
-      await storage.updatePosTerminal(req.params.id, { lastSeenAt: new Date(), outboxQueueSize });
+      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), outboxQueueSize });
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

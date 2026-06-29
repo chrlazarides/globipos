@@ -1,12 +1,16 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { PosOrder, PosLocation } from "@shared/schema";
-import { Card, CardContent } from "@/components/ui/card";
+import type { PosOrder, PosOrderLine, PosLocation } from "@shared/schema";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ShoppingBag, Loader2, Search } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ShoppingBag, Loader2, Search, Eye } from "lucide-react";
 import { format } from "date-fns";
+
+type OrderWithMeta = PosOrder & { locationName?: string; terminalName?: string; lines?: PosOrderLine[] };
 
 function paymentBadge(method: string) {
   const map: Record<string, string> = { cash: "bg-green-100 text-green-800", card: "bg-blue-100 text-blue-800", mixed: "bg-purple-100 text-purple-800" };
@@ -19,12 +23,108 @@ function statusBadge(status: string) {
   return <Badge variant="default">Completed</Badge>;
 }
 
+function OrderDetailDialog({ order, onClose }: { order: OrderWithMeta; onClose: () => void }) {
+  const { data: detail, isLoading } = useQuery<OrderWithMeta>({
+    queryKey: ["/api/pos/orders", order.id],
+  });
+  const lines = detail?.lines ?? order.lines ?? [];
+
+  return (
+    <Dialog open onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ShoppingBag className="w-5 h-5" />
+            Order {order.orderNumber}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">Date</p>
+              <p className="font-medium">{format(new Date(order.createdAt), "dd MMM yyyy HH:mm")}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">Status</p>
+              {statusBadge(order.status)}
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">Location / Terminal</p>
+              <p className="font-medium">{order.locationName || order.locationId}</p>
+              {order.terminalName && <p className="text-xs text-muted-foreground">{order.terminalName}</p>}
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">Cashier</p>
+              <p className="font-medium">{order.cashierName || "—"}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">Payment</p>
+              <span className={`px-2 py-0.5 rounded text-xs font-medium ${paymentBadge(order.paymentMethod)}`}>
+                {order.paymentMethod}
+              </span>
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">Customer</p>
+              <p className="font-medium">{order.customerId ? (order as any).customerName || order.customerId : "Walk-in"}</p>
+            </div>
+          </div>
+
+          <div className="border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wide">
+                <tr>
+                  <th className="px-3 py-2 text-left">Item</th>
+                  <th className="px-3 py-2 text-right">Qty</th>
+                  <th className="px-3 py-2 text-right">Unit Price</th>
+                  <th className="px-3 py-2 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {isLoading ? (
+                  <tr><td colSpan={4} className="px-3 py-4 text-center text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin inline" /></td></tr>
+                ) : lines.length === 0 ? (
+                  <tr><td colSpan={4} className="px-3 py-4 text-center text-muted-foreground text-xs">No line items</td></tr>
+                ) : lines.map((line, i) => (
+                  <tr key={line.id ?? i} data-testid={`row-orderline-${line.id ?? i}`}>
+                    <td className="px-3 py-2">
+                      <div className="font-medium">{(line as any).itemName || line.itemId}</div>
+                      {line.notes && <div className="text-xs text-muted-foreground">{line.notes}</div>}
+                    </td>
+                    <td className="px-3 py-2 text-right">{line.quantity}</td>
+                    <td className="px-3 py-2 text-right">€{parseFloat(line.unitPrice).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right font-semibold">€{parseFloat(line.lineTotal).toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex justify-end gap-6 text-sm border-t pt-3">
+            {order.discountAmount && parseFloat(order.discountAmount) > 0 && (
+              <div className="text-muted-foreground">Discount: −€{parseFloat(order.discountAmount).toFixed(2)}</div>
+            )}
+            {order.taxAmount && parseFloat(order.taxAmount) > 0 && (
+              <div className="text-muted-foreground">Tax: €{parseFloat(order.taxAmount).toFixed(2)}</div>
+            )}
+            <div className="font-bold text-base">Total: €{parseFloat(order.total).toFixed(2)}</div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button variant="outline" onClick={onClose} data-testid="button-close-order-detail">Close</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function PosOrders() {
   const [search, setSearch] = useState("");
   const [locationFilter, setLocationFilter] = useState("all");
   const [methodFilter, setMethodFilter] = useState("all");
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithMeta | null>(null);
 
-  const { data: orders = [], isLoading } = useQuery<(PosOrder & { locationName?: string; terminalName?: string })[]>({ queryKey: ["/api/pos/orders"] });
+  const { data: orders = [], isLoading } = useQuery<OrderWithMeta[]>({ queryKey: ["/api/pos/orders"] });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"] });
 
   const filtered = orders.filter(o => {
@@ -99,6 +199,7 @@ export default function PosOrders() {
                 <th className="px-4 py-3 text-left">Payment</th>
                 <th className="px-4 py-3 text-right">Total</th>
                 <th className="px-4 py-3 text-center">Status</th>
+                <th className="px-4 py-3 text-center">Detail</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -120,11 +221,25 @@ export default function PosOrders() {
                   </td>
                   <td className="px-4 py-3 text-right font-semibold">€{parseFloat(o.total).toFixed(2)}</td>
                   <td className="px-4 py-3 text-center">{statusBadge(o.status)}</td>
+                  <td className="px-4 py-3 text-center">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelectedOrder(o)}
+                      data-testid={`button-view-order-${o.id}`}
+                    >
+                      <Eye className="w-4 h-4" />
+                    </Button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {selectedOrder && (
+        <OrderDetailDialog order={selectedOrder} onClose={() => setSelectedOrder(null)} />
       )}
     </div>
   );
