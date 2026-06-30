@@ -17,13 +17,12 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+
 import {
   Banknote, CreditCard, Gift, Star, Building2,
-  Loader2, Check, X, ChevronRight, Trash2
+  Loader2, Check, X, ChevronRight, Trash2, DeleteIcon,
 } from "lucide-react";
 import { usePayment, type PaymentResult, type TenderMethod } from "../hooks/usePayment";
-import Numpad from "./Numpad";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -41,6 +40,30 @@ type PaymentTab = "cash" | "card" | "split";
 
 // Quick-cash buttons: common denominations
 const CASH_PRESETS = [5, 10, 20, 50, 100];
+
+// ── Inline compact keypad (not the POS Numpad modal) ────────────────────────
+
+const KEYPAD_KEYS = ["7","8","9","4","5","6","1","2","3",".","0","⌫"] as const;
+
+function PaymentKeypad({ onPress }: { onPress: (key: string) => void }) {
+  return (
+    <div className="grid grid-cols-3 gap-1.5">
+      {KEYPAD_KEYS.map((k, i) => (
+        <button
+          key={i}
+          type="button"
+          data-testid={`pkpad-${k === "⌫" ? "del" : k}`}
+          onClick={() => onPress(k === "⌫" ? "backspace" : k)}
+          className="h-11 flex items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800
+                     hover:bg-gray-200 dark:hover:bg-gray-700 text-foreground font-semibold
+                     text-base transition-colors active:scale-95"
+        >
+          {k === "⌫" ? <DeleteIcon className="h-4 w-4" /> : k}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -398,13 +421,9 @@ export default function PaymentDialog({
             </div>
           </div>
 
-          {/* Right: numpad */}
+          {/* Right: keypad */}
           <div className="p-4 space-y-2">
-            <Numpad
-              value={numpadValue}
-              onPress={handleNumpadPress}
-              showDecimal
-            />
+            <PaymentKeypad onPress={handleNumpadPress} />
 
             {/* Action buttons */}
             <div className="flex gap-2 pt-2">
