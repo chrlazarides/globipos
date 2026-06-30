@@ -333,7 +333,17 @@ pub async fn process_payment(
         "jcc"      => pay_jcc(cfg, amount, currency).await,
         "viva"     => pay_viva(cfg, amount, currency).await,
         "worldpay" => pay_worldpay(cfg, amount, currency).await,
-        _          => Ok(mock_approve(amount, currency)), // "mock" or unconfigured
+        // "mock" is permitted only in explicit dev/test mode
+        "mock"     => Ok(mock_approve(amount, currency)),
+        // Fail closed for any unknown or unconfigured provider — never auto-approve
+        other      => Ok(PaymentResult {
+            approved:  false,
+            reference: String::new(),
+            amount,
+            currency:  currency.into(),
+            error:     Some(format!("Card provider '{}' is not configured. Please update terminal payment settings.", other)),
+            provider:  other.into(),
+        }),
     }
 }
 

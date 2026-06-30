@@ -68,13 +68,15 @@ async fn register_terminal(
     let resp = sync::register_terminal(&state.db, &server_url, &terminal_code).await?;
 
     let cfg = TerminalConfig {
-        server_url:    server_url.clone(),
-        terminal_code: terminal_code.clone(),
-        terminal_id:   resp.terminal.id.clone(),
-        terminal_name: resp.terminal.name.clone(),
-        location_id:   resp.location.id.clone(),
-        location_name: resp.location.name.clone(),
-        price_level:   resp.terminal.price_level.unwrap_or(1),
+        server_url:        server_url.clone(),
+        terminal_code:     terminal_code.clone(),
+        terminal_id:       resp.terminal.id.clone(),
+        terminal_name:     resp.terminal.name.clone(),
+        location_id:       resp.location.id.clone(),
+        location_name:     resp.location.name.clone(),
+        price_level:       resp.terminal.price_level.unwrap_or(1),
+        mirror_server_url: None,
+        sco_mode:          None,
     };
 
     store_config(&app, &cfg)?;
