@@ -31,15 +31,22 @@ export default function PortalDashboard({ customer }: PortalDashboardProps) {
   const handleEnablePush = async () => {
     try {
       const perm = await Notification.requestPermission();
-      if (perm === "granted") {
-        setPushState("granted");
-        // Subscribe to push (no VAPID needed for basic portal notifications)
+      if (perm !== "granted") { setPushState("denied"); return; }
+      setPushState("granted");
+      try {
+        const { publicKey } = await fetch("/api/public/vapid-key").then(r => r.json());
+        if (!publicKey) return;
+        const registration = await navigator.serviceWorker.ready;
+        const sub = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: publicKey,
+        });
+        const json = sub.toJSON();
         await portalApiRequest("POST", `/api/portal/customer/${customer.id}/push/subscribe`, {
-          endpoint: "portal-native", keys: { p256dh: "portal", auth: "portal" }
+          endpoint: json.endpoint,
+          keys: { p256dh: json.keys?.p256dh || "", auth: json.keys?.auth || "" },
         }).catch(() => {/* non-fatal */});
-      } else {
-        setPushState("denied");
-      }
+      } catch { /* push subscription non-fatal — permission was still granted */ }
     } catch {}
   };
 

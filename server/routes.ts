@@ -1508,6 +1508,19 @@ export async function registerRoutes(
       const data = insertSeasonalOfferSchema.parse(req.body);
       const offer = await storage.createSeasonalOffer(data);
       res.json(offer);
+      // Push notification to all subscribed customers about new seasonal offer
+      setImmediate(async () => {
+        try {
+          const allSubs = await db.selectDistinct({ customerId: customerPushSubscriptions.customerId }).from(customerPushSubscriptions);
+          for (const { customerId } of allSubs) {
+            await sendPushToCustomer(customerId, {
+              title: "New Special Offer!",
+              body: `${data.name || "A new offer"} is now available. Check it out in the shop.`,
+              url: "/shop",
+            });
+          }
+        } catch { /* non-fatal */ }
+      });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }
@@ -4871,6 +4884,11 @@ export async function registerRoutes(
     return payload;
   }
 
+  // Public VAPID key — no auth, used by portal and customer-app to subscribe to push
+  app.get("/api/public/vapid-key", (_req, res) => {
+    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY || "" });
+  });
+
   // Public branding endpoint — no auth, used by customer-app on first load
   app.get("/api/public/branding", async (_req, res) => {
     try {
@@ -7305,6 +7323,31 @@ export async function registerRoutes(
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
+
+  // ─── Overdue payment push reminder — runs once at startup, then every 24h ───
+  async function sendOverduePushReminders() {
+    try {
+      const overdueInvs = await db
+        .select({ customerId: invoices.customerId, invoiceNumber: invoices.invoiceNumber, total: invoices.total })
+        .from(invoices)
+        .where(eq(invoices.status, "overdue"));
+      const seen = new Set<string>();
+      for (const inv of overdueInvs) {
+        if (!inv.customerId || seen.has(inv.customerId)) continue;
+        seen.add(inv.customerId);
+        await sendPushToCustomer(inv.customerId, {
+          title: "Payment Reminder",
+          body: `You have an overdue invoice (${inv.invoiceNumber}). Please log in to your account to view details.`,
+          url: "/portal",
+        });
+      }
+    } catch { /* non-fatal */ }
+  }
+  // Fire once on startup (after a short delay), then every 24 hours
+  setTimeout(() => {
+    sendOverduePushReminders();
+    setInterval(sendOverduePushReminders, 24 * 60 * 60 * 1000);
+  }, 30 * 1000);
 
   return httpServer;
 }
