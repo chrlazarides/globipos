@@ -27,6 +27,10 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         run_v2(pool).await?;
         set_version(pool, 2).await?;
     }
+    if current < 3 {
+        run_v3(pool).await?;
+        set_version(pool, 3).await?;
+    }
 
     Ok(())
 }
@@ -208,6 +212,96 @@ async fn run_v1(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     for sql in statements {
         sqlx::query(sql).execute(pool).await?;
+    }
+    Ok(())
+}
+
+async fn run_v3(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let statements = vec![
+        // Extend pos_shifts with notes column
+        "ALTER TABLE pos_shifts ADD COLUMN notes TEXT",
+        // Extend local_products with Phase 3 fields
+        "ALTER TABLE local_products ADD COLUMN age_restricted INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE local_products ADD COLUMN min_age INTEGER NOT NULL DEFAULT 18",
+        "ALTER TABLE local_products ADD COLUMN deposit_amount REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE local_products ADD COLUMN weight_based INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE local_products ADD COLUMN plu_code TEXT",
+        "ALTER TABLE local_products ADD COLUMN price_per_kg REAL",
+        "ALTER TABLE local_products ADD COLUMN category_name TEXT",
+        // Promotions cache (synced from server)
+        r#"CREATE TABLE IF NOT EXISTS local_promotions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'buy_n_get_m',
+            product_ids TEXT NOT NULL DEFAULT '[]',
+            category_ids TEXT NOT NULL DEFAULT '[]',
+            threshold_qty INTEGER NOT NULL DEFAULT 1,
+            get_qty INTEGER NOT NULL DEFAULT 0,
+            threshold_price REAL NOT NULL DEFAULT 0,
+            bundle_price REAL NOT NULL DEFAULT 0,
+            discount_pct REAL NOT NULL DEFAULT 0,
+            discount_fixed REAL NOT NULL DEFAULT 0,
+            coupon_code TEXT,
+            priority INTEGER NOT NULL DEFAULT 0,
+            stackable INTEGER NOT NULL DEFAULT 0,
+            valid_from TEXT,
+            valid_until TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            synced_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"#,
+        // Container deposits cache
+        r#"CREATE TABLE IF NOT EXISTS local_container_deposits (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            deposit_amount REAL NOT NULL,
+            product_ids TEXT NOT NULL DEFAULT '[]',
+            category_ids TEXT NOT NULL DEFAULT '[]',
+            deposit_sku TEXT NOT NULL DEFAULT 'DEPOSIT',
+            active INTEGER NOT NULL DEFAULT 1,
+            synced_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"#,
+        // Shift events (cash-in, cash-out, no-sale)
+        r#"CREATE TABLE IF NOT EXISTS shift_events (
+            id TEXT PRIMARY KEY,
+            shift_id TEXT NOT NULL REFERENCES pos_shifts(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL DEFAULT 'cash_in',
+            amount REAL NOT NULL DEFAULT 0,
+            note TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"#,
+        "CREATE INDEX IF NOT EXISTS idx_shift_events_shift ON shift_events(shift_id)",
+        // Return / refund orders
+        r#"CREATE TABLE IF NOT EXISTS pos_return_orders (
+            id TEXT PRIMARY KEY,
+            original_order_id TEXT,
+            original_order_number TEXT,
+            cashier_id TEXT NOT NULL,
+            cashier_name TEXT NOT NULL,
+            refund_method TEXT NOT NULL DEFAULT 'cash',
+            refund_total REAL NOT NULL DEFAULT 0,
+            notes TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            synced_at TEXT
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS pos_return_order_lines (
+            id TEXT PRIMARY KEY,
+            return_order_id TEXT NOT NULL REFERENCES pos_return_orders(id) ON DELETE CASCADE,
+            original_order_id TEXT,
+            original_line_id TEXT,
+            product_id TEXT,
+            description TEXT NOT NULL,
+            qty REAL NOT NULL,
+            unit_price REAL NOT NULL,
+            line_total REAL NOT NULL,
+            restocked INTEGER NOT NULL DEFAULT 1
+        )"#,
+        "CREATE INDEX IF NOT EXISTS idx_return_lines_return ON pos_return_order_lines(return_order_id)",
+    ];
+
+    for sql in &statements {
+        // Use try_execute to handle cases where the column already exists (ALTER TABLE)
+        let _ = sqlx::query(sql).execute(pool).await;
     }
     Ok(())
 }

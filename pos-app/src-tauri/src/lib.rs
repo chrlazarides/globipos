@@ -1,11 +1,13 @@
 mod auth;
 mod db;
+mod hardware;
 mod migrations;
 mod models;
 mod orders;
 mod sync;
 
 use db::row_to_json;
+use hardware::{HardwareConfig, ScaleWeight};
 use models::*;
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
@@ -42,15 +44,13 @@ fn load_cfg_from_store(app: &AppHandle) -> Result<Option<TerminalConfig>, String
     }
 }
 
-// ── Tauri commands ────────────────────────────────────────────────────────────
+// ── Original Tauri commands ───────────────────────────────────────────────────
 
 #[tauri::command]
 async fn get_config(app: AppHandle, state: State<'_, AppState>) -> Result<Option<TerminalConfig>, String> {
-    // Check in-memory state first
     if let Some(cfg) = state.config.lock().unwrap().clone() {
         return Ok(Some(cfg));
     }
-    // Fall back to persisted store
     let cfg = load_cfg_from_store(&app)?;
     if let Some(ref c) = cfg {
         *state.config.lock().unwrap() = Some(c.clone());
@@ -331,14 +331,12 @@ async fn get_customer_live(
     state: State<'_, AppState>,
     customer_id: String,
 ) -> Result<Option<Value>, String> {
-    // Acquire config values without holding the lock across an await point
     let (server_url, terminal_code) = {
         let cfg = state.config.lock().unwrap();
         let c = cfg.as_ref().ok_or_else(cfg_err)?;
         (c.server_url.clone(), c.terminal_code.clone())
     };
 
-    // Fallback rule query runs after lock is released
     let fb_row = sqlx::query(
         "SELECT offline_behavior FROM sync_fallback_config WHERE rule_key='customer_lookup'"
     )
@@ -472,6 +470,539 @@ async fn send_heartbeat(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(online)
 }
 
+// ── Phase 3: Shift management ─────────────────────────────────────────────────
+
+#[tauri::command]
+async fn open_shift(
+    state:        State<'_, AppState>,
+    cashier_id:   String,
+    cashier_name: String,
+    opening_float: f64,
+) -> Result<Value, String> {
+    let shift_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"INSERT INTO pos_shifts
+           (id, cashier_id, cashier_name, opening_float, status, opened_at)
+           VALUES (?, ?, ?, ?, 'open', datetime('now'))"#
+    )
+    .bind(&shift_id)
+    .bind(&cashier_id)
+    .bind(&cashier_name)
+    .bind(opening_float)
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    let row = sqlx::query("SELECT * FROM pos_shifts WHERE id = ?")
+        .bind(&shift_id)
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(row_to_json(row))
+}
+
+#[tauri::command]
+async fn get_current_shift(state: State<'_, AppState>) -> Result<Option<Value>, String> {
+    let row = sqlx::query(
+        "SELECT * FROM pos_shifts WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1"
+    )
+    .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(row.map(row_to_json))
+}
+
+#[tauri::command]
+async fn record_shift_event(
+    state:      State<'_, AppState>,
+    shift_id:   String,
+    event_type: String,
+    amount:     f64,
+    note:       Option<String>,
+) -> Result<(), String> {
+    let event_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO shift_events (id, shift_id, event_type, amount, note) VALUES (?, ?, ?, ?, ?)"
+    )
+    .bind(&event_id)
+    .bind(&shift_id)
+    .bind(&event_type)
+    .bind(amount)
+    .bind(note.as_deref())
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn update_shift_totals(
+    state:          State<'_, AppState>,
+    shift_id:       String,
+    total:          f64,
+    payment_method: String,
+) -> Result<(), String> {
+    let is_cash = payment_method.to_lowercase().contains("cash");
+    if is_cash {
+        sqlx::query(
+            r#"UPDATE pos_shifts SET
+               total_cash_sales = total_cash_sales + ?,
+               total_sales = total_sales + ?,
+               order_count = order_count + 1
+               WHERE id = ?"#
+        )
+        .bind(total).bind(total).bind(&shift_id)
+        .execute(&state.db).await.map_err(|e| e.to_string())?;
+    } else {
+        sqlx::query(
+            r#"UPDATE pos_shifts SET
+               total_card_sales = total_card_sales + ?,
+               total_sales = total_sales + ?,
+               order_count = order_count + 1
+               WHERE id = ?"#
+        )
+        .bind(total).bind(total).bind(&shift_id)
+        .execute(&state.db).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_shift_summary(
+    state:    State<'_, AppState>,
+    shift_id: String,
+) -> Result<Value, String> {
+    let shift_row = sqlx::query("SELECT * FROM pos_shifts WHERE id = ?")
+        .bind(&shift_id)
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?
+        .ok_or("Shift not found")?;
+
+    let events: Vec<Value> = sqlx::query("SELECT * FROM shift_events WHERE shift_id = ? ORDER BY created_at")
+        .bind(&shift_id)
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?
+        .into_iter().map(row_to_json).collect();
+
+    let shift = row_to_json(shift_row);
+
+    // Compute expected cash
+    let opening_float = shift.get("opening_float").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let cash_sales = shift.get("total_cash_sales").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let total_sales = shift.get("total_sales").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let card_sales = shift.get("total_card_sales").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let order_count = shift.get("order_count").and_then(|v| v.as_i64()).unwrap_or(0);
+
+    let cash_in: f64 = events.iter()
+        .filter(|e| e.get("event_type").and_then(|v| v.as_str()) == Some("cash_in"))
+        .filter_map(|e| e.get("amount").and_then(|v| v.as_f64()))
+        .sum();
+    let cash_out: f64 = events.iter()
+        .filter(|e| e.get("event_type").and_then(|v| v.as_str()) == Some("cash_out"))
+        .filter_map(|e| e.get("amount").and_then(|v| v.as_f64()))
+        .sum();
+
+    let expected_cash = opening_float + cash_sales + cash_in - cash_out;
+    let avg_basket = if order_count > 0 { total_sales / order_count as f64 } else { 0.0 };
+    let top_payment = if cash_sales >= card_sales { "cash" } else { "card" };
+
+    Ok(serde_json::json!({
+        "shift": shift,
+        "events": events,
+        "expected_cash": expected_cash,
+        "transaction_count": order_count,
+        "avg_basket": avg_basket,
+        "top_payment": top_payment,
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
+#[tauri::command]
+async fn close_shift(
+    state:        State<'_, AppState>,
+    shift_id:     String,
+    closing_cash: f64,   // -1 = blind close
+    notes:        Option<String>,
+) -> Result<Value, String> {
+    let summary = get_shift_summary(state.clone(), shift_id.clone()).await?;
+
+    let expected_cash = summary.get("expected_cash").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let effective_closing = if closing_cash < 0.0 { expected_cash } else { closing_cash };
+    let variance = effective_closing - expected_cash;
+
+    sqlx::query(
+        r#"UPDATE pos_shifts SET
+           status = 'closed',
+           closed_at = datetime('now'),
+           closing_cash = ?,
+           notes = ?
+           WHERE id = ?"#
+    )
+    .bind(effective_closing)
+    .bind(notes.as_deref())
+    .bind(&shift_id)
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    // Queue Z-report for server sync
+    let outbox_id = uuid::Uuid::new_v4().to_string();
+    let payload = serde_json::json!({
+        "type": "shift_close",
+        "shift_id": shift_id,
+        "closing_cash": effective_closing,
+        "variance": variance,
+    });
+    sqlx::query(
+        "INSERT INTO pos_outbox (id, order_id, payload, status) VALUES (?, ?, ?, 'pending')"
+    )
+    .bind(&outbox_id)
+    .bind(&shift_id)
+    .bind(payload.to_string())
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "shift": summary.get("shift"),
+        "events": summary.get("events"),
+        "expected_cash": expected_cash,
+        "closing_cash": effective_closing,
+        "variance": variance,
+        "is_balanced": variance.abs() < 0.50,
+        "transaction_count": summary.get("transaction_count"),
+        "avg_basket": summary.get("avg_basket"),
+        "top_payment": summary.get("top_payment"),
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
+// ── Phase 3: Promotions ───────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_promotions(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query(
+        r#"SELECT * FROM local_promotions
+           WHERE active = 1
+             AND (valid_until IS NULL OR valid_until > datetime('now'))
+           ORDER BY priority DESC, name"#
+    )
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+
+    let result: Vec<Value> = rows.into_iter().map(|row| {
+        let mut v = row_to_json(row);
+        // Parse JSON arrays from TEXT columns
+        if let Some(obj) = v.as_object_mut() {
+            for key in &["product_ids", "category_ids"] {
+                if let Some(raw) = obj.get(*key).and_then(|x| x.as_str()) {
+                    if let Ok(arr) = serde_json::from_str::<Value>(raw) {
+                        obj.insert(key.to_string(), arr);
+                    }
+                }
+            }
+        }
+        v
+    }).collect();
+
+    Ok(result)
+}
+
+#[tauri::command]
+async fn validate_coupon(
+    state:       State<'_, AppState>,
+    server_url:  String,
+    terminal_code: String,
+    code:        String,
+) -> Result<Value, String> {
+    // First check local cache
+    let row = sqlx::query(
+        r#"SELECT * FROM local_promotions
+           WHERE type = 'coupon'
+             AND active = 1
+             AND lower(coupon_code) = lower(?)
+             AND (valid_until IS NULL OR valid_until > datetime('now'))
+           LIMIT 1"#
+    )
+    .bind(&code)
+    .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+
+    if let Some(r) = row {
+        return Ok(serde_json::json!({ "valid": true, "promo": row_to_json(r) }));
+    }
+
+    // Fall back to server
+    let (srv, tc) = {
+        let cfg = state.config.lock().unwrap();
+        if let Some(c) = cfg.as_ref() {
+            (c.server_url.clone(), c.terminal_code.clone())
+        } else {
+            return Ok(serde_json::json!({ "valid": false, "message": "Offline — coupon not found" }));
+        }
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/api/pos/validate-coupon", srv.trim_end_matches('/'));
+    match client.post(&url)
+        .header("X-Terminal-Code", &tc)
+        .json(&serde_json::json!({ "code": code }))
+        .send().await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<Value>().await.map_err(|e| e.to_string())
+        }
+        _ => Ok(serde_json::json!({ "valid": false, "message": "Invalid or expired coupon" })),
+    }
+}
+
+// ── Phase 3: Container deposits & produce ─────────────────────────────────────
+
+#[tauri::command]
+async fn get_container_deposits(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query("SELECT * FROM local_container_deposits WHERE active = 1")
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_produce_items(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query(
+        r#"SELECT * FROM local_products
+           WHERE active = 1 AND (weight_based = 1 OR plu_code IS NOT NULL)
+           ORDER BY name"#
+    )
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+// ── Phase 3: Returns ──────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_order_by_number(
+    state:        State<'_, AppState>,
+    order_number: String,
+) -> Result<Option<Value>, String> {
+    let order_row = sqlx::query(
+        "SELECT * FROM pos_orders WHERE order_number = ? LIMIT 1"
+    )
+    .bind(&order_number)
+    .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+
+    if let Some(row) = order_row {
+        let order = row_to_json(row);
+        let order_id = order.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let lines: Vec<Value> = sqlx::query(
+            "SELECT * FROM pos_order_lines WHERE order_id = ? ORDER BY sort_order"
+        )
+        .bind(&order_id)
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?
+        .into_iter().map(row_to_json).collect();
+
+        let mut result = order;
+        result.as_object_mut().unwrap().insert("lines".to_string(), serde_json::json!(lines));
+        Ok(Some(result))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+async fn save_return_order(
+    state:        State<'_, AppState>,
+    return_order: Value,
+    lines:        Vec<Value>,
+) -> Result<(), String> {
+    let id = return_order.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    sqlx::query(
+        r#"INSERT INTO pos_return_orders
+           (id, original_order_id, original_order_number, cashier_id, cashier_name,
+            refund_method, refund_total, notes, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#
+    )
+    .bind(&id)
+    .bind(return_order.get("original_order_id").and_then(|v| v.as_str()).unwrap_or(""))
+    .bind(return_order.get("original_order_number").and_then(|v| v.as_str()).unwrap_or(""))
+    .bind(return_order.get("cashier_id").and_then(|v| v.as_str()).unwrap_or(""))
+    .bind(return_order.get("cashier_name").and_then(|v| v.as_str()).unwrap_or(""))
+    .bind(return_order.get("refund_method").and_then(|v| v.as_str()).unwrap_or("cash"))
+    .bind(return_order.get("refund_total").and_then(|v| v.as_f64()).unwrap_or(0.0))
+    .bind(return_order.get("notes").and_then(|v| v.as_str()))
+    .bind(return_order.get("status").and_then(|v| v.as_str()).unwrap_or("completed"))
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    for line in &lines {
+        let line_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"INSERT INTO pos_return_order_lines
+               (id, return_order_id, original_order_id, original_line_id, product_id,
+                description, qty, unit_price, line_total, restocked)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#
+        )
+        .bind(&line_id)
+        .bind(&id)
+        .bind(line.get("original_order_id").and_then(|v| v.as_str()).unwrap_or(""))
+        .bind(line.get("original_line_id").and_then(|v| v.as_str()).unwrap_or(""))
+        .bind(line.get("product_id").and_then(|v| v.as_str()))
+        .bind(line.get("description").and_then(|v| v.as_str()).unwrap_or(""))
+        .bind(line.get("qty").and_then(|v| v.as_f64()).unwrap_or(0.0))
+        .bind(line.get("unit_price").and_then(|v| v.as_f64()).unwrap_or(0.0))
+        .bind(line.get("line_total").and_then(|v| v.as_f64()).unwrap_or(0.0))
+        .bind(line.get("restocked").and_then(|v| v.as_bool()).unwrap_or(true))
+        .execute(&state.db).await.map_err(|e| e.to_string())?;
+    }
+
+    // Queue for server sync
+    let outbox_id = uuid::Uuid::new_v4().to_string();
+    let payload = serde_json::json!({ "type": "return_order", "return_order": return_order, "lines": lines });
+    sqlx::query(
+        "INSERT INTO pos_outbox (id, order_id, payload, status) VALUES (?, ?, ?, 'pending')"
+    )
+    .bind(&outbox_id)
+    .bind(&id)
+    .bind(payload.to_string())
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+// ── Phase 3: Hardware commands ────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_hardware_config(state: State<'_, AppState>) -> Result<HardwareConfig, String> {
+    Ok(hardware::load_hardware_config(&state.db).await)
+}
+
+#[tauri::command]
+async fn save_hardware_config(
+    state:  State<'_, AppState>,
+    config: HardwareConfig,
+) -> Result<(), String> {
+    hardware::save_hardware_config(&state.db, &config)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn scale_read_weight(
+    app:   AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ScaleWeight, String> {
+    let cfg = hardware::load_hardware_config(&state.db).await;
+    hardware::scale_read(&app, &cfg).await
+}
+
+#[tauri::command]
+async fn scale_tare(
+    app:   AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let cfg = hardware::load_hardware_config(&state.db).await;
+    hardware::scale_tare(&app, &cfg).await
+}
+
+#[tauri::command]
+async fn print_receipt(
+    app:   AppHandle,
+    state: State<'_, AppState>,
+    lines: Vec<Value>,
+) -> Result<(), String> {
+    let cfg = hardware::load_hardware_config(&state.db).await;
+    let cols = cfg.printer_columns.max(32);
+    hardware::print_receipt(&app, &cfg, &lines, cols).await
+}
+
+#[tauri::command]
+async fn open_cash_drawer(
+    app:   AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let cfg = hardware::load_hardware_config(&state.db).await;
+    hardware::open_cash_drawer(&app, &cfg).await
+}
+
+#[tauri::command]
+async fn check_printer_status(
+    app:   AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let cfg = hardware::load_hardware_config(&state.db).await;
+    Ok(hardware::check_printer_status(&app, &cfg).await)
+}
+
+/// Card payment — calls configured payment gateway via HTTP.
+/// Returns { approved: bool, reference: String, error?: String }.
+#[tauri::command]
+async fn process_card_payment(
+    state:        State<'_, AppState>,
+    amount:       f64,
+    currency:     String,
+    auto_confirm: Option<bool>,
+) -> Result<Value, String> {
+    // Load payment config from schema_meta
+    let cfg_row = sqlx::query("SELECT value FROM schema_meta WHERE key = 'payment_config'")
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+
+    let payment_cfg: Value = cfg_row
+        .and_then(|r| r.try_get::<String, _>("value").ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(serde_json::json!({"provider": "mock"}));
+
+    let provider = payment_cfg.get("provider").and_then(|v| v.as_str()).unwrap_or("mock");
+
+    // Mock mode — for development / demo terminals
+    if provider == "mock" || auto_confirm == Some(true) {
+        return Ok(serde_json::json!({
+            "approved": true,
+            "reference": format!("MOCK-{}", &uuid::Uuid::new_v4().to_string()[..8].to_uppercase()),
+            "amount": amount,
+            "currency": currency,
+        }));
+    }
+
+    // Real gateway integration
+    let endpoint = payment_cfg.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
+    let merchant_id = payment_cfg.get("merchant_id").and_then(|v| v.as_str()).unwrap_or("");
+    let api_key = payment_cfg.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+
+    if endpoint.is_empty() {
+        return Err("Payment gateway not configured".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60)) // card payments can take up to 60s
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let payload = serde_json::json!({
+        "merchant_id": merchant_id,
+        "amount": (amount * 100.0) as i64, // cents
+        "currency": currency.to_uppercase(),
+        "transaction_type": "sale",
+    });
+
+    match client
+        .post(endpoint)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            let body: Value = resp.json().await.unwrap_or(serde_json::json!({}));
+            let approved = body.get("approved").and_then(|v| v.as_bool())
+                .or_else(|| body.get("status").and_then(|v| v.as_str()).map(|s| s == "approved" || s == "00"))
+                .unwrap_or(false);
+            let reference = body.get("reference")
+                .or_else(|| body.get("auth_code"))
+                .or_else(|| body.get("transaction_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("N/A")
+                .to_string();
+            Ok(serde_json::json!({ "approved": approved, "reference": reference, "amount": amount }))
+        }
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let body: Value = resp.json().await.unwrap_or(serde_json::json!({}));
+            let error = body.get("message").or(body.get("error"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Declined")
+                .to_string();
+            Ok(serde_json::json!({ "approved": false, "error": error, "status": status }))
+        }
+        Err(e) => Ok(serde_json::json!({ "approved": false, "error": e.to_string() })),
+    }
+}
+
 // ── App entry point ───────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -505,6 +1036,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // ── Phase 1 & 2 commands ─────────────────────────────────────────
             get_config,
             register_terminal,
             validate_pin,
@@ -530,6 +1062,31 @@ pub fn run() {
             write_audit,
             get_outbox_counts,
             send_heartbeat,
+            // ── Phase 3: Shift management ────────────────────────────────────
+            open_shift,
+            get_current_shift,
+            record_shift_event,
+            update_shift_totals,
+            get_shift_summary,
+            close_shift,
+            // ── Phase 3: Promotions ──────────────────────────────────────────
+            get_promotions,
+            validate_coupon,
+            // ── Phase 3: Produce & deposits ──────────────────────────────────
+            get_produce_items,
+            get_container_deposits,
+            // ── Phase 3: Returns ─────────────────────────────────────────────
+            get_order_by_number,
+            save_return_order,
+            // ── Phase 3: Hardware ────────────────────────────────────────────
+            get_hardware_config,
+            save_hardware_config,
+            scale_read_weight,
+            scale_tare,
+            print_receipt,
+            open_cash_drawer,
+            check_printer_status,
+            process_card_payment,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

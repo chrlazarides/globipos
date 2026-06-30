@@ -643,3 +643,85 @@ export type PosSyncConfig = typeof posSyncConfig.$inferSelect;
 export const insertPosInboxSchema = createInsertSchema(posInbox).omit({ id: true, createdAt: true });
 export type InsertPosInbox = z.infer<typeof insertPosInboxSchema>;
 export type PosInbox = typeof posInbox.$inferSelect;
+
+// ── POS Phase 3: Promotions, Container Deposits, Returns ──────────────────────
+
+export const posPromotions = pgTable("pos_promotions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  locationId: varchar("location_id").references(() => posLocations.id, { onDelete: "set null" }),
+  name: text("name").notNull(),
+  type: text("type").notNull().default("buy_n_get_m"), // buy_n_get_m | qty_threshold | meal_deal | coupon | mix_match
+  productIds: text("product_ids").array().notNull().default(sql`'{}'`),
+  categoryIds: text("category_ids").array().notNull().default(sql`'{}'`),
+  thresholdQty: integer("threshold_qty").notNull().default(1),
+  getQty: integer("get_qty").notNull().default(0),           // for buy_n_get_m
+  thresholdPrice: numeric("threshold_price", { precision: 10, scale: 2 }).notNull().default("0"), // price/unit when qty threshold met
+  bundlePrice: numeric("bundle_price", { precision: 10, scale: 2 }).notNull().default("0"),       // meal deal / mix-match total
+  discountPct: numeric("discount_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+  discountFixed: numeric("discount_fixed", { precision: 10, scale: 2 }).notNull().default("0"),
+  couponCode: text("coupon_code"),
+  priority: integer("priority").notNull().default(0),
+  stackable: boolean("stackable").notNull().default(false),
+  validFrom: timestamp("valid_from"),
+  validUntil: timestamp("valid_until"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const posContainerDeposits = pgTable("pos_container_deposits", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  depositAmount: numeric("deposit_amount", { precision: 10, scale: 2 }).notNull(),
+  productIds: text("product_ids").array().notNull().default(sql`'{}'`),  // specific items
+  categoryIds: text("category_ids").array().notNull().default(sql`'{}'`), // all items in category
+  depositSku: text("deposit_sku").notNull().default("DEPOSIT"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posReturnOrders = pgTable("pos_return_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  originalOrderId: varchar("original_order_id").references(() => posOrders.id, { onDelete: "set null" }),
+  originalOrderNumber: text("original_order_number"),
+  terminalId: varchar("terminal_id").references(() => posTerminals.id, { onDelete: "set null" }),
+  locationId: varchar("location_id").references(() => posLocations.id, { onDelete: "set null" }),
+  cashierId: varchar("cashier_id"),
+  cashierName: text("cashier_name").notNull(),
+  refundMethod: text("refund_method").notNull().default("cash"), // cash | card | store_credit | exchange
+  refundTotal: numeric("refund_total", { precision: 12, scale: 2 }).notNull(),
+  notes: text("notes"),
+  status: text("status").notNull().default("completed"), // completed | pending | voided
+  syncedAt: timestamp("synced_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posReturnOrderLines = pgTable("pos_return_order_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  returnOrderId: varchar("return_order_id").notNull().references(() => posReturnOrders.id, { onDelete: "cascade" }),
+  originalOrderId: varchar("original_order_id"),
+  originalLineId: varchar("original_line_id"),
+  productId: varchar("product_id"),
+  description: text("description").notNull(),
+  qty: numeric("qty", { precision: 10, scale: 3 }).notNull(),
+  unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+  lineTotal: numeric("line_total", { precision: 12, scale: 2 }).notNull(),
+  restocked: boolean("restocked").notNull().default(true),
+});
+
+// Insert schemas for Phase 3
+export const insertPosPromotionSchema = createInsertSchema(posPromotions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPosPromotion = z.infer<typeof insertPosPromotionSchema>;
+export type PosPromotion = typeof posPromotions.$inferSelect;
+
+export const insertPosContainerDepositSchema = createInsertSchema(posContainerDeposits).omit({ id: true, createdAt: true });
+export type InsertPosContainerDeposit = z.infer<typeof insertPosContainerDepositSchema>;
+export type PosContainerDeposit = typeof posContainerDeposits.$inferSelect;
+
+export const insertPosReturnOrderSchema = createInsertSchema(posReturnOrders).omit({ id: true, createdAt: true, syncedAt: true });
+export type InsertPosReturnOrder = z.infer<typeof insertPosReturnOrderSchema>;
+export type PosReturnOrder = typeof posReturnOrders.$inferSelect;
+
+export const insertPosReturnOrderLineSchema = createInsertSchema(posReturnOrderLines).omit({ id: true });
+export type InsertPosReturnOrderLine = z.infer<typeof insertPosReturnOrderLineSchema>;
+export type PosReturnOrderLine = typeof posReturnOrderLines.$inferSelect;

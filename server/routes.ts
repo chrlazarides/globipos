@@ -1,14 +1,14 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail } from "./email";
 import { db } from "./db";
-import { sql, and, eq, gte, lte, desc } from "drizzle-orm";
+import { sql, and, or, eq, gte, lte, gt, desc, isNull, ilike } from "drizzle-orm";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -6428,6 +6428,308 @@ export async function registerRoutes(
       const { outboxQueueSize = 0 } = req.body;
       await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), outboxQueueSize });
       res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── POS Phase 3: Promotions ────────────────────────────────────────────────
+
+  app.get("/api/pos/promotions", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posPromotions)
+        .orderBy(desc(posPromotions.priority), desc(posPromotions.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/promotions/:id", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posPromotions)
+        .where(eq(posPromotions.id, req.params.id));
+      if (rows.length === 0) return res.status(404).json({ message: "Not found" });
+      res.json(rows[0]);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/promotions", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body;
+      const [row] = await db.insert(posPromotions).values({
+        name: body.name,
+        type: body.type ?? "buy_n_get_m",
+        locationId: body.locationId ?? null,
+        productIds: body.productIds ?? [],
+        categoryIds: body.categoryIds ?? [],
+        thresholdQty: body.thresholdQty ?? 1,
+        getQty: body.getQty ?? 0,
+        thresholdPrice: body.thresholdPrice ?? "0",
+        bundlePrice: body.bundlePrice ?? "0",
+        discountPct: body.discountPct ?? "0",
+        discountFixed: body.discountFixed ?? "0",
+        couponCode: body.couponCode ?? null,
+        priority: body.priority ?? 0,
+        stackable: body.stackable ?? false,
+        validFrom: body.validFrom ? new Date(body.validFrom) : null,
+        validUntil: body.validUntil ? new Date(body.validUntil) : null,
+        active: body.active ?? true,
+      }).returning();
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.put("/api/pos/promotions/:id", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body;
+      const [row] = await db.update(posPromotions)
+        .set({
+          name: body.name,
+          type: body.type,
+          productIds: body.productIds,
+          categoryIds: body.categoryIds,
+          thresholdQty: body.thresholdQty,
+          getQty: body.getQty,
+          thresholdPrice: body.thresholdPrice,
+          bundlePrice: body.bundlePrice,
+          discountPct: body.discountPct,
+          discountFixed: body.discountFixed,
+          couponCode: body.couponCode,
+          priority: body.priority,
+          stackable: body.stackable,
+          validFrom: body.validFrom ? new Date(body.validFrom) : null,
+          validUntil: body.validUntil ? new Date(body.validUntil) : null,
+          active: body.active,
+          updatedAt: new Date(),
+        })
+        .where(eq(posPromotions.id, req.params.id))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Not found" });
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/pos/promotions/:id", requireAdmin, async (req, res) => {
+    try {
+      await db.delete(posPromotions).where(eq(posPromotions.id, req.params.id));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Terminal sync endpoint: returns active promotions for a terminal/location
+  app.get("/api/pos/sync/promotions", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const now = new Date();
+      const rows = await db.select().from(posPromotions)
+        .where(
+          and(
+            eq(posPromotions.active, true),
+            or(
+              isNull(posPromotions.locationId),
+              eq(posPromotions.locationId, terminal.locationId)
+            ),
+            or(isNull(posPromotions.validUntil), gt(posPromotions.validUntil, now)),
+          )
+        )
+        .orderBy(desc(posPromotions.priority));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Coupon validation endpoint for terminals
+  app.post("/api/pos/validate-coupon", requireTerminal, async (req, res) => {
+    try {
+      const { code } = req.body;
+      if (!code) return res.status(400).json({ valid: false, message: "Code required" });
+      const now = new Date();
+      const rows = await db.select().from(posPromotions)
+        .where(
+          and(
+            eq(posPromotions.type, "coupon"),
+            eq(posPromotions.active, true),
+            ilike(posPromotions.couponCode, code),
+            or(isNull(posPromotions.validUntil), gt(posPromotions.validUntil, now)),
+          )
+        )
+        .limit(1);
+      if (rows.length === 0) {
+        return res.json({ valid: false, message: "Invalid or expired coupon" });
+      }
+      res.json({ valid: true, promo: rows[0], message: `Applied: ${rows[0].name}` });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── POS Phase 3: Container Deposits ────────────────────────────────────────
+
+  app.get("/api/pos/container-deposits", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posContainerDeposits)
+        .orderBy(posContainerDeposits.name);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/container-deposits", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body;
+      const [row] = await db.insert(posContainerDeposits).values({
+        name: body.name,
+        depositAmount: body.depositAmount,
+        productIds: body.productIds ?? [],
+        categoryIds: body.categoryIds ?? [],
+        depositSku: body.depositSku ?? "DEPOSIT",
+        active: body.active ?? true,
+      }).returning();
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.put("/api/pos/container-deposits/:id", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body;
+      const [row] = await db.update(posContainerDeposits)
+        .set({
+          name: body.name,
+          depositAmount: body.depositAmount,
+          productIds: body.productIds,
+          categoryIds: body.categoryIds,
+          depositSku: body.depositSku,
+          active: body.active,
+        })
+        .where(eq(posContainerDeposits.id, req.params.id))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Not found" });
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/pos/container-deposits/:id", requireAdmin, async (req, res) => {
+    try {
+      await db.delete(posContainerDeposits).where(eq(posContainerDeposits.id, req.params.id));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/sync/container-deposits", requireTerminal, async (req, res) => {
+    try {
+      const rows = await db.select().from(posContainerDeposits)
+        .where(eq(posContainerDeposits.active, true));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── POS Phase 3: Return Orders ─────────────────────────────────────────────
+
+  app.get("/api/pos/returns", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posReturnOrders)
+        .orderBy(desc(posReturnOrders.createdAt))
+        .limit(200);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/returns/:id", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posReturnOrders)
+        .where(eq(posReturnOrders.id, req.params.id));
+      if (rows.length === 0) return res.status(404).json({ message: "Not found" });
+      const lines = await db.select().from(posReturnOrderLines)
+        .where(eq(posReturnOrderLines.returnOrderId, req.params.id));
+      res.json({ ...rows[0], lines });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/returns", requireTerminal, async (req, res) => {
+    try {
+      const { returnOrder, lines } = req.body;
+      if (!returnOrder || !lines) return res.status(400).json({ message: "returnOrder and lines required" });
+      const [saved] = await db.insert(posReturnOrders).values({
+        originalOrderId: returnOrder.originalOrderId ?? null,
+        originalOrderNumber: returnOrder.originalOrderNumber ?? null,
+        terminalId: returnOrder.terminalId ?? null,
+        locationId: returnOrder.locationId ?? null,
+        cashierId: returnOrder.cashierId ?? null,
+        cashierName: returnOrder.cashierName,
+        refundMethod: returnOrder.refundMethod ?? "cash",
+        refundTotal: returnOrder.refundTotal,
+        notes: returnOrder.notes ?? null,
+        status: "completed",
+        syncedAt: new Date(),
+      }).returning();
+      if (lines.length > 0) {
+        await db.insert(posReturnOrderLines).values(
+          lines.map((l: any) => ({
+            returnOrderId: saved.id,
+            originalOrderId: l.originalOrderId ?? null,
+            originalLineId: l.originalLineId ?? null,
+            productId: l.productId ?? null,
+            description: l.description,
+            qty: l.qty,
+            unitPrice: l.unitPrice,
+            lineTotal: l.lineTotal,
+            restocked: l.restocked ?? true,
+          }))
+        );
+      }
+      res.json(saved);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── POS Phase 3: Shifts admin view ─────────────────────────────────────────
+
+  app.get("/api/pos/shifts", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posShifts)
+        .orderBy(desc(posShifts.createdAt))
+        .limit(100);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/shifts/:id", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posShifts)
+        .where(eq(posShifts.id, req.params.id));
+      if (rows.length === 0) return res.status(404).json({ message: "Not found" });
+      res.json(rows[0]);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Enhanced catalog sync — returns products + promotions + deposits in one call
+  app.get("/api/pos/sync/catalog-v2", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const since = req.query.since as string | undefined;
+
+      // Products (same as existing catalog sync but with Phase 3 fields)
+      let productsQuery = db.select().from(items)
+        .where(eq(items.active, true));
+      if (since) {
+        productsQuery = (productsQuery as any).where(gt(items.updatedAt, new Date(since)));
+      }
+      const products = await productsQuery;
+
+      // Active promotions for this location
+      const now = new Date();
+      const promotions = await db.select().from(posPromotions)
+        .where(
+          and(
+            eq(posPromotions.active, true),
+            or(isNull(posPromotions.locationId), eq(posPromotions.locationId, terminal.locationId)),
+            or(isNull(posPromotions.validUntil), gt(posPromotions.validUntil, now)),
+          )
+        )
+        .orderBy(desc(posPromotions.priority));
+
+      // Active deposits
+      const deposits = await db.select().from(posContainerDeposits)
+        .where(eq(posContainerDeposits.active, true));
+
+      res.json({
+        products,
+        promotions,
+        deposits,
+        syncedAt: now.toISOString(),
+      });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
