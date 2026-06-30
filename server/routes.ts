@@ -1,7 +1,8 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries } from "@shared/schema";
+import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -7384,6 +7385,290 @@ export async function registerRoutes(
     sendOverduePushReminders();
     setInterval(sendOverduePushReminders, 24 * 60 * 60 * 1000);
   }, 30 * 1000);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 5: WhatsApp Chatbot & Voice Ordering
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ── FAQ CRUD ──────────────────────────────────────────────────────────────
+  app.get("/api/faq", async (_req, res) => {
+    const faqs = await db.select().from(faqEntries).orderBy(faqEntries.sortOrder, faqEntries.createdAt);
+    res.json(faqs);
+  });
+
+  app.post("/api/faq", requireAdmin, async (req, res) => {
+    const { question, answer, keywords, sortOrder, active } = req.body;
+    if (!question || !answer) return res.status(400).json({ error: "question and answer required" });
+    const [entry] = await db.insert(faqEntries).values({
+      question, answer,
+      keywords: Array.isArray(keywords) ? keywords : [],
+      sortOrder: sortOrder ?? 0,
+      active: active !== false,
+    }).returning();
+    res.json(entry);
+  });
+
+  app.put("/api/faq/:id", requireAdmin, async (req, res) => {
+    const { question, answer, keywords, sortOrder, active } = req.body;
+    const updates: Record<string, any> = {};
+    if (question !== undefined) updates.question = question;
+    if (answer !== undefined) updates.answer = answer;
+    if (keywords !== undefined) updates.keywords = Array.isArray(keywords) ? keywords : [];
+    if (sortOrder !== undefined) updates.sortOrder = sortOrder;
+    if (active !== undefined) updates.active = active;
+    const [entry] = await db.update(faqEntries).set(updates).where(eq(faqEntries.id, req.params.id)).returning();
+    if (!entry) return res.status(404).json({ error: "Not found" });
+    res.json(entry);
+  });
+
+  app.delete("/api/faq/:id", requireAdmin, async (req, res) => {
+    await db.delete(faqEntries).where(eq(faqEntries.id, req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ── Chat conversations (admin panel) ─────────────────────────────────────
+  app.get("/api/chat/conversations", requireAdmin, async (_req, res) => {
+    const convs = await db
+      .select({
+        id: chatConversations.id,
+        customerId: chatConversations.customerId,
+        customerName: customers.name,
+        channel: chatConversations.channel,
+        waPhoneNumber: chatConversations.waPhoneNumber,
+        status: chatConversations.status,
+        handoffStaffId: chatConversations.handoffStaffId,
+        lastMessageAt: chatConversations.lastMessageAt,
+        createdAt: chatConversations.createdAt,
+      })
+      .from(chatConversations)
+      .leftJoin(customers, eq(customers.id, chatConversations.customerId))
+      .orderBy(desc(chatConversations.lastMessageAt));
+    res.json(convs.map(c => ({ ...c, unreadCount: 0 })));
+  });
+
+  app.get("/api/chat/conversations/:id/messages", requireAdmin, async (req, res) => {
+    const msgs = await db
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.conversationId, req.params.id))
+      .orderBy(chatMessages.createdAt);
+    res.json(msgs);
+  });
+
+  app.post("/api/chat/conversations/:id/messages", requireAdmin, async (req, res) => {
+    const { message } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: "message required" });
+    const userId = (req as any).user?.id || null;
+    const [msg] = await db.insert(chatMessages).values({
+      conversationId: req.params.id,
+      role: "staff",
+      content: message.trim(),
+      channel: "portal",
+    }).returning();
+    await db.update(chatConversations)
+      .set({ lastMessageAt: new Date(), handoffStaffId: userId })
+      .where(eq(chatConversations.id, req.params.id));
+    // If WhatsApp, relay message
+    const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, req.params.id));
+    if (conv?.channel === "whatsapp" && conv.waPhoneNumber) {
+      await sendWhatsAppMessage(conv.waPhoneNumber, message.trim());
+    }
+    res.json(msg);
+  });
+
+  app.post("/api/chat/conversations/:id/handoff", requireAdmin, async (req, res) => {
+    const userId = (req as any).user?.id || null;
+    const [conv] = await db.update(chatConversations)
+      .set({ status: "handoff", handoffStaffId: userId, handoffAt: new Date() })
+      .where(eq(chatConversations.id, req.params.id))
+      .returning();
+    res.json(conv);
+  });
+
+  app.post("/api/chat/conversations/:id/release", requireAdmin, async (req, res) => {
+    const [conv] = await db.update(chatConversations)
+      .set({ status: "active", handoffStaffId: null })
+      .where(eq(chatConversations.id, req.params.id))
+      .returning();
+    res.json(conv);
+  });
+
+  // ── Customer chat history (per customer ID) ───────────────────────────────
+  app.get("/api/customers/:id/chat-history", requireAdmin, async (req, res) => {
+    const convs = await db
+      .select()
+      .from(chatConversations)
+      .where(eq(chatConversations.customerId, req.params.id))
+      .orderBy(desc(chatConversations.lastMessageAt));
+    res.json(convs);
+  });
+
+  // ── Portal chatbot: create/get active conversation ────────────────────────
+  app.post("/api/portal/chat/conversation", async (req, res) => {
+    const { customerId, channel } = req.body;
+    if (!customerId) return res.status(400).json({ error: "customerId required" });
+    // Reuse existing active portal conversation if present
+    const [existing] = await db
+      .select()
+      .from(chatConversations)
+      .where(and(
+        eq(chatConversations.customerId, customerId),
+        eq(chatConversations.channel, channel || "portal"),
+        eq(chatConversations.status, "active"),
+      ))
+      .orderBy(desc(chatConversations.createdAt))
+      .limit(1);
+    if (existing) return res.json(existing);
+    const [conv] = await db.insert(chatConversations).values({
+      customerId,
+      channel: channel || "portal",
+      status: "active",
+    }).returning();
+    res.json(conv);
+  });
+
+  app.get("/api/portal/chat/conversation/:id/status", async (req, res) => {
+    const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, req.params.id));
+    if (!conv) return res.status(404).json({ error: "Not found" });
+    res.json({ status: conv.status, handoffStaffId: conv.handoffStaffId });
+  });
+
+  app.post("/api/portal/chat/conversation/:id/request-handoff", async (req, res) => {
+    const [conv] = await db.update(chatConversations)
+      .set({ status: "handoff", handoffAt: new Date() })
+      .where(eq(chatConversations.id, req.params.id))
+      .returning();
+    res.json(conv);
+  });
+
+  // ── Portal chatbot: persist message pair ─────────────────────────────────
+  app.post("/api/portal/chat/message", async (req, res) => {
+    const { conversationId, userMessage, botReply, intent } = req.body;
+    if (!conversationId || !userMessage) return res.status(400).json({ error: "conversationId and userMessage required" });
+    const inserts: any[] = [
+      { conversationId, role: "user", content: userMessage, channel: "portal", intent: intent || null },
+    ];
+    if (botReply) {
+      inserts.push({ conversationId, role: "bot", content: botReply, channel: "portal", intent: intent || null });
+    }
+    await db.insert(chatMessages).values(inserts);
+    await db.update(chatConversations).set({ lastMessageAt: new Date() }).where(eq(chatConversations.id, conversationId));
+    res.json({ ok: true });
+  });
+
+  // ── Portal audio transcription (Whisper via AI integration) ──────────────
+  const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+  app.post("/api/portal/transcribe", audioUpload.single("audio"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "audio file required" });
+    try {
+      const text = await transcribeAudio(req.file.buffer, req.file.mimetype || "audio/webm");
+      res.json({ text });
+    } catch (e: any) {
+      res.status(503).json({ error: e.message || "transcription failed" });
+    }
+  });
+
+  // ── WhatsApp webhook: verify ───────────────────────────────────────────────
+  app.get("/api/webhooks/whatsapp", (req, res) => {
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+    const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN || "globipos_whatsapp";
+    if (mode === "subscribe" && token === verifyToken) {
+      console.log("[WhatsApp] Webhook verified");
+      return res.status(200).send(challenge);
+    }
+    res.sendStatus(403);
+  });
+
+  // ── WhatsApp webhook: receive message ────────────────────────────────────
+  app.post("/api/webhooks/whatsapp", async (req, res) => {
+    res.sendStatus(200); // Always respond quickly
+    try {
+      const body = req.body;
+      const entry = body?.entry?.[0];
+      const change = entry?.changes?.[0];
+      const msg = change?.value?.messages?.[0];
+      if (!msg || msg.type !== "text") return;
+
+      const from = msg.from; // e164 phone number
+      const text = msg.text?.body || "";
+      if (!text) return;
+
+      // Find or create conversation for this WA number
+      let [conv] = await db
+        .select()
+        .from(chatConversations)
+        .where(and(
+          eq(chatConversations.waPhoneNumber, from),
+          eq(chatConversations.channel, "whatsapp"),
+          eq(chatConversations.status, "active"),
+        ))
+        .limit(1);
+
+      if (!conv) {
+        // Try to match customer by phone
+        const [matchedCustomer] = await db.select().from(customers).where(eq(customers.phone, from));
+        const [newConv] = await db.insert(chatConversations).values({
+          customerId: matchedCustomer?.id || "unknown",
+          channel: "whatsapp",
+          waPhoneNumber: from,
+          status: "active",
+        }).returning();
+        conv = newConv;
+      }
+
+      // Save user message
+      await db.insert(chatMessages).values({ conversationId: conv.id, role: "user", content: text, channel: "whatsapp" });
+      await db.update(chatConversations).set({ lastMessageAt: new Date() }).where(eq(chatConversations.id, conv.id));
+
+      // If in handoff, don't auto-reply
+      if (conv.status === "handoff") return;
+
+      // Check FAQs
+      const activeFaqs = await db.select().from(faqEntries).where(eq(faqEntries.active, true));
+      const faqAnswer = matchFaq(text, activeFaqs);
+
+      let reply: string;
+      let intent = "unknown";
+
+      if (faqAnswer) {
+        reply = faqAnswer;
+        intent = "faq";
+      } else {
+        // Parse intent
+        const catalog = await db.select({ name: items.name }).from(items).where(eq(items.active, true)).limit(20);
+        const catalogStr = catalog.map(i => i.name).join(", ");
+        const faqStr = activeFaqs.slice(0, 5).map(f => f.question).join("; ");
+        const parsed = await parseIntentAI(text, catalogStr, faqStr);
+        intent = parsed.intent;
+
+        if (parsed.intent === "handoff") {
+          await db.update(chatConversations).set({ status: "handoff", handoffAt: new Date() }).where(eq(chatConversations.id, conv.id));
+          reply = "I've notified our team. A staff member will reply to you shortly.";
+        } else if (parsed.intent === "browse" || parsed.intent === "search") {
+          const matches = await db.select().from(items)
+            .where(and(eq(items.active, true), ilike(items.name, `%${parsed.query?.split(" ")[0] || ""}%`)))
+            .limit(5);
+          if (matches.length > 0) {
+            reply = `Here are some products:\n` + matches.map((i, idx) => `${idx + 1}. ${i.name}`).join("\n") + "\n\nReply with the number to order, or visit our portal to place your order.";
+          } else {
+            reply = "I couldn't find that product. Please visit our portal to browse the full catalog, or reply 'agent' to speak with someone.";
+          }
+        } else if (parsed.intent === "faq") {
+          reply = "For store information, opening hours and delivery queries, please reply 'agent' to speak with our team.";
+        } else {
+          reply = "Thanks for your message! You can:\n• Browse our catalog at the customer portal\n• Reply 'agent' to speak with a team member\n• Ask me about our products";
+        }
+      }
+
+      // Save bot reply and send
+      await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: reply, channel: "whatsapp", intent });
+      await sendWhatsAppMessage(from, reply);
+    } catch (e) {
+      console.error("[WhatsApp webhook] error:", e);
+    }
+  });
 
   return httpServer;
 }

@@ -2,3 +2,4 @@
 - [Tauri 2.0 async state init](tauri-async-state.md) — block_on in setup() hook for async DB init; std::sync::Mutex locks must drop before any .await
 - [Customer PWA Phase 4 arch](customer-pwa-arch.md) — JWT Bearer auth, customer-app/ standalone Vite project, portal vs customer-app auth split
 - [Loyalty points system](loyalty-points.md) — 1 pt per €1 subtotal, awarded on both portal orders and /api/customer/orders, tiers Bronze/Silver/Gold
+- [Phase 5 chat auth pattern](phase5-chat.md) — auth middleware is requireAdmin (not requireAuth); FAQ GET is public; req.user typed directly on Request; portal chat routes use no middleware

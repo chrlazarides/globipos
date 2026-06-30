@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Users, Upload, Printer, TrendingUp, FileText, AlertTriangle, Euro, BarChart3, MapPin, Pencil, Trash2, Star, ExternalLink } from "lucide-react";
+import { Plus, Search, Users, Upload, Printer, TrendingUp, FileText, AlertTriangle, Euro, BarChart3, MapPin, Pencil, Trash2, Star, ExternalLink, MessageCircle, Bot, User as UserIcon, Phone } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertCustomerSchema, type Customer, type CustomerDeliveryLocation } from "@shared/schema";
@@ -380,6 +380,9 @@ function CustomerProfileDialog({
             <TabsTrigger value="locations" data-testid="tab-customer-locations">
               <MapPin className="w-3.5 h-3.5 mr-1.5" />Locations
             </TabsTrigger>
+            <TabsTrigger value="chat" data-testid="tab-customer-chat">
+              <MessageCircle className="w-3.5 h-3.5 mr-1.5" />Chat History
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="performance" className="space-y-4">
@@ -488,6 +491,10 @@ function CustomerProfileDialog({
 
           <TabsContent value="locations">
             <CustomerLocationsTab customerId={customer.id} open={open} />
+          </TabsContent>
+
+          <TabsContent value="chat">
+            <CustomerChatHistoryTab customerId={customer.id} open={open} />
           </TabsContent>
         </Tabs>
       </DialogContent>
@@ -833,6 +840,122 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: {
         </div>
       </form>
     </Form>
+  );
+}
+
+interface ChatConvEntry {
+  id: string;
+  channel: string;
+  status: string;
+  waPhoneNumber: string | null;
+  lastMessageAt: string;
+  createdAt: string;
+}
+
+interface ChatMsgEntry {
+  id: string;
+  role: string;
+  content: string;
+  intent: string | null;
+  createdAt: string;
+}
+
+function CustomerChatHistoryTab({ customerId, open }: { customerId: string; open: boolean }) {
+  const [selectedConvId, setSelectedConvId] = useState<string | null>(null);
+
+  const { data: conversations = [], isLoading: convLoading } = useQuery<ChatConvEntry[]>({
+    queryKey: ["/api/customers", customerId, "chat-history"],
+    queryFn: () => fetch(`/api/customers/${customerId}/chat-history`, { credentials: "include" }).then(r => r.json()),
+    enabled: open,
+  });
+
+  const { data: messages = [], isLoading: msgLoading } = useQuery<ChatMsgEntry[]>({
+    queryKey: ["/api/chat/conversations", selectedConvId, "messages"],
+    queryFn: () => fetch(`/api/chat/conversations/${selectedConvId}/messages`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!selectedConvId,
+  });
+
+  if (convLoading) return <Skeleton className="h-40 w-full" />;
+
+  if (conversations.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
+        <MessageCircle className="w-8 h-8 opacity-30" />
+        <p className="text-sm">No chat conversations yet for this customer.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {!selectedConvId ? (
+        conversations.map((conv) => (
+          <button
+            key={conv.id}
+            className="w-full text-left rounded-lg border p-3 hover:bg-muted/50 transition-colors"
+            onClick={() => setSelectedConvId(conv.id)}
+            data-testid={`button-chat-conv-${conv.id}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {conv.channel === "whatsapp"
+                  ? <Phone className="w-3.5 h-3.5 text-green-500" />
+                  : <MessageCircle className="w-3.5 h-3.5 text-blue-500" />}
+                <span className="text-sm font-medium capitalize">{conv.channel}</span>
+                {conv.waPhoneNumber && <span className="text-xs text-muted-foreground">{conv.waPhoneNumber}</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant={conv.status === "handoff" ? "destructive" : conv.status === "active" ? "secondary" : "outline"} className="text-xs capitalize">
+                  {conv.status}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {new Date(conv.lastMessageAt).toLocaleDateString("en-GB")}
+                </span>
+              </div>
+            </div>
+          </button>
+        ))
+      ) : (
+        <div className="space-y-3">
+          <Button variant="ghost" size="sm" onClick={() => setSelectedConvId(null)} data-testid="button-back-convs">
+            ← Back to conversations
+          </Button>
+          {msgLoading ? (
+            <Skeleton className="h-40 w-full" />
+          ) : messages.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">No messages in this conversation.</p>
+          ) : (
+            <div className="space-y-2 max-h-72 overflow-y-auto">
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex gap-2 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                  data-testid={`chat-history-msg-${msg.id}`}
+                >
+                  {msg.role !== "user" && (
+                    <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
+                      {msg.role === "staff"
+                        ? <UserIcon className="w-3 h-3 text-blue-500" />
+                        : <Bot className="w-3 h-3 text-muted-foreground" />}
+                    </div>
+                  )}
+                  <div className={`max-w-[75%] rounded-lg px-3 py-2 text-xs ${
+                    msg.role === "user" ? "bg-primary text-primary-foreground" :
+                    msg.role === "staff" ? "bg-blue-100 dark:bg-blue-900/30 text-blue-900 dark:text-blue-100" : "bg-muted"
+                  }`}>
+                    <p className="whitespace-pre-line">{msg.content}</p>
+                    <p className="opacity-60 mt-0.5">
+                      {new Date(msg.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+                      {msg.intent && ` · ${msg.intent}`}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

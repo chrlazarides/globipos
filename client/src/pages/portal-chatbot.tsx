@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Send, Bot, User, ShoppingCart, Package, ArrowRight } from "lucide-react";
+import { Send, Bot, User, ShoppingCart, ArrowRight, Mic, MicOff, PhoneCall, PhoneOff } from "lucide-react";
 import type { Customer, Item, Category } from "@shared/schema";
 
 interface PortalChatbotProps {
@@ -27,7 +27,14 @@ interface ChatMessage {
   cart?: CartItem[];
 }
 
-type BotState = "greeting" | "main_menu" | "browse_categories" | "browse_items" | "item_detail" | "cart_review" | "confirm_order" | "order_complete";
+type BotState = "greeting" | "main_menu" | "browse_categories" | "browse_items" | "item_detail" | "cart_review" | "confirm_order" | "order_complete" | "handoff";
+
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
 
 export default function PortalChatbot({ customer }: PortalChatbotProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -36,6 +43,16 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
   const [botState, setBotState] = useState<BotState>("greeting");
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [isHandoff, setIsHandoff] = useState(false);
+
+  // Voice state
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceMode, setVoiceMode] = useState<"speech" | "recorder" | "none">("none");
+  const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -57,6 +74,47 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // ── Init voice detection ─────────────────────────────────────────────────
+  useEffect(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      setVoiceMode("speech");
+    } else if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")) {
+      setVoiceMode("recorder");
+    }
+  }, []);
+
+  // ── Ensure conversation exists ────────────────────────────────────────────
+  const ensureConversation = useCallback(async (): Promise<string> => {
+    if (conversationId) return conversationId;
+    try {
+      const res = await apiRequest("POST", "/api/portal/chat/conversation", {
+        customerId: customer.id,
+        channel: "portal",
+      });
+      const data = await res.json();
+      setConversationId(data.id);
+      return data.id;
+    } catch {
+      return "";
+    }
+  }, [conversationId, customer.id]);
+
+  // ── Persist a message pair (fire-and-forget) ──────────────────────────────
+  const persistMessages = useCallback(async (userText: string, botText: string, intent?: string) => {
+    try {
+      const cid = await ensureConversation();
+      if (!cid) return;
+      await apiRequest("POST", "/api/portal/chat/message", {
+        conversationId: cid,
+        userMessage: userText,
+        botReply: botText,
+        intent: intent || "unknown",
+      });
+    } catch { /* non-fatal */ }
+  }, [ensureConversation]);
+
+  // ── Greeting on catalog load ──────────────────────────────────────────────
   useEffect(() => {
     if (catalog && messages.length === 0) {
       addBotMessage(
@@ -72,6 +130,30 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
     }
   }, [catalog]);
 
+  // ── Poll for handoff status ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!conversationId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/portal/chat/conversation/${conversationId}/status`, { credentials: "include" });
+        const data = await res.json();
+        if (data.status === "handoff" && !isHandoff) {
+          setIsHandoff(true);
+          setBotState("handoff");
+          addBotMessage("A member of our team has joined this chat. You are now connected to a live agent.", []);
+        } else if (data.status === "active" && isHandoff) {
+          setIsHandoff(false);
+          setBotState("main_menu");
+          addBotMessage("The agent has left. I'm back to assist you!", [
+            { label: "Browse by category", value: "browse" },
+            { label: "Search for a product", value: "search" },
+          ]);
+        }
+      } catch { /* non-fatal */ }
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [conversationId, isHandoff]);
+
   const addBotMessage = (text: string, options?: { label: string; value: string }[], items?: Item[], cartItems?: CartItem[]) => {
     setMessages((prev) => [...prev, { role: "bot", text, options, items, cart: cartItems }]);
   };
@@ -80,37 +162,105 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
     setMessages((prev) => [...prev, { role: "user", text }]);
   };
 
+  // ── Voice input: SpeechRecognition ────────────────────────────────────────
+  const startSpeechRecognition = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.lang = "en-US";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onresult = (e: any) => {
+      const transcript = e.results[0][0].transcript;
+      setInput(transcript);
+      setIsRecording(false);
+    };
+    rec.onerror = () => setIsRecording(false);
+    rec.onend = () => setIsRecording(false);
+    recognitionRef.current = rec;
+    rec.start();
+    setIsRecording(true);
+  };
+
+  const stopSpeechRecognition = () => {
+    recognitionRef.current?.stop();
+    setIsRecording(false);
+  };
+
+  // ── Voice input: MediaRecorder → Whisper ─────────────────────────────────
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => audioChunksRef.current.push(e.data);
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const formData = new FormData();
+        formData.append("audio", blob, "recording.webm");
+        try {
+          const res = await fetch("/api/portal/transcribe", { method: "POST", body: formData, credentials: "include" });
+          const data = await res.json();
+          if (data.text) setInput(data.text);
+        } catch {
+          toast({ title: "Voice transcription failed", variant: "destructive" });
+        }
+        setIsRecording(false);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+    } catch {
+      toast({ title: "Microphone access denied", variant: "destructive" });
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+  };
+
+  const handleVoiceToggle = () => {
+    if (isRecording) {
+      if (voiceMode === "speech") stopSpeechRecognition();
+      else stopRecording();
+    } else {
+      if (voiceMode === "speech") startSpeechRecognition();
+      else startRecording();
+    }
+  };
+
+  // ── Request human handoff ─────────────────────────────────────────────────
+  const requestHandoff = async () => {
+    addUserMessage("I'd like to speak to an agent");
+    const botText = "I've alerted our team. An agent will join this conversation shortly. Your chat history is visible to them.";
+    addBotMessage(botText, []);
+    setBotState("handoff");
+    setIsHandoff(true);
+    try {
+      const cid = await ensureConversation();
+      if (cid) {
+        await apiRequest("POST", `/api/portal/chat/conversation/${cid}/request-handoff`);
+      }
+    } catch { /* non-fatal */ }
+  };
+
+  // ── Handle option buttons ─────────────────────────────────────────────────
   const handleOption = (value: string) => {
     switch (botState) {
-      case "main_menu":
-        handleMainMenu(value);
-        break;
-      case "browse_categories":
-        handleCategorySelect(value);
-        break;
-      case "browse_items":
-        handleItemAction(value);
-        break;
-      case "item_detail":
-        handleItemAction(value);
-        break;
-      case "cart_review":
-        handleCartAction(value);
-        break;
-      case "confirm_order":
-        handleConfirmOrder(value);
-        break;
-      case "order_complete":
-        handleMainMenu(value);
-        break;
-      default:
-        handleMainMenu(value);
+      case "main_menu": handleMainMenu(value); break;
+      case "browse_categories": handleCategorySelect(value); break;
+      case "browse_items": handleItemAction(value); break;
+      case "item_detail": handleItemAction(value); break;
+      case "cart_review": handleCartAction(value); break;
+      case "confirm_order": handleConfirmOrder(value); break;
+      case "order_complete": handleMainMenu(value); break;
+      default: handleMainMenu(value);
     }
   };
 
   const handleMainMenu = (value: string) => {
     addUserMessage(value === "browse" ? "Browse by category" : value === "search" ? "Search for a product" : value === "cart" ? "View my cart" : "Quick reorder");
-
     if (value === "browse") {
       const catOptions = categories.map((c) => ({ label: c.name, value: c.id }));
       catOptions.push({ label: "Show all products", value: "all" });
@@ -131,9 +281,7 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
     const cat = categories.find((c) => c.id === categoryId);
     addUserMessage(categoryId === "all" ? "Show all products" : cat?.name || categoryId);
     setSelectedCategory(categoryId);
-
     const filtered = categoryId === "all" ? allItems : allItems.filter((i) => i.categoryId === categoryId);
-
     if (filtered.length === 0) {
       addBotMessage("No products found in this category. Want to try something else?", [
         { label: "Browse other categories", value: "browse" },
@@ -157,7 +305,6 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
       setBotState("main_menu");
       return;
     }
-
     if (value.startsWith("add:")) {
       const itemId = value.replace("add:", "");
       const item = allItems.find((i) => i.id === itemId);
@@ -165,9 +312,7 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
         addUserMessage(`Add ${item.name}`);
         setCart((prev) => {
           const existing = prev.find((ci) => ci.item.id === item.id);
-          if (existing) {
-            return prev.map((ci) => ci.item.id === item.id ? { ...ci, quantity: ci.quantity + 1 } : ci);
-          }
+          if (existing) return prev.map((ci) => ci.item.id === item.id ? { ...ci, quantity: ci.quantity + 1 } : ci);
           return [...prev, { item, quantity: 1 }];
         });
         const currentQty = (cart.find((ci) => ci.item.id === item.id)?.quantity || 0) + 1;
@@ -179,17 +324,12 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
             { label: "View cart & checkout", value: "cart" },
           ]
         );
+        persistMessages(`Add ${item.name}`, `Added ${item.name} to cart.`, "add_item");
         setBotState("browse_items");
       }
       return;
     }
-
-    if (value === "cart") {
-      addUserMessage("View my cart");
-      showCart();
-      return;
-    }
-
+    if (value === "cart") { addUserMessage("View my cart"); showCart(); return; }
     handleCategorySelect(value);
   };
 
@@ -204,13 +344,9 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
       const subtotal = cart.reduce((s, ci) => s + getPrice(ci.item) * ci.quantity, 0);
       const vat = subtotal * 0.19;
       const total = subtotal + vat;
-
       let cartSummary = "Here's your cart:\n\n";
-      cart.forEach((ci) => {
-        cartSummary += `${ci.quantity}x ${ci.item.name} - ${fmt(getPrice(ci.item) * ci.quantity)}\n`;
-      });
+      cart.forEach((ci) => { cartSummary += `${ci.quantity}x ${ci.item.name} - ${fmt(getPrice(ci.item) * ci.quantity)}\n`; });
       cartSummary += `\nSubtotal: ${fmt(subtotal)}\nVAT (19%): ${fmt(vat)}\nTotal: ${fmt(total)}`;
-
       addBotMessage(cartSummary, [
         { label: "Place order", value: "place_order" },
         { label: "Continue shopping", value: "browse" },
@@ -259,10 +395,12 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
         setCart([]);
         queryClient.invalidateQueries({ queryKey: ["/api/portal/customer", customer.id, "orders"] });
         queryClient.invalidateQueries({ queryKey: ["/api/portal/catalog"] });
-        addBotMessage("Your order has been placed successfully! We'll process it shortly.", [
+        const botText = "Your order has been placed successfully! We'll process it shortly.";
+        addBotMessage(botText, [
           { label: "Place another order", value: "browse" },
           { label: "Back to menu", value: "menu" },
         ]);
+        persistMessages("Yes, place my order", botText, "checkout");
         setBotState("order_complete");
         toast({ title: "Order placed", description: "Your order has been submitted." });
       } catch (err: any) {
@@ -290,18 +428,29 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
     setInput("");
     addUserMessage(query);
 
+    // Handoff keywords
+    const handoffKw = ["agent", "human", "person", "speak to someone", "real person", "support"];
+    if (handoffKw.some((k) => query.toLowerCase().includes(k))) {
+      requestHandoff();
+      return;
+    }
+
     const results = allItems.filter(
       (i) => i.name.toLowerCase().includes(query.toLowerCase()) || i.sku?.toLowerCase().includes(query.toLowerCase())
     );
 
     if (results.length === 0) {
-      addBotMessage(`No products found matching "${query}". Try different search terms or browse by category.`, [
+      const botText = `No products found matching "${query}". Try different search terms or browse by category.`;
+      addBotMessage(botText, [
         { label: "Browse by category", value: "browse" },
         { label: "Back to menu", value: "menu" },
       ]);
+      persistMessages(query, botText, "search");
       setBotState("main_menu");
     } else {
-      addBotMessage(`Found ${results.length} product${results.length > 1 ? "s" : ""} matching "${query}". Tap to add to cart.`, undefined, results);
+      const botText = `Found ${results.length} product${results.length > 1 ? "s" : ""} matching "${query}". Tap to add to cart.`;
+      addBotMessage(botText, undefined, results);
+      persistMessages(query, botText, "search");
       setBotState("browse_items");
     }
   };
@@ -317,9 +466,29 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold" data-testid="text-portal-chatbot-title">Order Assistant</h1>
-        <p className="text-sm text-muted-foreground mt-1">I'll help you find and order products</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold" data-testid="text-portal-chatbot-title">Order Assistant</h1>
+          <p className="text-sm text-muted-foreground mt-1">I'll help you find and order products</p>
+        </div>
+        {!isHandoff && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={requestHandoff}
+            className="text-xs"
+            data-testid="button-request-agent"
+          >
+            <PhoneCall className="w-3.5 h-3.5 mr-1.5" />
+            Speak to Agent
+          </Button>
+        )}
+        {isHandoff && (
+          <Badge variant="destructive" className="text-xs">
+            <PhoneOff className="w-3 h-3 mr-1" />
+            Live Agent Active
+          </Badge>
+        )}
       </div>
 
       <Card>
@@ -361,7 +530,7 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
                               onClick={() => handleOption(`add:${item.id}`)}
                               data-testid={`chatbot-add-${item.id}`}
                             >
-                              <Plus className="w-3 h-3 mr-1" /> Add
+                              <PlusIcon className="w-3 h-3 mr-1" /> Add
                             </Button>
                           </div>
                         ))}
@@ -376,7 +545,7 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
                       </div>
                     )}
 
-                    {msg.options && (
+                    {msg.options && msg.options.length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {msg.options.map((opt) => (
                           <Button
@@ -421,9 +590,21 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                placeholder="Search for a product..."
+                placeholder={isHandoff ? "Send message to agent..." : isRecording ? "Listening…" : "Search for a product or ask a question…"}
                 data-testid="input-chatbot-search"
+                className={isRecording ? "border-red-400 animate-pulse" : ""}
               />
+              {voiceMode !== "none" && (
+                <Button
+                  size="icon"
+                  variant={isRecording ? "destructive" : "outline"}
+                  onClick={handleVoiceToggle}
+                  title={isRecording ? "Stop recording" : "Start voice input"}
+                  data-testid="button-chatbot-voice"
+                >
+                  {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                </Button>
+              )}
               <Button size="icon" onClick={handleSend} data-testid="button-chatbot-send">
                 <Send className="w-4 h-4" />
               </Button>
@@ -435,7 +616,7 @@ export default function PortalChatbot({ customer }: PortalChatbotProps) {
   );
 }
 
-function Plus({ className }: { className?: string }) {
+function PlusIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />

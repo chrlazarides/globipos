@@ -766,3 +766,49 @@ export type PosReturnOrder = typeof posReturnOrders.$inferSelect;
 export const insertPosReturnOrderLineSchema = createInsertSchema(posReturnOrderLines).omit({ id: true });
 export type InsertPosReturnOrderLine = z.infer<typeof insertPosReturnOrderLineSchema>;
 export type PosReturnOrderLine = typeof posReturnOrderLines.$inferSelect;
+
+// ── Phase 5: WhatsApp Chatbot & Voice Ordering ─────────────────────────────
+
+export const chatConversations = pgTable("chat_conversations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  channel: text("channel").notNull().default("portal"), // portal | whatsapp
+  waPhoneNumber: text("wa_phone_number"),
+  status: text("status").notNull().default("active"), // active | handoff | closed
+  handoffStaffId: varchar("handoff_staff_id"),
+  handoffAt: timestamp("handoff_at"),
+  lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const chatMessages = pgTable("chat_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  conversationId: varchar("conversation_id").notNull(),
+  role: text("role").notNull().default("user"), // user | bot | staff
+  content: text("content").notNull(),
+  channel: text("channel").notNull().default("portal"), // portal | whatsapp
+  intent: text("intent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const faqEntries = pgTable("faq_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  question: text("question").notNull(),
+  answer: text("answer").notNull(),
+  keywords: text("keywords").array().default([]),
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertChatConversationSchema = createInsertSchema(chatConversations).omit({ id: true, createdAt: true, lastMessageAt: true });
+export type InsertChatConversation = z.infer<typeof insertChatConversationSchema>;
+export type ChatConversation = typeof chatConversations.$inferSelect;
+
+export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
+export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
+export type ChatMessage = typeof chatMessages.$inferSelect;
+
+export const insertFaqEntrySchema = createInsertSchema(faqEntries).omit({ id: true, createdAt: true });
+export type InsertFaqEntry = z.infer<typeof insertFaqEntrySchema>;
+export type FaqEntry = typeof faqEntries.$inferSelect;
