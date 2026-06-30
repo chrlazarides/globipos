@@ -7358,17 +7358,22 @@ export async function registerRoutes(
   // ─── Overdue payment push reminder — runs once at startup, then every 24h ───
   async function sendOverduePushReminders() {
     try {
+      // Only send for invoices that became overdue 7+ days ago (dueDate <= today - 7)
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const sevenDaysAgoStr = sevenDaysAgo.toISOString().split("T")[0];
+
       const overdueInvs = await db
-        .select({ customerId: invoices.customerId, invoiceNumber: invoices.invoiceNumber, total: invoices.total })
+        .select({ customerId: invoices.customerId, invoiceNumber: invoices.invoiceNumber, total: invoices.total, dueDate: invoices.dueDate })
         .from(invoices)
-        .where(eq(invoices.status, "overdue"));
+        .where(and(eq(invoices.status, "overdue"), lte(invoices.dueDate, sevenDaysAgoStr)));
       const seen = new Set<string>();
       for (const inv of overdueInvs) {
         if (!inv.customerId || seen.has(inv.customerId)) continue;
         seen.add(inv.customerId);
         await sendPushToCustomer(inv.customerId, {
-          title: "Payment Reminder",
-          body: `You have an overdue invoice (${inv.invoiceNumber}). Please log in to your account to view details.`,
+          title: "Payment Reminder — Action Required",
+          body: `Invoice ${inv.invoiceNumber} is overdue. Please log in to your account to settle the outstanding balance.`,
           url: "/portal",
         });
       }

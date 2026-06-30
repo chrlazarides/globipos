@@ -22,11 +22,13 @@ export default defineConfig({
         orientation: "portrait",
         start_url: "/",
         icons: [
-          { src: "/icons/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" },
+          { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
+          { src: "/icons/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
         ],
         shortcuts: [
-          { name: "Shop", url: "/shop", icons: [{ src: "/icons/icon.svg", sizes: "any", type: "image/svg+xml" }] },
-          { name: "My Orders", url: "/orders", icons: [{ src: "/icons/icon.svg", sizes: "any", type: "image/svg+xml" }] },
+          { name: "Shop", url: "/shop", icons: [{ src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }] },
+          { name: "My Orders", url: "/orders", icons: [{ src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }] },
         ],
         categories: ["shopping", "food"],
       },
