@@ -3,6 +3,8 @@
 /// <reference lib="webworker" />
 /// <reference lib="webworker.iterable" />
 
+declare const self: ServiceWorkerGlobalScope;
+
 const CACHE_VERSION = "globi-static-v1";
 
 // Auth-scoped cache: keyed by token prefix so different customers never share entries
@@ -28,51 +30,46 @@ function isAuthSensitive(url: string): boolean {
 }
 
 // ── Install: precache static assets only ─────────────────────────────────────
-self.addEventListener("install", (event) => {
-  const e = event as ExtendableEvent;
-  const sw = self as unknown as ServiceWorkerGlobalScope;
+self.addEventListener("install", (event: ExtendableEvent) => {
   const urls = __WB_MANIFEST.map((entry) =>
     typeof entry === "string" ? entry : entry.url
   ).filter((u) => !isAuthSensitive(u));
-  e.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(urls)).then(() => sw.skipWaiting())
+  event.waitUntil(
+    caches.open(CACHE_VERSION).then((cache) => cache.addAll(urls)).then(() => self.skipWaiting())
   );
 });
 
 // ── Activate: clean up old caches ────────────────────────────────────────────
-self.addEventListener("activate", (event) => {
-  const e = event as ExtendableEvent;
-  const sw = self as unknown as ServiceWorkerGlobalScope;
-  e.waitUntil(
+self.addEventListener("activate", (event: ExtendableEvent) => {
+  event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(
         keys.filter((k) => k !== CACHE_VERSION && !k.startsWith("globi-auth-"))
             .map((k) => caches.delete(k))
       ))
-      .then(() => sw.clients.claim())
+      .then(() => self.clients.claim())
   );
 });
 
 // ── Fetch: network-first; auth-sensitive endpoints are never cached ──────────
-self.addEventListener("fetch", (event) => {
-  const e = event as FetchEvent;
-  if (e.request.method !== "GET") return;
+self.addEventListener("fetch", (event: FetchEvent) => {
+  if (event.request.method !== "GET") return;
 
-  const url = e.request.url;
+  const url = event.request.url;
 
   // Auth-sensitive API calls: always network-only, never serve from cache
   if (isAuthSensitive(url)) {
-    e.respondWith(fetch(e.request));
+    event.respondWith(fetch(event.request));
     return;
   }
 
   // Public catalog endpoint: stale-while-revalidate (safe to cache, no user data)
   if (url.includes("/api/customer/catalog") || url.includes("/api/public/")) {
-    e.respondWith(
+    event.respondWith(
       caches.open(CACHE_VERSION).then((cache) =>
-        cache.match(e.request).then((cached) => {
-          const networkFetch = fetch(e.request).then((res) => {
-            cache.put(e.request, res.clone()).catch(() => {});
+        cache.match(event.request).then((cached) => {
+          const networkFetch = fetch(event.request).then((res) => {
+            cache.put(event.request, res.clone()).catch(() => {});
             return res;
           });
           return cached ?? networkFetch;
@@ -83,25 +80,38 @@ self.addEventListener("fetch", (event) => {
   }
 
   // Static assets: network-first, cache fallback
-  e.respondWith(
-    fetch(e.request)
+  event.respondWith(
+    fetch(event.request)
       .then((res) => {
         const clone = res.clone();
-        caches.open(CACHE_VERSION).then((c) => c.put(e.request, clone)).catch(() => {});
+        caches.open(CACHE_VERSION).then((c) => c.put(event.request, clone)).catch(() => {});
         return res;
       })
-      .catch(() => caches.match(e.request).then((r) => r ?? Response.error()))
+      .catch(() => caches.match(event.request).then((r) => r ?? Response.error()))
   );
 });
 
-// ── Push: show notification ───────────────────────────────────────────────────
-self.addEventListener("push", (event) => {
-  const e = event as PushEvent;
-  if (!e.data) return;
-  let payload: { title?: string; body?: string; url?: string } = {};
-  try { payload = e.data.json(); } catch { payload = { title: "GlobiPOS", body: e.data.text() }; }
+// ── Background Sync: notify all clients to flush their offline order queue ────
+// The SW itself cannot make authenticated API calls (no access to the JWT in
+// localStorage), so it posts a message to the active window which handles the
+// actual HTTP calls and React Query cache invalidation.
+self.addEventListener("sync", (event: SyncEvent) => {
+  if (event.tag === "globi-order-sync") {
+    event.waitUntil(
+      self.clients.matchAll({ includeUncontrolled: true, type: "window" }).then((clients) => {
+        if (clients.length === 0) return;
+        clients.forEach((client) => client.postMessage({ type: "SYNC_OFFLINE_ORDERS" }));
+      })
+    );
+  }
+});
 
-  const sw = self as unknown as ServiceWorkerGlobalScope;
+// ── Push: show notification ───────────────────────────────────────────────────
+self.addEventListener("push", (event: PushEvent) => {
+  if (!event.data) return;
+  let payload: { title?: string; body?: string; url?: string } = {};
+  try { payload = event.data.json(); } catch { payload = { title: "GlobiPOS", body: event.data.text() }; }
+
   const title = payload.title || "GlobiPOS";
   const options: NotificationOptions = {
     body: payload.body || "",
@@ -110,20 +120,18 @@ self.addEventListener("push", (event) => {
     data: { url: payload.url || "/" },
   };
 
-  (e as ExtendableEvent).waitUntil(sw.registration.showNotification(title, options));
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 // ── Notification click ────────────────────────────────────────────────────────
-self.addEventListener("notificationclick", (event) => {
-  const e = event as NotificationEvent;
-  const sw = self as unknown as ServiceWorkerGlobalScope;
-  e.notification.close();
-  const url = (e.notification.data?.url as string) || "/";
-  e.waitUntil(
-    sw.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+self.addEventListener("notificationclick", (event: NotificationEvent) => {
+  event.notification.close();
+  const url = (event.notification.data?.url as string) || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       const existing = clients.find((c) => c.url.includes(url));
       if (existing) return existing.focus();
-      return sw.clients.openWindow(url);
+      return self.clients.openWindow(url);
     })
   );
 });

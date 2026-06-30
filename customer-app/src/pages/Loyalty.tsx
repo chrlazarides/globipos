@@ -1,8 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "../lib/queryClient";
+import { apiFetch } from "../lib/queryClient";
 import { type CustomerSession } from "../lib/auth";
-import { Trophy, TrendingUp, Gift, Star } from "lucide-react";
+import { Trophy, TrendingUp, Gift, Star, Sparkles } from "lucide-react";
 
 interface LoyaltyProps { customer: CustomerSession; }
+
+const REDEEM_RATE = 100; // 100 points = €1 discount
 
 function tierColor(tier: string): string {
   if (tier === "Gold")   return "bg-yellow-100 text-yellow-800 border-yellow-300 dark:bg-yellow-900/40 dark:text-yellow-200";
@@ -15,7 +20,47 @@ function formatDate(d: string) {
 }
 
 export default function Loyalty({ customer }: LoyaltyProps) {
-  const { data, isLoading } = useQuery<any>({ queryKey: ["/api/customer/loyalty"] });
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["/api/customer/loyalty"],
+    staleTime: 0,
+  });
+
+  const [redeemPoints, setRedeemPoints] = useState("");
+  const [redeemSuccess, setRedeemSuccess] = useState<string | null>(null);
+  const [redeemError, setRedeemError] = useState<string | null>(null);
+
+  const redeemMutation = useMutation({
+    mutationFn: (points: number) =>
+      apiFetch("/api/customer/loyalty/redeem", {
+        method: "POST",
+        body: JSON.stringify({ points }),
+      }),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/customer/loyalty"] });
+      setRedeemPoints("");
+      setRedeemError(null);
+      const euroValue = (data.pointsRedeemed / REDEEM_RATE).toFixed(2);
+      setRedeemSuccess(`Redeemed ${data.pointsRedeemed} pts — €${euroValue} discount applied to your account!`);
+      setTimeout(() => setRedeemSuccess(null), 5000);
+    },
+    onError: (err: any) => {
+      setRedeemError(err.message || "Redemption failed");
+    },
+  });
+
+  function handleRedeem() {
+    const pts = parseInt(redeemPoints, 10);
+    if (!pts || pts < REDEEM_RATE) {
+      setRedeemError(`Minimum redemption is ${REDEEM_RATE} points`);
+      return;
+    }
+    if (pts > (data?.balance || 0)) {
+      setRedeemError("Insufficient points balance");
+      return;
+    }
+    setRedeemError(null);
+    redeemMutation.mutate(pts);
+  }
 
   if (isLoading) {
     return (
@@ -33,12 +78,13 @@ export default function Loyalty({ customer }: LoyaltyProps) {
 
   const { balance, earned, redeemed, tier, nextTier, history } = data;
   const progressPct = nextTier ? Math.min(100, (balance / nextTier.threshold) * 100) : 100;
+  const redeemableEuros = Math.floor(balance / REDEEM_RATE);
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">Loyalty Rewards</h1>
-        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Earn 1 point per €1 spent</p>
+        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Earn 1 point per €1 spent · {REDEEM_RATE} pts = €1 discount</p>
       </div>
 
       {/* Hero card */}
@@ -90,6 +136,56 @@ export default function Loyalty({ customer }: LoyaltyProps) {
         ))}
       </div>
 
+      {/* Redeem points */}
+      {balance >= REDEEM_RATE && (
+        <div className="bg-[hsl(var(--card))] border border-[hsl(var(--primary))]/30 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-[hsl(var(--primary))]" />
+            <p className="text-sm font-semibold">Redeem Points</p>
+          </div>
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">
+            You can redeem up to <strong>{Number(balance).toLocaleString()} pts</strong> for <strong>€{redeemableEuros}.00</strong> off your next order.
+          </p>
+
+          {redeemSuccess && (
+            <div className="flex items-center gap-2 p-2 rounded-lg bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 text-xs" data-testid="text-redeem-success">
+              ✓ {redeemSuccess}
+            </div>
+          )}
+          {redeemError && (
+            <p className="text-xs text-red-500" data-testid="text-redeem-error">{redeemError}</p>
+          )}
+
+          <div className="flex gap-2">
+            <input
+              type="number"
+              value={redeemPoints}
+              onChange={(e) => { setRedeemPoints(e.target.value); setRedeemError(null); }}
+              placeholder={`Min ${REDEEM_RATE} pts`}
+              min={REDEEM_RATE}
+              max={balance}
+              step={REDEEM_RATE}
+              className="flex-1 px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]"
+              data-testid="input-redeem-points"
+            />
+            <button
+              onClick={handleRedeem}
+              disabled={redeemMutation.isPending || !redeemPoints}
+              className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50 transition-opacity"
+              style={{ background: "hsl(var(--primary))" }}
+              data-testid="button-redeem-points"
+            >
+              {redeemMutation.isPending ? "…" : "Redeem"}
+            </button>
+          </div>
+          {redeemPoints && parseInt(redeemPoints, 10) >= REDEEM_RATE && (
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">
+              = €{(parseInt(redeemPoints, 10) / REDEEM_RATE).toFixed(2)} discount
+            </p>
+          )}
+        </div>
+      )}
+
       {/* History */}
       <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-[hsl(var(--border))]">
@@ -124,7 +220,7 @@ export default function Loyalty({ customer }: LoyaltyProps) {
         </div>
         <div className="divide-y divide-[hsl(var(--border))]">
           {[
-            { name: "Bronze", pts: 0,    benefit: "1 pt per €1" },
+            { name: "Bronze", pts: 0,    benefit: "1 pt per €1 · redeem 100 pts = €1" },
             { name: "Silver", pts: 1000, benefit: "Priority processing + seasonal offers" },
             { name: "Gold",   pts: 5000, benefit: "Dedicated manager + best pricing" },
           ].map((t) => (

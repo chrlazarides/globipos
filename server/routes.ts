@@ -5305,6 +5305,89 @@ export async function registerRoutes(
     res.json({ publicKey: process.env.VAPID_PUBLIC_KEY || "" });
   });
 
+  // ─── Loyalty: redeem points ─────────────────────────────────────────────────
+  app.post("/api/customer/loyalty/redeem", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const { points } = req.body;
+      const pts = parseInt(points, 10);
+      if (!pts || pts < 100) return res.status(400).json({ message: "Minimum redemption is 100 points" });
+      if (pts % 100 !== 0) return res.status(400).json({ message: "Points must be redeemed in multiples of 100" });
+
+      // Check current balance
+      const [totals] = await db.select({
+        balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
+
+      const balance = totals?.balance || 0;
+      if (pts > balance) return res.status(400).json({ message: "Insufficient points balance" });
+
+      // Insert negative points entry (redemption)
+      await db.insert(customerLoyaltyPoints).values({
+        customerId: auth.customerId,
+        points: -pts,
+        type: "redeem",
+        reason: `Redeemed ${pts} pts for €${(pts / 100).toFixed(2)} discount`,
+        sourceType: "redemption",
+        sourceId: null,
+      });
+
+      const newBalance = balance - pts;
+      res.json({ pointsRedeemed: pts, newBalance, discountEuros: (pts / 100).toFixed(2) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Admin: push notification management ────────────────────────────────────
+
+  // Stats: how many customers are subscribed
+  app.get("/api/admin/push/stats", requireAdmin, async (_req, res) => {
+    try {
+      const [{ subscribed }] = await db.select({
+        subscribed: sql<number>`count(distinct ${customerPushSubscriptions.customerId})`,
+      }).from(customerPushSubscriptions);
+      const [{ total }] = await db.select({
+        total: sql<number>`count(*)`,
+      }).from(customers).where(eq(customers.active, true));
+      res.json({ subscribed: Number(subscribed), total: Number(total) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Broadcast push to all subscribed customers
+  app.post("/api/admin/push/broadcast", requireAdmin, async (req, res) => {
+    try {
+      const { title, body, url } = req.body;
+      if (!title?.trim() || !body?.trim()) return res.status(400).json({ message: "Title and body required" });
+
+      const subsWithCustomers = await db
+        .selectDistinct({ customerId: customerPushSubscriptions.customerId })
+        .from(customerPushSubscriptions)
+        .innerJoin(customers, and(eq(customers.id, customerPushSubscriptions.customerId), eq(customers.active, true)));
+
+      let sent = 0;
+      for (const { customerId } of subsWithCustomers) {
+        await sendPushToCustomer(customerId, { title: title.trim(), body: body.trim(), url: url || "/" });
+        sent++;
+      }
+      res.json({ sent, message: `Push sent to ${sent} subscriber(s)` });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Send push to individual customer
+  app.post("/api/admin/push/customer/:id", requireAdmin, async (req, res) => {
+    try {
+      const { title, body, url } = req.body;
+      if (!title?.trim() || !body?.trim()) return res.status(400).json({ message: "Title and body required" });
+
+      const subs = await db.select().from(customerPushSubscriptions)
+        .where(eq(customerPushSubscriptions.customerId, req.params.id));
+      if (!subs.length) return res.status(404).json({ message: "No push subscriptions found for this customer" });
+
+      await sendPushToCustomer(req.params.id, { title: title.trim(), body: body.trim(), url: url || "/" });
+      res.json({ message: "Push notification sent" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   app.post("/api/demo/seed", async (_req, res) => {
     try {
       const [existingCats] = await db.select({ count: sql<number>`count(*)` }).from(categories);

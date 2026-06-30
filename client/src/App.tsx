@@ -46,6 +46,7 @@ import PosOrders from "@/pages/pos-orders";
 import PosSyncMonitor from "@/pages/pos-sync-monitor";
 import ChatPanel from "@/pages/chat-panel";
 import FaqEditor from "@/pages/faq-editor";
+import CustomerPushPage from "@/pages/customer-push";
 import type { Customer } from "@shared/schema";
 import { Loader2 } from "lucide-react";
 
@@ -147,6 +148,7 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/sync-monitor" component={PosSyncMonitor} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/chat-panel" component={ChatPanel} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/faq-editor" component={FaqEditor} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/customer-push" component={CustomerPushPage} />}
       <Route component={NotFound} />
     </Switch>
   );
