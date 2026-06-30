@@ -95,6 +95,7 @@ pub struct Order {
     pub payment_method: Option<String>,
     pub amount_tendered: Option<f64>,
     pub change_due: Option<f64>,
+    pub payment_ref: Option<String>,
     pub created_at: String,
 }
 

@@ -142,14 +142,20 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
 
     try {
       // Rust command calls the configured gateway via HTTP
-      const result = await invoke<{ approved: boolean; reference: string; error?: string }>(
+      const result = await invoke<{ approved: boolean; reference: string; provider: string; error?: string }>(
         "process_card_payment",
         { amount, currency: "EUR" }
       );
 
       if (result.approved) {
-        // Determine method from gateway config
-        const method: TenderMethod = "card_jcc"; // resolved by Rust based on config
+        // Map provider string returned by Rust to the correct TenderMethod
+        const providerToMethod: Record<string, TenderMethod> = {
+          jcc:       "card_jcc",
+          viva:      "card_viva",
+          worldpay:  "card_worldpay",
+          mock:      "card_jcc",
+        };
+        const method: TenderMethod = providerToMethod[result.provider] ?? "card_jcc";
         setTenders((prev) => [
           ...prev,
           {

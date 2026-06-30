@@ -16,8 +16,8 @@ pub async fn save_order(
             (id, order_number, status, customer_id, cashier_id, cashier_name,
              price_level, order_discount_pct, order_discount_fixed,
              subtotal, discount_amount, vat_amount, total,
-             note, payment_method, amount_tendered, change_due, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))"#
+             note, payment_method, amount_tendered, change_due, payment_ref, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))"#
     )
     .bind(&order.id)
     .bind(&order.order_number)
@@ -36,6 +36,7 @@ pub async fn save_order(
     .bind(&order.payment_method)
     .bind(order.amount_tendered)
     .bind(order.change_due)
+    .bind(&order.payment_ref)
     .execute(pool)
     .await?;
 
@@ -129,6 +130,7 @@ fn build_outbox_payload(
         "paymentMethod": order.payment_method,
         "amountTendered":order.amount_tendered,
         "changeDue":     order.change_due,
+        "paymentRef":    order.payment_ref,
         "status":        order.status,
         "notes":         order.note,
         "lines":         line_values,

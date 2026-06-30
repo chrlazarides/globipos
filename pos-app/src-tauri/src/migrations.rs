@@ -108,6 +108,7 @@ async fn run_v1(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             payment_method TEXT,
             amount_tendered REAL,
             change_due REAL,
+            payment_ref TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )"#,
@@ -297,6 +298,8 @@ async fn run_v3(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             restocked INTEGER NOT NULL DEFAULT 1
         )"#,
         "CREATE INDEX IF NOT EXISTS idx_return_lines_return ON pos_return_order_lines(return_order_id)",
+        // Additive column migrations — silently ignored on fresh DBs that already have it
+        "ALTER TABLE pos_orders ADD COLUMN payment_ref TEXT",
     ];
 
     for sql in &statements {

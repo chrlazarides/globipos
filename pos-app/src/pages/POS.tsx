@@ -24,6 +24,7 @@ import { useOrder } from "../hooks/useOrder";
 import { useBarcode } from "../hooks/useBarcode";
 import { usePermissions } from "../hooks/usePermissions";
 import { useHardware } from "../hooks/useHardware";
+import { useShift } from "../hooks/useShift";
 import { SyncHeader } from "../components/SyncHeader";
 import { CategoryNav } from "../components/CategoryNav";
 import { LayoutGrid } from "../components/LayoutGrid";
@@ -186,6 +187,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const engine  = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
   const perms   = usePermissions(session);
   const hw      = useHardware();
+  const shift   = useShift();
 
   const [products, setProducts]           = useState<Product[]>([]);
   const [categories, setCategories]       = useState<Category[]>([]);
@@ -221,6 +223,17 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   useEffect(() => {
     getProducts(selectedCategory ?? undefined).then(setProducts).catch(() => {});
   }, [selectedCategory]);
+
+  // Start / stop scale weight polling based on config and mode
+  useEffect(() => {
+    if (hw.config?.scale_enabled && mode === "sell") {
+      hw.startWeightPolling(500);
+    } else {
+      hw.stopWeightPolling();
+    }
+    return () => hw.stopWeightPolling();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hw.config?.scale_enabled, mode]);
 
   // Barcode scanner — active only in sell mode with no dialog open
   useBarcode({
@@ -276,18 +289,66 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   // ── Payment complete ──────────────────────────────────────────────────────
   async function handlePaymentComplete(result: PaymentResult) {
     try {
+      // Capture lines before completeOrder clears the order
+      const saleLines = [...engine.lines];
+      const saleOrder = { ...engine.order };
+
       const method = result.tenders.length === 1
         ? result.tenders[0].method
         : "split";
-      await engine.completeOrder(method, result.totalTendered, session.cashier_id, session.cashier_name);
+
+      // Gateway auth code from the approved card tender (if any)
+      const cardTender = result.tenders.find((t) =>
+        t.method.startsWith("card_") && t.approved
+      );
+      const paymentRef = cardTender?.reference;
+
+      const completedOrder = await engine.completeOrder(
+        method, result.totalTendered,
+        session.cashier_id, session.cashier_name,
+        paymentRef
+      );
       setDialog(null);
       sync.triggerOutboxFlush();
 
-      // Print receipt if printer is online
+      // Record sale in the current shift (updates shift totals for X/Z reports)
+      if (shift.isShiftOpen) {
+        await shift.recordSale(completedOrder.total, method).catch(() => {});
+      }
+
+      // Print full receipt if printer is available
       if (hw.printerStatus === "online" && hw.config?.printer_enabled) {
-        const receiptLines = engine.lines.map((l) => ({
-          text: `${l.description}  x${l.qty}  ${formatCurrency(l.line_total)}`,
-        }));
+        const colW = (hw.config.printer_columns ?? 42) as number;
+        const pad = (left: string, right: string) => {
+          const gap = Math.max(1, colW - left.length - right.length);
+          return `${left}${" ".repeat(gap)}${right}`;
+        };
+        const receiptLines = [
+          { text: config.terminal_code, align: "center" as const, bold: true, size: "big" as const },
+          { divider: true },
+          { text: `Terminal: ${config.terminal_code}  Cashier: ${session.cashier_name}` },
+          { text: `Order: ${completedOrder.order_number}  ${new Date().toLocaleString()}` },
+          { divider: true },
+          ...saleLines.map((l) => ({
+            text: pad(
+              l.description.substring(0, colW - 10),
+              `x${l.qty} ${formatCurrency(l.line_total)}`
+            ),
+          })),
+          { divider: true },
+          { text: pad("Subtotal", formatCurrency(saleOrder.subtotal)) },
+          { text: pad("VAT", formatCurrency(saleOrder.vat_amount)) },
+          { text: pad("TOTAL", formatCurrency(completedOrder.total)), bold: true, size: "big" as const, align: "right" as const },
+          { divider: true },
+          { text: `Payment: ${method.replace("card_", "Card ").replace("_", " ").toUpperCase()}` },
+          ...(result.totalTendered > 0 ? [
+            { text: pad("Tendered", formatCurrency(result.totalTendered)) },
+            { text: pad("Change", formatCurrency(result.changeDue)) },
+          ] : []),
+          ...(paymentRef ? [{ text: `Auth: ${paymentRef}` }] : []),
+          { divider: true },
+          { text: "Thank you for your purchase!", align: "center" as const },
+        ];
         await hw.printReceipt(receiptLines);
       }
 

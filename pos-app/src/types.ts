@@ -86,6 +86,7 @@ export interface Order {
   payment_method?: string;
   amount_tendered?: number;
   change_due?: number;
+  payment_ref?: string;          // gateway auth code / transaction reference
   created_at: string;
 }
 

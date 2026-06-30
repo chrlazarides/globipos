@@ -65,7 +65,8 @@ export interface UseOrderReturn {
     paymentMethod: string,
     amountTendered: number,
     cashierId: string,
-    cashierName: string
+    cashierName: string,
+    paymentRef?: string
   ) => Promise<Order>;
 
   // Numpad mode
@@ -363,7 +364,8 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
       paymentMethod: string,
       amountTendered: number,
       cId: string,
-      cName: string
+      cName: string,
+      paymentRef?: string
     ): Promise<Order> => {
       const orderNum = await nextOrderNumber(terminalPrefix);
       const changeDue = Math.max(0, amountTendered - order.total);
@@ -374,6 +376,7 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
         payment_method: paymentMethod,
         amount_tendered: amountTendered,
         change_due: changeDue,
+        payment_ref: paymentRef,
         cashier_id: cId,
         cashier_name: cName,
       };
