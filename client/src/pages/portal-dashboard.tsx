@@ -6,7 +6,7 @@ import { CreditCard, FileText, Receipt, TrendingUp, Bell, X, Trophy } from "luci
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { usePriceLevels } from "@/hooks/use-price-levels";
-import { apiRequest } from "@/lib/queryClient";
+import { portalApiRequest } from "@/lib/queryClient";
 import type { Customer } from "@shared/schema";
 
 interface PortalDashboardProps {
@@ -34,7 +34,7 @@ export default function PortalDashboard({ customer }: PortalDashboardProps) {
       if (perm === "granted") {
         setPushState("granted");
         // Subscribe to push (no VAPID needed for basic portal notifications)
-        await apiRequest("POST", `/api/portal/customer/${customer.id}/push/subscribe`, {
+        await portalApiRequest("POST", `/api/portal/customer/${customer.id}/push/subscribe`, {
           endpoint: "portal-native", keys: { p256dh: "portal", auth: "portal" }
         }).catch(() => {/* non-fatal */});
       } else {

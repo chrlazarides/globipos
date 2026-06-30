@@ -4578,7 +4578,8 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Invalid credentials" });
       }
       if (!customer.active) return res.status(403).json({ message: "Account is inactive" });
-      res.json({ customer });
+      const portalToken = signPortalToken(customer.id);
+      res.json({ customer, portalToken });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
@@ -4694,8 +4695,33 @@ export async function registerRoutes(
     }
   });
 
-  // Portal push subscription (stores intent; no VAPID needed for basic SW notifications)
+  // Portal JWT auth helpers — bind session to a specific customerId
+  const PORTAL_JWT_SECRET = (process.env.SESSION_SECRET || "fallback") + "_portal";
+
+  function signPortalToken(customerId: string): string {
+    return jwt.sign({ customerId, type: "portal" }, PORTAL_JWT_SECRET, { expiresIn: "7d" });
+  }
+
+  function verifyPortalToken(token: string): { customerId: string } | null {
+    try {
+      const p = jwt.verify(token, PORTAL_JWT_SECRET) as any;
+      if (p.type !== "portal") return null;
+      return { customerId: p.customerId };
+    } catch { return null; }
+  }
+
+  function requirePortalAuth(req: Request, res: Response, paramId: string): boolean {
+    const token = (req.headers["x-portal-token"] as string | undefined) || "";
+    if (!token) { res.status(401).json({ message: "Portal authentication required" }); return false; }
+    const payload = verifyPortalToken(token);
+    if (!payload) { res.status(401).json({ message: "Invalid or expired portal token" }); return false; }
+    if (payload.customerId !== paramId) { res.status(403).json({ message: "Access denied" }); return false; }
+    return true;
+  }
+
+  // Portal push subscription — requires portal JWT
   app.post("/api/portal/customer/:id/push/subscribe", async (req, res) => {
+    if (!requirePortalAuth(req, res, req.params.id)) return;
     try {
       const { endpoint, keys } = req.body;
       if (!endpoint) return res.status(400).json({ message: "endpoint required" });
@@ -4707,6 +4733,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/portal/customer/:id/push/subscribe", async (req, res) => {
+    if (!requirePortalAuth(req, res, req.params.id)) return;
     try {
       const { endpoint } = req.body;
       if (endpoint) await db.delete(customerPushSubscriptions).where(
@@ -4716,8 +4743,9 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  // Portal loyalty endpoint (uses portal session pattern — no JWT required)
+  // Portal loyalty endpoint — requires portal JWT
   app.get("/api/portal/customer/:id/loyalty", async (req, res) => {
+    if (!requirePortalAuth(req, res, req.params.id)) return;
     try {
       const history = await db.select().from(customerLoyaltyPoints)
         .where(eq(customerLoyaltyPoints.customerId, req.params.id))
@@ -4734,11 +4762,12 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  // Portal reorder endpoint (repeat a previous portal order)
+  // Portal reorder endpoint — requires portal JWT matching the customerId in request body
   app.post("/api/portal/orders/:id/reorder", async (req, res) => {
+    const { customerId } = req.body;
+    if (!customerId) return res.status(400).json({ message: "customerId required" });
+    if (!requirePortalAuth(req, res, customerId)) return;
     try {
-      const { customerId } = req.body;
-      if (!customerId) return res.status(400).json({ message: "customerId required" });
       const orders = await storage.getPortalOrders(customerId);
       const original = orders.find((o: any) => o.id === req.params.id);
       if (!original) return res.status(404).json({ message: "Order not found" });

@@ -4,6 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Trophy, Star, TrendingUp, Gift } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { getPortalQueryFn } from "@/lib/queryClient";
 import type { Customer } from "@shared/schema";
 
 interface PortalLoyaltyProps {
@@ -21,6 +22,7 @@ function tierColor(tier: string) {
 export default function PortalLoyalty({ customer }: PortalLoyaltyProps) {
   const { data, isLoading } = useQuery<any>({
     queryKey: ["/api/portal/customer", customer.id, "loyalty"],
+    queryFn: getPortalQueryFn(`/api/portal/customer/${customer.id}/loyalty`),
   });
 
   if (isLoading) {

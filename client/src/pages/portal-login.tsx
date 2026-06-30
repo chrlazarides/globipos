@@ -16,8 +16,8 @@ interface PortalLoginProps {
 export default function PortalLogin({ onLogin }: PortalLoginProps) {
   const [code, setCode] = useState("");
   const [accessCode, setAccessCode] = useState("");
-  const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
-  const companyName = settings.find(s => s.key === "company_name")?.value || "GlobiPOS";
+  const { data: settings } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
+  const companyName = (settings ?? []).find(s => s.key === "company_name")?.value || "GlobiPOS";
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -28,6 +28,7 @@ export default function PortalLogin({ onLogin }: PortalLoginProps) {
     try {
       const res = await apiRequest("POST", "/api/portal/login", { code, accessCode });
       const data = await res.json();
+      if (data.portalToken) localStorage.setItem("globi_portal_token", data.portalToken);
       onLogin(data.customer);
     } catch (err: any) {
       setError(err.message?.includes("401") ? "Invalid customer code or access code" : "Login failed. Please try again.");

@@ -49,19 +49,59 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
     setBasket((prev) => prev.filter((b) => b.item.id !== id));
   }
 
+  const OFFLINE_QUEUE_KEY = "globi_offline_orders";
+
+  function enqueueOffline(payload: object) {
+    try {
+      const queue = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || "[]");
+      queue.push({ payload, queuedAt: new Date().toISOString() });
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+    } catch {}
+  }
+
+  async function flushOfflineQueue() {
+    try {
+      const queue: any[] = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || "[]");
+      if (!queue.length) return;
+      const remaining: any[] = [];
+      for (const item of queue) {
+        try {
+          await apiFetch("/api/customer/orders", { method: "POST", body: JSON.stringify(item.payload) });
+        } catch {
+          remaining.push(item);
+        }
+      }
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remaining));
+      if (remaining.length < queue.length) {
+        queryClient.invalidateQueries({ queryKey: ["/api/customer/orders"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/customer/loyalty"] });
+      }
+    } catch {}
+  }
+
   async function handleSubmit() {
     if (!basket.length) return;
     setSubmitting(true);
+    const orderPayload = {
+      items: basket.map((b) => ({ itemId: b.item.id, quantity: b.quantity })),
+      notes,
+      deliveryType,
+      deliveryAddress: deliveryType === "delivery" ? deliveryAddress : undefined,
+    };
     try {
-      await apiFetch("/api/customer/orders", {
-        method: "POST",
-        body: JSON.stringify({
-          items: basket.map((b) => ({ itemId: b.item.id, quantity: b.quantity })),
-          notes,
-          deliveryType,
-          deliveryAddress: deliveryType === "delivery" ? deliveryAddress : undefined,
-        }),
-      });
+      if (!navigator.onLine) {
+        enqueueOffline(orderPayload);
+        setBasket([]);
+        setNotes("");
+        setSuccess(true);
+        // Register online listener to flush
+        window.addEventListener("online", () => flushOfflineQueue(), { once: true });
+        setTimeout(() => { setSuccess(false); navigate("/orders"); }, 2000);
+        return;
+      }
+      // Try to flush any previously queued orders first
+      await flushOfflineQueue();
+      await apiFetch("/api/customer/orders", { method: "POST", body: JSON.stringify(orderPayload) });
       queryClient.invalidateQueries({ queryKey: ["/api/customer/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/customer/loyalty"] });
       setBasket([]);

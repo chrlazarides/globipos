@@ -7,12 +7,13 @@ import Orders from "./Orders";
 import Account from "./Account";
 import Loyalty from "./Loyalty";
 import PushNotificationBanner from "../components/PushNotificationBanner";
-import { useState } from "react";
 import { ShoppingCart, Package, Receipt, User, Trophy, LogOut } from "lucide-react";
 
 interface LayoutProps {
   customer: CustomerSession;
   onLogout: () => void;
+  basket: BasketItem[];
+  setBasket: React.Dispatch<React.SetStateAction<BasketItem[]>>;
 }
 
 const navItems = [
@@ -23,9 +24,8 @@ const navItems = [
   { label: "Loyalty", path: "/loyalty",  icon: Trophy   },
 ];
 
-export default function Layout({ customer, onLogout }: LayoutProps) {
+export default function Layout({ customer, onLogout, basket, setBasket }: LayoutProps) {
   const [location] = useLocation();
-  const [basket, setBasket] = useState<BasketItem[]>([]);
 
   const totalItems = basket.reduce((s, i) => s + i.quantity, 0);
 

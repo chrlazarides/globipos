@@ -28,6 +28,41 @@ export async function apiRequest(
   return res;
 }
 
+export async function portalApiRequest(
+  method: string,
+  url: string,
+  data?: unknown | undefined,
+): Promise<Response> {
+  const token = localStorage.getItem("globi_portal_token") || "";
+  const headers: Record<string, string> = { "X-Portal-Token": token };
+  if (data) headers["Content-Type"] = "application/json";
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: data ? JSON.stringify(data) : undefined,
+    credentials: "include",
+  });
+  await throwIfResNotOk(res);
+  return res;
+}
+
+export function getPortalQueryFn(url: string): () => Promise<any> {
+  return async () => {
+    const token = localStorage.getItem("globi_portal_token") || "";
+    const res = await fetch(url, {
+      headers: { "X-Portal-Token": token },
+      credentials: "include",
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let message = `${res.status}: ${text}`;
+      try { const j = JSON.parse(text); if (j.message) message = j.message; } catch {}
+      throw new Error(message);
+    }
+    return res.json();
+  };
+}
+
 type UnauthorizedBehavior = "returnNull" | "throw" | "redirect";
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;

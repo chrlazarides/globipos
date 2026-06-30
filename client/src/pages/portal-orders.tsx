@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Receipt, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { portalApiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Customer } from "@shared/schema";
 
@@ -38,7 +38,7 @@ export default function PortalOrders({ customer }: PortalOrdersProps) {
   const handleReorder = async (orderId: string) => {
     setReorderingId(orderId);
     try {
-      await apiRequest("POST", `/api/portal/orders/${orderId}/reorder`, { customerId: customer.id });
+      await portalApiRequest("POST", `/api/portal/orders/${orderId}/reorder`, { customerId: customer.id });
       toast({ title: "Reorder placed", description: "A new order has been submitted based on your previous one." });
       queryClient.invalidateQueries({ queryKey: ["/api/portal/customer", customer.id, "orders"] });
     } catch (err: any) {
