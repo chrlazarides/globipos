@@ -7,7 +7,7 @@ mod orders;
 mod sync;
 
 use db::row_to_json;
-use hardware::{HardwareConfig, ScaleWeight};
+use hardware::{HardwareConfig, PaymentConfig, ScaleWeight};
 use models::*;
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
@@ -695,12 +695,10 @@ async fn get_promotions(state: State<'_, AppState>) -> Result<Vec<Value>, String
 
 #[tauri::command]
 async fn validate_coupon(
-    state:       State<'_, AppState>,
-    server_url:  String,
-    terminal_code: String,
-    code:        String,
+    state: State<'_, AppState>,
+    code:  String,
 ) -> Result<Value, String> {
-    // First check local cache
+    // First check local SQLite cache
     let row = sqlx::query(
         r#"SELECT * FROM local_promotions
            WHERE type = 'coupon'
@@ -713,16 +711,15 @@ async fn validate_coupon(
     .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
 
     if let Some(r) = row {
-        return Ok(serde_json::json!({ "valid": true, "promo": row_to_json(r) }));
+        return Ok(serde_json::json!({ "valid": true, "promo": row_to_json(r), "message": "Coupon applied" }));
     }
 
-    // Fall back to server
+    // Fall back to server if terminal is configured and online
     let (srv, tc) = {
         let cfg = state.config.lock().unwrap();
-        if let Some(c) = cfg.as_ref() {
-            (c.server_url.clone(), c.terminal_code.clone())
-        } else {
-            return Ok(serde_json::json!({ "valid": false, "message": "Offline — coupon not found" }));
+        match cfg.as_ref() {
+            Some(c) => (c.server_url.clone(), c.terminal_code.clone()),
+            None    => return Ok(serde_json::json!({ "valid": false, "message": "Offline — coupon not found" })),
         }
     };
 
@@ -732,10 +729,12 @@ async fn validate_coupon(
         .map_err(|e| e.to_string())?;
 
     let url = format!("{}/api/pos/validate-coupon", srv.trim_end_matches('/'));
-    match client.post(&url)
+    match client
+        .post(&url)
         .header("X-Terminal-Code", &tc)
         .json(&serde_json::json!({ "code": code }))
-        .send().await
+        .send()
+        .await
     {
         Ok(resp) if resp.status().is_success() => {
             resp.json::<Value>().await.map_err(|e| e.to_string())
@@ -867,9 +866,7 @@ async fn save_hardware_config(
     state:  State<'_, AppState>,
     config: HardwareConfig,
 ) -> Result<(), String> {
-    hardware::save_hardware_config(&state.db, &config)
-        .await
-        .map_err(|e| e.to_string())
+    hardware::save_hardware_config(&state.db, &config).await
 }
 
 #[tauri::command]
@@ -919,8 +916,11 @@ async fn check_printer_status(
     Ok(hardware::check_printer_status(&app, &cfg).await)
 }
 
-/// Card payment — calls configured payment gateway via HTTP.
-/// Returns { approved: bool, reference: String, error?: String }.
+/// Card payment — routes to JCC, Viva, Worldpay, or mock based on 'payment_config'
+/// stored in schema_meta. Returns { approved, reference, amount, currency, error? }.
+///
+/// `auto_confirm=true` forces mock approval regardless of provider (used in demo/test mode).
+/// On any infrastructure failure the command returns Ok with approved=false (fail-closed).
 #[tauri::command]
 async fn process_card_payment(
     state:        State<'_, AppState>,
@@ -928,79 +928,40 @@ async fn process_card_payment(
     currency:     String,
     auto_confirm: Option<bool>,
 ) -> Result<Value, String> {
-    // Load payment config from schema_meta
+    // Load payment config from schema_meta; default to mock if absent
     let cfg_row = sqlx::query("SELECT value FROM schema_meta WHERE key = 'payment_config'")
         .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
 
-    let payment_cfg: Value = cfg_row
+    let payment_cfg: PaymentConfig = cfg_row
         .and_then(|r| r.try_get::<String, _>("value").ok())
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(serde_json::json!({"provider": "mock"}));
+        .unwrap_or_default();
 
-    let provider = payment_cfg.get("provider").and_then(|v| v.as_str()).unwrap_or("mock");
-
-    // Mock mode — for development / demo terminals
-    if provider == "mock" || auto_confirm == Some(true) {
-        return Ok(serde_json::json!({
-            "approved": true,
-            "reference": format!("MOCK-{}", &uuid::Uuid::new_v4().to_string()[..8].to_uppercase()),
-            "amount": amount,
-            "currency": currency,
-        }));
+    // Forced mock approval (demo / test terminals)
+    if payment_cfg.provider == "mock" || auto_confirm == Some(true) {
+        let result = hardware::PaymentResult {
+            approved:  true,
+            reference: format!("MOCK-{}", &uuid::Uuid::new_v4().to_string()[..8].to_uppercase()),
+            amount,
+            currency:  currency.clone(),
+            error:     None,
+            provider:  "mock".into(),
+        };
+        return Ok(serde_json::to_value(&result).unwrap_or_default());
     }
 
-    // Real gateway integration
-    let endpoint = payment_cfg.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
-    let merchant_id = payment_cfg.get("merchant_id").and_then(|v| v.as_str()).unwrap_or("");
-    let api_key = payment_cfg.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    // Route to provider adapter — infrastructure failures are fail-closed (approved=false)
+    let result = hardware::process_payment(&payment_cfg, amount, &currency).await
+        .unwrap_or_else(|e| hardware::PaymentResult {
+            approved:  false,
+            reference: String::new(),
+            amount,
+            currency:  currency.clone(),
+            error:     Some(e),
+            provider:  payment_cfg.provider.clone(),
+        });
 
-    if endpoint.is_empty() {
-        return Err("Payment gateway not configured".into());
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60)) // card payments can take up to 60s
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let payload = serde_json::json!({
-        "merchant_id": merchant_id,
-        "amount": (amount * 100.0) as i64, // cents
-        "currency": currency.to_uppercase(),
-        "transaction_type": "sale",
-    });
-
-    match client
-        .post(endpoint)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&payload)
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            let body: Value = resp.json().await.unwrap_or(serde_json::json!({}));
-            let approved = body.get("approved").and_then(|v| v.as_bool())
-                .or_else(|| body.get("status").and_then(|v| v.as_str()).map(|s| s == "approved" || s == "00"))
-                .unwrap_or(false);
-            let reference = body.get("reference")
-                .or_else(|| body.get("auth_code"))
-                .or_else(|| body.get("transaction_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("N/A")
-                .to_string();
-            Ok(serde_json::json!({ "approved": approved, "reference": reference, "amount": amount }))
-        }
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            let body: Value = resp.json().await.unwrap_or(serde_json::json!({}));
-            let error = body.get("message").or(body.get("error"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Declined")
-                .to_string();
-            Ok(serde_json::json!({ "approved": false, "error": error, "status": status }))
-        }
-        Err(e) => Ok(serde_json::json!({ "approved": false, "error": e.to_string() })),
-    }
+    Ok(serde_json::to_value(&result).unwrap_or_default())
 }
 
 // ── App entry point ───────────────────────────────────────────────────────────

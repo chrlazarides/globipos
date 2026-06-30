@@ -233,15 +233,18 @@ export function useMultiBuy(): UseMultiBuyReturn {
         (p) => p.type === "coupon" && p.coupon_code?.toLowerCase() === code.toLowerCase()
       );
       if (!coupon) {
-        // Try server validation for dynamic coupons
+        // Try server/local validation via Tauri command (reads config from state)
         try {
-          const result = await invoke<{ valid: boolean; promo?: Promotion }>(
+          const result = await invoke<{ valid: boolean; promo?: Promotion; message?: string }>(
             "validate_coupon",
             { code }
           );
+          if (!result || typeof result !== "object") {
+            return { valid: false, message: "Could not validate coupon" };
+          }
           return result.valid
-            ? { valid: true, promo: result.promo, message: "Coupon applied" }
-            : { valid: false, message: "Invalid or expired coupon" };
+            ? { valid: true, promo: result.promo, message: result.message ?? "Coupon applied" }
+            : { valid: false, message: result.message ?? "Invalid or expired coupon" };
         } catch {
           return { valid: false, message: "Could not validate coupon" };
         }

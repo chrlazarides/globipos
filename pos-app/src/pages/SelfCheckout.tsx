@@ -195,13 +195,17 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
     // In SCO mode, payment is handled by card terminal directly
     // Simulate card tap → complete
     try {
-      const approved = await invoke<boolean>("process_card_payment", {
-        amount: totals.total,
-        currency: "EUR",
-        auto_confirm: true,  // SCO taps directly — no cashier intervention
-      }).catch(() => false);
+      const result = await invoke<{ approved: boolean; reference?: string; error?: string }>(
+        "process_card_payment",
+        { amount: totals.total, currency: "EUR", auto_confirm: true }
+      ).catch(() => ({ approved: false, error: "Terminal communication failed" }));
 
-      if (approved) {
+      if (result === null || result === undefined || typeof result !== "object") {
+        setMode("scanning");
+        return;
+      }
+
+      if (result.approved === true) {
         const orderNum = await nextOrderNumber(terminalPrefix);
         await saveOrder(
           {
