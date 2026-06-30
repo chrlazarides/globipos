@@ -1,9 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Receipt } from "lucide-react";
+import { Receipt, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { Customer } from "@shared/schema";
 
 interface PortalOrdersProps {
@@ -14,18 +18,33 @@ export default function PortalOrders({ customer }: PortalOrdersProps) {
   const { data: orders, isLoading } = useQuery<any[]>({
     queryKey: ["/api/portal/customer", customer.id, "orders"],
   });
+  const [reorderingId, setReorderingId] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const fmt = (v: string | number) =>
     `€${parseFloat(String(v || 0)).toLocaleString("el-CY", { minimumFractionDigits: 2 })}`;
 
   const statusVariant = (status: string) => {
     switch (status) {
-      case "pending": return "secondary";
+      case "pending":   return "secondary";
       case "confirmed": return "default";
-      case "shipped": return "outline";
+      case "shipped":   return "outline";
       case "completed": return "default";
       case "cancelled": return "destructive";
-      default: return "secondary";
+      default:          return "secondary";
+    }
+  };
+
+  const handleReorder = async (orderId: string) => {
+    setReorderingId(orderId);
+    try {
+      await apiRequest("POST", `/api/portal/orders/${orderId}/reorder`, { customerId: customer.id });
+      toast({ title: "Reorder placed", description: "A new order has been submitted based on your previous one." });
+      queryClient.invalidateQueries({ queryKey: ["/api/portal/customer", customer.id, "orders"] });
+    } catch (err: any) {
+      toast({ title: "Reorder failed", description: err.message, variant: "destructive" });
+    } finally {
+      setReorderingId(null);
     }
   };
 
@@ -33,7 +52,7 @@ export default function PortalOrders({ customer }: PortalOrdersProps) {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold" data-testid="text-portal-orders-title">My Orders</h1>
-        <p className="text-sm text-muted-foreground mt-1">Track your orders and their status</p>
+        <p className="text-sm text-muted-foreground mt-1">Track your orders and reorder previous ones</p>
       </div>
 
       {isLoading ? (
@@ -57,9 +76,20 @@ export default function PortalOrders({ customer }: PortalOrdersProps) {
                     {order.status}
                   </Badge>
                 </div>
-                <span className="text-xs text-muted-foreground">
-                  {formatDate(order.createdAt)}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{formatDate(order.createdAt)}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleReorder(order.id)}
+                    disabled={reorderingId === order.id}
+                    data-testid={`button-reorder-${order.id}`}
+                    className="h-7 text-xs"
+                  >
+                    <RefreshCw className={`w-3 h-3 mr-1 ${reorderingId === order.id ? "animate-spin" : ""}`} />
+                    {reorderingId === order.id ? "Placing…" : "Reorder"}
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="p-4 pt-0">
                 {order.items && order.items.length > 0 && (

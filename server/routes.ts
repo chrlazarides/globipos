@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -15,6 +15,7 @@ import path from "path";
 import { execSync } from "child_process";
 import AdmZip from "adm-zip";
 import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser } from "./auth";
+import jwt from "jsonwebtoken";
 import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
 import QRCode from "qrcode";
 
@@ -4676,10 +4677,471 @@ export async function registerRoutes(
         }
       }
 
+      // Award loyalty points (1 pt per € of subtotal)
+      if (subtotal > 0) {
+        const pts = Math.floor(subtotal);
+        if (pts > 0) {
+          await db.insert(customerLoyaltyPoints).values({
+            customerId, points: pts, type: "earn",
+            reason: `Order #${order.id.slice(0, 8)}`, sourceType: "portal_order", sourceId: order.id,
+          }).catch(() => {/* non-fatal */});
+        }
+      }
+
       res.json(order);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
+  });
+
+  // Portal push subscription (stores intent; no VAPID needed for basic SW notifications)
+  app.post("/api/portal/customer/:id/push/subscribe", async (req, res) => {
+    try {
+      const { endpoint, keys } = req.body;
+      if (!endpoint) return res.status(400).json({ message: "endpoint required" });
+      await db.insert(customerPushSubscriptions)
+        .values({ customerId: req.params.id, endpoint, p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent: req.headers["user-agent"] || null })
+        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: req.params.id } });
+      res.json({ message: "Subscribed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/portal/customer/:id/push/subscribe", async (req, res) => {
+    try {
+      const { endpoint } = req.body;
+      if (endpoint) await db.delete(customerPushSubscriptions).where(
+        and(eq(customerPushSubscriptions.endpoint, endpoint), eq(customerPushSubscriptions.customerId, req.params.id))
+      );
+      res.json({ message: "Unsubscribed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Portal loyalty endpoint (uses portal session pattern — no JWT required)
+  app.get("/api/portal/customer/:id/loyalty", async (req, res) => {
+    try {
+      const history = await db.select().from(customerLoyaltyPoints)
+        .where(eq(customerLoyaltyPoints.customerId, req.params.id))
+        .orderBy(desc(customerLoyaltyPoints.createdAt)).limit(50);
+      const [totals] = await db.select({
+        earned: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='earn' then ${customerLoyaltyPoints.points} else 0 end),0)`,
+        redeemed: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='redeem' then ${customerLoyaltyPoints.points} else 0 end),0)`,
+        balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, req.params.id));
+      const balance = totals?.balance || 0;
+      const tier = balance >= 5000 ? "Gold" : balance >= 1000 ? "Silver" : "Bronze";
+      const nextTier = tier === "Bronze" ? { name: "Silver", threshold: 1000 } : tier === "Silver" ? { name: "Gold", threshold: 5000 } : null;
+      res.json({ balance, earned: totals?.earned || 0, redeemed: Math.abs(totals?.redeemed || 0), tier, nextTier, history });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Portal reorder endpoint (repeat a previous portal order)
+  app.post("/api/portal/orders/:id/reorder", async (req, res) => {
+    try {
+      const { customerId } = req.body;
+      if (!customerId) return res.status(400).json({ message: "customerId required" });
+      const orders = await storage.getPortalOrders(customerId);
+      const original = orders.find((o: any) => o.id === req.params.id);
+      if (!original) return res.status(404).json({ message: "Order not found" });
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const VAT_RATE = 0.19;
+      let subtotal = 0;
+      const processedItems: any[] = [];
+      for (const oi of (original.items || [])) {
+        const item = await storage.getItem(oi.itemId);
+        if (!item) continue;
+        const priceKey = `price${customer.priceLevel}` as keyof typeof item;
+        const unitPrice = parseFloat(String(item[priceKey] || item.price1));
+        const lineTotal = unitPrice * oi.quantity;
+        subtotal += lineTotal;
+        processedItems.push({ itemId: item.id, itemName: item.name, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+      }
+      if (!processedItems.length) return res.status(400).json({ message: "No valid items to reorder" });
+      const vatAmount = subtotal * VAT_RATE;
+      const total = subtotal + vatAmount;
+      const newOrder = await storage.createPortalOrder(
+        { customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: `Reorder of ${req.params.id.slice(0, 8)}`, status: "pending" },
+        processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
+      );
+      res.json(newOrder);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Customer PWA API (/api/customer/*) ─────────────────────────────────────
+  // Separate JWT secret scope for customer tokens (uses SESSION_SECRET + suffix)
+  const CUSTOMER_JWT_SECRET = (process.env.SESSION_SECRET || "fallback") + "_customer";
+  const CUSTOMER_TOKEN_EXPIRY = "7d";
+  const LOYALTY_POINTS_PER_EURO = 1; // 1 point per €1 spent
+
+  function signCustomerToken(customerId: string, customerCode: string): string {
+    return jwt.sign({ customerId, customerCode, type: "customer" }, CUSTOMER_JWT_SECRET, { expiresIn: CUSTOMER_TOKEN_EXPIRY });
+  }
+
+  function verifyCustomerToken(token: string): { customerId: string; customerCode: string } | null {
+    try {
+      const payload = jwt.verify(token, CUSTOMER_JWT_SECRET) as any;
+      if (payload.type !== "customer") return null;
+      return { customerId: payload.customerId, customerCode: payload.customerCode };
+    } catch { return null; }
+  }
+
+  async function requireCustomerAuth(req: Request, res: Response): Promise<{ customerId: string; customerCode: string } | null> {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith("Bearer ")) { res.status(401).json({ message: "Authentication required" }); return null; }
+    const payload = verifyCustomerToken(auth.slice(7));
+    if (!payload) { res.status(401).json({ message: "Invalid or expired token" }); return null; }
+    return payload;
+  }
+
+  // Public branding endpoint — no auth, used by customer-app on first load
+  app.get("/api/public/branding", async (_req, res) => {
+    try {
+      const settings = await storage.getSettings();
+      const get = (k: string) => settings.find((s: any) => s.key === k)?.value || "";
+      res.json({
+        companyName: get("company_name") || "GlobiPOS",
+        primaryColor: get("brand_primary_color") || "#722F37",
+        currencySymbol: get("currency_symbol") || "€",
+        vatRate: parseFloat(get("default_vat_rate") || "19"),
+        logoUrl: "/api/public/logo",
+        portalEnabled: get("portal_enabled") !== "false",
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // OTP-based customer authentication
+  app.post("/api/customer/auth/request-otp", async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) return res.status(400).json({ message: "Email required" });
+      const [customer] = await db.select().from(customers).where(
+        and(eq(customers.email, email.toLowerCase().trim()), eq(customers.active, true))
+      );
+      if (!customer) return res.status(404).json({ message: "No account found with that email" });
+
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+      await db.insert(customerOtpTokens).values({
+        customerId: customer.id, email: email.toLowerCase().trim(),
+        code, expiresAt, used: false,
+      });
+
+      // Send via SendGrid/Resend
+      const settings = await storage.getSettings();
+      const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
+      try {
+        await sendTestEmail(email, `Your ${companyName} login code`, `<p>Your one-time login code is: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>This code expires in 10 minutes.</p>`);
+      } catch { /* email failure non-fatal — code still works */ }
+
+      res.json({ message: "OTP sent", customerId: customer.id });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/auth/verify-otp", async (req, res) => {
+    try {
+      const { email, code } = req.body;
+      if (!email || !code) return res.status(400).json({ message: "Email and code required" });
+
+      const [otpRecord] = await db.select().from(customerOtpTokens).where(
+        and(
+          eq(customerOtpTokens.email, email.toLowerCase().trim()),
+          eq(customerOtpTokens.code, code.trim()),
+          eq(customerOtpTokens.used, false),
+          gte(customerOtpTokens.expiresAt, new Date())
+        )
+      ).orderBy(desc(customerOtpTokens.createdAt)).limit(1);
+
+      if (!otpRecord) return res.status(401).json({ message: "Invalid or expired code" });
+
+      await db.update(customerOtpTokens).set({ used: true }).where(eq(customerOtpTokens.id, otpRecord.id));
+
+      const [customer] = await db.select().from(customers).where(eq(customers.id, otpRecord.customerId));
+      if (!customer || !customer.active) return res.status(403).json({ message: "Account inactive" });
+
+      const token = signCustomerToken(customer.id, customer.code);
+      res.json({ token, customer: { id: customer.id, name: customer.name, code: customer.code, email: customer.email, priceLevel: customer.priceLevel } });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Also support portal-code login (existing portal auth via /api/customer/auth/login)
+  app.post("/api/customer/auth/login", async (req, res) => {
+    try {
+      const { code, accessCode } = req.body;
+      if (!code || !accessCode) return res.status(400).json({ message: "Customer code and access code required" });
+      const customer = await storage.getCustomerByCode(code.toUpperCase());
+      if (!customer || !customer.active) return res.status(401).json({ message: "Invalid credentials" });
+      if (!customer.portalAccessCode || customer.portalAccessCode !== accessCode) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+      const token = signCustomerToken(customer.id, customer.code);
+      res.json({ token, customer: { id: customer.id, name: customer.name, code: customer.code, email: customer.email, priceLevel: customer.priceLevel } });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/me", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Not found" });
+      res.json({ id: customer.id, name: customer.name, code: customer.code, email: customer.email,
+        phone: customer.phone, address: customer.address, city: customer.city,
+        priceLevel: customer.priceLevel, creditLimit: customer.creditLimit,
+        currentBalance: customer.currentBalance, paymentTerms: customer.paymentTerms });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/catalog", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const { search, categoryId, page = "1", limit = "48" } = req.query as Record<string, string>;
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Not found" });
+
+      let allItems = await storage.getAvailableItems();
+      if (search) allItems = allItems.filter((i: any) =>
+        i.name.toLowerCase().includes(search.toLowerCase()) ||
+        i.sku?.toLowerCase().includes(search.toLowerCase()) ||
+        i.brand?.toLowerCase().includes(search.toLowerCase())
+      );
+      if (categoryId) allItems = allItems.filter((i: any) => i.categoryId === categoryId);
+
+      const pl = customer.priceLevel || 1;
+      const paged = allItems.slice((+page - 1) * +limit, +page * +limit).map((i: any) => ({
+        ...i,
+        customerPrice: parseFloat(String(i[`price${pl}`] || i.price1)),
+      }));
+
+      const cats = await storage.getCategories();
+      res.json({ items: paged, total: allItems.length, page: +page, categories: cats });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/catalog/:id", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const customer = await storage.getCustomer(auth.customerId);
+      const item = await storage.getItem(req.params.id);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      const pl = customer?.priceLevel || 1;
+      res.json({ ...item, customerPrice: parseFloat(String((item as any)[`price${pl}`] || item.price1)) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/barcode/:barcode", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const customer = await storage.getCustomer(auth.customerId);
+      const allItems = await storage.getAvailableItems();
+      const item = allItems.find((i: any) => i.barcode === req.params.barcode);
+      if (!item) return res.status(404).json({ message: "Item not found for this barcode" });
+      const pl = customer?.priceLevel || 1;
+      res.json({ ...(item as any), customerPrice: parseFloat(String((item as any)[`price${pl}`] || (item as any).price1)) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/invoices", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const invList = await storage.getCustomerInvoices(auth.customerId);
+      res.json(invList);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/statement", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const statements = await storage.getCustomerStatements();
+      const st = statements.find((s: any) => s.customerId === auth.customerId);
+      res.json(st || { customerId: auth.customerId, balance: "0.00", totalInvoiced: "0.00", totalPaid: "0.00", invoiceCount: 0 });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/account-summary", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Not found" });
+      const invList = await storage.getCustomerInvoices(auth.customerId);
+      const overdueCount = invList.filter((i: any) => i.status === "overdue").length;
+      const overdueAmount = invList
+        .filter((i: any) => i.status === "overdue")
+        .reduce((s: number, i: any) => s + parseFloat(i.total), 0);
+      const [loyaltyRows] = await db.select({
+        total: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
+      res.json({
+        balance: customer.currentBalance,
+        creditLimit: customer.creditLimit,
+        availableCredit: (parseFloat(String(customer.creditLimit)) - parseFloat(String(customer.currentBalance))).toFixed(2),
+        overdueCount,
+        overdueAmount: overdueAmount.toFixed(2),
+        loyaltyPoints: loyaltyRows?.total || 0,
+        paymentTerms: customer.paymentTerms,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/orders", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const orders = await storage.getPortalOrders(auth.customerId);
+      res.json(orders);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/orders", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const { items: orderItems, notes, deliveryType = "collection", deliveryAddress } = req.body;
+      if (!orderItems?.length) return res.status(400).json({ message: "Items required" });
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const VAT_RATE = 0.19;
+      let subtotal = 0;
+      const processedItems: any[] = [];
+      for (const oi of orderItems) {
+        const item = await storage.getItem(oi.itemId);
+        if (!item) continue;
+        const pl = customer.priceLevel || 1;
+        const unitPrice = parseFloat(String((item as any)[`price${pl}`] || item.price1));
+        const lineTotal = unitPrice * oi.quantity;
+        subtotal += lineTotal;
+        processedItems.push({ itemId: item.id, itemName: item.name, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+      }
+
+      const vatAmount = subtotal * VAT_RATE;
+      const total = subtotal + vatAmount;
+      const order = await storage.createPortalOrder(
+        { customerId: auth.customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: notes || null, status: "pending" },
+        processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
+      );
+
+      // Award loyalty points (1 pt per € subtotal)
+      if (subtotal > 0) {
+        const pts = Math.floor(subtotal * LOYALTY_POINTS_PER_EURO);
+        if (pts > 0) {
+          await db.insert(customerLoyaltyPoints).values({
+            customerId: auth.customerId, points: pts, type: "earn",
+            reason: `Order #${order.id.slice(0, 8)}`, sourceType: "portal_order", sourceId: order.id,
+          });
+        }
+      }
+      res.json(order);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/orders/:id/reorder", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const orders = await storage.getPortalOrders(auth.customerId);
+      const original = orders.find((o: any) => o.id === req.params.id);
+      if (!original) return res.status(404).json({ message: "Order not found" });
+
+      const orderItems = (original.items || []).map((i: any) => ({ itemId: i.itemId, quantity: i.quantity }));
+      if (!orderItems.length) return res.status(400).json({ message: "Original order has no items" });
+
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const VAT_RATE = 0.19;
+      let subtotal = 0;
+      const processedItems: any[] = [];
+      for (const oi of orderItems) {
+        const item = await storage.getItem(oi.itemId);
+        if (!item) continue;
+        const pl = customer.priceLevel || 1;
+        const unitPrice = parseFloat(String((item as any)[`price${pl}`] || item.price1));
+        const lineTotal = unitPrice * oi.quantity;
+        subtotal += lineTotal;
+        processedItems.push({ itemId: item.id, itemName: item.name, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+      }
+      const vatAmount = subtotal * VAT_RATE;
+      const total = subtotal + vatAmount;
+      const newOrder = await storage.createPortalOrder(
+        { customerId: auth.customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: `Reorder of ${req.params.id.slice(0, 8)}`, status: "pending" },
+        processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
+      );
+      res.json(newOrder);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/loyalty", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const history = await db.select().from(customerLoyaltyPoints)
+        .where(eq(customerLoyaltyPoints.customerId, auth.customerId))
+        .orderBy(desc(customerLoyaltyPoints.createdAt)).limit(50);
+      const [totals] = await db.select({
+        earned: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='earn' then ${customerLoyaltyPoints.points} else 0 end),0)`,
+        redeemed: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='redeem' then ${customerLoyaltyPoints.points} else 0 end),0)`,
+        balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
+
+      const balance = totals?.balance || 0;
+      const tier = balance >= 5000 ? "Gold" : balance >= 1000 ? "Silver" : "Bronze";
+      const nextTier = tier === "Bronze" ? { name: "Silver", threshold: 1000 } : tier === "Silver" ? { name: "Gold", threshold: 5000 } : null;
+
+      res.json({
+        balance,
+        earned: totals?.earned || 0,
+        redeemed: Math.abs(totals?.redeemed || 0),
+        tier,
+        nextTier,
+        history: history.map((h) => ({
+          id: h.id, points: h.points, type: h.type, reason: h.reason,
+          sourceType: h.sourceType, createdAt: h.createdAt,
+        })),
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Push notification subscription management
+  app.post("/api/customer/push/subscribe", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const { endpoint, keys } = req.body;
+      if (!endpoint || !keys?.p256dh || !keys?.auth) return res.status(400).json({ message: "Invalid subscription" });
+
+      await db.insert(customerPushSubscriptions)
+        .values({ customerId: auth.customerId, endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null })
+        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: auth.customerId, p256dh: keys.p256dh, auth: keys.auth } });
+
+      res.json({ message: "Subscribed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/customer/push/subscribe", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const { endpoint } = req.body;
+      if (endpoint) {
+        await db.delete(customerPushSubscriptions).where(
+          and(eq(customerPushSubscriptions.endpoint, endpoint), eq(customerPushSubscriptions.customerId, auth.customerId))
+        );
+      }
+      res.json({ message: "Unsubscribed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // VAPID public key endpoint (used by customer-app to subscribe to push)
+  app.get("/api/customer/push/vapid-public-key", (_req, res) => {
+    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY || "" });
   });
 
   app.post("/api/demo/seed", async (_req, res) => {

@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CreditCard, FileText, Receipt, TrendingUp } from "lucide-react";
+import { CreditCard, FileText, Receipt, TrendingUp, Bell, X, Trophy } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { usePriceLevels } from "@/hooks/use-price-levels";
+import { apiRequest } from "@/lib/queryClient";
 import type { Customer } from "@shared/schema";
 
 interface PortalDashboardProps {
@@ -13,6 +15,38 @@ interface PortalDashboardProps {
 
 export default function PortalDashboard({ customer }: PortalDashboardProps) {
   const priceLevelNames = usePriceLevels();
+  const [pushDismissed, setPushDismissed] = useState(() => localStorage.getItem("push_dismissed") === "1");
+  const [pushState, setPushState] = useState<"prompt" | "granted" | "denied" | "unsupported">("prompt");
+
+  useEffect(() => {
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+      setPushState("unsupported");
+    } else if (Notification.permission === "granted") {
+      setPushState("granted");
+    } else if (Notification.permission === "denied") {
+      setPushState("denied");
+    }
+  }, []);
+
+  const handleEnablePush = async () => {
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm === "granted") {
+        setPushState("granted");
+        // Subscribe to push (no VAPID needed for basic portal notifications)
+        await apiRequest("POST", `/api/portal/customer/${customer.id}/push/subscribe`, {
+          endpoint: "portal-native", keys: { p256dh: "portal", auth: "portal" }
+        }).catch(() => {/* non-fatal */});
+      } else {
+        setPushState("denied");
+      }
+    } catch {}
+  };
+
+  const dismissPush = () => {
+    setPushDismissed(true);
+    localStorage.setItem("push_dismissed", "1");
+  };
   const { data: statement, isLoading: loadingStatement } = useQuery<any>({
     queryKey: ["/api/portal/customer", customer.id, "statement"],
   });
@@ -30,6 +64,25 @@ export default function PortalDashboard({ customer }: PortalDashboardProps) {
 
   return (
     <div className="space-y-6">
+      {/* Push notification opt-in banner */}
+      {!pushDismissed && pushState === "prompt" && (
+        <div className="flex items-center gap-3 p-3 rounded-xl border border-primary/30 bg-primary/5">
+          <Bell className="w-4 h-4 text-primary flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium">Enable notifications</p>
+            <p className="text-xs text-muted-foreground">Get updates when orders are confirmed or invoices are ready</p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button size="sm" onClick={handleEnablePush} data-testid="button-enable-notifications" className="h-7 text-xs">
+              Enable
+            </Button>
+            <Button size="icon" variant="ghost" onClick={dismissPush} className="h-7 w-7" data-testid="button-dismiss-notifications">
+              <X className="w-3 h-3" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div>
         <h1 className="text-2xl font-semibold" data-testid="text-portal-welcome">Welcome, {customer.name}</h1>
         <p className="text-sm text-muted-foreground mt-1">Your account overview and recent activity</p>

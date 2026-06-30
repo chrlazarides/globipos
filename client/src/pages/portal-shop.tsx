@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Search, ShoppingCart, Plus, Minus, X, Package } from "lucide-react";
+import { Search, ShoppingCart, Plus, Minus, X, Package, ScanBarcode } from "lucide-react";
 import type { Customer, Item, Category } from "@shared/schema";
 
 interface PortalShopProps {
@@ -25,6 +25,11 @@ export default function PortalShop({ customer }: PortalShopProps) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [scanMode, setScanMode] = useState(false);
+  const [scanError, setScanError] = useState("");
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const scanningRef = useRef(false);
   const { toast } = useToast();
 
   const { data: catalog, isLoading } = useQuery<{ items: Item[]; categories: Category[] }>({
@@ -71,6 +76,54 @@ export default function PortalShop({ customer }: PortalShopProps) {
   const vatAmount = cartTotal * 0.19;
   const grandTotal = cartTotal + vatAmount;
 
+  const startScan = useCallback(async () => {
+    setScanError("");
+    setScanMode(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      streamRef.current = stream;
+      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+
+      if ("BarcodeDetector" in window) {
+        const BarcodeDetectorAPI = (window as any).BarcodeDetector;
+        const detector = new BarcodeDetectorAPI({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"] });
+        scanningRef.current = true;
+        const tick = async () => {
+          if (!scanningRef.current || !videoRef.current) return;
+          try {
+            const barcodes = await detector.detect(videoRef.current);
+            if (barcodes.length > 0) {
+              const bc: string = barcodes[0].rawValue;
+              stopScan();
+              const found = items.find((i: Item) => i.barcode === bc);
+              if (found) {
+                addToCart(found);
+                toast({ title: "Item scanned", description: found.name });
+              } else {
+                setScanError(`Barcode "${bc}" not found in catalog`);
+              }
+              return;
+            }
+          } catch { /* frame not ready yet */ }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      } else {
+        setScanError("Your browser doesn't support native barcode detection. Enter the barcode manually in search.");
+      }
+    } catch {
+      setScanError("Camera access denied.");
+      setScanMode(false);
+    }
+  }, [items]);
+
+  const stopScan = () => {
+    scanningRef.current = false;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setScanMode(false);
+  };
+
   const handleSubmit = async () => {
     if (cart.length === 0) return;
     setSubmitting(true);
@@ -114,7 +167,36 @@ export default function PortalShop({ customer }: PortalShopProps) {
                 data-testid="input-portal-search"
               />
             </div>
+            <Button
+              variant={scanMode ? "default" : "outline"}
+              size="icon"
+              onClick={scanMode ? stopScan : startScan}
+              title="Scan barcode"
+              data-testid="button-scan-barcode"
+            >
+              <ScanBarcode className="w-4 h-4" />
+            </Button>
           </div>
+          {scanMode && (
+            <div className="relative rounded-xl overflow-hidden border bg-black aspect-video max-h-48">
+              <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-40 h-28 border-2 border-white rounded-lg opacity-60" />
+              </div>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="absolute top-1 right-1 bg-black/50 text-white hover:bg-black/70 h-7 w-7"
+                onClick={stopScan}
+              >
+                <X className="w-3 h-3" />
+              </Button>
+              <p className="absolute bottom-1 left-0 right-0 text-center text-xs text-white/80">Point camera at barcode</p>
+            </div>
+          )}
+          {scanError && (
+            <p className="text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{scanError}</p>
+          )}
 
           <div className="flex flex-wrap gap-1">
             <Button

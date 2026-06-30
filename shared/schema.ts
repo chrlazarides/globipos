@@ -709,6 +709,47 @@ export const posReturnOrderLines = pgTable("pos_return_order_lines", {
   restocked: boolean("restocked").notNull().default(true),
 });
 
+// ── Customer PWA: Push Subscriptions, Loyalty, OTP tokens ────────────────────
+
+export const customerPushSubscriptions = pgTable("customer_push_subscriptions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const customerLoyaltyPoints = pgTable("customer_loyalty_points", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  points: integer("points").notNull(),
+  type: text("type").notNull().default("earn"), // earn | redeem | adjust | expire
+  reason: text("reason"),
+  sourceType: text("source_type"), // invoice | portal_order | manual
+  sourceId: varchar("source_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const customerOtpTokens = pgTable("customer_otp_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  email: text("email").notNull(),
+  code: text("code").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  used: boolean("used").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCustomerPushSubscriptionSchema = createInsertSchema(customerPushSubscriptions).omit({ id: true, createdAt: true });
+export type InsertCustomerPushSubscription = z.infer<typeof insertCustomerPushSubscriptionSchema>;
+export type CustomerPushSubscription = typeof customerPushSubscriptions.$inferSelect;
+
+export const insertCustomerLoyaltyPointSchema = createInsertSchema(customerLoyaltyPoints).omit({ id: true, createdAt: true });
+export type InsertCustomerLoyaltyPoint = z.infer<typeof insertCustomerLoyaltyPointSchema>;
+export type CustomerLoyaltyPoint = typeof customerLoyaltyPoints.$inferSelect;
+
 // Insert schemas for Phase 3
 export const insertPosPromotionSchema = createInsertSchema(posPromotions).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertPosPromotion = z.infer<typeof insertPosPromotionSchema>;

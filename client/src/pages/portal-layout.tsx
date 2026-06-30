@@ -2,7 +2,7 @@ import { useState } from "react";
 import { LogoImg } from "@/components/logo-img";
 import { Switch, Route, useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Grape, LayoutDashboard, ShoppingCart, FileText, Receipt, LogOut, MessageCircle, Menu, X } from "lucide-react";
+import { Grape, LayoutDashboard, ShoppingCart, FileText, Receipt, LogOut, MessageCircle, Menu, X, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { Customer, SystemSetting } from "@shared/schema";
@@ -11,6 +11,7 @@ import PortalShop from "./portal-shop";
 import PortalOrders from "./portal-orders";
 import PortalStatement from "./portal-statement";
 import PortalChatbot from "./portal-chatbot";
+import PortalLoyalty from "./portal-loyalty";
 
 interface PortalLayoutProps {
   customer: Customer;
@@ -22,6 +23,7 @@ const navItems = [
   { title: "Shop", url: "/portal/shop", icon: ShoppingCart },
   { title: "My Orders", url: "/portal/orders", icon: Receipt },
   { title: "Invoices", url: "/portal/invoices", icon: FileText },
+  { title: "Loyalty", url: "/portal/loyalty", icon: Trophy },
   { title: "Order Assistant", url: "/portal/assistant", icon: MessageCircle },
 ];
 
@@ -109,6 +111,7 @@ export default function PortalLayout({ customer, onLogout }: PortalLayoutProps) 
           <Route path="/portal/shop" component={() => <PortalShop customer={customer} />} />
           <Route path="/portal/orders" component={() => <PortalOrders customer={customer} />} />
           <Route path="/portal/invoices" component={() => <PortalStatement customer={customer} />} />
+          <Route path="/portal/loyalty" component={() => <PortalLoyalty customer={customer} />} />
           <Route path="/portal/assistant" component={() => <PortalChatbot customer={customer} />} />
         </Switch>
       </main>
