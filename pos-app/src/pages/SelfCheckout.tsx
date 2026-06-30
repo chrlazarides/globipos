@@ -197,7 +197,7 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
     try {
       const result = await invoke<{ approved: boolean; reference?: string; error?: string }>(
         "process_card_payment",
-        { amount: totals.total, currency: "EUR", auto_confirm: true }
+        { amount: totals.total, currency: "EUR" }
       ).catch(() => ({ approved: false, error: "Terminal communication failed" }));
 
       if (result === null || result === undefined || typeof result !== "object") {

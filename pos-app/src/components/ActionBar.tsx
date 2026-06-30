@@ -1,6 +1,7 @@
 import {
   PauseIcon, PlayIcon, XCircleIcon, StickyNoteIcon, RepeatIcon,
   PercentIcon, TagIcon, SmartphoneIcon, ShieldIcon, RotateCcwIcon,
+  RotateCcw, CalendarClock, MonitorSmartphone,
 } from "lucide-react";
 import type { NumpadMode } from "../types";
 
@@ -17,6 +18,9 @@ interface ActionBarProps {
   onPromoCode: () => void;
   onFallbackRules: () => void;
   onRemoveDiscount: () => void;
+  onRefund?: () => void;
+  onShift?: () => void;
+  onSco?: () => void;
 }
 
 export function ActionBar({
@@ -32,6 +36,9 @@ export function ActionBar({
   onPromoCode,
   onFallbackRules,
   onRemoveDiscount,
+  onRefund,
+  onShift,
+  onSco,
 }: ActionBarProps) {
   type Btn = {
     label: string;
@@ -135,6 +142,28 @@ export function ActionBar({
       enabled: true,
       testId: "action-fallback",
     },
+    ...(onRefund ? [{
+      label: "Refund",
+      icon: RotateCcw,
+      onClick: onRefund,
+      enabled: true,
+      className: "text-amber-400 hover:bg-amber-950",
+      testId: "action-refund",
+    }] : []),
+    ...(onShift ? [{
+      label: "Shift",
+      icon: CalendarClock,
+      onClick: onShift,
+      enabled: true,
+      testId: "action-shift",
+    }] : []),
+    ...(onSco ? [{
+      label: "SCO Mode",
+      icon: MonitorSmartphone,
+      onClick: onSco,
+      enabled: true,
+      testId: "action-sco",
+    }] : []),
   ];
 
   return (

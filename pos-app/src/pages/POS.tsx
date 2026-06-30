@@ -1,16 +1,29 @@
 /**
  * Main POS selling screen.
- * Layout: [Category Nav + Layout Grid] | [Order Ticket]
+ * Layout: [Category Nav + ScaleBar + Layout Grid] | [Order Ticket]
  * Bottom: Action Bar
  * Top: Sync Header
+ *
+ * Phase 3 components wired:
+ *  - PaymentDialog  — full split-payment flow (cash/card/voucher/loyalty)
+ *  - RefundDialog   — return by receipt or manual item entry
+ *  - ShiftManager   — shift open/close, X-report, end-of-day Z-report
+ *  - SelfCheckout   — dedicated self-service checkout mode
+ *  - ScaleBar       — live weight display when scale is connected
+ *  - CustomerDisplay — pole display overlay when enabled
+ *  - useHardware    — receipt printing + cash drawer on payment complete
  */
 import { useState, useEffect, useCallback } from "react";
-import type { Product, Category, LayoutButton, CashierSession, TerminalConfig, NumpadMode, Order as OrderType, OrderLine as OrderLineType } from "../types";
+import type {
+  Product, Category, LayoutButton, CashierSession, TerminalConfig,
+  NumpadMode, Order as OrderType, OrderLine as OrderLineType,
+} from "../types";
 import { getProducts, getCategories, getLayout, getHeldOrders, getOrderLines } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
 import { useOrder } from "../hooks/useOrder";
 import { useBarcode } from "../hooks/useBarcode";
 import { usePermissions } from "../hooks/usePermissions";
+import { useHardware } from "../hooks/useHardware";
 import { SyncHeader } from "../components/SyncHeader";
 import { CategoryNav } from "../components/CategoryNav";
 import { LayoutGrid } from "../components/LayoutGrid";
@@ -18,7 +31,14 @@ import { OrderTicket } from "../components/OrderTicket";
 import { Numpad } from "../components/Numpad";
 import { ActionBar } from "../components/ActionBar";
 import { PinPrompt } from "../components/PinPrompt";
+import ScaleBar from "../components/ScaleBar";
+import CustomerDisplay from "../components/CustomerDisplay";
+import PaymentDialog from "../components/PaymentDialog";
+import RefundDialog from "../components/RefundDialog";
+import type { PaymentResult } from "../hooks/usePayment";
 import { FallbackRules } from "./FallbackRules";
+import ShiftManager from "./ShiftManager";
+import SelfCheckout from "./SelfCheckout";
 import type { UseSyncReturn } from "../hooks/useSync";
 
 interface POSProps {
@@ -28,105 +48,11 @@ interface POSProps {
   onLogout: () => void;
 }
 
-// ── Payment dialog ────────────────────────────────────────────────────────────
-
-function PayDialog({
-  total,
-  onPay,
-  onClose,
-}: {
-  total: number;
-  onPay: (method: string, tendered: number) => void;
-  onClose: () => void;
-}) {
-  const [method, setMethod] = useState<"cash" | "card">("cash");
-  const [tendered, setTendered] = useState(total.toFixed(2));
-
-  const change = Math.max(0, parseFloat(tendered || "0") - total);
-  const methods = ["cash", "card"] as const;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
-        <h2 className="text-white font-bold text-xl mb-5">Payment</h2>
-
-        {/* Total */}
-        <div className="bg-gray-800 rounded-xl px-4 py-3 mb-5 text-center">
-          <div className="text-gray-400 text-sm">Amount Due</div>
-          <div className="text-white text-3xl font-bold">{formatCurrency(total)}</div>
-        </div>
-
-        {/* Payment method */}
-        <div className="flex gap-2 mb-4">
-          {methods.map((m) => (
-            <button
-              key={m}
-              onClick={() => setMethod(m)}
-              className={`flex-1 py-2.5 rounded-lg font-semibold text-sm capitalize transition-colors ${
-                method === m
-                  ? m === "cash" ? "bg-green-700 text-white" : "bg-blue-700 text-white"
-                  : "bg-gray-800 text-gray-400 hover:text-white"
-              }`}
-              data-testid={`pay-method-${m}`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-
-        {/* Cash tendered */}
-        {method === "cash" && (
-          <div className="mb-4">
-            <label className="text-gray-400 text-sm block mb-1.5">Cash Tendered</label>
-            <input
-              type="number"
-              value={tendered}
-              onChange={(e) => setTendered(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 text-white text-xl font-mono rounded-lg px-4 py-3 text-right focus:outline-none focus:ring-2 focus:ring-burgundy-500"
-              data-testid="input-tendered"
-              autoFocus
-            />
-            {change > 0 && (
-              <div className="text-green-400 text-sm mt-2 text-right">
-                Change: <span className="font-bold">{formatCurrency(change)}</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="flex gap-3 mt-5">
-          <button
-            onClick={onClose}
-            className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-semibold transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => onPay(method, method === "cash" ? parseFloat(tendered || String(total)) : total)}
-            className="flex-2 flex-[2] py-3 bg-green-700 hover:bg-green-600 text-white rounded-xl font-bold text-lg transition-colors"
-            data-testid="button-confirm-pay"
-          >
-            {method === "cash" ? "Confirm Cash" : "Confirm Card"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Note input dialog ─────────────────────────────────────────────────────────
 
 function NoteDialog({
-  title,
-  initial,
-  onConfirm,
-  onClose,
-}: {
-  title: string;
-  initial?: string;
-  onConfirm: (note: string) => void;
-  onClose: () => void;
-}) {
+  title, initial, onConfirm, onClose,
+}: { title: string; initial?: string; onConfirm: (note: string) => void; onClose: () => void; }) {
   const [note, setNote] = useState(initial ?? "");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
@@ -142,9 +68,7 @@ function NoteDialog({
           data-testid="input-note"
         />
         <div className="flex gap-3 mt-4">
-          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
-            Cancel
-          </button>
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Cancel</button>
           <button onClick={() => { onConfirm(note); onClose(); }}
             className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors"
             data-testid="button-save-note">
@@ -159,12 +83,8 @@ function NoteDialog({
 // ── Promo code dialog ─────────────────────────────────────────────────────────
 
 function PromoDialog({
-  onApply,
-  onClose,
-}: {
-  onApply: (code: string) => { success: boolean; message: string };
-  onClose: () => void;
-}) {
+  onApply, onClose,
+}: { onApply: (code: string) => { success: boolean; message: string }; onClose: () => void; }) {
   const [code, setCode] = useState("");
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
 
@@ -189,14 +109,10 @@ function PromoDialog({
           autoFocus
         />
         {result && (
-          <p className={`mt-2 text-sm ${result.success ? "text-green-400" : "text-red-400"}`}>
-            {result.message}
-          </p>
+          <p className={`mt-2 text-sm ${result.success ? "text-green-400" : "text-red-400"}`}>{result.message}</p>
         )}
         <div className="flex gap-3 mt-4">
-          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
-            Cancel
-          </button>
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Cancel</button>
           <button onClick={handleApply} disabled={!code.trim()}
             className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
             data-testid="button-apply-promo">
@@ -210,10 +126,7 @@ function PromoDialog({
 
 // ── Recall dialog ─────────────────────────────────────────────────────────────
 
-function RecallDialog({
-  onRecall,
-  onClose,
-}: {
+function RecallDialog({ onRecall, onClose }: {
   onRecall: (order: OrderType, lines: OrderLineType[]) => void;
   onClose: () => void;
 }) {
@@ -222,9 +135,7 @@ function RecallDialog({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getHeldOrders().then((h) => {
-      setHeld(h as HeldOrder[]);
-    }).finally(() => setLoading(false));
+    getHeldOrders().then((h) => { setHeld(h as HeldOrder[]); }).finally(() => setLoading(false));
   }, []);
 
   async function recall(heldOrder: HeldOrder) {
@@ -259,9 +170,7 @@ function RecallDialog({
             ))}
           </div>
         )}
-        <button onClick={onClose} className="mt-4 w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
-          Close
-        </button>
+        <button onClick={onClose} className="mt-4 w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Close</button>
       </div>
     </div>
   );
@@ -269,21 +178,23 @@ function RecallDialog({
 
 // ── Main POS Screen ───────────────────────────────────────────────────────────
 
-type Dialog = "pay" | "numpad" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | null;
+type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | null;
 type GridLayout = { columns: number; rows: number };
+type POSMode = "sell" | "sco" | "shift" | "fallback";
 
 export function POS({ config, session, sync, onLogout }: POSProps) {
-  const engine = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
-  const perms  = usePermissions(session);
+  const engine  = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
+  const perms   = usePermissions(session);
+  const hw      = useHardware();
 
-  const [products, setProducts]         = useState<Product[]>([]);
-  const [categories, setCategories]     = useState<Category[]>([]);
+  const [products, setProducts]           = useState<Product[]>([]);
+  const [categories, setCategories]       = useState<Category[]>([]);
   const [layoutButtons, setLayoutButtons] = useState<LayoutButton[]>([]);
-  const [gridLayout, setGridLayout]     = useState<GridLayout>({ columns: 4, rows: 5 });
+  const [gridLayout, setGridLayout]       = useState<GridLayout>({ columns: 4, rows: 5 });
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [dialog, setDialog]             = useState<Dialog>(null);
-  const [numpadMode, setNumpadModeState] = useState<NumpadMode>("qty");
-  const [showFallback, setShowFallback] = useState(false);
+  const [dialog, setDialog]               = useState<Dialog>(null);
+  const [numpadMode, setNumpadModeState]  = useState<NumpadMode>("qty");
+  const [mode, setMode]                   = useState<POSMode>(config.sco_mode ? "sco" : "sell");
 
   // Load local data on mount
   useEffect(() => {
@@ -291,10 +202,9 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     getCategories().then(setCategories).catch(() => {});
     getLayout().then((btns) => {
       setLayoutButtons(btns);
-      // Auto-detect grid size from max position
       if (btns.length > 0) {
         const maxPos = Math.max(...btns.map((b) => b.position));
-        const cols = 4; // default; server sets this via layout set
+        const cols = 4;
         setGridLayout({ columns: cols, rows: Math.ceil((maxPos + 1) / cols) });
       }
     }).catch(() => {});
@@ -312,34 +222,29 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     getProducts(selectedCategory ?? undefined).then(setProducts).catch(() => {});
   }, [selectedCategory]);
 
-  // Barcode scanner
+  // Barcode scanner — active only in sell mode with no dialog open
   useBarcode({
-    enabled: dialog === null && !showFallback,
+    enabled: mode === "sell" && dialog === null,
     onScan: async (barcode) => {
       const { getProductByBarcode } = await import("../lib/db");
       const product = await getProductByBarcode(barcode);
-      if (product) {
-        engine.addProduct(product);
-      } else {
-        // Trigger search with the barcode value
-        setProducts([]);
-      }
+      if (product) engine.addProduct(product);
     },
   });
 
-  // ── Action dispatcher (from layout grid action buttons and action bar) ──────
+  // ── Action dispatcher ──────────────────────────────────────────────────────
   const handleAction = useCallback((code: string) => {
     switch (code) {
-      case "CLEAR_ORDER":    engine.clearOrder(); break;
-      case "VOID_ORDER":     perms.requestAction("void_order", () => { engine.voidOrder(); }); break;
-      case "HOLD_ORDER":     engine.holdOrder(); break;
-      case "RECALL_ORDER":   setDialog("recall"); break;
-      case "REPEAT_LAST":    engine.repeatLastItem(); break;
-      case "ADD_LINE_NOTE":  setDialog("note_line"); break;
-      case "ADD_NOTE":       setDialog("note_order"); break;
-      case "PRICE_CHECK":    setDialog("price_check"); break;
-      case "PROMO_CODE":     setDialog("promo"); break;
-      case "PRICE_OVERRIDE": perms.requestAction("price_override", () => { setNumpadModeState("price_override"); setDialog("numpad"); }); break;
+      case "CLEAR_ORDER":         engine.clearOrder(); break;
+      case "VOID_ORDER":          perms.requestAction("void_order", () => { engine.voidOrder(); }); break;
+      case "HOLD_ORDER":          engine.holdOrder(); break;
+      case "RECALL_ORDER":        setDialog("recall"); break;
+      case "REPEAT_LAST":         engine.repeatLastItem(); break;
+      case "ADD_LINE_NOTE":       setDialog("note_line"); break;
+      case "ADD_NOTE":            setDialog("note_order"); break;
+      case "PRICE_CHECK":         setDialog("price_check"); break;
+      case "PROMO_CODE":          setDialog("promo"); break;
+      case "PRICE_OVERRIDE":      perms.requestAction("price_override", () => { setNumpadModeState("price_override"); setDialog("numpad"); }); break;
       case "LINE_DISCOUNT_PCT":   perms.requestAction("discount", () => { setNumpadModeState("line_discount_pct"); setDialog("numpad"); }); break;
       case "LINE_DISCOUNT_FIXED": perms.requestAction("discount", () => { setNumpadModeState("line_discount_fixed"); setDialog("numpad"); }); break;
       case "ORDER_DISCOUNT_PCT":  perms.requestAction("discount", () => { setNumpadModeState("order_discount_pct"); setDialog("numpad"); }); break;
@@ -350,13 +255,13 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "PRICE_LEVEL_3": engine.switchPriceLevel(3); break;
       case "PRICE_LEVEL_4": engine.switchPriceLevel(4); break;
       case "PRICE_LEVEL_5": engine.switchPriceLevel(5); break;
-      case "FALLBACK_RULES": setShowFallback(true); break;
+      case "FALLBACK_RULES": setMode("fallback"); break;
       case "PAY_CASH":
-      case "PAY_CARD":       setDialog("pay"); break;
+      case "PAY_CARD": setDialog("payment"); break;
     }
   }, [engine, perms]);
 
-  // ── Numpad confirm ────────────────────────────────────────────────────────────
+  // ── Numpad confirm ────────────────────────────────────────────────────────
   function handleNumpadConfirm(value: number) {
     switch (numpadMode) {
       case "qty":                  engine.setQty(value); break;
@@ -368,20 +273,61 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     }
   }
 
-  // ── Pay ───────────────────────────────────────────────────────────────────────
-  async function handlePay(method: string, tendered: number) {
+  // ── Payment complete ──────────────────────────────────────────────────────
+  async function handlePaymentComplete(result: PaymentResult) {
     try {
-      const completed = await engine.completeOrder(method, tendered, session.cashier_id, session.cashier_name);
+      const method = result.tenders.length === 1
+        ? result.tenders[0].method
+        : "split";
+      await engine.completeOrder(method, result.totalTendered, session.cashier_id, session.cashier_name);
       setDialog(null);
-      // Trigger outbox flush
       sync.triggerOutboxFlush();
+
+      // Print receipt if printer is online
+      if (hw.printerStatus === "online" && hw.config?.printer_enabled) {
+        const receiptLines = engine.lines.map((l) => ({
+          text: `${l.description}  x${l.qty}  ${formatCurrency(l.line_total)}`,
+        }));
+        await hw.printReceipt(receiptLines);
+      }
+
+      // Open cash drawer for cash payments
+      const hasCash = result.tenders.some((t) => t.method === "cash");
+      if (hasCash && hw.config?.drawer_enabled) {
+        await hw.openDrawer();
+      }
     } catch (e) {
-      console.error("Pay failed:", e);
+      console.error("Payment complete failed:", e);
     }
   }
 
-  if (showFallback) {
-    return <FallbackRules onClose={() => setShowFallback(false)} />;
+  // ── Special modes ─────────────────────────────────────────────────────────
+
+  if (mode === "sco") {
+    return (
+      <SelfCheckout
+        cashierId={session.cashier_id}
+        cashierName={session.cashier_name}
+        terminalPrefix={config.terminal_code}
+        onExit={() => setMode("sell")}
+      />
+    );
+  }
+
+  if (mode === "shift") {
+    return (
+      <ShiftManager
+        cashierId={session.cashier_id}
+        cashierName={session.cashier_name}
+        terminalName={config.terminal_name}
+        onPrint={(lines) => hw.printReceipt(lines)}
+        onClose={() => setMode("sell")}
+      />
+    );
+  }
+
+  if (mode === "fallback") {
+    return <FallbackRules onClose={() => setMode("sell")} />;
   }
 
   const selectedLine = engine.lines.find((l) => l.id === engine.selectedLineId);
@@ -406,9 +352,17 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         onSelect={setSelectedCategory}
       />
 
+      {/* Scale bar — shown when scale is connected */}
+      {hw.config?.scale_enabled && (
+        <ScaleBar
+          weight={hw.scaleWeight}
+          error={hw.scaleError}
+          onTare={hw.tare}
+        />
+      )}
+
       {/* Main content: grid + ticket */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Left: Layout grid */}
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <LayoutGrid
             buttons={layoutButtons}
@@ -422,7 +376,6 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           />
         </div>
 
-        {/* Right: Order ticket */}
         <OrderTicket
           order={engine.order}
           lines={engine.lines}
@@ -432,12 +385,12 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onSubQty={engine.subtractQty}
           onRemoveLine={engine.removeLine}
           onVoidLine={() => perms.requestAction("void_line", engine.voidLine)}
-          onPay={() => setDialog("pay")}
+          onPay={() => setDialog("payment")}
           onClear={engine.clearOrder}
         />
       </div>
 
-      {/* Action bar */}
+      {/* Action bar — with Phase 3 buttons */}
       <ActionBar
         hasLines={hasLines}
         hasSelectedLine={!!selectedLine && !selectedLine.voided}
@@ -447,21 +400,40 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         onLineNote={() => setDialog("note_line")}
         onOrderNote={() => setDialog("note_order")}
         onRepeatLast={engine.repeatLastItem}
-        onNumpad={(mode) => { setNumpadModeState(mode); setDialog("numpad"); }}
+        onNumpad={(m) => { setNumpadModeState(m); setDialog("numpad"); }}
         onPromoCode={() => setDialog("promo")}
-        onFallbackRules={() => setShowFallback(true)}
+        onFallbackRules={() => setMode("fallback")}
         onRemoveDiscount={engine.removeDiscount}
+        onRefund={() => setDialog("refund")}
+        onShift={() => setMode("shift")}
+        onSco={() => setMode("sco")}
       />
 
       {/* ── Dialogs ── */}
 
-      {dialog === "pay" && (
-        <PayDialog
-          total={engine.order.total}
-          onPay={handlePay}
-          onClose={() => setDialog(null)}
-        />
-      )}
+      {/* Full PaymentDialog (Phase 3) — replaces the simple inline PayDialog */}
+      <PaymentDialog
+        open={dialog === "payment"}
+        orderTotal={engine.order.total}
+        onComplete={handlePaymentComplete}
+        onCancel={() => setDialog(null)}
+      />
+
+      {/* RefundDialog (Phase 3) */}
+      <RefundDialog
+        open={dialog === "refund"}
+        cashierId={session.cashier_id}
+        cashierName={session.cashier_name}
+        onComplete={(refundTotal, method) => {
+          setDialog(null);
+          sync.triggerOutboxFlush();
+          // Open drawer for cash refunds
+          if (method === "cash" && hw.config?.drawer_enabled) {
+            hw.openDrawer();
+          }
+        }}
+        onCancel={() => setDialog(null)}
+      />
 
       {dialog === "numpad" && (
         <Numpad
@@ -499,9 +471,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
 
       {dialog === "recall" && (
         <RecallDialog
-          onRecall={(heldOrder, heldLines) => {
-            engine.recallOrder(heldOrder, heldLines);
-          }}
+          onRecall={(heldOrder, heldLines) => { engine.recallOrder(heldOrder, heldLines); }}
           onClose={() => setDialog(null)}
         />
       )}
@@ -515,6 +485,9 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onDenied={perms.onPinDenied}
         />
       )}
+
+      {/* Customer display — reads from Tauri store; rendered when enabled */}
+      {hw.config?.customer_display_enabled && <CustomerDisplay />}
     </div>
   );
 }

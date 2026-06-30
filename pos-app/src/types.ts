@@ -120,6 +120,10 @@ export interface TerminalConfig {
   location_id: string;
   location_name: string;
   price_level: number;
+  /** Optional local mirror server. Outbox is routed here first; primary is the fallback. */
+  mirror_server_url?: string;
+  /** If true, terminal boots directly into self-checkout mode (no cashier UI). */
+  sco_mode?: boolean;
 }
 
 // ── Sync ──────────────────────────────────────────────────────────────────────

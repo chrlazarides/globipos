@@ -1,8 +1,14 @@
 /**
  * Sync engine hooks — background polling for catalog, inbox, outbox, and heartbeat.
+ *
+ * Mirror server routing: when `config.mirror_server_url` is set, the outbox
+ * flush is sent to the mirror first (local relay). If the mirror is unreachable,
+ * the primary `server_url` is used as fallback. This allows store-local servers
+ * to act as a resilience layer before data propagates to the cloud.
  */
-import { useState, useEffect, useCallback, useRef } from "react";
-import type { SyncStatus } from "../types";
+import { useState, useEffect, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import type { SyncStatus, TerminalConfig } from "../types";
 import {
   syncCatalog,
   syncInbox,
@@ -22,12 +28,12 @@ export interface UseSyncReturn {
   triggerOutboxFlush: () => Promise<void>;
 }
 
-const CATALOG_INTERVAL_MS  = 15 * 60 * 1000;  // 15 min
-const INBOX_INTERVAL_MS    =  5 * 60 * 1000;  // 5 min
-const OUTBOX_INTERVAL_MS   = 30 * 1000;        // 30 s
-const HEARTBEAT_INTERVAL_MS = 60 * 1000;       // 1 min
+const CATALOG_INTERVAL_MS   = 15 * 60 * 1000;  // 15 min
+const INBOX_INTERVAL_MS     =  5 * 60 * 1000;  // 5 min
+const OUTBOX_INTERVAL_MS    = 30 * 1000;        // 30 s
+const HEARTBEAT_INTERVAL_MS = 60 * 1000;        // 1 min
 
-export function useSync(isConfigured: boolean): UseSyncReturn {
+export function useSync(isConfigured: boolean, config: TerminalConfig | null = null): UseSyncReturn {
   const [status, setStatus] = useState<SyncStatus>({
     online: false,
     syncing: false,
@@ -81,12 +87,31 @@ export function useSync(isConfigured: boolean): UseSyncReturn {
     await refreshStatus();
   }, [refreshStatus, refreshTimedPrices, refreshNotifications]);
 
+  /**
+   * Mirror-first outbox flush.
+   *
+   * Flow:
+   *   1. If mirror_server_url is configured → invoke flush_outbox_mirror(mirrorUrl)
+   *      which tries the mirror, falls back to primary in Rust if mirror unreachable.
+   *   2. If no mirror → invoke standard flush_outbox (primary only).
+   *
+   * This ensures locally-hosted mirror servers are preferred for low-latency
+   * sync while the central server remains the authoritative fallback.
+   */
   const triggerOutboxFlush = useCallback(async () => {
     try {
-      await flushOutbox();
-    } catch {}
+      const mirrorUrl = config?.mirror_server_url;
+      if (mirrorUrl && mirrorUrl.trim()) {
+        // Mirror-first routing via dedicated Rust command
+        await invoke("flush_outbox_mirror", { mirrorUrl: mirrorUrl.trim() });
+      } else {
+        await flushOutbox();
+      }
+    } catch {
+      // Any failure (both mirror and primary failed) — status will show failed count
+    }
     await refreshStatus();
-  }, [refreshStatus]);
+  }, [config, refreshStatus]);
 
   // Kick off background polling when terminal is configured
   useEffect(() => {
@@ -108,7 +133,7 @@ export function useSync(isConfigured: boolean): UseSyncReturn {
     // Inbox sync every 5 min
     const inboxTimer = setInterval(triggerInboxSync, INBOX_INTERVAL_MS);
 
-    // Outbox flush every 30 s
+    // Outbox flush every 30 s (mirror-first if mirror_server_url set)
     const outboxTimer = setInterval(triggerOutboxFlush, OUTBOX_INTERVAL_MS);
 
     return () => {
@@ -117,7 +142,8 @@ export function useSync(isConfigured: boolean): UseSyncReturn {
       clearInterval(inboxTimer);
       clearInterval(outboxTimer);
     };
-  }, [isConfigured, refreshStatus, refreshTimedPrices, refreshNotifications, triggerCatalogSync, triggerInboxSync, triggerOutboxFlush]);
+  }, [isConfigured, refreshStatus, refreshTimedPrices, refreshNotifications,
+      triggerCatalogSync, triggerInboxSync, triggerOutboxFlush]);
 
   return {
     status,

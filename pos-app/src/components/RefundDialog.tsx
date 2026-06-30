@@ -31,7 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { RotateCcw, Search, Loader2, AlertCircle, Check } from "lucide-react";
+import { RotateCcw, Search, Loader2, AlertCircle, Check, Plus, Trash2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { v4 as uuidv4 } from "uuid";
 
@@ -126,10 +126,13 @@ export default function RefundDialog({
     }
   }, [receiptNumber]);
 
-  // ── Start without receipt ───────────────────────────────────────────────────
+  // ── Manual item entry (no-receipt) ─────────────────────────────────────────
+
+  const [manualDesc, setManualDesc]   = useState("");
+  const [manualQty, setManualQty]     = useState("1");
+  const [manualPrice, setManualPrice] = useState("");
 
   function startWithoutReceipt() {
-    // Create a blank order placeholder
     setOriginalOrder({
       id: "",
       order_number: "NO-RECEIPT",
@@ -139,6 +142,38 @@ export default function RefundDialog({
       lines: [],
     });
     setStage("select_lines");
+  }
+
+  function addManualLine() {
+    const qty   = parseFloat(manualQty)   || 1;
+    const price = parseFloat(manualPrice) || 0;
+    if (!manualDesc.trim() || price <= 0) return;
+    const newLine: OriginalLine = {
+      id:          `manual-${Date.now()}`,
+      description: manualDesc.trim(),
+      qty,
+      unit_price:  price,
+      line_total:  qty * price,
+    };
+    setOriginalOrder((prev) => prev
+      ? { ...prev, lines: [...prev.lines, newLine] }
+      : prev
+    );
+    // Auto-select the new line
+    setSelectedLineIds((prev) => new Set([...prev, newLine.id]));
+    setReturnQty((prev) => ({ ...prev, [newLine.id]: qty }));
+    // Reset the entry fields
+    setManualDesc("");
+    setManualQty("1");
+    setManualPrice("");
+  }
+
+  function removeManualLine(id: string) {
+    setOriginalOrder((prev) =>
+      prev ? { ...prev, lines: prev.lines.filter((l) => l.id !== id) } : prev
+    );
+    setSelectedLineIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    setReturnQty((prev) => { const n = { ...prev }; delete n[id]; return n; });
   }
 
   // ── Line selection ──────────────────────────────────────────────────────────
@@ -273,7 +308,7 @@ export default function RefundDialog({
               </div>
             </div>
 
-            <div className="space-y-1.5 max-h-52 overflow-y-auto">
+            <div className="space-y-1.5 max-h-44 overflow-y-auto">
               {originalOrder.lines.map((line) => (
                 <div
                   key={line.id}
@@ -301,12 +336,75 @@ export default function RefundDialog({
                   <span className="text-sm font-mono w-16 text-right">
                     €{(line.unit_price * (returnQty[line.id] ?? line.qty)).toFixed(2)}
                   </span>
+                  {originalOrder.order_number === "NO-RECEIPT" && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); removeManualLine(line.id); }}
+                      className="text-muted-foreground hover:text-destructive shrink-0"
+                      data-testid={`btn-remove-manual-line-${line.id}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               ))}
-              {originalOrder.lines.length === 0 && (
-                <p className="text-sm text-muted-foreground text-center py-4">No items to return.</p>
+              {originalOrder.lines.length === 0 && originalOrder.order_number === "NO-RECEIPT" && (
+                <p className="text-sm text-muted-foreground text-center py-3">
+                  Add items below to process the return.
+                </p>
               )}
             </div>
+
+            {/* Manual item entry — only shown for no-receipt returns */}
+            {originalOrder.order_number === "NO-RECEIPT" && (
+              <div className="rounded border border-dashed p-3 space-y-2 bg-muted/20">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Add item manually
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    data-testid="input-manual-desc"
+                    placeholder="Description"
+                    value={manualDesc}
+                    onChange={(e) => setManualDesc(e.target.value)}
+                    className="flex-[3]"
+                    onKeyDown={(e) => e.key === "Enter" && addManualLine()}
+                  />
+                  <Input
+                    data-testid="input-manual-qty"
+                    placeholder="Qty"
+                    type="number"
+                    min={0.1}
+                    step={0.1}
+                    value={manualQty}
+                    onChange={(e) => setManualQty(e.target.value)}
+                    className="w-16 text-center"
+                  />
+                  <div className="relative flex-[1.5]">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">€</span>
+                    <Input
+                      data-testid="input-manual-price"
+                      placeholder="0.00"
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={manualPrice}
+                      onChange={(e) => setManualPrice(e.target.value)}
+                      className="pl-6"
+                      onKeyDown={(e) => e.key === "Enter" && addManualLine()}
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    data-testid="btn-add-manual-line"
+                    onClick={addManualLine}
+                    disabled={!manualDesc.trim() || parseFloat(manualPrice) <= 0}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* Refund method */}
             <div className="space-y-1">

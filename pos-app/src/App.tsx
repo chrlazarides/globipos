@@ -19,7 +19,7 @@ export function App() {
   const [config, setConfig]   = useState<TerminalConfig | null>(null);
   const [session, setSession] = useState<CashierSession | null>(null);
 
-  const sync = useSync(config !== null);
+  const sync = useSync(config !== null, config);
 
   // On mount: init SQLite and check if we have a stored config
   useEffect(() => {

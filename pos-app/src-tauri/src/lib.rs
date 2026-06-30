@@ -272,21 +272,56 @@ async fn flush_outbox(state: State<'_, AppState>) -> Result<usize, String> {
     };
 
     let result = sync::flush_outbox(&state.db, &server_url, &terminal_code).await?;
+    update_outbox_counts(&*state).await?;
+    Ok(result)
+}
 
+/// Mirror-first outbox flush.
+///
+/// Tries to flush pending outbox items to `mirror_url` first (a local relay server
+/// for low-latency resilience). If the mirror is unreachable or returns an error,
+/// falls back to the configured primary `server_url` automatically.
+///
+/// Items successfully synced by the mirror are marked as `synced` and will NOT be
+/// retried against the primary, preventing double-delivery.
+#[tauri::command]
+async fn flush_outbox_mirror(
+    state:      State<'_, AppState>,
+    mirror_url: String,
+) -> Result<usize, String> {
+    let (primary_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    // Attempt mirror first; if it fails (network error, non-200, etc.) fall back
+    // to the primary. Any items marked synced by the mirror step are excluded from
+    // the fallback because flush_outbox only processes `status='pending'` rows.
+    let result = match sync::flush_outbox(&state.db, &mirror_url, &terminal_code).await {
+        Ok(n) => Ok(n),
+        Err(_) => {
+            // Mirror unreachable — use primary as fallback
+            sync::flush_outbox(&state.db, &primary_url, &terminal_code).await
+        }
+    }?;
+
+    update_outbox_counts(&*state).await?;
+    Ok(result)
+}
+
+/// Helper: refresh the in-memory outbox_pending / outbox_failed counters.
+async fn update_outbox_counts(state: &AppState) -> Result<(), String> {
     let pending: i64 = sqlx::query("SELECT COUNT(*) as c FROM pos_outbox WHERE status='pending'")
         .fetch_one(&state.db).await.map_err(|e| e.to_string())?
         .try_get("c").unwrap_or(0);
     let failed: i64 = sqlx::query("SELECT COUNT(*) as c FROM pos_outbox WHERE status='failed'")
         .fetch_one(&state.db).await.map_err(|e| e.to_string())?
         .try_get("c").unwrap_or(0);
-
-    {
-        let mut s = state.sync_status.lock().unwrap();
-        s.outbox_pending = pending as i32;
-        s.outbox_failed  = failed  as i32;
-    }
-
-    Ok(result)
+    let mut s = state.sync_status.lock().unwrap();
+    s.outbox_pending = pending as i32;
+    s.outbox_failed  = failed  as i32;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1013,6 +1048,7 @@ pub fn run() {
             sync_catalog,
             sync_inbox,
             flush_outbox,
+            flush_outbox_mirror,
             get_sync_status,
             get_fallback_rules,
             update_fallback_rule,

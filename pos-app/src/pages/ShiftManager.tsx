@@ -35,13 +35,14 @@ interface ShiftManagerProps {
   cashierName: string;
   terminalName?: string;
   onPrint?: (lines: PrintReceiptLine[]) => void;
+  onClose?: () => void;
 }
 
 function fmt(n: number) {
   return `€${(n ?? 0).toFixed(2)}`;
 }
 
-export default function ShiftManager({ cashierId, cashierName, terminalName = "Terminal", onPrint }: ShiftManagerProps) {
+export default function ShiftManager({ cashierId, cashierName, terminalName = "Terminal", onPrint, onClose }: ShiftManagerProps) {
   const shift = useShift();
 
   // Open shift state
@@ -233,11 +234,18 @@ export default function ShiftManager({ cashierId, cashierName, terminalName = "T
     <div className="flex flex-col gap-6 p-6" data-testid="shift-dashboard">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold">{terminalName} — Shift Open</h2>
-          <p className="text-muted-foreground text-sm">
-            Opened: {new Date(s.opened_at).toLocaleString()} · Cashier: {s.cashier_name}
-          </p>
+        <div className="flex items-center gap-3">
+          {onClose && (
+            <Button variant="ghost" size="sm" data-testid="btn-shift-back" onClick={onClose}>
+              ← Back
+            </Button>
+          )}
+          <div>
+            <h2 className="text-xl font-bold">{terminalName} — Shift Open</h2>
+            <p className="text-muted-foreground text-sm">
+              Opened: {new Date(s.opened_at).toLocaleString()} · Cashier: {s.cashier_name}
+            </p>
+          </div>
         </div>
         <Button
           variant="destructive"
