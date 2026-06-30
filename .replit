@@ -11,6 +11,11 @@ localPort = 5000
 externalPort = 80
 
 [[ports]]
+localPort = 5173
+externalPort = 5173
+exposeLocalhost = true
+
+[[ports]]
 localPort = 5904
 externalPort = 3000
 
@@ -34,6 +39,10 @@ author = "agent"
 task = "workflow.run"
 args = "Start application"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Customer App"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -43,9 +52,28 @@ task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
 
+[[workflows.workflow]]
+name = "Customer App"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd customer-app && npx vite --port 5173"
+waitForPort = 5173
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [agent]
 integrations = ["sendgrid:1.0.0", "resend:1.0.0"]
 
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+VAPID_PUBLIC_KEY = "BMDKWb-vcF3nZpBSvjSjft3VYVM12Wazmh6Rs0GGyUYhWH_gHUjLJX76SMs4pTCq4GVouN4M7o2R_UZSotwIk68"
+VAPID_PRIVATE_KEY = "dGdWGNLp04xyD24aAAiaunrE4JcI5Ner2PUhft21LH0"
+VAPID_CONTACT_EMAIL = "admin@globipos.com"
