@@ -161,16 +161,22 @@ export default function Account({ customer }: AccountProps) {
                     <p className={`text-[10px] font-medium capitalize ${statusColor(inv.status)}`}>{inv.status}</p>
                   </div>
                   {token && (
-                    <a
-                      href={`/api/invoices/${inv.id}/pdf?token=${encodeURIComponent(token)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      onClick={async () => {
+                        const res = await fetch(`/api/customer/invoices/${inv.id}/pdf`, {
+                          headers: { Authorization: `Bearer ${token}` },
+                        });
+                        if (!res.ok) return;
+                        const html = await res.text();
+                        const win = window.open("", "_blank");
+                        if (win) { win.document.write(html); win.document.close(); }
+                      }}
                       className="flex-shrink-0 p-1.5 rounded-md hover:bg-[hsl(var(--muted))] transition-colors"
                       title="View PDF"
                       data-testid={`link-invoice-pdf-${inv.id}`}
                     >
                       <ExternalLink className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-                    </a>
+                    </button>
                   )}
                 </div>
               </div>

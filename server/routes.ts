@@ -1914,6 +1914,33 @@ export async function registerRoutes(
     }
   });
 
+  // Customer-authenticated invoice PDF — verifies ownership via customer JWT
+  app.get("/api/customer/invoices/:id/pdf", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const inv = await storage.getInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      if (inv.customerId !== auth.customerId) return res.status(403).json({ message: "Forbidden" });
+
+      const customer = await storage.getCustomer(inv.customerId);
+      const typeLabel = inv.type === "credit_note" ? "CREDIT NOTE" : inv.type === "proforma" ? "PROFORMA INVOICE" : inv.type === "quotation" ? "QUOTATION" : "INVOICE";
+
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
+        const item = li.itemId ? await storage.getItem(li.itemId) : null;
+        return { ...li, barcode: item?.barcode || null, lineVatRate: parseFloat(inv.taxRate || "19") };
+      }));
+
+      const html = generateInvoiceHtml({ ...inv, items: enrichedItems }, customer, typeLabel, false, settingsMap);
+      res.setHeader("Content-Type", "text/html");
+      res.send(html);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // Send invoice by email
   const sendEmailBodySchema = z.object({ email: z.string().email().optional() }).optional();
   app.post("/api/invoices/:id/send-email", async (req, res) => {

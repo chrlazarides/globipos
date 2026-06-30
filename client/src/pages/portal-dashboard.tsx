@@ -36,10 +36,14 @@ export default function PortalDashboard({ customer }: PortalDashboardProps) {
       try {
         const { publicKey } = await fetch("/api/public/vapid-key").then(r => r.json());
         if (!publicKey) return;
+        // Convert base64url-encoded VAPID public key to Uint8Array as required by pushManager.subscribe
+        const padding = "=".repeat((4 - (publicKey.length % 4)) % 4);
+        const base64 = (publicKey + padding).replace(/-/g, "+").replace(/_/g, "/");
+        const rawKey = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
         const registration = await navigator.serviceWorker.ready;
         const sub = await registration.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: publicKey,
+          applicationServerKey: rawKey,
         });
         const json = sub.toJSON();
         await portalApiRequest("POST", `/api/portal/customer/${customer.id}/push/subscribe`, {
