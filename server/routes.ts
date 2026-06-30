@@ -1508,14 +1508,18 @@ export async function registerRoutes(
       const data = insertSeasonalOfferSchema.parse(req.body);
       const offer = await storage.createSeasonalOffer(data);
       res.json(offer);
-      // Push notification to all subscribed customers about new seasonal offer
+      // Push notification to subscribed active customers about new seasonal offer
+      // Joins with customers so we can filter by active status and price level
       setImmediate(async () => {
         try {
-          const allSubs = await db.selectDistinct({ customerId: customerPushSubscriptions.customerId }).from(customerPushSubscriptions);
-          for (const { customerId } of allSubs) {
+          const subsWithCustomers = await db
+            .selectDistinct({ customerId: customerPushSubscriptions.customerId, priceLevel: customers.priceLevel })
+            .from(customerPushSubscriptions)
+            .innerJoin(customers, and(eq(customers.id, customerPushSubscriptions.customerId), eq(customers.active, true)));
+          for (const { customerId, priceLevel } of subsWithCustomers) {
             await sendPushToCustomer(customerId, {
               title: "New Special Offer!",
-              body: `${data.name || "A new offer"} is now available. Check it out in the shop.`,
+              body: `${data.name || "A new special offer"} is now available — ${data.discountPercentage}% off. Check it out in the shop.`,
               url: "/shop",
             });
           }
