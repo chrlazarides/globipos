@@ -9,6 +9,12 @@ pub struct TerminalConfig {
     pub location_id: String,
     pub location_name: String,
     pub price_level: i32,
+    /// Optional local mirror server. Outbox is routed here first; primary is fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror_server_url: Option<String>,
+    /// If true, terminal boots directly into self-checkout mode (no cashier UI).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sco_mode: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

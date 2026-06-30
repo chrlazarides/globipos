@@ -13,7 +13,8 @@
  *  - CustomerDisplay — pole display overlay when enabled
  *  - useHardware    — receipt printing + cash drawer on payment complete
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { load as loadStore } from "@tauri-apps/plugin-store";
 import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
@@ -224,6 +225,41 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     getProducts(selectedCategory ?? undefined).then(setProducts).catch(() => {});
   }, [selectedCategory]);
 
+  // Customer display: publish order state to shared Tauri store on every change.
+  // The CustomerDisplay component (in its own window or same window) polls this store.
+  const cdStoreRef = useRef<Awaited<ReturnType<typeof loadStore>> | null>(null);
+  useEffect(() => {
+    if (!hw.config?.customer_display_enabled) return;
+
+    async function publishDisplayState() {
+      try {
+        if (!cdStoreRef.current) {
+          cdStoreRef.current = await loadStore("customer_display.json");
+        }
+        const store = cdStoreRef.current;
+        const hasLines = engine.lines.length > 0;
+        await store.set("state", {
+          mode: hasLines ? "scanning" : "idle",
+          items: engine.lines.map((l) => ({
+            description: l.description,
+            qty: l.qty,
+            unit_price: l.unit_price,
+            line_total: l.line_total,
+          })),
+          subtotal: engine.order.subtotal,
+          vat:      engine.order.vat_amount,
+          total:    engine.order.total,
+          store_name: config.terminal_name,
+        });
+        await store.save();
+      } catch {
+        // Display store unavailable — non-critical
+      }
+    }
+
+    publishDisplayState();
+  }, [engine.lines, engine.order, hw.config?.customer_display_enabled, config.terminal_name]);
+
   // Start / stop scale weight polling based on config and mode
   useEffect(() => {
     if (hw.config?.scale_enabled && mode === "sell") {
@@ -303,6 +339,20 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       );
       const paymentRef = cardTender?.reference;
 
+      // Publish "payment" mode to customer display before completing
+      if (hw.config?.customer_display_enabled && cdStoreRef.current) {
+        await cdStoreRef.current.set("state", {
+          mode: "payment",
+          items: saleLines.map((l) => ({ description: l.description, qty: l.qty, unit_price: l.unit_price, line_total: l.line_total })),
+          subtotal: saleOrder.subtotal, vat: saleOrder.vat_amount,
+          total: saleOrder.total, payment_method: method,
+          amount_tendered: result.totalTendered,
+          change_due: result.changeDue,
+          store_name: config.terminal_name,
+        }).catch(() => {});
+        await cdStoreRef.current.save().catch(() => {});
+      }
+
       const completedOrder = await engine.completeOrder(
         method, result.totalTendered,
         session.cashier_id, session.cashier_name,
@@ -310,6 +360,19 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       );
       setDialog(null);
       sync.triggerOutboxFlush();
+
+      // Publish "complete" mode to customer display after order finalised
+      if (hw.config?.customer_display_enabled && cdStoreRef.current) {
+        await cdStoreRef.current.set("state", {
+          mode: "complete",
+          items: [], subtotal: 0, vat: 0,
+          total: completedOrder.total,
+          payment_method: method,
+          change_due: result.changeDue,
+          store_name: config.terminal_name,
+        }).catch(() => {});
+        await cdStoreRef.current.save().catch(() => {});
+      }
 
       // Record sale in the current shift (updates shift totals for X/Z reports)
       if (shift.isShiftOpen) {
