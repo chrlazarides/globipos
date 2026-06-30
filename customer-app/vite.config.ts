@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.png", "logo.png", "icons/*.png"],
+      includeAssets: ["favicon.png", "logo.png", "icons/*.svg", "icons/*.png"],
       manifest: {
         name: "GlobiPOS Shop",
         short_name: "GlobiShop",
@@ -19,12 +19,11 @@ export default defineConfig({
         orientation: "portrait",
         start_url: "/",
         icons: [
-          { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
-          { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
+          { src: "/icons/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" },
         ],
         shortcuts: [
-          { name: "Shop", url: "/shop", icons: [{ src: "/icons/icon-96.png", sizes: "96x96" }] },
-          { name: "My Orders", url: "/orders", icons: [{ src: "/icons/icon-96.png", sizes: "96x96" }] },
+          { name: "Shop", url: "/shop", icons: [{ src: "/icons/icon.svg", sizes: "any", type: "image/svg+xml" }] },
+          { name: "My Orders", url: "/orders", icons: [{ src: "/icons/icon.svg", sizes: "any", type: "image/svg+xml" }] },
         ],
         categories: ["shopping", "food"],
       },

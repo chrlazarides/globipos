@@ -12,6 +12,7 @@ import { sql, and, or, eq, gte, lte, gt, desc, isNull, ilike } from "drizzle-orm
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import webpush from "web-push";
 import { execSync } from "child_process";
 import AdmZip from "adm-zip";
 import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser } from "./auth";
@@ -1817,6 +1818,17 @@ export async function registerRoutes(
           description: `Credit Note ${inv.invoiceNumber}`,
           reference: inv.invoiceNumber,
           lines: journalLines,
+        });
+      }
+
+      // Fire push notification to customer if they have push subscriptions
+      if (data.type === "invoice" && data.status !== "draft" && data.customerId) {
+        setImmediate(() => {
+          sendPushToCustomer(data.customerId as string, {
+            title: "New Invoice",
+            body: `Invoice ${inv.invoiceNumber} for €${parseFloat(String(data.total || 0)).toFixed(2)} is ready.`,
+            url: `/portal`,
+          });
         });
       }
 
@@ -4803,6 +4815,42 @@ export async function registerRoutes(
   const CUSTOMER_TOKEN_EXPIRY = "7d";
   const LOYALTY_POINTS_PER_EURO = 1; // 1 point per €1 spent
 
+  // VAPID setup for Web Push
+  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    webpush.setVapidDetails(
+      `mailto:${process.env.VAPID_CONTACT_EMAIL || "noreply@example.com"}`,
+      process.env.VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY
+    );
+  }
+
+  async function sendPushToCustomer(customerId: string, payload: { title: string; body: string; url?: string }) {
+    if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return;
+    try {
+      const subs = await db.select().from(customerPushSubscriptions).where(eq(customerPushSubscriptions.customerId, customerId));
+      for (const sub of subs) {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            JSON.stringify(payload)
+          );
+        } catch { /* individual delivery failure is non-fatal */ }
+      }
+    } catch { /* push send is always non-fatal */ }
+  }
+
+  // OTP rate limiting — keyed by IP; max 5 requests per 15 minutes
+  const otpRateLimitMap = new Map<string, number[]>();
+  const OTP_MAX_ATTEMPTS = 5;
+  const OTP_WINDOW_MS = 15 * 60 * 1000;
+  function checkOtpRateLimit(ip: string): boolean {
+    const now = Date.now();
+    const hits = (otpRateLimitMap.get(ip) || []).filter(t => now - t < OTP_WINDOW_MS);
+    hits.push(now);
+    otpRateLimitMap.set(ip, hits);
+    return hits.length <= OTP_MAX_ATTEMPTS;
+  }
+
   function signCustomerToken(customerId: string, customerCode: string): string {
     return jwt.sign({ customerId, customerCode, type: "customer" }, CUSTOMER_JWT_SECRET, { expiresIn: CUSTOMER_TOKEN_EXPIRY });
   }
@@ -4841,30 +4889,32 @@ export async function registerRoutes(
 
   // OTP-based customer authentication
   app.post("/api/customer/auth/request-otp", async (req, res) => {
+    const ip = String(req.ip || req.headers["x-forwarded-for"] || "unknown");
+    if (!checkOtpRateLimit(ip)) {
+      return res.status(429).json({ message: "Too many requests. Please wait before trying again." });
+    }
     try {
       const { email } = req.body;
       if (!email) return res.status(400).json({ message: "Email required" });
+      // Generic response regardless of whether email exists — prevents user enumeration
       const [customer] = await db.select().from(customers).where(
         and(eq(customers.email, email.toLowerCase().trim()), eq(customers.active, true))
       );
-      if (!customer) return res.status(404).json({ message: "No account found with that email" });
-
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-      await db.insert(customerOtpTokens).values({
-        customerId: customer.id, email: email.toLowerCase().trim(),
-        code, expiresAt, used: false,
-      });
-
-      // Send via SendGrid/Resend
-      const settings = await storage.getSettings();
-      const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
-      try {
-        await sendTestEmail(email, `Your ${companyName} login code`, `<p>Your one-time login code is: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>This code expires in 10 minutes.</p>`);
-      } catch { /* email failure non-fatal — code still works */ }
-
-      res.json({ message: "OTP sent", customerId: customer.id });
+      if (customer) {
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+        await db.insert(customerOtpTokens).values({
+          customerId: customer.id, email: email.toLowerCase().trim(),
+          code, expiresAt, used: false,
+        });
+        const settings = await storage.getSettings();
+        const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
+        try {
+          await sendTestEmail(email, `Your ${companyName} login code`, `<p>Your one-time login code is: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>This code expires in 10 minutes.</p>`);
+        } catch { /* email failure non-fatal */ }
+      }
+      // Always return 200 with the same message — do not reveal whether email exists
+      res.json({ message: "If this email is registered, you will receive a login code shortly." });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -5057,6 +5107,38 @@ export async function registerRoutes(
         processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
       );
 
+      // Create a Proforma invoice for the order
+      let proforma: any = null;
+      try {
+        const proformaItems = processedItems.map((pi) => ({
+          itemId: pi.itemId, itemName: pi.itemName, quantity: pi.quantity,
+          unitPrice: pi.unitPrice, vatRate: "19.00", discount: "0.00",
+          total: pi.total, invoiceId: "TEMP", saleUnit: "bottle",
+        }));
+        proforma = await storage.createInvoice(
+          {
+            customerId: auth.customerId, type: "proforma", status: "sent",
+            date: new Date().toISOString().split("T")[0],
+            dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+            subtotal: subtotal.toFixed(2), taxRate: "19.00",
+            taxAmount: (subtotal * 0.19).toFixed(2), discountAmount: "0.00",
+            total: total.toFixed(2), notes: notes || `Portal order #${order.id.slice(0, 8)}`,
+            invoiceNumber: "TEMP",
+          },
+          proformaItems
+        );
+        // Send confirmation email (non-fatal)
+        try {
+          if (customer.email) {
+            const settings = await storage.getSettings();
+            const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
+            const subject = `Order Confirmation — ${proforma.invoiceNumber}`;
+            const html = `<p>Dear ${customer.name},</p><p>Thank you for your order. Your proforma reference is <strong>${proforma.invoiceNumber}</strong> for <strong>€${total.toFixed(2)}</strong>.</p><p>We will process your order shortly.</p><p>${companyName}</p>`;
+            await sendTestEmail(customer.email, subject, html);
+          }
+        } catch { /* email non-fatal */ }
+      } catch { /* proforma creation non-fatal */ }
+
       // Award loyalty points (1 pt per € subtotal)
       if (subtotal > 0) {
         const pts = Math.floor(subtotal * LOYALTY_POINTS_PER_EURO);
@@ -5067,7 +5149,7 @@ export async function registerRoutes(
           });
         }
       }
-      res.json(order);
+      res.json({ ...order, proformaId: proforma?.id || null, proformaNumber: proforma?.invoiceNumber || null });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
