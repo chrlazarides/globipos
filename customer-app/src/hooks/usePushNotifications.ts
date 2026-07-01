@@ -10,9 +10,24 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
 }
 
+export function isIos(): boolean {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+export function isInStandaloneMode(): boolean {
+  return (
+    ("standalone" in window.navigator && (window.navigator as any).standalone === true) ||
+    window.matchMedia("(display-mode: standalone)").matches
+  );
+}
+
 export function usePushNotifications() {
   const [state, setState] = useState<PushState>("loading");
   const [subscription, setSubscription] = useState<PushSubscription | null>(null);
+
+  const ios = isIos();
+  const standalone = isInStandaloneMode();
 
   useEffect(() => {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
@@ -28,11 +43,11 @@ export function usePushNotifications() {
   async function subscribe() {
     setState("loading");
     try {
-      const { publicKey } = await apiFetch<{ publicKey: string }>("/api/customer/push/vapid-public-key");
-      if (!publicKey) throw new Error("VAPID key not configured");
-
       const perm = await Notification.requestPermission();
       if (perm !== "granted") { setState("denied"); return; }
+
+      const { publicKey } = await apiFetch<{ publicKey: string }>("/api/customer/push/vapid-public-key");
+      if (!publicKey) throw new Error("VAPID key not configured");
 
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.subscribe({
@@ -66,5 +81,5 @@ export function usePushNotifications() {
     }
   }
 
-  return { state, subscription, subscribe, unsubscribe };
+  return { state, subscription, subscribe, unsubscribe, ios, standalone };
 }
