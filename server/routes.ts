@@ -7672,9 +7672,25 @@ export async function registerRoutes(
     try {
       const terminal = (req as any).terminal;
       if (req.params.id !== terminal.id) return res.status(403).json({ message: "Forbidden: terminal mismatch" });
-      const { outboxQueueSize = 0 } = req.body;
-      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), outboxQueueSize });
-      res.json({ ok: true });
+      const { outboxQueueSize = 0, peripheralStatus } = req.body;
+      const update: any = { lastSeenAt: new Date(), outboxQueueSize };
+      if (peripheralStatus && typeof peripheralStatus === "object") {
+        update.peripheralStatus = peripheralStatus;
+      }
+      await storage.updatePosTerminal(terminal.id, update);
+      // Return the peripheral config so the terminal can apply it
+      const updated = await storage.getPosTerminal(terminal.id);
+      res.json({ ok: true, peripheralConfig: updated?.peripheralConfig ?? null });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Peripheral config — back office writes, terminal reads via heartbeat response
+  app.put("/api/pos/terminals/:id/peripheral-config", requireAdmin, async (req, res) => {
+    try {
+      const t = await storage.getPosTerminal(req.params.id);
+      if (!t) return res.status(404).json({ message: "Terminal not found" });
+      const updated = await storage.updatePosTerminal(req.params.id, { peripheralConfig: req.body } as any);
+      res.json(updated);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 

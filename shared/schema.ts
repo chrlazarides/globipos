@@ -505,6 +505,10 @@ export const posTerminals = pgTable("pos_terminals", {
   outboxQueueSize: integer("outbox_queue_size").notNull().default(0),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  // Peripheral configuration — written by back office, downloaded by terminal on sync
+  peripheralConfig: jsonb("peripheral_config"),
+  // Peripheral status — written by terminal on heartbeat, read by back office
+  peripheralStatus: jsonb("peripheral_status"),
 });
 
 export const posLayoutSets = pgTable("pos_layout_sets", {
