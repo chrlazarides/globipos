@@ -7880,6 +7880,27 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // ── Layout column config (responsive breakpoints) ──────────────────────────
+  // Returns the layout set's column counts for all 5 screen-size breakpoints.
+  // Terminals call this from JS on startup to drive useResponsiveColumns().
+  app.get("/api/pos/sync/layout-config", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const fallback = { columns: 4, colsTablet: 3, colsMobile: 2, colsLarge: 6, colsTV: 8, buttonRadius: "rounded" };
+      if (!terminal.layoutSetId) return res.json(fallback);
+      const ls = await storage.getPosLayoutSet(terminal.layoutSetId);
+      if (!ls) return res.json(fallback);
+      res.json({
+        columns:      ls.columns     ?? 4,
+        colsTablet:   ls.colsTablet  ?? 3,
+        colsMobile:   ls.colsMobile  ?? 2,
+        colsLarge:    (ls as any).colsLarge    ?? 6,
+        colsTV:       (ls as any).colsTV       ?? 8,
+        buttonRadius: (ls as any).buttonRadius ?? "rounded",
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // ── POS Phase 3: Return Orders ─────────────────────────────────────────────
 
   app.get("/api/pos/returns", requireAdmin, async (req, res) => {

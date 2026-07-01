@@ -26,6 +26,7 @@ import { useBarcode } from "../hooks/useBarcode";
 import { usePermissions } from "../hooks/usePermissions";
 import { useHardware } from "../hooks/useHardware";
 import { useShift } from "../hooks/useShift";
+import { useResponsiveColumns, type LayoutColumnConfig } from "../hooks/useWindowSize";
 import { SyncHeader } from "../components/SyncHeader";
 import { CategoryNav } from "../components/CategoryNav";
 import { LayoutGrid } from "../components/LayoutGrid";
@@ -181,7 +182,6 @@ function RecallDialog({ onRecall, onClose }: {
 // ── Main POS Screen ───────────────────────────────────────────────────────────
 
 type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | null;
-type GridLayout = { columns: number; rows: number };
 type POSMode = "sell" | "sco" | "shift" | "fallback";
 
 interface PaymentSuccessState {
@@ -286,13 +286,32 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [products, setProducts]           = useState<Product[]>([]);
   const [categories, setCategories]       = useState<Category[]>([]);
   const [layoutButtons, setLayoutButtons] = useState<LayoutButton[]>([]);
-  const [gridLayout, setGridLayout]       = useState<GridLayout>({ columns: 4, rows: 5 });
+  const [layoutConfig, setLayoutConfig]   = useState<LayoutColumnConfig | null>(null);
+  const [maxButtonPos, setMaxButtonPos]   = useState(19); // default 4×5-1
+
+  // Responsive column count — recalculates live on window resize.
+  // Depends on layoutConfig state so must be declared after it.
+  const activeColumns = useResponsiveColumns(layoutConfig);
+  const activeRows    = Math.ceil((maxButtonPos + 1) / activeColumns);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [dialog, setDialog]               = useState<Dialog>(null);
   const [numpadMode, setNumpadModeState]  = useState<NumpadMode>("qty");
   const [mode, setMode]                   = useState<POSMode>(config.sco_mode ? "sco" : "sell");
   const [paymentSuccess, setPaymentSuccess] = useState<PaymentSuccessState | null>(null);
   const lastReceiptPrinterCallback = useRef<(() => Promise<void>) | null>(null);
+
+  // Responsive column config — fetch from server once on mount.
+  // Uses X-Terminal-Code header (no API key needed) to get the layout
+  // set's per-breakpoint column counts. Falls back to defaults silently.
+  useEffect(() => {
+    const base = config.server_url.replace(/\/$/, "");
+    fetch(`${base}/api/pos/sync/layout-config`, {
+      headers: { "X-Terminal-Code": config.terminal_code },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setLayoutConfig(data); })
+      .catch(() => {/* no-op: defaults apply */});
+  }, [config.server_url, config.terminal_code]);
 
   // Load local data on mount
   useEffect(() => {
@@ -301,9 +320,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     getLayout().then((btns) => {
       setLayoutButtons(btns);
       if (btns.length > 0) {
-        const maxPos = Math.max(...btns.map((b) => b.position));
-        const cols = 4;
-        setGridLayout({ columns: cols, rows: Math.ceil((maxPos + 1) / cols) });
+        setMaxButtonPos(Math.max(...btns.map((b) => b.position)));
       }
     }).catch(() => {});
   }, []);
@@ -600,8 +617,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           <LayoutGrid
             buttons={layoutButtons}
             products={products}
-            columns={gridLayout.columns}
-            rows={gridLayout.rows}
+            columns={activeColumns}
+            rows={activeRows}
             priceLevel={engine.order.price_level}
             onItemButton={engine.addProduct}
             onCategoryButton={setSelectedCategory}

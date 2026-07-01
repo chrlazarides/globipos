@@ -518,8 +518,10 @@ export const posLayoutSets = pgTable("pos_layout_sets", {
   description: text("description"),
   locationId: varchar("location_id"),
   columns: integer("columns").notNull().default(4),       // desktop columns
-  colsTablet: integer("cols_tablet").default(3),          // tablet columns (auto if null)
-  colsMobile: integer("cols_mobile").default(2),          // phone columns (auto if null)
+  colsTablet: integer("cols_tablet").default(3),          // tablet columns (640–1023px)
+  colsMobile: integer("cols_mobile").default(2),          // phone columns (<640px)
+  colsLarge: integer("cols_large").default(6),             // large monitor columns (1920–2559px)
+  colsTV: integer("cols_tv").default(8),                   // 4K / TV columns (2560px+)
   rows: integer("rows").notNull().default(5),
   buttonRadius: text("button_radius").default("rounded"), // rounded | round | square
   active: boolean("active").notNull().default(true),

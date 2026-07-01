@@ -19,7 +19,7 @@ import {
   Calculator, Printer, BookOpen, ShieldAlert, Clock,
   ChevronUp, ChevronDown, AlignLeft, Wallet, Minus,
   DoorOpen, FileText, BarChart2, TrendingDown,
-  Smartphone, Tablet, Monitor, Layers, Circle,
+  Smartphone, Tablet, Monitor, Tv, Layers, Circle,
   Square, Plus, Minus as MinusIcon, Info,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton } from "@shared/schema";
@@ -773,9 +773,11 @@ export default function PosLayoutEditor() {
   const [columns,      setColumns]      = useState(4);
   const [colsTablet,   setColsTablet]   = useState(3);
   const [colsMobile,   setColsMobile]   = useState(2);
+  const [colsLarge,    setColsLarge]    = useState(6);
+  const [colsTV,       setColsTV]       = useState(8);
   const [rows,         setRows]         = useState(5);
   const [buttonRadius, setButtonRadius] = useState("rounded");
-  const [deviceView,   setDeviceView]   = useState<"desktop" | "tablet" | "phone">("desktop");
+  const [deviceView,   setDeviceView]   = useState<"desktop" | "tablet" | "phone" | "large" | "tv">("desktop");
   const [slots,        setSlots]        = useState<SlotData[]>([]);
   const [selected,     setSelected]     = useState<number | null>(null);
   const [dirty,        setDirty]        = useState(false);
@@ -788,6 +790,8 @@ export default function PosLayoutEditor() {
     setColumns(layoutSet.columns ?? 4);
     setColsTablet((layoutSet as any).colsTablet ?? 3);
     setColsMobile((layoutSet as any).colsMobile ?? 2);
+    setColsLarge((layoutSet as any).colsLarge ?? 6);
+    setColsTV((layoutSet as any).colsTV ?? 8);
     setRows(layoutSet.rows ?? 5);
     setButtonRadius((layoutSet as any).buttonRadius ?? "rounded");
   }, [layoutSet]);
@@ -817,11 +821,16 @@ export default function PosLayoutEditor() {
     setDirty(false);
   }, [savedButtons, layoutSet]);
 
-  const activeColumns = deviceView === "phone" ? colsMobile : deviceView === "tablet" ? colsTablet : columns;
+  const activeColumns =
+    deviceView === "phone"   ? colsMobile :
+    deviceView === "tablet"  ? colsTablet :
+    deviceView === "large"   ? colsLarge  :
+    deviceView === "tv"      ? colsTV     :
+    columns;
 
   const saveMeta = useMutation({
     mutationFn: () => apiRequest("PUT", `/api/pos/layouts/${layoutId}`, {
-      name, description, columns, colsTablet, colsMobile, rows, buttonRadius,
+      name, description, columns, colsTablet, colsMobile, colsLarge, colsTV, rows, buttonRadius,
     }).then(r => r.json()),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/pos/layouts"] }),
   });
@@ -892,9 +901,11 @@ export default function PosLayoutEditor() {
         {/* Device size selector */}
         <div className="flex items-center border rounded-lg overflow-hidden">
           {([
-            { id: "desktop", icon: Monitor,    label: `${columns} col`,   title: "Desktop" },
-            { id: "tablet",  icon: Tablet,     label: `${colsTablet} col`, title: "Tablet" },
-            { id: "phone",   icon: Smartphone, label: `${colsMobile} col`, title: "Phone" },
+            { id: "phone",   icon: Smartphone, label: `${colsMobile} col`, title: "Phone (<640px)" },
+            { id: "tablet",  icon: Tablet,     label: `${colsTablet} col`, title: "Tablet (640-1023px)" },
+            { id: "desktop", icon: Monitor,    label: `${columns} col`,   title: "Desktop (1024-1919px)" },
+            { id: "large",   icon: Monitor,    label: `${colsLarge} col`, title: "Large (1920-2559px)" },
+            { id: "tv",      icon: Tv,         label: `${colsTV} col`,    title: "4K/TV (2560px+)" },
           ] as const).map(d => {
             const Icon = d.icon;
             const active = deviceView === d.id;
@@ -944,20 +955,20 @@ export default function PosLayoutEditor() {
               <div className="space-y-2">
                 <div>
                   <Label className="text-xs flex items-center gap-1.5 mb-1">
-                    <Monitor className="w-3 h-3" />Desktop columns
+                    <Smartphone className="w-3 h-3" />Phone <span className="text-muted-foreground font-normal">(&lt;640px)</span>
                   </Label>
-                  <Select value={String(columns)} onValueChange={v => resizeGrid(Number(v), rows)}>
-                    <SelectTrigger className="h-8 text-xs" data-testid="select-desktop-cols">
+                  <Select value={String(colsMobile)} onValueChange={v => { setColsMobile(Number(v)); setDirty(true); }}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-phone-cols-top">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {[2,3,4,5,6,7,8].map(n => <SelectItem key={n} value={String(n)}>{n} columns</SelectItem>)}
+                      {[1,2,3,4].map(n => <SelectItem key={n} value={String(n)}>{n} columns</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
                   <Label className="text-xs flex items-center gap-1.5 mb-1">
-                    <Tablet className="w-3 h-3" />Tablet columns
+                    <Tablet className="w-3 h-3" />Tablet <span className="text-muted-foreground font-normal">(640–1023px)</span>
                   </Label>
                   <Select value={String(colsTablet)} onValueChange={v => { setColsTablet(Number(v)); setDirty(true); }}>
                     <SelectTrigger className="h-8 text-xs" data-testid="select-tablet-cols">
@@ -970,14 +981,40 @@ export default function PosLayoutEditor() {
                 </div>
                 <div>
                   <Label className="text-xs flex items-center gap-1.5 mb-1">
-                    <Smartphone className="w-3 h-3" />Phone columns
+                    <Monitor className="w-3 h-3" />Desktop <span className="text-muted-foreground font-normal">(1024–1919px)</span>
                   </Label>
-                  <Select value={String(colsMobile)} onValueChange={v => { setColsMobile(Number(v)); setDirty(true); }}>
-                    <SelectTrigger className="h-8 text-xs" data-testid="select-phone-cols">
+                  <Select value={String(columns)} onValueChange={v => resizeGrid(Number(v), rows)}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-desktop-cols">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {[1,2,3,4].map(n => <SelectItem key={n} value={String(n)}>{n} columns</SelectItem>)}
+                      {[2,3,4,5,6,7,8].map(n => <SelectItem key={n} value={String(n)}>{n} columns</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs flex items-center gap-1.5 mb-1">
+                    <Monitor className="w-3 h-3" />Large monitor <span className="text-muted-foreground font-normal">(1920+)</span>
+                  </Label>
+                  <Select value={String(colsLarge)} onValueChange={v => { setColsLarge(Number(v)); setDirty(true); }}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-large-cols">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[4,5,6,7,8,9,10,12].map(n => <SelectItem key={n} value={String(n)}>{n} columns</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs flex items-center gap-1.5 mb-1">
+                    <Tv className="w-3 h-3" />4K / TV <span className="text-muted-foreground font-normal">(2560px+)</span>
+                  </Label>
+                  <Select value={String(colsTV)} onValueChange={v => { setColsTV(Number(v)); setDirty(true); }}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-tv-cols">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[6,7,8,9,10,12,14,16].map(n => <SelectItem key={n} value={String(n)}>{n} columns</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -1027,9 +1064,11 @@ export default function PosLayoutEditor() {
             {/* Mini device previews */}
             <div className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Responsive Preview</p>
-              <MiniGrid slots={slots} cols={columns}    buttonRadius={buttonRadius} label="Desktop" icon={Monitor}    allLayouts={allLayouts} />
-              <MiniGrid slots={slots} cols={colsTablet} buttonRadius={buttonRadius} label="Tablet"  icon={Tablet}     allLayouts={allLayouts} />
               <MiniGrid slots={slots} cols={colsMobile} buttonRadius={buttonRadius} label="Phone"   icon={Smartphone} allLayouts={allLayouts} />
+              <MiniGrid slots={slots} cols={colsTablet} buttonRadius={buttonRadius} label="Tablet"  icon={Tablet}     allLayouts={allLayouts} />
+              <MiniGrid slots={slots} cols={columns}    buttonRadius={buttonRadius} label="Desktop" icon={Monitor}    allLayouts={allLayouts} />
+              <MiniGrid slots={slots} cols={colsLarge}  buttonRadius={buttonRadius} label="Large"   icon={Monitor}    allLayouts={allLayouts} />
+              <MiniGrid slots={slots} cols={colsTV}     buttonRadius={buttonRadius} label="4K/TV"   icon={Tv}         allLayouts={allLayouts} />
             </div>
 
             <Separator />
@@ -1057,9 +1096,11 @@ export default function PosLayoutEditor() {
         <div className="flex-1 overflow-auto p-4">
           {/* Device banner */}
           <div className="flex items-center gap-2 mb-3 text-xs text-muted-foreground">
-            {deviceView === "desktop" && <><Monitor className="w-3.5 h-3.5" />Desktop — {columns} columns</>}
-            {deviceView === "tablet"  && <><Tablet  className="w-3.5 h-3.5" />Tablet — {colsTablet} columns (tap Desktop tab to edit)</>}
-            {deviceView === "phone"   && <><Smartphone className="w-3.5 h-3.5" />Phone — {colsMobile} columns (tap Desktop tab to edit)</>}
+            {deviceView === "phone"   && <><Smartphone className="w-3.5 h-3.5" />Phone &lt;640px — {colsMobile} columns</>}
+            {deviceView === "tablet"  && <><Tablet  className="w-3.5 h-3.5" />Tablet 640–1023px — {colsTablet} columns</>}
+            {deviceView === "desktop" && <><Monitor className="w-3.5 h-3.5" />Desktop 1024–1919px — {columns} columns</>}
+            {deviceView === "large"   && <><Monitor className="w-3.5 h-3.5" />Large monitor 1920–2559px — {colsLarge} columns</>}
+            {deviceView === "tv"      && <><Tv className="w-3.5 h-3.5" />4K/TV 2560px+ — {colsTV} columns</>}
             {deviceView !== "desktop" && (
               <Badge variant="outline" className="text-[10px] ml-1">Preview only — click Desktop to edit</Badge>
             )}
