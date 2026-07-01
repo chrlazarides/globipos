@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
+import { WhatsAppAlertProvider } from "@/hooks/use-whatsapp-alert";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { offlineStore } from "@/lib/offline-store";
 import NotFound from "@/pages/not-found";
@@ -173,23 +174,25 @@ function AdminRouter() {
 function AdminLayout() {
   const style = { "--sidebar-width": "16rem", "--sidebar-width-icon": "3rem" };
   return (
-    <SidebarProvider style={style as React.CSSProperties}>
-      <OfflineDataSync />
-      <div className="flex h-screen w-full">
-        <AppSidebar />
-        <div className="flex flex-col flex-1 min-w-0">
-          <header className="flex items-center justify-between gap-2 px-4 py-2 border-b sticky top-0 z-50 bg-background">
-            <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
-          </header>
-          <main className="flex-1 overflow-y-auto">
-            <ErrorBoundary>
-              <AdminRouter />
-            </ErrorBoundary>
-          </main>
+    <WhatsAppAlertProvider>
+      <SidebarProvider style={style as React.CSSProperties}>
+        <OfflineDataSync />
+        <div className="flex h-screen w-full">
+          <AppSidebar />
+          <div className="flex flex-col flex-1 min-w-0">
+            <header className="flex items-center justify-between gap-2 px-4 py-2 border-b sticky top-0 z-50 bg-background">
+              <SidebarTrigger data-testid="button-sidebar-toggle" />
+              <ThemeToggle />
+            </header>
+            <main className="flex-1 overflow-y-auto">
+              <ErrorBoundary>
+                <AdminRouter />
+              </ErrorBoundary>
+            </main>
+          </div>
         </div>
-      </div>
-    </SidebarProvider>
+      </SidebarProvider>
+    </WhatsAppAlertProvider>
   );
 }
 

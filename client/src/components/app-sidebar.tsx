@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, RotateCcw, Clock } from "lucide-react";
+import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { LogoImg } from "@/components/logo-img";
 import {
@@ -92,7 +93,7 @@ const chatNav = [
   { title: "Customer Notifications", url: "/customer-push", icon: Bell, module: "_admin" },
 ];
 
-type NavItem = { title: string; url: string; icon: any; module: string };
+type NavItem = { title: string; url: string; icon: any; module: string; badge?: number };
 
 function NavSection({ label, items }: { label: string; items: NavItem[] }) {
   const [location] = useLocation();
@@ -120,7 +121,15 @@ function NavSection({ label, items }: { label: string; items: NavItem[] }) {
                   data-testid={`nav-${item.title.toLowerCase().replace(/\s+/g, "-")}`}
                 >
                   <item.icon className="w-4 h-4" />
-                  <span>{item.title}</span>
+                  <span className="flex-1">{item.title}</span>
+                  {item.badge != null && item.badge > 0 && (
+                    <span
+                      className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-[#25D366] px-1.5 text-[10px] font-bold leading-none text-white"
+                      data-testid={`nav-badge-${item.title.toLowerCase().replace(/\s+/g, "-")}`}
+                    >
+                      {item.badge > 99 ? "99+" : item.badge}
+                    </span>
+                  )}
                 </SidebarMenuButton>
               </SidebarMenuItem>
             );
@@ -138,6 +147,7 @@ export function AppSidebar() {
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
   const companyName = settings.find(s => s.key === "company_name")?.value || "GlobiPOS";
   const { user, logout } = useAuth();
+  const { newOrderCount } = useWhatsAppAlert();
 
   useEffect(() => {
     const goOnline = () => setIsOnline(true);
@@ -159,6 +169,12 @@ export function AppSidebar() {
   // Filter each section based on the user's permitted modules
   const isAdmin = user?.role === "admin" || user?.role === "superuser";
   const filter = (items: NavItem[]) => items.filter(i => hasModuleAccess(user, i.module));
+
+  const chatNavWithBadge: NavItem[] = chatNav.map(item =>
+    item.url === "/whatsapp-orders"
+      ? { ...item, badge: newOrderCount }
+      : item
+  );
 
   return (
     <Sidebar>
@@ -189,7 +205,7 @@ export function AppSidebar() {
         <NavSection label="Analytics" items={filter(reportNav)} />
         <NavSection label="System" items={filter(systemNav)} />
         {isAdmin && <NavSection label="GlobiPOS" items={posNav} />}
-        {isAdmin && <NavSection label="Chat & FAQ" items={chatNav} />}
+        {isAdmin && <NavSection label="Chat & FAQ" items={chatNavWithBadge} />}
         {isAdmin && <NavSection label="Admin" items={adminNav} />}
       </SidebarContent>
       <SidebarFooter className="p-4 space-y-2">

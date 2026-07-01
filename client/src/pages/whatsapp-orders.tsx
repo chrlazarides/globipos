@@ -9,8 +9,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw } from "lucide-react";
+import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX } from "lucide-react";
 import { format } from "date-fns";
+import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 
 type OrderItem = {
   id: string;
@@ -273,6 +274,11 @@ export default function WhatsAppOrders() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [selectedOrder, setSelectedOrder] = useState<PortalOrder | null>(null);
+  const { clearNewOrders, chimeMuted, toggleChimeMuted } = useWhatsAppAlert();
+
+  useEffect(() => {
+    clearNewOrders();
+  }, [clearNewOrders]);
 
   const { data: orders = [], isLoading, refetch } = useQuery<PortalOrder[]>({
     queryKey: ["/api/admin/portal-orders", sourceFilter, statusFilter],
@@ -297,6 +303,17 @@ export default function WhatsAppOrders() {
         description="Review and action orders placed via WhatsApp or the Customer Portal"
         action={
           <div className="flex items-center gap-2">
+            <Button
+              variant={chimeMuted ? "outline" : "secondary"}
+              size="sm"
+              onClick={toggleChimeMuted}
+              data-testid="btn-toggle-chime"
+              title={chimeMuted ? "Chime muted — click to unmute" : "Chime on — click to mute"}
+              className="flex items-center gap-1.5"
+            >
+              {chimeMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+              <span className="hidden sm:inline">{chimeMuted ? "Chime Off" : "Chime On"}</span>
+            </Button>
             <PushToggle />
             <Button variant="outline" size="sm" onClick={() => refetch()} data-testid="btn-refresh-orders">
               <RefreshCcw className="w-4 h-4" />
