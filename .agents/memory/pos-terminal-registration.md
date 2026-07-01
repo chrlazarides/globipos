@@ -39,8 +39,4 @@ The seed script uses this endpoint.
 
 ## Supermarket test data
 
-Run `node supermarket-test-seed.mjs` to create:
-- Location: Fresh Market Supermarket (code: MKTMAIN)
-- Terminal: Checkout 1 (code: T001)
-- 10 categories, 45 products with barcodes, 28 layout buttons
-- Cashiers: Maria/1234 (manager), Yiannis/2222 (supervisor), Andreas/3333, Eleni/4444
+A seed script (`supermarket-test-seed.mjs`) creates sample location, terminal, categories, products with barcodes, layout buttons, and cashiers for development testing. Cashier credentials in the script are test-only placeholders — do not store actual PINs in memory files.
