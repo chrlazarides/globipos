@@ -4,6 +4,7 @@ import { type BasketItem } from "./Basket";
 import { type CustomerSession } from "../lib/auth";
 import { cn } from "../lib/cn";
 import { Search, ScanBarcode, Plus, Minus, X, Package, ChevronDown } from "lucide-react";
+import { BrowserMultiFormatReader } from "@zxing/browser";
 
 interface CatalogProps {
   customer: CustomerSession;
@@ -68,6 +69,23 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
     setBasket((prev) => prev.map((b) => b.item.id === id ? { ...b, quantity: b.quantity - 1 } : b).filter((b) => b.quantity > 0));
   }
 
+  const zxingReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+
+  async function lookupBarcode(bc: string) {
+    try {
+      const res = await fetch(`/api/customer/barcode/${encodeURIComponent(bc)}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("globi_customer_token")}` },
+      });
+      if (res.ok) {
+        const found = await res.json();
+        add(found);
+        setSearch(found.name);
+      } else {
+        setScanError(`Barcode ${bc} not found in catalog`);
+      }
+    } catch { setScanError("Failed to look up barcode"); }
+  }
+
   const startScan = useCallback(async () => {
     setScanError("");
     setScanMode(true);
@@ -80,6 +98,7 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
       }
 
       if ("BarcodeDetector" in window) {
+        // Chrome / Android native BarcodeDetector
         const BarcodeDetector = (window as any).BarcodeDetector;
         detectorRef.current = new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"] });
         scanningRef.current = true;
@@ -90,19 +109,7 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
             if (barcodes.length > 0) {
               const bc = barcodes[0].rawValue;
               stopScan();
-              // Look up item by barcode
-              try {
-                const res = await fetch(`/api/customer/barcode/${encodeURIComponent(bc)}`, {
-                  headers: { Authorization: `Bearer ${localStorage.getItem("globi_customer_token")}` },
-                });
-                if (res.ok) {
-                  const found = await res.json();
-                  add(found);
-                  setSearch(found.name);
-                } else {
-                  setScanError(`Barcode ${bc} not found in catalog`);
-                }
-              } catch { setScanError("Failed to look up barcode"); }
+              await lookupBarcode(bc);
               return;
             }
           } catch {}
@@ -110,7 +117,23 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
         };
         requestAnimationFrame(tick);
       } else {
-        setScanError("Your browser doesn't support native barcode scanning. Enter barcode manually.");
+        // iOS Safari fallback — use ZXing
+        try {
+          const reader = new BrowserMultiFormatReader();
+          zxingReaderRef.current = reader;
+          if (videoRef.current) {
+            reader.decodeFromStream(stream, videoRef.current, async (result, err) => {
+              if (result) {
+                stopScan();
+                await lookupBarcode(result.getText());
+              }
+              // err is continuously fired when no barcode in frame — ignore
+              void err;
+            });
+          }
+        } catch (zxErr) {
+          setScanError("Barcode scanning unavailable on this browser. Please enter the barcode manually.");
+        }
       }
     } catch {
       setScanError("Camera access denied. Please enter the barcode manually.");
@@ -120,6 +143,11 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
 
   function stopScan() {
     scanningRef.current = false;
+    // Stop ZXing reader if active
+    if (zxingReaderRef.current) {
+      try { zxingReaderRef.current.reset(); } catch {}
+      zxingReaderRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;

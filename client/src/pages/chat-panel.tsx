@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { MessageCircle, Send, Bot, User, Users, Phone, Clock, CheckCheck, AlertCircle } from "lucide-react";
+import { MessageCircle, Send, Bot, User, Users, Phone, Clock, CheckCheck, AlertCircle, Wifi, WifiOff } from "lucide-react";
 
 interface ChatConversation {
   id: string;
@@ -42,6 +42,11 @@ export default function ChatPanel() {
   const { data: conversations = [], isLoading: convLoading } = useQuery<ChatConversation[]>({
     queryKey: ["/api/chat/conversations"],
     refetchInterval: 8000,
+  });
+
+  const { data: waStatus } = useQuery<{ configured: boolean; phoneNumberId: string | null; webhookUrl: string; verifyToken: string }>({
+    queryKey: ["/api/admin/whatsapp/status"],
+    staleTime: 30000,
   });
 
   const selectedConv = conversations.find((c) => c.id === selectedConvId) ?? null;
@@ -122,6 +127,25 @@ export default function ChatPanel() {
         subtitle="View and respond to customer conversations — take over when the bot needs help"
         icon={<MessageCircle className="w-5 h-5" />}
       />
+
+      {/* WhatsApp connection status */}
+      {waStatus && (
+        <div className={`flex items-start gap-3 p-3 rounded-lg border ${waStatus.configured ? "bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800" : "bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800"}`}>
+          {waStatus.configured
+            ? <Wifi className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />
+            : <WifiOff className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />}
+          <div className="flex-1 min-w-0">
+            <p className={`text-sm font-medium ${waStatus.configured ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400"}`}>
+              {waStatus.configured ? `WhatsApp connected — Phone ID: ${waStatus.phoneNumberId}` : "WhatsApp not configured"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {waStatus.configured
+                ? `Webhook: ${waStatus.webhookUrl}`
+                : "Set WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID environment variables to enable WhatsApp"}
+            </p>
+          </div>
+        </div>
+      )}
 
       {handoffConvs.length > 0 && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/20">

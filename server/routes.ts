@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries } from "@shared/schema";
-import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage } from "./chatbot-service";
+import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -5418,6 +5418,91 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // List all customers with their push subscription status
+  app.get("/api/admin/push/subscribers", requireAdmin, async (_req, res) => {
+    try {
+      const subs = await db.select({ customerId: customerPushSubscriptions.customerId })
+        .from(customerPushSubscriptions);
+      const subscribedIds = new Set(subs.map((s) => s.customerId));
+      const allCustomers = await db.select().from(customers).where(eq(customers.active, true)).orderBy(customers.name);
+      res.json(allCustomers.map((c) => ({
+        id: c.id, name: c.name, code: c.code, email: c.email,
+        subscribed: subscribedIds.has(c.id),
+      })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Card terminal status & test
+  app.get("/api/pos/card-terminal/status", requireAdmin, async (_req, res) => {
+    const [providerRow] = await db.select().from(systemSettings).where(eq(systemSettings.key, "card_terminal_provider"));
+    res.json({
+      activeProvider: providerRow?.value || null,
+      jccConfigured: !!(process.env.JCC_MERCHANT_ID && process.env.JCC_API_KEY && process.env.JCC_TERMINAL_ID),
+      vivaConfigured: !!(process.env.VIVA_CLIENT_ID && process.env.VIVA_CLIENT_SECRET && process.env.VIVA_MERCHANT_ID),
+      worldpayConfigured: !!(process.env.WORLDPAY_ENTITY_ID && process.env.WORLDPAY_API_KEY),
+    });
+  });
+
+  app.post("/api/pos/card-terminal/test", requireAdmin, async (req, res) => {
+    const { provider } = req.body;
+    if (!["jcc", "viva", "worldpay"].includes(provider)) {
+      return res.status(400).json({ success: false, message: "Unknown provider" });
+    }
+    if (provider === "jcc") {
+      if (!process.env.JCC_MERCHANT_ID || !process.env.JCC_API_KEY) {
+        return res.json({ success: false, message: "JCC credentials not configured. Set JCC_MERCHANT_ID, JCC_API_KEY, and JCC_TERMINAL_ID." });
+      }
+      return res.json({ success: true, message: `JCC credentials present (Merchant: ${process.env.JCC_MERCHANT_ID}). Connect a physical JCC terminal to test live transactions.` });
+    }
+    if (provider === "viva") {
+      if (!process.env.VIVA_CLIENT_ID || !process.env.VIVA_CLIENT_SECRET) {
+        return res.json({ success: false, message: "Viva credentials not configured. Set VIVA_CLIENT_ID, VIVA_CLIENT_SECRET, VIVA_MERCHANT_ID, and VIVA_SOURCE_CODE." });
+      }
+      try {
+        const tokenRes = await fetch("https://accounts.vivapayments.com/connect/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ grant_type: "client_credentials", client_id: process.env.VIVA_CLIENT_ID, client_secret: process.env.VIVA_CLIENT_SECRET }),
+        });
+        if (tokenRes.ok) {
+          return res.json({ success: true, message: "Viva Wallet OAuth token obtained successfully. Integration is ready." });
+        }
+        return res.json({ success: false, message: `Viva auth failed (${tokenRes.status}). Check credentials.` });
+      } catch (e: any) {
+        return res.json({ success: false, message: `Viva connection error: ${e.message}` });
+      }
+    }
+    if (provider === "worldpay") {
+      if (!process.env.WORLDPAY_ENTITY_ID || !process.env.WORLDPAY_API_KEY) {
+        return res.json({ success: false, message: "Worldpay credentials not configured. Set WORLDPAY_ENTITY_ID, WORLDPAY_API_KEY, and WORLDPAY_TERMINAL_GROUP." });
+      }
+      return res.json({ success: true, message: `Worldpay credentials present (Entity: ${process.env.WORLDPAY_ENTITY_ID}). Connect a registered terminal to test transactions.` });
+    }
+  });
+
+  app.post("/api/settings/card_terminal_provider", requireAdmin, async (req, res) => {
+    try {
+      const { value } = req.body;
+      if (!["jcc", "viva", "worldpay", ""].includes(value)) {
+        return res.status(400).json({ message: "Invalid provider" });
+      }
+      await db.insert(systemSettings).values({ key: "card_terminal_provider", value, label: "Card Terminal Provider", group: "pos" })
+        .onConflictDoUpdate({ target: systemSettings.key, set: { value } });
+      res.json({ key: "card_terminal_provider", value });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // WhatsApp connection status
+  app.get("/api/admin/whatsapp/status", requireAdmin, (_req, res) => {
+    const configured = !!(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
+    res.json({
+      configured,
+      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || null,
+      verifyToken: process.env.WHATSAPP_VERIFY_TOKEN ? "set" : "default",
+      webhookUrl: `${process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : ""}/api/webhooks/whatsapp`,
+    });
+  });
+
   app.post("/api/demo/seed", async (_req, res) => {
     try {
       const [existingCats] = await db.select({ count: sql<number>`count(*)` }).from(categories);
@@ -7759,19 +7844,114 @@ export async function registerRoutes(
         if (parsed.intent === "handoff") {
           await db.update(chatConversations).set({ status: "handoff", handoffAt: new Date() }).where(eq(chatConversations.id, conv.id));
           reply = "I've notified our team. A staff member will reply to you shortly.";
+
         } else if (parsed.intent === "browse" || parsed.intent === "search") {
-          const matches = await db.select().from(items)
-            .where(and(eq(items.active, true), ilike(items.name, `%${parsed.query?.split(" ")[0] || ""}%`)))
-            .limit(5);
+          // Search products and show a numbered list the customer can reply to
+          const searchTerm = (parsed.query ?? "").split(" ").slice(0, 2).join(" ").trim() || "";
+          const matches = await db.select({
+            id: items.id, name: items.name, sku: items.sku,
+            price1: items.price1, brand: items.brand,
+          }).from(items)
+            .where(and(
+              eq(items.active, true),
+              searchTerm ? ilike(items.name, `%${searchTerm}%`) : sql`true`,
+            ))
+            .limit(6);
           if (matches.length > 0) {
-            reply = `Here are some products:\n` + matches.map((i, idx) => `${idx + 1}. ${i.name}`).join("\n") + "\n\nReply with the number to order, or visit our portal to place your order.";
+            // Store browse results in the conversation's cart context for add_item
+            const resultKey = `browse_${conv.id}`;
+            (global as any)[resultKey] = matches; // temp; cleared on checkout/cancel
+            reply = `🍷 *Products found:*\n` +
+              matches.map((i, idx) => `${idx + 1}. ${i.name}${i.brand ? ` (${i.brand})` : ""} — €${parseFloat(String(i.price1 ?? "0")).toFixed(2)}`).join("\n") +
+              `\n\nReply with the *number* to add to cart, or "cart" to view your cart.`;
           } else {
-            reply = "I couldn't find that product. Please visit our portal to browse the full catalog, or reply 'agent' to speak with someone.";
+            reply = "I couldn't find that product. Try a different name, or reply 'cart' to review your current selections.";
           }
+
+        } else if (parsed.intent === "add_item") {
+          // Try to match item number from last browse results
+          const resultKey = `browse_${conv.id}`;
+          const lastResults: any[] = (global as any)[resultKey] ?? [];
+          const numMatch = text.match(/\b([1-6])\b/);
+          const qtyMatch = text.match(/\b(\d+)\s*(?:bottles?|cases?|pcs?|x)?\b/i);
+          const idx = numMatch ? parseInt(numMatch[1]) - 1 : -1;
+          const qty = qtyMatch && parseInt(qtyMatch[1]) > 1 ? parseInt(qtyMatch[1]) : 1;
+
+          if (idx >= 0 && idx < lastResults.length) {
+            const it = lastResults[idx];
+            addToWaCart(conv.id, {
+              itemId: it.id,
+              name: it.name,
+              sku: it.sku || "",
+              price: parseFloat(String(it.price1 ?? "0")),
+            }, qty);
+            const cart = getWaCart(conv.id);
+            reply = `✅ Added *${qty}× ${it.name}* to your cart.\n\n${formatWaCart(cart)}`;
+          } else {
+            // No prior browse — do a quick name search
+            const searchWords = (parsed.query ?? text).toLowerCase().replace(/\d+/g, "").trim();
+            if (searchWords.length > 2) {
+              const found = await db.select({ id: items.id, name: items.name, sku: items.sku, price1: items.price1 }).from(items)
+                .where(and(eq(items.active, true), ilike(items.name, `%${searchWords.split(" ")[0]}%`))).limit(1);
+              if (found.length) {
+                addToWaCart(conv.id, { itemId: found[0].id, name: found[0].name, sku: found[0].sku || "", price: parseFloat(String(found[0].price1 ?? "0")) }, qty);
+                const cart = getWaCart(conv.id);
+                reply = `✅ Added *${qty}× ${found[0].name}* to your cart.\n\n${formatWaCart(cart)}`;
+              } else {
+                reply = `I couldn't find that item. Please browse first (reply "show wines") then reply with the number.`;
+              }
+            } else {
+              reply = `Please browse first (e.g. "show red wines") then reply with the item number to add.`;
+            }
+          }
+
+        } else if (parsed.intent === "view_cart") {
+          const cart = getWaCart(conv.id);
+          reply = formatWaCart(cart);
+
+        } else if (parsed.intent === "checkout") {
+          const cart = getWaCart(conv.id);
+          if (!cart.length) {
+            reply = "Your cart is empty. Browse our catalog first, then add items to order.";
+          } else {
+            // Find the customer and create a portal order
+            const [matchedCustomer] = await db.select().from(customers)
+              .where(eq(customers.phone, from)).limit(1);
+            if (matchedCustomer) {
+              const total = cart.reduce((s, c) => s + c.price * c.qty, 0);
+              const [newOrder] = await db.insert(portalOrders).values({
+                customerId: matchedCustomer.id,
+                status: "pending",
+                total: String(total.toFixed(2)),
+                notes: "Ordered via WhatsApp",
+              }).returning();
+              await db.insert(portalOrderItems).values(
+                cart.map(c => ({
+                  orderId: newOrder.id,
+                  itemId: c.itemId,
+                  description: c.name,
+                  quantity: String(c.qty),
+                  unitPrice: String(c.price),
+                  lineTotal: String((c.price * c.qty).toFixed(2)),
+                }))
+              );
+              clearWaCart(conv.id);
+              reply = `🎉 *Order confirmed!*\n\nTotal: €${total.toFixed(2)}\n\nYour order has been placed and our team will process it shortly. Thank you!`;
+            } else {
+              reply = `To place an order via WhatsApp, please register in our Customer Portal first. Reply 'agent' to get help from our team.`;
+            }
+          }
+
+        } else if (parsed.intent === "cancel") {
+          clearWaCart(conv.id);
+          reply = "Cart cleared. Start browsing again by replying 'show wines' or 'browse spirits'.";
+
         } else if (parsed.intent === "faq") {
           reply = "For store information, opening hours and delivery queries, please reply 'agent' to speak with our team.";
+
         } else {
-          reply = "Thanks for your message! You can:\n• Browse our catalog at the customer portal\n• Reply 'agent' to speak with a team member\n• Ask me about our products";
+          const cart = getWaCart(conv.id);
+          reply = `Thanks for your message! You can:\n• 🍷 Browse: "show red wines" or "search whisky"\n• 🛒 View cart: "my cart"\n• ✅ Order: "checkout"\n• 👤 Get help: "agent"${cart.length ? `\n\nYou have ${cart.length} item(s) in your cart.` : ""}`;
         }
       }
 

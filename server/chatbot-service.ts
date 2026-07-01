@@ -1,5 +1,38 @@
 import OpenAI from "openai";
 
+// ─── WhatsApp in-chat cart store (per conversation, in-memory) ────────────────
+export interface WaCartItem {
+  itemId: string;
+  name: string;
+  sku: string;
+  price: number;
+  qty: number;
+}
+
+const waCartStore = new Map<string, WaCartItem[]>(); // key = conversationId
+
+export function getWaCart(convId: string): WaCartItem[] {
+  return waCartStore.get(convId) ?? [];
+}
+
+export function addToWaCart(convId: string, item: Omit<WaCartItem, "qty">, qty = 1) {
+  const cart = waCartStore.get(convId) ?? [];
+  const existing = cart.find((c) => c.itemId === item.itemId);
+  if (existing) { existing.qty += qty; } else { cart.push({ ...item, qty }); }
+  waCartStore.set(convId, cart);
+}
+
+export function clearWaCart(convId: string) {
+  waCartStore.delete(convId);
+}
+
+export function formatWaCart(cart: WaCartItem[]): string {
+  if (!cart.length) return "Your cart is empty.";
+  const lines = cart.map((c, i) => `${i + 1}. ${c.name} ×${c.qty} — €${(c.price * c.qty).toFixed(2)}`);
+  const total = cart.reduce((s, c) => s + c.price * c.qty, 0);
+  return `🛒 *Your Cart:*\n${lines.join("\n")}\n\n*Total: €${total.toFixed(2)}*\n\nReply "checkout" to confirm, "clear" to start over, or keep browsing.`;
+}
+
 export type Intent =
   | "browse"
   | "search"

@@ -47,6 +47,10 @@ import PosSyncMonitor from "@/pages/pos-sync-monitor";
 import ChatPanel from "@/pages/chat-panel";
 import FaqEditor from "@/pages/faq-editor";
 import CustomerPushPage from "@/pages/customer-push";
+import PosPromotions from "@/pages/pos-promotions";
+import PosReturns from "@/pages/pos-returns";
+import PosShifts from "@/pages/pos-shifts";
+import PosCardTerminal from "@/pages/pos-card-terminal";
 import type { Customer } from "@shared/schema";
 import { Loader2 } from "lucide-react";
 
@@ -145,6 +149,10 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/terminals" component={PosTerminals} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/layouts" component={PosLayouts} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/orders" component={PosOrders} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/promotions" component={PosPromotions} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/returns" component={PosReturns} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/shifts" component={PosShifts} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/card-terminal" component={PosCardTerminal} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/sync-monitor" component={PosSyncMonitor} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/chat-panel" component={ChatPanel} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/faq-editor" component={FaqEditor} />}
