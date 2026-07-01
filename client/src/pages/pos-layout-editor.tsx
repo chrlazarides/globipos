@@ -7,40 +7,204 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   ArrowLeft, Save, Loader2, LayoutGrid, Trash2, Package,
-  Tag, Zap, EyeOff, Settings2, RefreshCw, CheckCircle2
+  Tag, Zap, EyeOff, Settings2, RefreshCw, CheckCircle2,
+  CreditCard, Banknote, Receipt, RotateCcw, Users, Search,
+  Calculator, Printer, BookOpen, ShieldAlert, Clock,
+  ChevronUp, ChevronDown, AlignLeft, Wallet, Minus,
+  DoorOpen, FileText, BarChart2, TrendingDown,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton } from "@shared/schema";
 
+// ── Color palette ─────────────────────────────────────────────────────────────
 const PRESET_COLORS = [
-  "#6b7280", // gray
+  "#1e293b", // slate-900
+  "#374151", // gray-700
+  "#6b7280", // gray-500
   "#ef4444", // red
+  "#dc2626", // red-600
   "#f97316", // orange
-  "#eab308", // yellow
-  "#22c55e", // green
-  "#06b6d4", // cyan
-  "#3b82f6", // blue
-  "#8b5cf6", // purple
-  "#ec4899", // pink
-  "#14b8a6", // teal
+  "#ea580c", // orange-600
   "#f59e0b", // amber
+  "#eab308", // yellow
   "#84cc16", // lime
+  "#22c55e", // green
+  "#16a34a", // green-600
+  "#14b8a6", // teal
+  "#06b6d4", // cyan
+  "#0ea5e9", // sky
+  "#3b82f6", // blue
+  "#1d4ed8", // blue-700
+  "#8b5cf6", // violet
+  "#7c3aed", // violet-700
+  "#ec4899", // pink
+  "#be185d", // pink-700
+  "#9f1239", // rose-800 (wine)
+  "#7f1d1d", // red-900 (burgundy)
+  "#78350f", // amber-900 (brown)
 ];
 
-const ACTION_OPTIONS = [
-  { code: "pay_cash", label: "Pay Cash" },
-  { code: "pay_card", label: "Pay Card" },
-  { code: "void_sale", label: "Void Sale" },
-  { code: "hold_sale", label: "Hold Sale" },
-  { code: "new_sale", label: "New Sale" },
-  { code: "discount", label: "Discount" },
-  { code: "no_sale", label: "No Sale (Open Drawer)" },
-  { code: "reprint", label: "Reprint Receipt" },
+// ── Comprehensive action groups ───────────────────────────────────────────────
+interface ActionDef {
+  code: string;
+  label: string;
+  icon: any;
+  description?: string;
+}
+
+interface ActionGroup {
+  group: string;
+  icon: any;
+  color: string;
+  actions: ActionDef[];
+}
+
+const ACTION_GROUPS: ActionGroup[] = [
+  {
+    group: "Payments",
+    icon: CreditCard,
+    color: "text-green-600",
+    actions: [
+      { code: "pay_cash",      label: "Pay Cash",           icon: Banknote,    description: "Accept cash payment and calculate change" },
+      { code: "pay_card",      label: "Pay Card",           icon: CreditCard,  description: "Process card via connected terminal" },
+      { code: "pay_split",     label: "Split Payment",      icon: Wallet,      description: "Split across cash and card" },
+      { code: "pay_account",   label: "Charge to Account",  icon: AlignLeft,   description: "Post to customer account / credit" },
+      { code: "pay_voucher",   label: "Redeem Voucher",     icon: Receipt,     description: "Accept a gift voucher or coupon code" },
+      { code: "pay_layaway",   label: "Layaway / Deposit",  icon: Wallet,      description: "Take partial payment, hold order" },
+    ],
+  },
+  {
+    group: "Sale Management",
+    icon: Receipt,
+    color: "text-blue-600",
+    actions: [
+      { code: "new_sale",      label: "New Sale",           icon: Receipt,     description: "Clear current order and start fresh" },
+      { code: "hold_sale",     label: "Hold Sale",          icon: Receipt,     description: "Park current order, serve another customer" },
+      { code: "recall_sale",   label: "Recall Held Sale",   icon: Receipt,     description: "Bring back a parked order" },
+      { code: "void_line",     label: "Void Line",          icon: Minus,       description: "Remove the currently selected line" },
+      { code: "void_sale",     label: "Void Sale",          icon: RotateCcw,   description: "Cancel the entire current order" },
+      { code: "refund",        label: "Refund / Return",    icon: RotateCcw,   description: "Process a return against a prior sale" },
+      { code: "exchange",      label: "Exchange",           icon: RotateCcw,   description: "Swap an item for another" },
+      { code: "suspend_sale",  label: "Suspend Sale",       icon: Receipt,     description: "Save order without payment" },
+    ],
+  },
+  {
+    group: "Price & Quantity Modifiers",
+    icon: Calculator,
+    color: "text-amber-600",
+    actions: [
+      { code: "qty",               label: "Enter Quantity",        icon: Calculator, description: "Open numeric keypad to set line quantity" },
+      { code: "discount_pct",      label: "Line Discount %",       icon: TrendingDown, description: "Apply percentage discount to selected line" },
+      { code: "discount_fixed",    label: "Line Discount (Fixed)", icon: TrendingDown, description: "Apply fixed-amount discount to selected line" },
+      { code: "order_discount_pct",label: "Order Discount %",      icon: TrendingDown, description: "Percentage discount on whole order" },
+      { code: "price_override",    label: "Price Override",        icon: Calculator, description: "Manually set the price of a line" },
+      { code: "price_check",       label: "Price Check",           icon: Search,     description: "Look up the price of an item by barcode" },
+      { code: "weight",            label: "Enter Weight",          icon: Calculator, description: "Input weight for sold-by-weight items" },
+    ],
+  },
+  {
+    group: "Customer",
+    icon: Users,
+    color: "text-purple-600",
+    actions: [
+      { code: "customer_lookup",   label: "Customer Lookup",       icon: Search,     description: "Attach a customer to this order" },
+      { code: "customer_clear",    label: "Clear Customer",        icon: Users,      description: "Remove customer from current order" },
+      { code: "loyalty_points",    label: "Redeem Loyalty Points", icon: Users,      description: "Apply earned points as discount" },
+      { code: "customer_account",  label: "Customer Balance",      icon: Wallet,     description: "Show customer account balance" },
+      { code: "customer_history",  label: "Purchase History",      icon: FileText,   description: "View customer's recent purchases" },
+    ],
+  },
+  {
+    group: "Barcode & Search",
+    icon: Search,
+    color: "text-cyan-600",
+    actions: [
+      { code: "barcode_scan",   label: "Scan Barcode",         icon: Search,   description: "Activate barcode scanner input" },
+      { code: "item_search",    label: "Search Items",         icon: Search,   description: "Open text search for items" },
+      { code: "plu",            label: "PLU / Item Code",      icon: Search,   description: "Enter an item code directly" },
+    ],
+  },
+  {
+    group: "Cash Drawer & Journal",
+    icon: DoorOpen,
+    color: "text-orange-600",
+    actions: [
+      { code: "open_drawer",    label: "Open Drawer",          icon: DoorOpen,   description: "Pop open the cash drawer" },
+      { code: "no_sale",        label: "No Sale",              icon: DoorOpen,   description: "Open drawer without a transaction" },
+      { code: "cash_in",        label: "Cash In",              icon: Banknote,   description: "Record cash added to drawer (e.g. float top-up)" },
+      { code: "cash_out",       label: "Cash Out",             icon: Banknote,   description: "Record cash removed from drawer (e.g. banking)" },
+      { code: "petty_cash",     label: "Petty Cash",           icon: Banknote,   description: "Record a petty cash expense from drawer" },
+      { code: "declare_cash",   label: "Declare Cash",         icon: Banknote,   description: "Count and declare the cash in drawer at shift end" },
+    ],
+  },
+  {
+    group: "Receipt & Print",
+    icon: Printer,
+    color: "text-gray-600",
+    actions: [
+      { code: "print_receipt",  label: "Print Receipt",        icon: Printer,  description: "Print receipt for last or current sale" },
+      { code: "reprint",        label: "Reprint Receipt",      icon: Printer,  description: "Reprint the last printed receipt" },
+      { code: "email_receipt",  label: "Email Receipt",        icon: Receipt,  description: "Send receipt to customer via email" },
+      { code: "gift_receipt",   label: "Gift Receipt",         icon: Receipt,  description: "Print receipt without prices" },
+    ],
+  },
+  {
+    group: "Shift & Reports",
+    icon: BarChart2,
+    color: "text-indigo-600",
+    actions: [
+      { code: "clock_in",      label: "Clock In",             icon: Clock,      description: "Cashier clocks in at start of shift" },
+      { code: "clock_out",     label: "Clock Out",            icon: Clock,      description: "Cashier clocks out at end of shift" },
+      { code: "report_x",      label: "X Report (Interim)",   icon: BarChart2,  description: "Print mid-shift sales summary without resetting" },
+      { code: "report_z",      label: "Z Report (End of Day)",icon: BarChart2,  description: "Print end-of-day report and reset counters" },
+      { code: "shift_start",   label: "Start Shift",          icon: Clock,      description: "Open a new cashier shift" },
+      { code: "shift_end",     label: "End Shift",            icon: Clock,      description: "Close current shift" },
+    ],
+  },
+  {
+    group: "Accounting / Journal",
+    icon: BookOpen,
+    color: "text-rose-600",
+    actions: [
+      { code: "journal_cash_in",   label: "Journal: Cash In",    icon: BookOpen,  description: "Post a cash-in journal entry to accounting" },
+      { code: "journal_cash_out",  label: "Journal: Cash Out",   icon: BookOpen,  description: "Post a cash-out journal entry to accounting" },
+      { code: "journal_expense",   label: "Journal: Expense",    icon: BookOpen,  description: "Record a petty-cash expense in the ledger" },
+      { code: "journal_correction",label: "Journal: Correction", icon: BookOpen,  description: "Post a manual correction entry" },
+      { code: "vat_summary",       label: "VAT Summary",         icon: FileText,  description: "Show VAT collected for current shift" },
+    ],
+  },
+  {
+    group: "Navigation & Display",
+    icon: LayoutGrid,
+    color: "text-slate-600",
+    actions: [
+      { code: "page_up",         label: "Page Up",              icon: ChevronUp,    description: "Scroll the product grid up one page" },
+      { code: "page_down",       label: "Page Down",            icon: ChevronDown,  description: "Scroll the product grid down one page" },
+      { code: "show_all_items",  label: "Show All Items",       icon: LayoutGrid,   description: "Clear category filter — show everything" },
+      { code: "numpad",          label: "Numeric Keypad",       icon: Calculator,   description: "Open the numeric input pad" },
+      { code: "notes",           label: "Add Order Note",       icon: AlignLeft,    description: "Attach a free-text note to the order" },
+    ],
+  },
+  {
+    group: "Manager & Security",
+    icon: ShieldAlert,
+    color: "text-red-700",
+    actions: [
+      { code: "manager_override", label: "Manager Override",    icon: ShieldAlert, description: "Prompt for manager PIN to authorise action" },
+      { code: "lock_terminal",    label: "Lock Terminal",       icon: ShieldAlert, description: "Lock screen — requires PIN to resume" },
+      { code: "change_cashier",   label: "Change Cashier",      icon: Users,       description: "Switch to a different cashier without closing sale" },
+      { code: "admin_menu",       label: "Admin Menu",          icon: Settings2,   description: "Access terminal administration options" },
+    ],
+  },
 ];
+
+// flat lookup for auto-label
+const ALL_ACTIONS = ACTION_GROUPS.flatMap(g => g.actions);
 
 type ButtonType = "item" | "category" | "action" | "empty";
 
@@ -59,35 +223,25 @@ function makeEmpty(position: number): SlotData {
   return { position, label: "", color: "#6b7280", buttonType: "empty" };
 }
 
-function typeIcon(type: ButtonType) {
-  if (type === "item") return <Package className="w-3 h-3" />;
-  if (type === "category") return <Tag className="w-3 h-3" />;
-  if (type === "action") return <Zap className="w-3 h-3" />;
-  return <EyeOff className="w-3 h-3" />;
+function typeChip(type: ButtonType) {
+  const map: Record<ButtonType, string> = {
+    item: "bg-blue-100 text-blue-700",
+    category: "bg-purple-100 text-purple-700",
+    action: "bg-amber-100 text-amber-700",
+    empty: "bg-gray-100 text-gray-400",
+  };
+  return map[type];
 }
 
-function typeColor(type: ButtonType) {
-  if (type === "item") return "bg-blue-100 text-blue-700";
-  if (type === "category") return "bg-purple-100 text-purple-700";
-  if (type === "action") return "bg-amber-100 text-amber-700";
-  return "bg-gray-100 text-gray-400";
-}
-
-// ── Button slot on the grid ───────────────────────────────────────────────────
-function GridButton({
-  slot, onClick, isSelected,
-}: {
-  slot: SlotData;
-  onClick: () => void;
-  isSelected: boolean;
-}) {
+// ── Grid button ───────────────────────────────────────────────────────────────
+function GridButton({ slot, onClick, isSelected }: { slot: SlotData; onClick: () => void; isSelected: boolean }) {
   const isEmpty = slot.buttonType === "empty" || !slot.label;
   return (
     <button
       onClick={onClick}
       data-testid={`grid-btn-${slot.position}`}
       className={`
-        relative flex flex-col items-center justify-center rounded-lg border-2 
+        relative flex flex-col items-center justify-center rounded-lg border-2
         text-center transition-all h-20 select-none overflow-hidden
         ${isSelected ? "ring-2 ring-primary ring-offset-2" : "hover:opacity-90"}
         ${isEmpty ? "border-dashed border-gray-200 bg-gray-50 hover:border-primary/40" : "border-transparent shadow-sm"}
@@ -99,28 +253,92 @@ function GridButton({
           <span className="text-white font-semibold text-xs leading-tight px-1 max-h-12 overflow-hidden break-words line-clamp-3">
             {slot.label}
           </span>
-          <span className={`absolute bottom-1 left-1 text-[9px] px-1 py-0.5 rounded ${typeColor(slot.buttonType)} opacity-80`}>
+          <span className={`absolute bottom-1 left-1 text-[9px] px-1 py-0.5 rounded ${typeChip(slot.buttonType)} opacity-80`}>
             {slot.buttonType}
           </span>
         </>
       ) : (
         <span className="text-gray-300 text-xs">+</span>
       )}
-      <span className="absolute top-1 right-1 text-[10px] text-white/60 font-mono">
-        {slot.position + 1}
-      </span>
+      <span className="absolute top-0.5 right-1 text-[9px] text-white/50 font-mono">{slot.position + 1}</span>
     </button>
   );
 }
 
-// ── Button editor dialog ─────────────────────────────────────────────────────
+// ── Action group picker ───────────────────────────────────────────────────────
+function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code: string) => void }) {
+  const [openGroup, setOpenGroup] = useState<string | null>(() => {
+    if (!value) return ACTION_GROUPS[0].group;
+    const g = ACTION_GROUPS.find(g => g.actions.some(a => a.code === value));
+    return g?.group ?? ACTION_GROUPS[0].group;
+  });
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      {ACTION_GROUPS.map(group => {
+        const GroupIcon = group.icon;
+        const isOpen = openGroup === group.group;
+        const selectedInGroup = group.actions.find(a => a.code === value);
+        return (
+          <div key={group.group}>
+            <button
+              type="button"
+              onClick={() => setOpenGroup(isOpen ? null : group.group)}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium border-b transition-colors ${
+                isOpen ? "bg-muted/60" : "bg-background hover:bg-muted/30"
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <GroupIcon className={`w-4 h-4 ${group.color}`} />
+                {group.group}
+                {selectedInGroup && (
+                  <Badge variant="secondary" className="text-[10px] h-4 px-1.5 font-normal">
+                    {selectedInGroup.label}
+                  </Badge>
+                )}
+              </span>
+              <span className="text-muted-foreground text-xs">{group.actions.length}</span>
+            </button>
+            {isOpen && (
+              <div className="divide-y bg-muted/20">
+                {group.actions.map(action => {
+                  const ActionIcon = action.icon;
+                  const isSelected = value === action.code;
+                  return (
+                    <button
+                      key={action.code}
+                      type="button"
+                      onClick={() => onChange(action.code)}
+                      data-testid={`action-${action.code}`}
+                      className={`w-full flex items-start gap-3 px-4 py-2.5 text-left transition-colors ${
+                        isSelected
+                          ? "bg-primary/10 text-primary"
+                          : "hover:bg-muted/50"
+                      }`}
+                    >
+                      <ActionIcon className={`w-4 h-4 flex-shrink-0 mt-0.5 ${isSelected ? "text-primary" : "text-muted-foreground"}`} />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium leading-none">{action.label}</p>
+                        {action.description && (
+                          <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{action.description}</p>
+                        )}
+                      </div>
+                      {isSelected && <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0 ml-auto mt-0.5" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Button editor dialog ──────────────────────────────────────────────────────
 function ButtonDialog({
-  slot,
-  onSave,
-  onClear,
-  onClose,
-  items,
-  categories,
+  slot, onSave, onClear, onClose, items, categories,
 }: {
   slot: SlotData;
   onSave: (s: SlotData) => void;
@@ -131,28 +349,33 @@ function ButtonDialog({
 }) {
   const [draft, setDraft] = useState<SlotData>({ ...slot });
   const set = (patch: Partial<SlotData>) => setDraft(d => ({ ...d, ...patch }));
+  const [itemSearch, setItemSearch] = useState("");
 
-  // Auto-fill label when item/category/action selected
+  // Auto-fill label on selection
   useEffect(() => {
     if (draft.buttonType === "item" && draft.itemId) {
       const item = items.find(i => i.id === draft.itemId);
-      if (item && !draft.label) set({ label: item.name.slice(0, 30) });
+      if (item) set({ label: item.name.slice(0, 30) });
     }
   }, [draft.itemId]);
 
   useEffect(() => {
     if (draft.buttonType === "category" && draft.categoryId) {
       const cat = categories.find(c => c.id === draft.categoryId);
-      if (cat && !draft.label) set({ label: cat.name.slice(0, 30) });
+      if (cat) set({ label: cat.name.slice(0, 30) });
     }
   }, [draft.categoryId]);
 
   useEffect(() => {
     if (draft.buttonType === "action" && draft.actionCode) {
-      const act = ACTION_OPTIONS.find(a => a.code === draft.actionCode);
-      if (act && !draft.label) set({ label: act.label });
+      const act = ALL_ACTIONS.find(a => a.code === draft.actionCode);
+      if (act) set({ label: act.label });
     }
   }, [draft.actionCode]);
+
+  const filteredItems = itemSearch
+    ? items.filter(i => i.name.toLowerCase().includes(itemSearch.toLowerCase())).slice(0, 50)
+    : items.slice(0, 80);
 
   const isValid =
     draft.buttonType === "empty" ||
@@ -163,67 +386,103 @@ function ButtonDialog({
 
   return (
     <Dialog open onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Settings2 className="w-4 h-4" />
             Configure Button #{slot.position + 1}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {/* Type tabs */}
+        <div className="flex-1 overflow-y-auto pr-1 space-y-4">
+          {/* Type selector */}
           <div>
-            <Label className="mb-2 block">Button Type</Label>
-            <Tabs value={draft.buttonType} onValueChange={v => set({ buttonType: v as ButtonType, itemId: undefined, categoryId: undefined, actionCode: undefined, label: "" })}>
+            <Label className="mb-2 block text-sm">Button Type</Label>
+            <Tabs
+              value={draft.buttonType}
+              onValueChange={v => set({ buttonType: v as ButtonType, itemId: undefined, categoryId: undefined, actionCode: undefined, label: "" })}
+            >
               <TabsList className="w-full grid grid-cols-4">
-                <TabsTrigger value="item" data-testid="tab-type-item"><Package className="w-3.5 h-3.5 mr-1" />Item</TabsTrigger>
-                <TabsTrigger value="category" data-testid="tab-type-category"><Tag className="w-3.5 h-3.5 mr-1" />Category</TabsTrigger>
-                <TabsTrigger value="action" data-testid="tab-type-action"><Zap className="w-3.5 h-3.5 mr-1" />Action</TabsTrigger>
-                <TabsTrigger value="empty" data-testid="tab-type-empty"><EyeOff className="w-3.5 h-3.5 mr-1" />Empty</TabsTrigger>
+                <TabsTrigger value="item" data-testid="tab-type-item">
+                  <Package className="w-3.5 h-3.5 mr-1" />Product
+                </TabsTrigger>
+                <TabsTrigger value="category" data-testid="tab-type-category">
+                  <Tag className="w-3.5 h-3.5 mr-1" />Category
+                </TabsTrigger>
+                <TabsTrigger value="action" data-testid="tab-type-action">
+                  <Zap className="w-3.5 h-3.5 mr-1" />Function
+                </TabsTrigger>
+                <TabsTrigger value="empty" data-testid="tab-type-empty">
+                  <EyeOff className="w-3.5 h-3.5 mr-1" />Empty
+                </TabsTrigger>
               </TabsList>
 
-              {/* Item picker */}
-              <TabsContent value="item" className="mt-3 space-y-3">
-                <div>
-                  <Label>Product</Label>
-                  <Select value={draft.itemId ?? ""} onValueChange={v => set({ itemId: v })}>
-                    <SelectTrigger data-testid="select-item"><SelectValue placeholder="Choose a product…" /></SelectTrigger>
-                    <SelectContent className="max-h-60">
-                      {items.map(i => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
+              {/* Product picker */}
+              <TabsContent value="item" className="mt-3 space-y-2">
+                <Input
+                  placeholder="Search products…"
+                  value={itemSearch}
+                  onChange={e => setItemSearch(e.target.value)}
+                  data-testid="input-item-search"
+                  className="mb-1"
+                />
+                <ScrollArea className="h-48 border rounded-md">
+                  <div className="p-1">
+                    {filteredItems.map(i => (
+                      <button
+                        key={i.id}
+                        type="button"
+                        onClick={() => set({ itemId: i.id })}
+                        data-testid={`item-option-${i.id}`}
+                        className={`w-full text-left px-3 py-2 rounded text-sm flex items-center justify-between transition-colors ${
+                          draft.itemId === i.id ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted/60"
+                        }`}
+                      >
+                        <span className="truncate">{i.name}</span>
+                        {draft.itemId === i.id && <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 ml-2" />}
+                      </button>
+                    ))}
+                    {filteredItems.length === 0 && (
+                      <p className="text-sm text-muted-foreground text-center py-4">No products found</p>
+                    )}
+                  </div>
+                </ScrollArea>
+                <p className="text-xs text-muted-foreground">{items.length} products available</p>
               </TabsContent>
 
               {/* Category picker */}
-              <TabsContent value="category" className="mt-3 space-y-3">
-                <div>
-                  <Label>Category</Label>
-                  <Select value={draft.categoryId ?? ""} onValueChange={v => set({ categoryId: v })}>
-                    <SelectTrigger data-testid="select-category"><SelectValue placeholder="Choose a category…" /></SelectTrigger>
-                    <SelectContent>
-                      {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+              <TabsContent value="category" className="mt-3">
+                <div className="grid grid-cols-2 gap-1.5">
+                  {categories.map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => set({ categoryId: c.id })}
+                      data-testid={`cat-option-${c.id}`}
+                      className={`text-left px-3 py-2 rounded border text-sm transition-colors ${
+                        draft.categoryId === c.id
+                          ? "border-primary bg-primary/10 text-primary font-medium"
+                          : "border-border hover:bg-muted/50"
+                      }`}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
                 </div>
               </TabsContent>
 
-              {/* Action picker */}
-              <TabsContent value="action" className="mt-3 space-y-3">
-                <div>
-                  <Label>Action</Label>
-                  <Select value={draft.actionCode ?? ""} onValueChange={v => set({ actionCode: v })}>
-                    <SelectTrigger data-testid="select-action"><SelectValue placeholder="Choose an action…" /></SelectTrigger>
-                    <SelectContent>
-                      {ACTION_OPTIONS.map(a => <SelectItem key={a.code} value={a.code}>{a.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
+              {/* Function / action picker */}
+              <TabsContent value="action" className="mt-3">
+                <ScrollArea className="h-72">
+                  <ActionGroupPicker
+                    value={draft.actionCode ?? ""}
+                    onChange={code => set({ actionCode: code })}
+                  />
+                </ScrollArea>
               </TabsContent>
 
               <TabsContent value="empty" className="mt-3">
-                <p className="text-sm text-muted-foreground">This slot will appear blank on the terminal.</p>
+                <p className="text-sm text-muted-foreground">This slot will appear blank on the terminal — useful for visual spacing.</p>
               </TabsContent>
             </Tabs>
           </div>
@@ -237,58 +496,71 @@ function ButtonDialog({
                   id="btn-label"
                   value={draft.label}
                   onChange={e => set({ label: e.target.value })}
-                  placeholder="Short name shown on button"
+                  placeholder="Text shown on the button"
                   maxLength={30}
                   data-testid="input-btn-label"
                 />
-                <p className="text-xs text-muted-foreground mt-1">{draft.label.length}/30 chars</p>
+                <p className="text-xs text-muted-foreground mt-1">{draft.label.length}/30 characters</p>
               </div>
 
               {/* Color */}
               <div>
                 <Label>Button Color</Label>
-                <div className="flex flex-wrap gap-2 mt-2">
+                <div className="flex flex-wrap gap-1.5 mt-2">
                   {PRESET_COLORS.map(c => (
                     <button
                       key={c}
+                      type="button"
                       onClick={() => set({ color: c })}
-                      className={`w-8 h-8 rounded-full border-2 transition-all ${draft.color === c ? "border-foreground scale-110" : "border-transparent"}`}
+                      className={`w-7 h-7 rounded-full border-2 transition-all ${
+                        draft.color === c ? "border-foreground scale-110 shadow-md" : "border-transparent"
+                      }`}
                       style={{ backgroundColor: c }}
-                      data-testid={`color-${c}`}
                       title={c}
                     />
                   ))}
-                  <label className="w-8 h-8 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer overflow-hidden hover:border-primary" title="Custom color">
-                    <input type="color" value={draft.color} onChange={e => set({ color: e.target.value })} className="opacity-0 absolute" />
-                    <span className="text-[10px] text-gray-400">+</span>
+                  <label
+                    className="w-7 h-7 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer hover:border-primary relative"
+                    title="Custom color"
+                  >
+                    <input
+                      type="color"
+                      value={draft.color}
+                      onChange={e => set({ color: e.target.value })}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
+                    <span className="text-[9px] text-gray-400 pointer-events-none">+</span>
                   </label>
                 </div>
 
-                {/* Preview */}
+                {/* Live preview */}
                 <div className="mt-3 flex items-center gap-3">
                   <div
-                    className="w-24 h-14 rounded-lg flex items-center justify-center text-white font-semibold text-xs text-center px-1 shadow"
+                    className="w-28 h-16 rounded-lg flex items-center justify-center text-white font-semibold text-xs text-center px-2 shadow-sm leading-tight"
                     style={{ backgroundColor: draft.color }}
                   >
                     {draft.label || "Preview"}
                   </div>
-                  <span className="text-xs text-muted-foreground">Button preview</span>
+                  <div className="text-xs text-muted-foreground space-y-0.5">
+                    <p>Hex: <code className="bg-muted px-1 rounded">{draft.color}</code></p>
+                    <p>Type: <span className={`px-1 py-0.5 rounded text-[10px] ${typeChip(draft.buttonType)}`}>{draft.buttonType}</span></p>
+                  </div>
                 </div>
               </div>
             </>
           )}
+        </div>
 
-          {/* Actions */}
-          <div className="flex justify-between pt-2">
-            <Button variant="outline" size="sm" onClick={onClear} className="text-destructive hover:bg-destructive/10" data-testid="btn-clear-slot">
-              <Trash2 className="w-3.5 h-3.5 mr-1" />Clear slot
+        {/* Footer actions */}
+        <div className="flex justify-between pt-3 border-t flex-shrink-0">
+          <Button variant="outline" size="sm" onClick={onClear} className="text-destructive hover:bg-destructive/10" data-testid="btn-clear-slot">
+            <Trash2 className="w-3.5 h-3.5 mr-1" />Clear Slot
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={() => isValid && onSave(draft)} disabled={!isValid} data-testid="btn-save-slot">
+              <CheckCircle2 className="w-4 h-4 mr-1.5" />Apply
             </Button>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={onClose}>Cancel</Button>
-              <Button onClick={() => isValid && onSave(draft)} disabled={!isValid} data-testid="btn-save-slot">
-                <CheckCircle2 className="w-4 h-4 mr-1" />Apply
-              </Button>
-            </div>
           </div>
         </div>
       </DialogContent>
@@ -296,7 +568,7 @@ function ButtonDialog({
   );
 }
 
-// ── Main editor page ─────────────────────────────────────────────────────────
+// ── Main editor ───────────────────────────────────────────────────────────────
 export default function PosLayoutEditor() {
   const [, params] = useRoute("/pos/layouts/:id/edit");
   const [, navigate] = useLocation();
@@ -328,15 +600,15 @@ export default function PosLayoutEditor() {
 
   const { data: items = [] } = useQuery<{ id: string; name: string }[]>({
     queryKey: ["/api/items"],
-    select: (data: any[]) => data.map(i => ({ id: i.id, name: i.name })),
+    select: (data: any[]) => data.map(i => ({ id: i.id, name: i.name })).sort((a, b) => a.name.localeCompare(b.name)),
   });
 
   const { data: categories = [] } = useQuery<{ id: string; name: string }[]>({
     queryKey: ["/api/categories"],
-    select: (data: any[]) => data.map(c => ({ id: c.id, name: c.name })),
+    select: (data: any[]) => data.map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name)),
   });
 
-  // Initialize slots from existing buttons whenever layout+buttons load
+  // Build grid from saved buttons
   useEffect(() => {
     if (!layout) return;
     const total = layout.columns * layout.rows;
@@ -385,16 +657,9 @@ export default function PosLayoutEditor() {
     setSelectedPos(null);
   }, []);
 
-  const resetAll = () => {
-    if (!layout) return;
-    const total = layout.columns * layout.rows;
-    setSlots(Array.from({ length: total }, (_, i) => makeEmpty(i)));
-    setDirty(true);
-  };
-
+  const selectedSlot = selectedPos !== null ? slots.find(s => s.position === selectedPos) : null;
   const filled = slots.filter(s => s.buttonType !== "empty" && s.label).length;
   const total = slots.length;
-  const selectedSlot = selectedPos !== null ? slots.find(s => s.position === selectedPos) : null;
 
   if (loadingLayout || loadingButtons) {
     return (
@@ -414,12 +679,12 @@ export default function PosLayoutEditor() {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-screen bg-background">
-      {/* Header */}
+    <div className="flex flex-col min-h-screen bg-background">
+      {/* Sticky header */}
       <div className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur px-6 py-3 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <Button variant="ghost" size="sm" onClick={() => navigate("/pos/layouts")} data-testid="btn-back">
-            <ArrowLeft className="w-4 h-4 mr-1" />Back
+            <ArrowLeft className="w-4 h-4 mr-1" />Layouts
           </Button>
           <div className="h-4 w-px bg-border" />
           <div className="min-w-0">
@@ -431,10 +696,18 @@ export default function PosLayoutEditor() {
               {layout.columns} × {layout.rows} grid · {filled}/{total} buttons configured
             </p>
           </div>
-          {dirty && <Badge variant="secondary" className="text-xs">Unsaved changes</Badge>}
+          {dirty && <Badge variant="secondary" className="text-xs animate-pulse">Unsaved</Badge>}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <Button variant="ghost" size="sm" onClick={resetAll} data-testid="btn-reset-all">
+          <Button
+            variant="ghost" size="sm"
+            onClick={() => {
+              if (!layout) return;
+              setSlots(Array.from({ length: layout.columns * layout.rows }, (_, i) => makeEmpty(i)));
+              setDirty(true);
+            }}
+            data-testid="btn-reset-all"
+          >
             <RefreshCw className="w-3.5 h-3.5 mr-1" />Clear All
           </Button>
           <Button
@@ -452,7 +725,7 @@ export default function PosLayoutEditor() {
       </div>
 
       <div className="flex flex-1 gap-6 p-6">
-        {/* Grid */}
+        {/* Button grid */}
         <div className="flex-1">
           <div
             className="grid gap-2"
@@ -468,42 +741,43 @@ export default function PosLayoutEditor() {
               />
             ))}
           </div>
-          <p className="text-xs text-muted-foreground mt-3 text-center">
-            Click any slot to configure it · Drag-and-drop coming soon
-          </p>
+          <p className="text-xs text-muted-foreground mt-3 text-center">Click any slot to configure it</p>
         </div>
 
-        {/* Legend */}
+        {/* Sidebar info */}
         <div className="w-56 flex-shrink-0 space-y-4">
           <div className="rounded-lg border p-4 space-y-3">
-            <p className="text-sm font-semibold">Legend</p>
-            <div className="space-y-2 text-xs">
-              {[
-                { type: "item" as ButtonType, label: "Product shortcut" },
-                { type: "category" as ButtonType, label: "Category filter" },
-                { type: "action" as ButtonType, label: "POS action" },
-                { type: "empty" as ButtonType, label: "Empty slot" },
-              ].map(({ type, label }) => (
-                <div key={type} className="flex items-center gap-2">
-                  <span className={`px-1.5 py-0.5 rounded flex items-center gap-1 ${typeColor(type)}`}>
-                    {typeIcon(type)} {type}
-                  </span>
-                  <span className="text-muted-foreground">{label}</span>
+            <p className="text-sm font-semibold">Button Types</p>
+            <div className="space-y-1.5 text-xs">
+              {([
+                ["item", "Product shortcut — adds item to order instantly"],
+                ["category", "Filter the product list to a category"],
+                ["action", "POS function (pay, discount, open drawer…)"],
+                ["empty", "Blank spacer slot"],
+              ] as const).map(([type, desc]) => (
+                <div key={type} className="flex items-start gap-1.5">
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${typeChip(type)}`}>{type}</span>
+                  <span className="text-muted-foreground leading-snug">{desc}</span>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="rounded-lg border p-4 space-y-2 text-xs text-muted-foreground">
-            <p className="font-semibold text-foreground text-sm">Tips</p>
-            <p>• Click a slot to open the button editor</p>
-            <p>• Labels are truncated to 30 chars on the terminal</p>
-            <p>• Category buttons filter the product list</p>
-            <p>• Changes sync to terminals within 5 minutes</p>
+          <div className="rounded-lg border p-4 space-y-1.5 text-xs text-muted-foreground">
+            <p className="font-semibold text-foreground text-sm">Function groups</p>
+            {ACTION_GROUPS.map(g => {
+              const GIcon = g.icon;
+              return (
+                <div key={g.group} className="flex items-center gap-1.5">
+                  <GIcon className={`w-3 h-3 ${g.color}`} />
+                  <span>{g.group} ({g.actions.length})</span>
+                </div>
+              );
+            })}
           </div>
 
-          <div className="rounded-lg border bg-muted/30 p-4 space-y-1 text-xs">
-            <p className="font-medium">Stats</p>
+          <div className="rounded-lg border bg-muted/30 p-3 text-xs space-y-0.5">
+            <p className="font-medium text-sm mb-1">Stats</p>
             <p>Total slots: <strong>{total}</strong></p>
             <p>Configured: <strong>{filled}</strong></p>
             <p>Empty: <strong>{total - filled}</strong></p>
@@ -511,7 +785,7 @@ export default function PosLayoutEditor() {
         </div>
       </div>
 
-      {/* Button config dialog */}
+      {/* Config dialog */}
       {selectedPos !== null && selectedSlot && (
         <ButtonDialog
           slot={selectedSlot}
