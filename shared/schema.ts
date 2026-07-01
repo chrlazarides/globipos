@@ -96,6 +96,7 @@ export const customers = pgTable("customers", {
   location: text("location"),
   portalAccessCode: text("portal_access_code"),
   active: boolean("active").default(true).notNull(),
+  cashbackBalance: numeric("cashback_balance", { precision: 10, scale: 2 }).default("0"),
 });
 
 export const portalOrders = pgTable("portal_orders", {
@@ -105,6 +106,7 @@ export const portalOrders = pgTable("portal_orders", {
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
   vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
   total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+  cashbackApplied: numeric("cashback_applied", { precision: 10, scale: 2 }).default("0"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

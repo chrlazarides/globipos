@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "../lib/queryClient";
 import { apiFetch } from "../lib/queryClient";
 import { type CustomerSession } from "../lib/auth";
-import { Trophy, TrendingUp, Gift, Star, Sparkles } from "lucide-react";
+import { Trophy, TrendingUp, Gift, Star, Sparkles, Wallet } from "lucide-react";
 
 interface LoyaltyProps { customer: CustomerSession; }
 
@@ -69,6 +69,7 @@ export default function Loyalty({ customer }: LoyaltyProps) {
         <div className="grid grid-cols-3 gap-3">
           {Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-20 rounded-xl bg-[hsl(var(--muted))] animate-pulse" />)}
         </div>
+        <div className="h-32 rounded-xl bg-[hsl(var(--muted))] animate-pulse" />
         <div className="h-48 rounded-xl bg-[hsl(var(--muted))] animate-pulse" />
       </div>
     );
@@ -76,15 +77,16 @@ export default function Loyalty({ customer }: LoyaltyProps) {
 
   if (!data) return null;
 
-  const { balance, earned, redeemed, tier, nextTier, history } = data;
+  const { balance, earned, redeemed, tier, nextTier, cashbackBalance = 0, cashbackRate = 0.01, history } = data;
   const progressPct = nextTier ? Math.min(100, (balance / nextTier.threshold) * 100) : 100;
   const redeemableEuros = Math.floor(balance / REDEEM_RATE);
+  const cashbackPct = (cashbackRate * 100).toFixed(1).replace(".0", "");
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">Loyalty Rewards</h1>
-        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Earn 1 point per €1 spent · {REDEEM_RATE} pts = €1 discount</p>
+        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Earn 1 point per €1 spent · {REDEEM_RATE} pts = €1 discount · {cashbackPct}% cashback</p>
       </div>
 
       {/* Hero card */}
@@ -134,6 +136,39 @@ export default function Loyalty({ customer }: LoyaltyProps) {
             </p>
           </div>
         ))}
+      </div>
+
+      {/* Cashback wallet card */}
+      <div className="bg-[hsl(var(--card))] border border-green-200 dark:border-green-800 rounded-xl p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-full bg-green-100 dark:bg-green-900/40 flex items-center justify-center flex-shrink-0">
+              <Wallet className="w-4 h-4 text-green-600 dark:text-green-400" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold">Cashback Wallet</p>
+              <p className="text-[10px] text-[hsl(var(--muted-foreground))]">
+                {cashbackPct}% back on every order · applied at checkout
+              </p>
+            </div>
+          </div>
+          <div className="text-right flex-shrink-0">
+            <p className="text-lg font-bold text-green-600 dark:text-green-400 tabular-nums" data-testid="stat-cashback-balance">
+              €{Number(cashbackBalance).toFixed(2)}
+            </p>
+            <p className="text-[10px] text-[hsl(var(--muted-foreground))]">available</p>
+          </div>
+        </div>
+        {cashbackBalance >= 0.01 && (
+          <p className="text-[10px] text-green-600 dark:text-green-400 mt-2.5 pt-2.5 border-t border-green-100 dark:border-green-800/60">
+            ✓ Toggle cashback at checkout to apply your credit
+          </p>
+        )}
+        {cashbackBalance < 0.01 && (
+          <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-2.5 pt-2.5 border-t border-[hsl(var(--border))]">
+            Place an order to start earning {cashbackPct}% cashback on every purchase
+          </p>
+        )}
       </div>
 
       {/* Redeem points */}
@@ -220,9 +255,9 @@ export default function Loyalty({ customer }: LoyaltyProps) {
         </div>
         <div className="divide-y divide-[hsl(var(--border))]">
           {[
-            { name: "Bronze", pts: 0,    benefit: "1 pt per €1 · redeem 100 pts = €1" },
-            { name: "Silver", pts: 1000, benefit: "Priority processing + seasonal offers" },
-            { name: "Gold",   pts: 5000, benefit: "Dedicated manager + best pricing" },
+            { name: "Bronze", pts: 0,    benefit: "1 pt/€1 · redeem 100 pts = €1 · 1% cashback" },
+            { name: "Silver", pts: 1000, benefit: "Priority processing · 1.5% cashback" },
+            { name: "Gold",   pts: 5000, benefit: "Dedicated manager · best pricing · 2% cashback" },
           ].map((t) => (
             <div key={t.name} className={`flex items-center gap-3 px-4 py-3 ${tier === t.name ? "bg-[hsl(var(--primary))]/5" : ""}`}>
               <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border flex-shrink-0 ${tierColor(t.name)}`}>

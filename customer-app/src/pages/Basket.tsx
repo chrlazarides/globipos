@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../lib/queryClient";
 import { queryClient } from "../lib/queryClient";
 import { type CustomerSession } from "../lib/auth";
 import { cn } from "../lib/cn";
-import { ShoppingCart, Plus, Minus, X, Truck, Store, WifiOff, RefreshCw } from "lucide-react";
+import { ShoppingCart, Plus, Minus, X, Truck, Store, WifiOff, RefreshCw, Wallet } from "lucide-react";
 
 export interface BasketItem {
   item: {
@@ -84,6 +85,14 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingCount, setPendingCount] = useState(getOfflineQueueCount);
   const [syncing, setSyncing] = useState(false);
+  const [useCashback, setUseCashback] = useState(false);
+
+  // Fetch loyalty/cashback data
+  const { data: loyaltyData } = useQuery<any>({
+    queryKey: ["/api/customer/loyalty"],
+    staleTime: 0,
+  });
+  const availableCashback = parseFloat(String(loyaltyData?.cashbackBalance || "0"));
 
   // Track online/offline status and refresh pending count
   useEffect(() => {
@@ -123,7 +132,9 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
   const VAT = 0.19;
   const subtotal = basket.reduce((s, b) => s + b.item.customerPrice * b.quantity, 0);
   const vatAmount = subtotal * VAT;
-  const total = subtotal + vatAmount;
+  const grossTotal = subtotal + vatAmount;
+  const cashbackDeduction = useCashback ? Math.min(availableCashback, grossTotal) : 0;
+  const total = Math.max(0, grossTotal - cashbackDeduction);
 
   const fmt = (v: number) => `€${v.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`;
 
@@ -152,6 +163,7 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
       notes,
       deliveryType,
       deliveryAddress: deliveryType === "delivery" ? deliveryAddress : undefined,
+      useCashback: useCashback && availableCashback > 0,
     };
     try {
       if (!navigator.onLine) {
@@ -160,6 +172,7 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
         setPendingCount(getOfflineQueueCount());
         setBasket([]);
         setNotes("");
+        setUseCashback(false);
         setSuccess(true);
         setTimeout(() => { setSuccess(false); navigate("/orders"); }, 2500);
         return;
@@ -172,6 +185,7 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
       queryClient.invalidateQueries({ queryKey: ["/api/customer/loyalty"] });
       setBasket([]);
       setNotes("");
+      setUseCashback(false);
       setSuccess(true);
       setTimeout(() => { setSuccess(false); navigate("/orders"); }, 2000);
     } catch (err: any) {
@@ -248,6 +262,39 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
             ))}
           </div>
 
+          {/* Cashback wallet */}
+          {availableCashback >= 0.01 && (
+            <button
+              onClick={() => setUseCashback((v) => !v)}
+              className={cn(
+                "w-full flex items-center justify-between gap-3 p-3 rounded-xl border text-sm transition-colors",
+                useCashback
+                  ? "border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300"
+                  : "border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--muted))]"
+              )}
+              data-testid="button-use-cashback"
+            >
+              <div className="flex items-center gap-2">
+                <Wallet className={cn("w-4 h-4", useCashback ? "text-green-600" : "text-[hsl(var(--muted-foreground))]")} />
+                <div className="text-left">
+                  <p className="font-medium text-xs">Cashback Wallet</p>
+                  <p className="text-[10px] text-[hsl(var(--muted-foreground))]">{fmt(availableCashback)} available</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {useCashback && cashbackDeduction > 0 && (
+                  <span className="text-xs font-semibold text-green-600">−{fmt(cashbackDeduction)}</span>
+                )}
+                <div className={cn(
+                  "w-9 h-5 rounded-full transition-colors flex items-center px-0.5",
+                  useCashback ? "bg-green-500" : "bg-[hsl(var(--muted))]"
+                )}>
+                  <div className={cn("w-4 h-4 rounded-full bg-white shadow transition-transform", useCashback ? "translate-x-4" : "translate-x-0")} />
+                </div>
+              </div>
+            </button>
+          )}
+
           {/* Delivery type */}
           <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-4 space-y-3">
             <p className="text-sm font-semibold">Delivery Method</p>
@@ -299,11 +346,16 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
             <div className="flex justify-between text-sm text-[hsl(var(--muted-foreground))]">
               <span>VAT (19%)</span><span>{fmt(vatAmount)}</span>
             </div>
+            {cashbackDeduction > 0 && (
+              <div className="flex justify-between text-sm text-green-600 dark:text-green-400">
+                <span>Cashback credit</span><span>−{fmt(cashbackDeduction)}</span>
+              </div>
+            )}
             <div className="flex justify-between text-sm font-bold border-t border-[hsl(var(--border))] pt-2">
               <span>Total</span><span data-testid="text-basket-total">{fmt(total)}</span>
             </div>
             <p className="text-[10px] text-[hsl(var(--muted-foreground))]">
-              You'll earn ~{Math.floor(subtotal)} loyalty points on this order
+              You'll earn ~{Math.floor(subtotal)} loyalty pts + cashback on this order
             </p>
           </div>
 

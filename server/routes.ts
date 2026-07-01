@@ -5132,7 +5132,7 @@ export async function registerRoutes(
     const auth = await requireCustomerAuth(req, res);
     if (!auth) return;
     try {
-      const { items: orderItems, notes, deliveryType = "collection", deliveryAddress } = req.body;
+      const { items: orderItems, notes, deliveryType = "collection", deliveryAddress, useCashback = false } = req.body;
       if (!orderItems?.length) return res.status(400).json({ message: "Items required" });
       const customer = await storage.getCustomer(auth.customerId);
       if (!customer) return res.status(404).json({ message: "Customer not found" });
@@ -5151,9 +5151,17 @@ export async function registerRoutes(
       }
 
       const vatAmount = subtotal * VAT_RATE;
-      const total = subtotal + vatAmount;
+      let total = subtotal + vatAmount;
+
+      // Apply cashback credit if requested
+      const availableCashback = parseFloat(String(customer.cashbackBalance || "0"));
+      const cashbackApplied = useCashback ? Math.min(availableCashback, total) : 0;
+      if (cashbackApplied > 0) {
+        total = Math.max(0, total - cashbackApplied);
+      }
+
       const order = await storage.createPortalOrder(
-        { customerId: auth.customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: notes || null, status: "pending" },
+        { customerId: auth.customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), cashbackApplied: cashbackApplied.toFixed(2), notes: notes || null, status: "pending" },
         processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
       );
 
@@ -5199,6 +5207,22 @@ export async function registerRoutes(
           });
         }
       }
+
+      // Award cashback credit (tier-based %) and deduct any used cashback
+      {
+        const [loyTotals] = await db.select({
+          balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
+        }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
+        const loyBalance = loyTotals?.balance || 0;
+        const cbTier = loyBalance >= 5000 ? "Gold" : loyBalance >= 1000 ? "Silver" : "Bronze";
+        const cbRate = cbTier === "Gold" ? 0.02 : cbTier === "Silver" ? 0.015 : 0.01;
+        const earnedCashback = parseFloat((subtotal * cbRate).toFixed(2));
+
+        const currentCb = parseFloat(String(customer.cashbackBalance || "0"));
+        const newCb = Math.max(0, currentCb - cashbackApplied + earnedCashback);
+        await storage.updateCustomer(auth.customerId, { cashbackBalance: newCb.toFixed(2) } as any);
+      }
+
       res.json({ ...order, proformaId: proforma?.id || null, proformaNumber: proforma?.invoiceNumber || null });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -5255,6 +5279,10 @@ export async function registerRoutes(
       const balance = totals?.balance || 0;
       const tier = balance >= 5000 ? "Gold" : balance >= 1000 ? "Silver" : "Bronze";
       const nextTier = tier === "Bronze" ? { name: "Silver", threshold: 1000 } : tier === "Silver" ? { name: "Gold", threshold: 5000 } : null;
+      const cashbackRate = tier === "Gold" ? 0.02 : tier === "Silver" ? 0.015 : 0.01;
+
+      const customer = await storage.getCustomer(auth.customerId);
+      const cashbackBalance = parseFloat(String(customer?.cashbackBalance || "0"));
 
       res.json({
         balance,
@@ -5262,6 +5290,8 @@ export async function registerRoutes(
         redeemed: Math.abs(totals?.redeemed || 0),
         tier,
         nextTier,
+        cashbackBalance,
+        cashbackRate,
         history: history.map((h) => ({
           id: h.id, points: h.points, type: h.type, reason: h.reason,
           sourceType: h.sourceType, createdAt: h.createdAt,
