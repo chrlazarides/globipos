@@ -1,6 +1,9 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type CustomerSession, getToken } from "../lib/auth";
-import { CreditCard, FileText, ExternalLink, AlertTriangle } from "lucide-react";
+import { CreditCard, FileText, ExternalLink, AlertTriangle, RefreshCw } from "lucide-react";
+
+const IOS_BANNER_DISMISSED_KEY = "globi_ios_banner_dismissed";
 
 interface AccountProps { customer: CustomerSession; }
 
@@ -29,6 +32,15 @@ export default function Account({ customer }: AccountProps) {
   const { data: summary, isLoading: loadSum } = useQuery<any>({ queryKey: ["/api/customer/account-summary"] });
   const { data: invoices = [], isLoading: loadInv } = useQuery<any[]>({ queryKey: ["/api/customer/invoices"] });
   const { data: statement, isLoading: loadStmt } = useQuery<any>({ queryKey: ["/api/customer/statement"] });
+
+  const [bannerDismissed, setBannerDismissed] = useState(
+    () => localStorage.getItem(IOS_BANNER_DISMISSED_KEY) === "1"
+  );
+
+  function resetIosBanner() {
+    localStorage.removeItem(IOS_BANNER_DISMISSED_KEY);
+    setBannerDismissed(false);
+  }
 
   const token = getToken();
 
@@ -184,6 +196,26 @@ export default function Account({ customer }: AccountProps) {
           </div>
         )}
       </div>
+
+      {/* Reset install banner (shown only when banner has been dismissed) */}
+      {bannerDismissed && (
+        <div className="bg-[hsl(var(--muted))] rounded-xl p-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium">Install banner hidden</p>
+            <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-0.5">
+              You dismissed the "Add to Home Screen" prompt. Tap to show it again.
+            </p>
+          </div>
+          <button
+            onClick={resetIosBanner}
+            className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[hsl(var(--border))] text-xs font-medium hover:bg-[hsl(var(--card))] transition-colors"
+            data-testid="button-reset-ios-banner"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Reset
+          </button>
+        </div>
+      )}
 
       {/* Statement — due date listing */}
       {!loadStmt && statement?.invoices?.length > 0 && (

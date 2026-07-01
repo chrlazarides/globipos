@@ -2,9 +2,18 @@ import { Bell, X, Share, ArrowDown } from "lucide-react";
 import { useState } from "react";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 
+const IOS_BANNER_DISMISSED_KEY = "globi_ios_banner_dismissed";
+
 export default function PushNotificationBanner() {
   const { state, subscribe, ios, standalone } = usePushNotifications();
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(
+    () => localStorage.getItem(IOS_BANNER_DISMISSED_KEY) === "1"
+  );
+
+  function dismiss() {
+    localStorage.setItem(IOS_BANNER_DISMISSED_KEY, "1");
+    setDismissed(true);
+  }
 
   if (dismissed) return null;
 
@@ -15,7 +24,7 @@ export default function PushNotificationBanner() {
         data-testid="banner-ios-install"
       >
         <button
-          onClick={() => setDismissed(true)}
+          onClick={dismiss}
           className="absolute top-2 right-2 opacity-70 hover:opacity-100"
           data-testid="button-dismiss-ios-banner"
           aria-label="Dismiss"
@@ -60,7 +69,7 @@ export default function PushNotificationBanner() {
           Enable
         </button>
         <button
-          onClick={() => setDismissed(true)}
+          onClick={dismiss}
           className="opacity-70 hover:opacity-100"
           data-testid="button-dismiss-push"
           aria-label="Dismiss"
