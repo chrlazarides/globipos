@@ -20,7 +20,7 @@ import {
   ChevronUp, ChevronDown, AlignLeft, Wallet, Minus,
   DoorOpen, FileText, BarChart2, TrendingDown,
   Smartphone, Tablet, Monitor, Layers, Circle,
-  Square, RectangleHorizontal, ChevronRight, Info,
+  Square, Plus, Minus as MinusIcon, Info,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton } from "@shared/schema";
 
@@ -159,8 +159,8 @@ const ACTION_GROUPS: ActionGroup[] = [
 const ALL_ACTIONS = ACTION_GROUPS.flatMap(g => g.actions);
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-type ButtonType = "item" | "category" | "action" | "sublayout" | "empty";
-type ShapeType  = "rect" | "round" | "wide" | "tall" | "large";
+type ButtonType  = "item" | "category" | "action" | "sublayout" | "empty";
+type CornerStyle = "rect" | "round"; // rect = rounded-xl, round = rounded-full (circle)
 
 interface SlotData {
   position:    number;
@@ -171,9 +171,9 @@ interface SlotData {
   categoryId?: string;
   actionCode?: string;
   sublayoutId?:string;
-  shape?:      ShapeType;
-  colspan?:    number;
-  rowspan?:    number;
+  shape?:      CornerStyle; // visual corner style only
+  colspan?:    number;      // 1–4, independent of rowspan
+  rowspan?:    number;      // 1–4, independent of colspan
   icon?:       string;
 }
 
@@ -181,21 +181,13 @@ function makeEmpty(position: number): SlotData {
   return { position, label: "", color: "#6b7280", buttonType: "empty", shape: "rect", colspan: 1, rowspan: 1 };
 }
 
-function shapeToSpan(shape?: ShapeType): { colspan: number; rowspan: number } {
-  switch (shape) {
-    case "wide":  return { colspan: 2, rowspan: 1 };
-    case "tall":  return { colspan: 1, rowspan: 2 };
-    case "large": return { colspan: 2, rowspan: 2 };
-    default:      return { colspan: 1, rowspan: 1 };
-  }
-}
-
-/** Positions consumed by wide/tall neighbours (not anchor positions themselves) */
+/** Positions consumed by spanning neighbours (not the anchor itself) */
 function getConsumedPositions(slots: SlotData[], cols: number): Set<number> {
   const consumed = new Set<number>();
   if (cols <= 0) return consumed;
   for (const slot of slots) {
-    const { colspan = 1, rowspan = 1 } = shapeToSpan(slot.shape);
+    const colspan = slot.colspan ?? 1;
+    const rowspan = slot.rowspan ?? 1;
     if (colspan === 1 && rowspan === 1) continue;
     const col = slot.position % cols;
     const row = Math.floor(slot.position / cols);
@@ -209,9 +201,9 @@ function getConsumedPositions(slots: SlotData[], cols: number): Set<number> {
   return consumed;
 }
 
-function radiusClass(radius?: string | null, shape?: ShapeType) {
-  if (shape === "round") return "rounded-full";
-  switch (radius) {
+function radiusClass(layoutRadius?: string | null, cornerStyle?: CornerStyle) {
+  if (cornerStyle === "round") return "rounded-full";
+  switch (layoutRadius) {
     case "round":  return "rounded-full";
     case "square": return "rounded-none";
     default:       return "rounded-xl";
@@ -239,23 +231,22 @@ function GridButton({
   buttonRadius?: string | null;
   allLayouts: PosLayoutSet[];
 }) {
-  const isEmpty = slot.buttonType === "empty" || !slot.label;
-  const { colspan = 1, rowspan = 1 } = shapeToSpan(slot.shape);
-  const rc = radiusClass(buttonRadius, slot.shape);
-  const subName = slot.sublayoutId
-    ? allLayouts.find(l => l.id === slot.sublayoutId)?.name
-    : null;
+  const isEmpty   = slot.buttonType === "empty" || !slot.label;
+  const colspan   = slot.colspan ?? 1;
+  const rowspan   = slot.rowspan ?? 1;
+  const rc        = radiusClass(buttonRadius, slot.shape);
+  const subName   = slot.sublayoutId ? allLayouts.find(l => l.id === slot.sublayoutId)?.name : null;
+  const sizeLabel = (colspan > 1 || rowspan > 1) ? `${colspan}×${rowspan}` : null;
 
   return (
     <button
       onClick={onClick}
       data-testid={`grid-btn-${slot.position}`}
       style={{
-        gridColumn: colspan > 1 ? `span ${colspan}` : undefined,
-        gridRow:    rowspan > 1 ? `span ${rowspan}` : undefined,
+        gridColumn:      colspan > 1 ? `span ${colspan}` : undefined,
+        gridRow:         rowspan > 1 ? `span ${rowspan}` : undefined,
         backgroundColor: isEmpty ? undefined : slot.color + "dd",
         borderColor:     isEmpty ? undefined : slot.color,
-        aspectRatio: slot.shape === "round" ? "1/1" : undefined,
       }}
       className={`
         relative flex flex-col items-center justify-center border-2 text-center
@@ -273,8 +264,8 @@ function GridButton({
           <span className={`absolute bottom-1 left-1 text-[9px] px-1 py-0.5 rounded ${typeChip(slot.buttonType)} opacity-80`}>
             {slot.buttonType}
           </span>
-          {slot.shape && slot.shape !== "rect" && (
-            <span className="absolute bottom-1 right-1 text-[9px] text-white/60">{slot.shape}</span>
+          {sizeLabel && (
+            <span className="absolute bottom-1 right-1 text-[9px] text-white/60 font-mono">{sizeLabel}</span>
           )}
           {subName && (
             <span className="absolute top-1 right-1 text-[9px] text-white/70 flex items-center gap-0.5">
@@ -285,7 +276,7 @@ function GridButton({
       ) : (
         <span className="text-gray-300 text-xs">+</span>
       )}
-      <span className="absolute top-0.5 right-1 text-[9px] text-white/40 font-mono">{slot.position + 1}</span>
+      <span className="absolute top-0.5 left-1 text-[9px] text-white/30 font-mono">{slot.position + 1}</span>
     </button>
   );
 }
@@ -350,34 +341,132 @@ function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code
   );
 }
 
-// ── ShapePicker ────────────────────────────────────────────────────────────────
-const SHAPES: { id: ShapeType; label: string; icon: any; desc: string }[] = [
-  { id: "rect",  label: "Normal",  icon: Square,              desc: "1×1 — standard button" },
-  { id: "round", label: "Circle",  icon: Circle,              desc: "1×1 — circular, great for action keys" },
-  { id: "wide",  label: "Wide 2×", icon: RectangleHorizontal, desc: "2×1 — spans 2 columns" },
-  { id: "tall",  label: "Tall 2×", icon: Square,              desc: "1×2 — spans 2 rows" },
-  { id: "large", label: "Large 2×2",icon: Square,             desc: "2×2 — dominant button" },
+// ── SizePicker ─────────────────────────────────────────────────────────────────
+// Visual W×H matrix + stepper fallback + corner-style toggle
+const MAX_SPAN = 4;
+const QUICK_SIZES: { w: number; h: number; label: string }[] = [
+  { w:1, h:1, label:"1×1" }, { w:2, h:1, label:"2×1" }, { w:3, h:1, label:"3×1" }, { w:4, h:1, label:"4×1" },
+  { w:1, h:2, label:"1×2" }, { w:2, h:2, label:"2×2" }, { w:3, h:2, label:"3×2" }, { w:4, h:2, label:"4×2" },
+  { w:1, h:3, label:"1×3" }, { w:2, h:3, label:"2×3" }, { w:3, h:3, label:"3×3" }, { w:4, h:3, label:"4×3" },
+  { w:1, h:4, label:"1×4" }, { w:2, h:4, label:"2×4" }, { w:3, h:4, label:"3×4" }, { w:4, h:4, label:"4×4" },
 ];
 
-function ShapePicker({ value, onChange }: { value: ShapeType; onChange: (s: ShapeType) => void }) {
+function SizePicker({
+  colspan, rowspan, shape, color,
+  onColspan, onRowspan, onShape,
+}: {
+  colspan: number; rowspan: number; shape: CornerStyle; color: string;
+  onColspan: (n: number) => void; onRowspan: (n: number) => void; onShape: (s: CornerStyle) => void;
+}) {
+  const [hovered, setHovered] = useState<{ w: number; h: number } | null>(null);
+  const previewW = hovered?.w ?? colspan;
+  const previewH = hovered?.h ?? rowspan;
+
   return (
-    <div className="grid grid-cols-3 gap-2">
-      {SHAPES.map(s => {
-        const Icon = s.icon;
-        const sel = value === s.id;
-        return (
-          <button
-            key={s.id}
-            type="button"
-            onClick={() => onChange(s.id)}
-            className={`rounded-lg border p-2.5 flex flex-col items-center gap-1.5 text-center transition-all ${sel ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted/50"}`}
+    <div className="space-y-4">
+      {/* Visual matrix */}
+      <div>
+        <p className="text-xs font-medium text-muted-foreground mb-2">Click to set width × height</p>
+        <div className="inline-grid gap-1" style={{ gridTemplateColumns: `repeat(${MAX_SPAN}, 1fr)` }}>
+          {QUICK_SIZES.map(({ w, h, label }) => {
+            const isActive = w === colspan && h === rowspan;
+            const isHighlighted = hovered ? w <= hovered.w && h <= hovered.h : w <= colspan && h <= rowspan;
+            return (
+              <button
+                key={label}
+                type="button"
+                data-testid={`size-${w}x${h}`}
+                onMouseEnter={() => setHovered({ w, h })}
+                onMouseLeave={() => setHovered(null)}
+                onClick={() => { onColspan(w); onRowspan(h); }}
+                title={`${w}×${h}`}
+                className={`w-9 h-9 rounded border-2 text-[10px] font-mono transition-all ${
+                  isActive
+                    ? "border-primary bg-primary text-primary-foreground font-bold"
+                    : isHighlighted
+                    ? "border-primary/60 bg-primary/20 text-primary"
+                    : "border-border bg-muted/30 text-muted-foreground hover:border-primary/40"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Steppers */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-1.5">Width (columns)</p>
+          <div className="flex items-center gap-1.5">
+            <button type="button" onClick={() => onColspan(Math.max(1, colspan - 1))} disabled={colspan <= 1}
+              className="w-7 h-7 rounded border flex items-center justify-center disabled:opacity-40 hover:bg-muted transition-colors" data-testid="btn-colspan-minus">
+              <MinusIcon className="w-3 h-3" />
+            </button>
+            <span className="w-8 text-center text-sm font-semibold tabular-nums">{colspan}</span>
+            <button type="button" onClick={() => onColspan(Math.min(MAX_SPAN, colspan + 1))} disabled={colspan >= MAX_SPAN}
+              className="w-7 h-7 rounded border flex items-center justify-center disabled:opacity-40 hover:bg-muted transition-colors" data-testid="btn-colspan-plus">
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-1.5">Height (rows)</p>
+          <div className="flex items-center gap-1.5">
+            <button type="button" onClick={() => onRowspan(Math.max(1, rowspan - 1))} disabled={rowspan <= 1}
+              className="w-7 h-7 rounded border flex items-center justify-center disabled:opacity-40 hover:bg-muted transition-colors" data-testid="btn-rowspan-minus">
+              <MinusIcon className="w-3 h-3" />
+            </button>
+            <span className="w-8 text-center text-sm font-semibold tabular-nums">{rowspan}</span>
+            <button type="button" onClick={() => onRowspan(Math.min(MAX_SPAN, rowspan + 1))} disabled={rowspan >= MAX_SPAN}
+              className="w-7 h-7 rounded border flex items-center justify-center disabled:opacity-40 hover:bg-muted transition-colors" data-testid="btn-rowspan-plus">
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Corner style */}
+      <div>
+        <p className="text-xs font-medium text-muted-foreground mb-1.5">Corner Style</p>
+        <div className="flex gap-2">
+          {([
+            { id: "rect"  as CornerStyle, label: "Rounded", cls: "rounded-lg" },
+            { id: "round" as CornerStyle, label: "Circle",  cls: "rounded-full" },
+          ]).map(s => (
+            <button key={s.id} type="button" onClick={() => onShape(s.id)} data-testid={`corner-${s.id}`}
+              className={`flex-1 py-2.5 text-xs font-medium border transition-all ${s.cls} ${shape === s.id ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted/50"}`}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+        {shape === "round" && (
+          <p className="text-[10px] text-muted-foreground mt-1.5 flex gap-1">
+            <Circle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+            Circle works best with equal width & height (e.g. 1×1, 2×2)
+          </p>
+        )}
+      </div>
+
+      {/* Live preview */}
+      <div>
+        <p className="text-xs font-medium text-muted-foreground mb-1.5">Preview ({previewW}×{previewH})</p>
+        <div className="bg-muted/30 rounded-lg p-3 flex items-center justify-center" style={{ minHeight: "80px" }}>
+          <div
+            className={`flex items-center justify-center text-white text-xs font-semibold shadow transition-all ${radiusClass(undefined, shape)}`}
+            style={{
+              backgroundColor: color,
+              width:  `${previewW * 44}px`,
+              height: `${previewH * 44}px`,
+              maxWidth: "200px",
+              maxHeight: "200px",
+            }}
           >
-            <Icon className={`w-5 h-5 ${s.id === "wide" ? "scale-x-150" : s.id === "tall" ? "scale-y-150" : s.id === "large" ? "scale-125" : ""}`} />
-            <p className="text-xs font-medium leading-none">{s.label}</p>
-            <p className="text-[10px] text-muted-foreground leading-snug">{s.desc}</p>
-          </button>
-        );
-      })}
+            {previewW}×{previewH}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -425,12 +514,6 @@ function ButtonDialog({
     }
   }, [draft.sublayoutId]);
 
-  // Sync shape → colspan/rowspan
-  useEffect(() => {
-    const { colspan, rowspan } = shapeToSpan(draft.shape);
-    setDraft(d => ({ ...d, colspan, rowspan }));
-  }, [draft.shape]);
-
   const filteredItems = itemSearch
     ? items.filter(i => i.name.toLowerCase().includes(itemSearch.toLowerCase())).slice(0, 50)
     : items.slice(0, 80);
@@ -445,8 +528,8 @@ function ButtonDialog({
        draft.buttonType === "action"    ? !!draft.actionCode :
        draft.buttonType === "sublayout" ? !!draft.sublayoutId : true));
 
-  const { colspan = 1, rowspan = 1 } = shapeToSpan(draft.shape);
-  const rc = radiusClass(undefined, draft.shape);
+  const colspan = draft.colspan ?? 1;
+  const rowspan = draft.rowspan ?? 1;
 
   return (
     <Dialog open onOpenChange={o => !o && onClose()}>
@@ -588,36 +671,22 @@ function ButtonDialog({
                   </div>
                 </div>
 
-                {/* Shape */}
+                {/* Size & Shape */}
                 <div>
-                  <Label className="mb-2 block">Button Shape & Size</Label>
-                  <ShapePicker value={draft.shape ?? "rect"} onChange={s => set({ shape: s })} />
+                  <Label className="mb-2 block">Size & Shape</Label>
+                  <SizePicker
+                    colspan={colspan}
+                    rowspan={rowspan}
+                    shape={draft.shape ?? "rect"}
+                    color={draft.color}
+                    onColspan={n => set({ colspan: n })}
+                    onRowspan={n => set({ rowspan: n })}
+                    onShape={s => set({ shape: s })}
+                  />
                 </div>
               </>
             )}
           </div>
-
-          {/* Right preview panel */}
-          {draft.buttonType !== "empty" && (
-            <div className="w-36 border-l bg-muted/20 flex-shrink-0 flex flex-col items-center justify-start gap-3 px-3 py-5">
-              <p className="text-xs font-medium text-muted-foreground">Preview</p>
-              <div
-                className={`flex items-center justify-center text-white font-semibold text-xs text-center px-2 shadow-sm leading-tight ${rc}`}
-                style={{
-                  backgroundColor: draft.color,
-                  width: colspan >= 2 ? "112px" : "56px",
-                  height: rowspan >= 2 ? "112px" : "56px",
-                }}
-              >
-                {draft.label || "Label"}
-              </div>
-              <div className="text-[10px] text-muted-foreground text-center space-y-0.5">
-                <p>{colspan}×{rowspan} cells</p>
-                <p className="capitalize">{draft.shape ?? "rect"}</p>
-                <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] ${typeChip(draft.buttonType)}`}>{draft.buttonType}</span>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Footer */}
@@ -655,7 +724,8 @@ function MiniGrid({ slots, cols, buttonRadius, label, icon: Icon, allLayouts }: 
         {grid.map((slot, idx) => {
           if (consumed.has(slot.position)) return <div key={idx} />;
           const isEmpty = slot.buttonType === "empty" || !slot.label;
-          const { colspan = 1, rowspan = 1 } = shapeToSpan(slot.shape);
+          const colspan = slot.colspan ?? 1;
+          const rowspan = slot.rowspan ?? 1;
           const rc = radiusClass(buttonRadius, slot.shape);
           return (
             <div
@@ -737,7 +807,7 @@ export default function PosLayoutEditor() {
         categoryId:  b.categoryId ?? undefined,
         actionCode:  b.actionCode ?? undefined,
         sublayoutId: (b as any).sublayoutId ?? undefined,
-        shape:       ((b as any).shape as ShapeType) ?? "rect",
+        shape:       ((b as any).shape as CornerStyle) ?? "rect",
         colspan:     (b as any).colspan ?? 1,
         rowspan:     (b as any).rowspan ?? 1,
         icon:        b.icon ?? undefined,
