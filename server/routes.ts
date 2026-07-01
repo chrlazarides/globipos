@@ -4929,6 +4929,7 @@ export async function registerRoutes(
       );
 
       await storage.updatePortalOrderStatus(req.params.id, "confirmed");
+      await storage.setPortalOrderInvoiceId(req.params.id, invoice.id);
 
       res.json({ invoice, message: "Invoice created successfully" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }

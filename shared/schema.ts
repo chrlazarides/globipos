@@ -109,6 +109,7 @@ export const portalOrders = pgTable("portal_orders", {
   total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
   cashbackApplied: numeric("cashback_applied", { precision: 10, scale: 2 }).default("0"),
   notes: text("notes"),
+  invoiceId: varchar("invoice_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

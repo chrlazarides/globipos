@@ -123,6 +123,15 @@ app.use((req, res, next) => {
     console.error("[migration] portal_orders.source column error:", e);
   }
 
+  // Schema migration: add invoice_id column to portal_orders for order→invoice cross-reference
+  try {
+    await db.execute(sql`
+      ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS invoice_id VARCHAR;
+    `);
+  } catch (e) {
+    console.error("[migration] portal_orders.invoice_id column error:", e);
+  }
+
   // Schema migration: create staff_push_subscriptions table if it doesn't exist
   try {
     await db.execute(sql`

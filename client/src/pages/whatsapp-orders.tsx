@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX, Send } from "lucide-react";
+import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX, Send, ExternalLink } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
@@ -35,6 +36,7 @@ type PortalOrder = {
   vatAmount: string;
   total: string;
   notes: string | null;
+  invoiceId: string | null;
   createdAt: string;
   items: OrderItem[];
 };
@@ -59,6 +61,7 @@ function sourceBadge(source: string) {
 
 function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: () => void }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [replyText, setReplyText] = useState("");
 
   const sendReply = useMutation({
@@ -90,8 +93,17 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
     mutationFn: () => apiRequest("POST", `/api/admin/portal-orders/${order.id}/convert-to-invoice`, {}),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/portal-orders"] });
-      toast({ title: "Invoice created", description: `Invoice created as draft. Order confirmed.` });
-      onClose();
+      const invoiceNum = data?.invoice?.invoiceNumber || "";
+      toast({
+        title: "Invoice created",
+        description: `Draft invoice${invoiceNum ? ` #${invoiceNum}` : ""} created. Order confirmed.`,
+      });
+      if (data?.invoice?.id) {
+        onClose();
+        navigate(`/invoices/${data.invoice.id}`);
+      } else {
+        onClose();
+      }
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -120,6 +132,22 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
               <p className="font-medium">{format(new Date(order.createdAt), "dd MMM yyyy HH:mm")}</p>
             </div>
           </div>
+
+          {order.invoiceId && (
+            <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-md p-3">
+              <FileText className="w-4 h-4 text-blue-600 flex-shrink-0" />
+              <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">Invoice created from this order.</span>
+              <Button
+                variant="link"
+                size="sm"
+                className="ml-auto text-blue-600 dark:text-blue-400 h-auto p-0 font-medium flex items-center gap-1"
+                onClick={() => { onClose(); navigate(`/invoices/${order.invoiceId}`); }}
+                data-testid="link-view-invoice"
+              >
+                View Invoice <ExternalLink className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          )}
 
           {order.notes && (
             <div className="bg-muted/50 rounded-md p-3 text-sm italic text-muted-foreground">
@@ -320,6 +348,7 @@ export default function WhatsAppOrders() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [selectedOrder, setSelectedOrder] = useState<PortalOrder | null>(null);
+  const [, navigate] = useLocation();
   const { clearNewOrders, chimeMuted, toggleChimeMuted } = useWhatsAppAlert();
 
   useEffect(() => {
@@ -464,7 +493,16 @@ export default function WhatsAppOrders() {
                   </div>
                   <div className="text-right flex-shrink-0">
                     <p className="font-bold text-base" data-testid={`order-total-${order.id}`}>€{parseFloat(order.total).toFixed(2)}</p>
-                    {order.status === "pending" && (
+                    {order.invoiceId && (
+                      <button
+                        className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200 font-medium flex items-center justify-end gap-0.5 mt-0.5 underline-offset-2 hover:underline"
+                        onClick={e => { e.stopPropagation(); navigate(`/invoices/${order.invoiceId}`); }}
+                        data-testid={`link-view-invoice-${order.id}`}
+                      >
+                        <FileText className="w-3 h-3" /> View Invoice →
+                      </button>
+                    )}
+                    {order.status === "pending" && !order.invoiceId && (
                       <span className="text-xs text-yellow-600 font-medium">Needs action</span>
                     )}
                   </div>

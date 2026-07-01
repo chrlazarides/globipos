@@ -120,6 +120,7 @@ export interface IStorage {
   getPortalOrders(customerId: string): Promise<(PortalOrder & { items: PortalOrderItem[] })[]>;
   getAllPortalOrders(filters?: { source?: string; status?: string }): Promise<(PortalOrder & { items: PortalOrderItem[]; customerName: string; customerCode: string })[]>;
   updatePortalOrderStatus(id: string, status: string): Promise<PortalOrder | undefined>;
+  setPortalOrderInvoiceId(id: string, invoiceId: string): Promise<PortalOrder | undefined>;
   createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]): Promise<PortalOrder>;
   getAvailableItems(): Promise<Item[]>;
 
@@ -1784,6 +1785,11 @@ export class DatabaseStorage implements IStorage {
 
   async updatePortalOrderStatus(id: string, status: string) {
     const [updated] = await db.update(portalOrders).set({ status }).where(eq(portalOrders.id, id)).returning();
+    return updated;
+  }
+
+  async setPortalOrderInvoiceId(id: string, invoiceId: string) {
+    const [updated] = await db.update(portalOrders).set({ invoiceId }).where(eq(portalOrders.id, id)).returning();
     return updated;
   }
 
