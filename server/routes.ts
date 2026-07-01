@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions } from "@shared/schema";
-import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, wordToNumber, type WaPendingItem } from "./chatbot-service";
+import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -8332,9 +8332,18 @@ export async function registerRoutes(
 
       // ── Pending confirmation check (yes/no after add_item preview) ──────────
       const pendingItem = getPendingItem(conv.id);
+      const lowerText = text.toLowerCase().trim();
+      const isYes = /^(yes|yeah|yep|correct|ok|okay|confirm|sure|add it|go ahead|y)$/i.test(lowerText);
+
+      // If no pending item but one recently expired, tell the customer to browse again
+      if (!pendingItem && isYes && consumeExpiredPendingFlag(conv.id)) {
+        const expiredReply = "⏱️ Your confirmation timed out after 10 minutes — the item wasn't added. Please browse and select the item again when you're ready!";
+        await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: expiredReply, channel: "whatsapp", intent: "unknown" });
+        await sendWhatsAppMessage(from, expiredReply);
+        return;
+      }
+
       if (pendingItem) {
-        const lowerText = text.toLowerCase().trim();
-        const isYes = /^(yes|yeah|yep|correct|ok|okay|confirm|sure|add it|go ahead|y)$/i.test(lowerText);
         const isNo  = /^(no|nope|nah|cancel|wrong|incorrect|n)$/i.test(lowerText);
         if (isYes) {
           clearPendingItem(conv.id);

@@ -75,18 +75,60 @@ export interface WaPendingItem {
   qty: number;
 }
 
-const waPendingStore = new Map<string, WaPendingItem>();
+const PENDING_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+interface WaPendingEntry {
+  item: WaPendingItem;
+  expiresAt: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const waPendingStore = new Map<string, WaPendingEntry>();
+
+// Tracks conversations where a pending item recently expired — lets routes.ts
+// give the customer a helpful "browse again" reply instead of a confusing response.
+const waPendingExpired = new Set<string>();
 
 export function getPendingItem(convId: string): WaPendingItem | undefined {
-  return waPendingStore.get(convId);
+  const entry = waPendingStore.get(convId);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    clearTimeout(entry.timer);
+    waPendingStore.delete(convId);
+    waPendingExpired.add(convId);
+    return undefined;
+  }
+  return entry.item;
 }
 
 export function setPendingItem(convId: string, item: WaPendingItem) {
-  waPendingStore.set(convId, item);
+  // Cancel any existing timer first
+  const existing = waPendingStore.get(convId);
+  if (existing) clearTimeout(existing.timer);
+
+  const timer = setTimeout(() => {
+    waPendingStore.delete(convId);
+    waPendingExpired.add(convId);
+  }, PENDING_TTL_MS);
+
+  waPendingStore.set(convId, { item, expiresAt: Date.now() + PENDING_TTL_MS, timer });
+  waPendingExpired.delete(convId); // reset expired flag on new pending item
 }
 
 export function clearPendingItem(convId: string) {
+  const entry = waPendingStore.get(convId);
+  if (entry) clearTimeout(entry.timer);
   waPendingStore.delete(convId);
+  waPendingExpired.delete(convId);
+}
+
+/** Returns true (and clears the flag) if a pending item expired for this conversation. */
+export function consumeExpiredPendingFlag(convId: string): boolean {
+  if (waPendingExpired.has(convId)) {
+    waPendingExpired.delete(convId);
+    return true;
+  }
+  return false;
 }
 
 // ─── Keyword intent matcher (always available) ────────────────────────────────
