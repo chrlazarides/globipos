@@ -103,6 +103,7 @@ export const portalOrders = pgTable("portal_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   customerId: varchar("customer_id").notNull(),
   status: text("status").notNull().default("pending"),
+  source: text("source").notNull().default("portal"), // portal | whatsapp
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
   vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
   total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
@@ -830,3 +831,18 @@ export type ChatMessage = typeof chatMessages.$inferSelect;
 export const insertFaqEntrySchema = createInsertSchema(faqEntries).omit({ id: true, createdAt: true });
 export type InsertFaqEntry = z.infer<typeof insertFaqEntrySchema>;
 export type FaqEntry = typeof faqEntries.$inferSelect;
+
+// ── Staff Push Subscriptions (back-office browser push for new WhatsApp orders) ─
+export const staffPushSubscriptions = pgTable("staff_push_subscriptions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertStaffPushSubscriptionSchema = createInsertSchema(staffPushSubscriptions).omit({ id: true, createdAt: true });
+export type InsertStaffPushSubscription = z.infer<typeof insertStaffPushSubscriptionSchema>;
+export type StaffPushSubscription = typeof staffPushSubscriptions.$inferSelect;

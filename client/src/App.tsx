@@ -53,6 +53,7 @@ import PosReturns from "@/pages/pos-returns";
 import PosShifts from "@/pages/pos-shifts";
 import PosCardTerminal from "@/pages/pos-card-terminal";
 import PosDownload from "@/pages/pos-download";
+import WhatsAppOrders from "@/pages/whatsapp-orders";
 import type { Customer } from "@shared/schema";
 import { Loader2 } from "lucide-react";
 
@@ -161,6 +162,7 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/chat-panel" component={ChatPanel} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/faq-editor" component={FaqEditor} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/customer-push" component={CustomerPushPage} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/whatsapp-orders" component={WhatsAppOrders} />}
       <Route component={NotFound} />
     </Switch>
   );

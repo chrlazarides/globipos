@@ -118,6 +118,8 @@ export interface IStorage {
   getCustomerByCode(code: string): Promise<Customer | undefined>;
   getCustomerInvoices(customerId: string): Promise<(Invoice & { items: InvoiceItem[] })[]>;
   getPortalOrders(customerId: string): Promise<(PortalOrder & { items: PortalOrderItem[] })[]>;
+  getAllPortalOrders(filters?: { source?: string; status?: string }): Promise<(PortalOrder & { items: PortalOrderItem[]; customerName: string; customerCode: string })[]>;
+  updatePortalOrderStatus(id: string, status: string): Promise<PortalOrder | undefined>;
   createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]): Promise<PortalOrder>;
   getAvailableItems(): Promise<Item[]>;
 
@@ -1758,6 +1760,31 @@ export class DatabaseStorage implements IStorage {
       result.push({ ...order, items });
     }
     return result;
+  }
+
+  async getAllPortalOrders(filters?: { source?: string; status?: string }) {
+    const conditions = [];
+    if (filters?.source) conditions.push(eq(portalOrders.source, filters.source));
+    if (filters?.status) conditions.push(eq(portalOrders.status, filters.status));
+
+    const rows = await db
+      .select({ order: portalOrders, customerName: customers.name, customerCode: customers.code })
+      .from(portalOrders)
+      .leftJoin(customers, eq(customers.id, portalOrders.customerId))
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(portalOrders.createdAt));
+
+    const result = [];
+    for (const row of rows) {
+      const items = await db.select().from(portalOrderItems).where(eq(portalOrderItems.orderId, row.order.id));
+      result.push({ ...row.order, items, customerName: row.customerName || "Unknown", customerCode: row.customerCode || "" });
+    }
+    return result;
+  }
+
+  async updatePortalOrderStatus(id: string, status: string) {
+    const [updated] = await db.update(portalOrders).set({ status }).where(eq(portalOrders.id, id)).returning();
+    return updated;
   }
 
   async createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]) {

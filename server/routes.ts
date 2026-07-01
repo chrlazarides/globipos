@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions } from "@shared/schema";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -4854,6 +4854,114 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // ─── Admin: Portal / WhatsApp Order Queue ───────────────────────────────────
+
+  // GET all portal orders (all sources) — requireAdmin
+  app.get("/api/admin/portal-orders", requireAdmin, async (req, res) => {
+    try {
+      const { source, status } = req.query as { source?: string; status?: string };
+      const orders = await storage.getAllPortalOrders({
+        source: source || undefined,
+        status: status || undefined,
+      });
+      res.json(orders);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // PATCH status (confirmed | rejected | pending)
+  app.patch("/api/admin/portal-orders/:id/status", requireAdmin, async (req, res) => {
+    try {
+      const { status } = req.body;
+      if (!["pending", "confirmed", "rejected", "completed"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status" });
+      }
+      const updated = await storage.updatePortalOrderStatus(req.params.id, status);
+      if (!updated) return res.status(404).json({ message: "Order not found" });
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POST convert portal order → draft invoice
+  app.post("/api/admin/portal-orders/:id/convert-to-invoice", requireAdmin, async (req, res) => {
+    try {
+      const allOrders = await storage.getAllPortalOrders();
+      const order = allOrders.find((o: any) => o.id === req.params.id);
+      if (!order) return res.status(404).json({ message: "Order not found" });
+      const customer = await storage.getCustomer(order.customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const settings = await storage.getSettings();
+      const vatRateSetting = settings.find((s: any) => s.key === "default_vat_rate");
+      const vatRate = parseFloat(vatRateSetting?.value || "19") / 100;
+
+      const today = new Date().toISOString().split("T")[0];
+      const daysMap: Record<string, number> = { "net7": 7, "net14": 14, "net30": 30, "net60": 60 };
+      const dueDays = daysMap[customer.paymentTerms || "net30"] ?? 30;
+      const dueDate = new Date(Date.now() + dueDays * 86400000).toISOString().split("T")[0];
+
+      const lineItems = (order.items || []).map((oi: any) => ({
+        itemId: oi.itemId || null,
+        description: oi.itemName,
+        quantity: String(oi.quantity),
+        saleUnit: "pc",
+        unitPrice: String(oi.unitPrice),
+        discountPercent: "0",
+        discount: "0",
+        total: String(oi.total),
+        invoiceId: "TEMP",
+      }));
+
+      const invoice = await storage.createInvoice(
+        {
+          customerId: order.customerId,
+          type: "invoice",
+          date: today,
+          dueDate,
+          subtotal: String(order.subtotal),
+          taxRate: String(vatRate * 100),
+          taxAmount: String(order.vatAmount),
+          total: String(order.total),
+          notes: order.notes || `Converted from ${order.source === "whatsapp" ? "WhatsApp" : "portal"} order`,
+          status: "draft",
+          currency: settings.find((s: any) => s.key === "currency_symbol")?.value || "€",
+        },
+        lineItems
+      );
+
+      await storage.updatePortalOrderStatus(req.params.id, "confirmed");
+
+      res.json({ invoice, message: "Invoice created successfully" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POST subscribe staff browser to push notifications for new WhatsApp orders
+  app.post("/api/admin/push/subscribe", requireAdmin, async (req, res) => {
+    try {
+      const { endpoint, keys } = req.body;
+      if (!endpoint || !keys?.p256dh || !keys?.auth) {
+        return res.status(400).json({ message: "endpoint and keys required" });
+      }
+      const userId = (req as any).user?.id;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      await db.insert(staffPushSubscriptions).values({
+        userId, endpoint, p256dh: keys.p256dh, auth: keys.auth,
+        userAgent: req.headers["user-agent"] || null,
+      }).onConflictDoUpdate({ target: staffPushSubscriptions.endpoint, set: { userId, p256dh: keys.p256dh, auth: keys.auth } });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // DELETE unsubscribe staff browser
+  app.delete("/api/admin/push/unsubscribe", requireAdmin, async (req, res) => {
+    try {
+      const { endpoint } = req.body;
+      if (endpoint) {
+        await db.delete(staffPushSubscriptions).where(eq(staffPushSubscriptions.endpoint, endpoint));
+      }
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // ─── Customer PWA API (/api/customer/*) ─────────────────────────────────────
   // Separate JWT secret scope for customer tokens (uses SESSION_SECRET + suffix)
   const CUSTOMER_JWT_SECRET = (process.env.SESSION_SECRET || "fallback") + "_customer";
@@ -4873,6 +4981,21 @@ export async function registerRoutes(
     if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return;
     try {
       const subs = await db.select().from(customerPushSubscriptions).where(eq(customerPushSubscriptions.customerId, customerId));
+      for (const sub of subs) {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            JSON.stringify(payload)
+          );
+        } catch { /* individual delivery failure is non-fatal */ }
+      }
+    } catch { /* push send is always non-fatal */ }
+  }
+
+  async function sendPushToAllStaff(payload: { title: string; body: string; url?: string }) {
+    if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return;
+    try {
+      const subs = await db.select().from(staffPushSubscriptions);
       for (const sub of subs) {
         try {
           await webpush.sendNotification(
@@ -8215,10 +8338,15 @@ export async function registerRoutes(
             const [matchedCustomer] = await db.select().from(customers)
               .where(eq(customers.phone, from)).limit(1);
             if (matchedCustomer) {
-              const total = cart.reduce((s, c) => s + c.price * c.qty, 0);
+              const subtotal = cart.reduce((s, c) => s + c.price * c.qty, 0);
+              const vatAmt = subtotal * 0.19;
+              const total = subtotal + vatAmt;
               const [newOrder] = await db.insert(portalOrders).values({
                 customerId: matchedCustomer.id,
                 status: "pending",
+                source: "whatsapp",
+                subtotal: String(subtotal.toFixed(2)),
+                vatAmount: String(vatAmt.toFixed(2)),
                 total: String(total.toFixed(2)),
                 notes: "Ordered via WhatsApp",
               }).returning();
@@ -8226,13 +8354,19 @@ export async function registerRoutes(
                 cart.map(c => ({
                   orderId: newOrder.id,
                   itemId: c.itemId,
-                  description: c.name,
-                  quantity: String(c.qty),
+                  itemName: c.name,
+                  quantity: c.qty,
                   unitPrice: String(c.price),
-                  lineTotal: String((c.price * c.qty).toFixed(2)),
+                  total: String((c.price * c.qty).toFixed(2)),
                 }))
               );
               clearWaCart(conv.id);
+              // Notify all subscribed staff of the new WhatsApp order
+              sendPushToAllStaff({
+                title: "New WhatsApp Order",
+                body: `${matchedCustomer.name} placed an order for €${total.toFixed(2)}`,
+                url: "/whatsapp-orders",
+              }).catch(() => {});
               reply = `🎉 *Order confirmed!*\n\nTotal: €${total.toFixed(2)}\n\nYour order has been placed and our team will process it shortly. Thank you!`;
             } else {
               reply = `To place an order via WhatsApp, please register in our Customer Portal first. Reply 'agent' to get help from our team.`;

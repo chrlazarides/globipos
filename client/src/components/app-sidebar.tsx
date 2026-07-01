@@ -87,6 +87,7 @@ const posNav = [
 
 const chatNav = [
   { title: "Chat Panel", url: "/chat-panel", icon: MessageCircle, module: "_admin" },
+  { title: "WhatsApp Orders", url: "/whatsapp-orders", icon: ShoppingBag, module: "_admin" },
   { title: "FAQ Editor", url: "/faq-editor", icon: HelpCircle, module: "_admin" },
   { title: "Customer Notifications", url: "/customer-push", icon: Bell, module: "_admin" },
 ];

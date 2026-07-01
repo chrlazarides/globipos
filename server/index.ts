@@ -114,6 +114,32 @@ app.use((req, res, next) => {
     console.error("[migration] opening_balance column error:", e);
   }
 
+  // Schema migration: add source column to portal_orders for WhatsApp vs portal distinction
+  try {
+    await db.execute(sql`
+      ALTER TABLE portal_orders ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'portal';
+    `);
+  } catch (e) {
+    console.error("[migration] portal_orders.source column error:", e);
+  }
+
+  // Schema migration: create staff_push_subscriptions table if it doesn't exist
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS staff_push_subscriptions (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id VARCHAR NOT NULL,
+        endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        user_agent TEXT,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      );
+    `);
+  } catch (e) {
+    console.error("[migration] staff_push_subscriptions table error:", e);
+  }
+
   // One-time opening balance migration — sets carry-over balances from previous system
   // Idempotent: only sets where opening_balance is still 0
   try {
