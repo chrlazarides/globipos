@@ -7150,8 +7150,8 @@ export async function registerRoutes(
         storage.getPosSyncConfig(),
         storage.getPosCashiers(terminal.locationId),
       ]);
-      // Strip sensitive fields — only send id, name, pin, role (pin is plaintext; terminal hashes locally)
-      const cashierPayload = cashiers.map(c => ({ id: c.id, name: c.name, pin: c.pin, role: c.role }));
+      // Send SHA-256 hash of PIN (never plaintext). Terminal stores hash directly.
+      const cashierPayload = cashiers.map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role }));
       res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: allItems, categories: cats }, syncConfig: syncCfg, cashiers: cashierPayload });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -7161,7 +7161,8 @@ export async function registerRoutes(
     try {
       const terminal = (req as any).terminal;
       const cashiers = await storage.getPosCashiers(terminal.locationId);
-      res.json(cashiers.map(c => ({ id: c.id, name: c.name, pin: c.pin, role: c.role })));
+      // Send SHA-256 hash (the `pin` column stores hashes, never plaintext)
+      res.json(cashiers.map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role })));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -7169,22 +7170,32 @@ export async function registerRoutes(
   app.get("/api/pos/cashiers", requireAdmin, async (req, res) => {
     try {
       const { locationId } = req.query;
-      res.json(await storage.getPosCashiers(locationId as string | undefined));
+      const cashiers = await storage.getPosCashiers(locationId as string | undefined);
+      // Never expose the hash in admin listing — return masked pin indicator
+      res.json(cashiers.map(c => ({ ...c, pin: "••••" })));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.post("/api/pos/cashiers", requireAdmin, async (req, res) => {
     try {
-      const data = req.body;
-      if (!data.name || !data.pin) return res.status(400).json({ message: "name and pin required" });
-      const cashier = await storage.createPosCashier(data);
-      res.status(201).json(cashier);
+      const { name, pin, role, locationId, active } = req.body;
+      if (!name || !pin) return res.status(400).json({ message: "name and pin required" });
+      // Hash PIN with SHA-256 before storing — never store plaintext
+      const { createHash } = await import("crypto");
+      const pinHash = createHash("sha256").update(String(pin)).digest("hex");
+      const cashier = await storage.createPosCashier({ name, pin: pinHash, role: role || "cashier", locationId: locationId || null, active: active !== false });
+      res.status(201).json({ ...cashier, pin: "••••" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.put("/api/pos/cashiers/:id", requireAdmin, async (req, res) => {
     try {
-      const cashier = await storage.updatePosCashier(req.params.id, req.body);
+      const updates: any = { ...req.body };
+      if (updates.pin) {
+        const { createHash } = await import("crypto");
+        updates.pin = createHash("sha256").update(String(updates.pin)).digest("hex");
+      }
+      const cashier = await storage.updatePosCashier(req.params.id, updates);
       if (!cashier) return res.status(404).json({ message: "Cashier not found" });
-      res.json(cashier);
+      res.json({ ...cashier, pin: "••••" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.delete("/api/pos/cashiers/:id", requireAdmin, async (req, res) => {

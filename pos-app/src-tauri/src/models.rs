@@ -165,7 +165,8 @@ pub struct SyncStatus {
 pub struct CashierSeed {
     pub id: String,
     pub name: String,
-    pub pin: String,  // plaintext; hashed locally by the terminal
+    #[serde(rename = "pinHash")]
+    pub pin_hash: String,  // SHA-256 hex hash; stored directly, no re-hashing
     pub role: String,
 }
 

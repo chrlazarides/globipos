@@ -1,14 +1,12 @@
+use sha2::{Sha256, Digest};
 use sqlx::{Row, SqlitePool};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 use crate::models::CashierSession;
 
-/// Simple PIN hash. In production, use argon2 or bcrypt.
+/// Hash a plaintext PIN using SHA-256. Returns lowercase hex string.
 pub fn hash_pin(pin: &str) -> String {
-    let mut h = DefaultHasher::new();
-    pin.hash(&mut h);
-    format!("{:016x}", h.finish())
+    let result = Sha256::digest(pin.as_bytes());
+    result.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// Validate a cashier PIN against the local DB.
@@ -49,7 +47,7 @@ fn default_permissions(role: &str) -> Vec<String> {
     .iter().map(|s| s.to_string()).collect()
 }
 
-/// Create or update a cashier.
+/// Create or update a cashier from a plaintext PIN (hashed locally before storage).
 pub async fn upsert_cashier(
     pool: &SqlitePool,
     id: &str,
@@ -58,6 +56,18 @@ pub async fn upsert_cashier(
     role: &str,
 ) -> Result<(), sqlx::Error> {
     let hash = hash_pin(pin);
+    upsert_cashier_with_hash(pool, id, name, &hash, role).await
+}
+
+/// Create or update a cashier from a pre-computed SHA-256 hex hash (from server sync).
+/// Stores the hash directly without re-hashing.
+pub async fn upsert_cashier_with_hash(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    pin_hash: &str,
+    role: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"INSERT INTO cashiers (id, name, pin_hash, role, active)
            VALUES (?, ?, ?, ?, 1)
@@ -65,7 +75,7 @@ pub async fn upsert_cashier(
     )
     .bind(id)
     .bind(name)
-    .bind(&hash)
+    .bind(pin_hash)
     .bind(role)
     .execute(pool)
     .await?;

@@ -57,9 +57,9 @@ pub async fn register_terminal(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Seed cashiers synced from server
+    // Seed cashiers synced from server (server sends SHA-256 hash, stored directly)
     for c in &data.cashiers {
-        crate::auth::upsert_cashier(pool, &c.id, &c.name, &c.pin, &c.role)
+        crate::auth::upsert_cashier_with_hash(pool, &c.id, &c.name, &c.pin_hash, &c.role)
             .await
             .map_err(|e| e.to_string())?;
     }
