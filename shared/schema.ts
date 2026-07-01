@@ -646,6 +646,21 @@ export const insertPosInboxSchema = createInsertSchema(posInbox).omit({ id: true
 export type InsertPosInbox = z.infer<typeof insertPosInboxSchema>;
 export type PosInbox = typeof posInbox.$inferSelect;
 
+// ── POS Cashiers (server-managed; synced to terminal on registration) ─────────
+
+export const posCashiers = pgTable("pos_cashiers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  locationId: varchar("location_id"), // null = all locations
+  name: text("name").notNull(),
+  pin: text("pin").notNull(),          // plaintext; terminal hashes locally
+  role: text("role").notNull().default("cashier"), // cashier | supervisor | manager
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertPosCashierSchema = createInsertSchema(posCashiers).omit({ id: true, createdAt: true });
+export type InsertPosCashier = z.infer<typeof insertPosCashierSchema>;
+export type PosCashier = typeof posCashiers.$inferSelect;
+
 // ── POS Phase 3: Promotions, Container Deposits, Returns ──────────────────────
 
 export const posPromotions = pgTable("pos_promotions", {

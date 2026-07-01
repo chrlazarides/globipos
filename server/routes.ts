@@ -7062,6 +7062,14 @@ export async function registerRoutes(
   app.get("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
     try { res.json(await storage.getPosLayoutButtons(req.params.id)); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
+  app.put("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
+    try {
+      const { buttons } = req.body;
+      if (!Array.isArray(buttons)) return res.status(400).json({ message: "buttons array required" });
+      const rows = await storage.setPosLayoutButtons(req.params.id, buttons.map((b: any) => ({ ...b, layoutSetId: req.params.id })));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
 
   // POS Orders
   app.get("/api/pos/orders", requireAdmin, async (req, res) => {
@@ -7119,30 +7127,70 @@ export async function registerRoutes(
   // No X-Terminal-Code header required (this IS the bootstrap before the terminal has a session).
   app.post("/api/pos/terminals/register", async (req, res) => {
     try {
-      const { terminalCode, locationCode } = req.body;
+      // Accept both "terminalCode" (canonical) and legacy "code" field from older Tauri builds
+      const terminalCode = req.body.terminalCode || req.body.code;
+      const { locationCode } = req.body;
       if (!terminalCode) return res.status(400).json({ message: "terminalCode required" });
       const terminal = await storage.getPosTerminalByCode(terminalCode);
-      if (!terminal) return res.status(404).json({ message: "Terminal not found" });
+      if (!terminal) return res.status(404).json({ message: `Terminal '${terminalCode}' not found. Create it in Admin → POS → Terminals.` });
       if (!terminal.active) return res.status(403).json({ message: "Terminal is not active" });
-      // Optionally validate locationCode if provided
       if (locationCode) {
         const locs = await storage.getPosLocations();
         const loc = locs.find(l => l.code === locationCode || l.id === locationCode);
         if (!loc) return res.status(404).json({ message: `Location '${locationCode}' not found` });
         if (terminal.locationId !== loc.id) return res.status(403).json({ message: "Terminal is not assigned to that location" });
       }
-      // Update last seen
       await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date() });
-      // Build bundle
-      const [location, layoutButtons, inboxItems, allItems, cats, syncCfg] = await Promise.all([
+      const [location, layoutButtons, inboxItems, allItems, cats, syncCfg, cashiers] = await Promise.all([
         storage.getPosLocation(terminal.locationId),
         terminal.layoutSetId ? storage.getPosLayoutButtons(terminal.layoutSetId) : Promise.resolve([]),
         storage.getPosInbox(terminal.id),
         storage.getItems(),
         storage.getCategories(),
         storage.getPosSyncConfig(),
+        storage.getPosCashiers(terminal.locationId),
       ]);
-      res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: allItems, categories: cats }, syncConfig: syncCfg });
+      // Strip sensitive fields — only send id, name, pin, role (pin is plaintext; terminal hashes locally)
+      const cashierPayload = cashiers.map(c => ({ id: c.id, name: c.name, pin: c.pin, role: c.role }));
+      res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: allItems, categories: cats }, syncConfig: syncCfg, cashiers: cashierPayload });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Cashier sync endpoint (called by terminal after initial registration for delta updates)
+  app.get("/api/pos/sync/cashiers", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const cashiers = await storage.getPosCashiers(terminal.locationId);
+      res.json(cashiers.map(c => ({ id: c.id, name: c.name, pin: c.pin, role: c.role })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Cashier CRUD (admin-only)
+  app.get("/api/pos/cashiers", requireAdmin, async (req, res) => {
+    try {
+      const { locationId } = req.query;
+      res.json(await storage.getPosCashiers(locationId as string | undefined));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/cashiers", requireAdmin, async (req, res) => {
+    try {
+      const data = req.body;
+      if (!data.name || !data.pin) return res.status(400).json({ message: "name and pin required" });
+      const cashier = await storage.createPosCashier(data);
+      res.status(201).json(cashier);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.put("/api/pos/cashiers/:id", requireAdmin, async (req, res) => {
+    try {
+      const cashier = await storage.updatePosCashier(req.params.id, req.body);
+      if (!cashier) return res.status(404).json({ message: "Cashier not found" });
+      res.json(cashier);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.delete("/api/pos/cashiers/:id", requireAdmin, async (req, res) => {
+    try {
+      await storage.deletePosCashier(req.params.id);
+      res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 

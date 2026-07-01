@@ -85,6 +85,7 @@ const PUBLIC_PATHS = [
   "/api/manual",
   "/api/public",
   "/api/customer",
+  "/api/pos/terminals/register", // bootstrap — no session cookie on first launch
 ];
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {

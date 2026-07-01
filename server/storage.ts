@@ -212,6 +212,13 @@ export interface IStorage {
   getPosInbox(terminalId?: string, since?: Date): Promise<PosInbox[]>;
   createPosInboxItem(data: InsertPosInbox): Promise<PosInbox>;
   deletePosInboxItem(id: string): Promise<void>;
+
+  // POS Cashiers
+  getPosCashiers(locationId?: string): Promise<import("@shared/schema").PosCashier[]>;
+  getPosCashier(id: string): Promise<import("@shared/schema").PosCashier | undefined>;
+  createPosCashier(data: import("@shared/schema").InsertPosCashier): Promise<import("@shared/schema").PosCashier>;
+  updatePosCashier(id: string, data: Partial<import("@shared/schema").InsertPosCashier>): Promise<import("@shared/schema").PosCashier | undefined>;
+  deletePosCashier(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2721,6 +2728,33 @@ export class DatabaseStorage implements IStorage {
   }
   async deletePosInboxItem(id: string): Promise<void> {
     await db.delete(posInbox).where(eq(posInbox.id, id));
+  }
+
+  // ─── POS Cashiers ──────────────────────────────────────────────────────────
+  async getPosCashiers(locationId?: string) {
+    const { posCashiers } = await import("@shared/schema");
+    const rows = await db.select().from(posCashiers).orderBy(posCashiers.name);
+    if (locationId) return rows.filter(r => !r.locationId || r.locationId === locationId);
+    return rows;
+  }
+  async getPosCashier(id: string) {
+    const { posCashiers } = await import("@shared/schema");
+    const [row] = await db.select().from(posCashiers).where(eq(posCashiers.id, id));
+    return row;
+  }
+  async createPosCashier(data: import("@shared/schema").InsertPosCashier) {
+    const { posCashiers } = await import("@shared/schema");
+    const [row] = await db.insert(posCashiers).values(data).returning();
+    return row;
+  }
+  async updatePosCashier(id: string, data: Partial<import("@shared/schema").InsertPosCashier>) {
+    const { posCashiers } = await import("@shared/schema");
+    const [row] = await db.update(posCashiers).set(data).where(eq(posCashiers.id, id)).returning();
+    return row;
+  }
+  async deletePosCashier(id: string): Promise<void> {
+    const { posCashiers } = await import("@shared/schema");
+    await db.delete(posCashiers).where(eq(posCashiers.id, id));
   }
 }
 

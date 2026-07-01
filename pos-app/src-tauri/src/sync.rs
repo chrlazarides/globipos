@@ -19,7 +19,7 @@ pub async fn register_terminal(
     let url = format!("{}/api/pos/terminals/register", server_url.trim_end_matches('/'));
     let resp = client
         .post(&url)
-        .json(&serde_json::json!({ "code": terminal_code }))
+        .json(&serde_json::json!({ "terminalCode": terminal_code }))
         .send()
         .await
         .map_err(|e| format!("Network error: {}", e))?;
@@ -56,6 +56,13 @@ pub async fn register_terminal(
     db::replace_layout(pool, &btns)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Seed cashiers synced from server
+    for c in &data.cashiers {
+        crate::auth::upsert_cashier(pool, &c.id, &c.name, &c.pin, &c.role)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
 
     // Log
     sqlx::query(

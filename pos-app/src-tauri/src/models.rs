@@ -162,6 +162,15 @@ pub struct SyncStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CashierSeed {
+    pub id: String,
+    pub name: String,
+    pub pin: String,  // plaintext; hashed locally by the terminal
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegisterResponse {
     pub terminal: RegisteredTerminal,
     pub location: RegisteredLocation,
@@ -169,6 +178,8 @@ pub struct RegisterResponse {
     pub inbox_items: Vec<serde_json::Value>,
     pub catalog: CatalogData,
     pub sync_config: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub cashiers: Vec<CashierSeed>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
