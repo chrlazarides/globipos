@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -8,267 +8,291 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   ArrowLeft, Save, Loader2, LayoutGrid, Trash2, Package,
-  Tag, Zap, EyeOff, Settings2, RefreshCw, CheckCircle2,
+  Tag, Zap, EyeOff, Settings2, CheckCircle2,
   CreditCard, Banknote, Receipt, RotateCcw, Users, Search,
   Calculator, Printer, BookOpen, ShieldAlert, Clock,
   ChevronUp, ChevronDown, AlignLeft, Wallet, Minus,
   DoorOpen, FileText, BarChart2, TrendingDown,
+  Smartphone, Tablet, Monitor, Layers, Circle,
+  Square, RectangleHorizontal, ChevronRight, Info,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton } from "@shared/schema";
 
-// ── Color palette ─────────────────────────────────────────────────────────────
+// ── Color palette ──────────────────────────────────────────────────────────────
 const PRESET_COLORS = [
-  "#1e293b", // slate-900
-  "#374151", // gray-700
-  "#6b7280", // gray-500
-  "#ef4444", // red
-  "#dc2626", // red-600
-  "#f97316", // orange
-  "#ea580c", // orange-600
-  "#f59e0b", // amber
-  "#eab308", // yellow
-  "#84cc16", // lime
-  "#22c55e", // green
-  "#16a34a", // green-600
-  "#14b8a6", // teal
-  "#06b6d4", // cyan
-  "#0ea5e9", // sky
-  "#3b82f6", // blue
-  "#1d4ed8", // blue-700
-  "#8b5cf6", // violet
-  "#7c3aed", // violet-700
-  "#ec4899", // pink
-  "#be185d", // pink-700
-  "#9f1239", // rose-800 (wine)
-  "#7f1d1d", // red-900 (burgundy)
-  "#78350f", // amber-900 (brown)
+  "#1e293b","#374151","#6b7280","#ef4444","#dc2626","#f97316",
+  "#ea580c","#f59e0b","#eab308","#84cc16","#22c55e","#16a34a",
+  "#14b8a6","#06b6d4","#0ea5e9","#3b82f6","#1d4ed8","#8b5cf6",
+  "#7c3aed","#ec4899","#be185d","#9f1239","#7f1d1d","#78350f",
 ];
 
-// ── Comprehensive action groups ───────────────────────────────────────────────
-interface ActionDef {
-  code: string;
-  label: string;
-  icon: any;
-  description?: string;
-}
-
-interface ActionGroup {
-  group: string;
-  icon: any;
-  color: string;
-  actions: ActionDef[];
-}
+// ── Action groups ──────────────────────────────────────────────────────────────
+interface ActionDef { code: string; label: string; icon: any; description?: string }
+interface ActionGroup { group: string; icon: any; color: string; actions: ActionDef[] }
 
 const ACTION_GROUPS: ActionGroup[] = [
   {
-    group: "Payments",
-    icon: CreditCard,
-    color: "text-green-600",
+    group: "Payments", icon: CreditCard, color: "text-green-600",
     actions: [
-      { code: "pay_cash",      label: "Pay Cash",           icon: Banknote,    description: "Accept cash payment and calculate change" },
-      { code: "pay_card",      label: "Pay Card",           icon: CreditCard,  description: "Process card via connected terminal" },
-      { code: "pay_split",     label: "Split Payment",      icon: Wallet,      description: "Split across cash and card" },
-      { code: "pay_account",   label: "Charge to Account",  icon: AlignLeft,   description: "Post to customer account / credit" },
-      { code: "pay_voucher",   label: "Redeem Voucher",     icon: Receipt,     description: "Accept a gift voucher or coupon code" },
-      { code: "pay_layaway",   label: "Layaway / Deposit",  icon: Wallet,      description: "Take partial payment, hold order" },
+      { code: "pay_cash",         label: "Pay Cash",             icon: Banknote,     description: "Accept cash, calculate change" },
+      { code: "pay_card",         label: "Pay Card",             icon: CreditCard,   description: "Process card via connected terminal" },
+      { code: "pay_split",        label: "Split Payment",        icon: Wallet,       description: "Split across cash and card" },
+      { code: "pay_account",      label: "Charge to Account",    icon: AlignLeft,    description: "Post to customer account / credit" },
+      { code: "pay_voucher",      label: "Redeem Voucher",       icon: Receipt,      description: "Accept a gift voucher or coupon code" },
+      { code: "pay_layaway",      label: "Layaway / Deposit",    icon: Wallet,       description: "Take partial payment, hold order" },
     ],
   },
   {
-    group: "Sale Management",
-    icon: Receipt,
-    color: "text-blue-600",
+    group: "Sale Management", icon: Receipt, color: "text-blue-600",
     actions: [
-      { code: "new_sale",      label: "New Sale",           icon: Receipt,     description: "Clear current order and start fresh" },
-      { code: "hold_sale",     label: "Hold Sale",          icon: Receipt,     description: "Park current order, serve another customer" },
-      { code: "recall_sale",   label: "Recall Held Sale",   icon: Receipt,     description: "Bring back a parked order" },
-      { code: "void_line",     label: "Void Line",          icon: Minus,       description: "Remove the currently selected line" },
-      { code: "void_sale",     label: "Void Sale",          icon: RotateCcw,   description: "Cancel the entire current order" },
-      { code: "refund",        label: "Refund / Return",    icon: RotateCcw,   description: "Process a return against a prior sale" },
-      { code: "exchange",      label: "Exchange",           icon: RotateCcw,   description: "Swap an item for another" },
-      { code: "suspend_sale",  label: "Suspend Sale",       icon: Receipt,     description: "Save order without payment" },
+      { code: "new_sale",         label: "New Sale",             icon: Receipt,      description: "Clear current order and start fresh" },
+      { code: "hold_sale",        label: "Hold Sale",            icon: Receipt,      description: "Park current order, serve another customer" },
+      { code: "recall_sale",      label: "Recall Held Sale",     icon: Receipt,      description: "Bring back a parked order" },
+      { code: "void_line",        label: "Void Line",            icon: Minus,        description: "Remove currently selected line" },
+      { code: "void_sale",        label: "Void Sale",            icon: RotateCcw,    description: "Cancel the entire current order" },
+      { code: "refund",           label: "Refund / Return",      icon: RotateCcw,    description: "Process a return against a prior sale" },
+      { code: "exchange",         label: "Exchange",             icon: RotateCcw,    description: "Swap an item for another" },
+      { code: "suspend_sale",     label: "Suspend Sale",         icon: Receipt,      description: "Save order without payment" },
     ],
   },
   {
-    group: "Price & Quantity Modifiers",
-    icon: Calculator,
-    color: "text-amber-600",
+    group: "Price & Modifiers", icon: Calculator, color: "text-amber-600",
     actions: [
-      { code: "qty",               label: "Enter Quantity",        icon: Calculator, description: "Open numeric keypad to set line quantity" },
-      { code: "discount_pct",      label: "Line Discount %",       icon: TrendingDown, description: "Apply percentage discount to selected line" },
-      { code: "discount_fixed",    label: "Line Discount (Fixed)", icon: TrendingDown, description: "Apply fixed-amount discount to selected line" },
-      { code: "order_discount_pct",label: "Order Discount %",      icon: TrendingDown, description: "Percentage discount on whole order" },
-      { code: "price_override",    label: "Price Override",        icon: Calculator, description: "Manually set the price of a line" },
-      { code: "price_check",       label: "Price Check",           icon: Search,     description: "Look up the price of an item by barcode" },
-      { code: "weight",            label: "Enter Weight",          icon: Calculator, description: "Input weight for sold-by-weight items" },
+      { code: "qty",              label: "Enter Quantity",       icon: Calculator,   description: "Numeric keypad to set line quantity" },
+      { code: "discount_pct",     label: "Line Discount %",      icon: TrendingDown, description: "Percentage discount on selected line" },
+      { code: "discount_fixed",   label: "Line Discount (Fixed)",icon: TrendingDown, description: "Fixed-amount discount on selected line" },
+      { code: "order_discount_pct",label:"Order Discount %",     icon: TrendingDown, description: "Percentage discount on whole order" },
+      { code: "price_override",   label: "Price Override",       icon: Calculator,   description: "Manually set the price of a line" },
+      { code: "price_check",      label: "Price Check",          icon: Search,       description: "Look up item price by barcode" },
+      { code: "weight",           label: "Enter Weight",         icon: Calculator,   description: "Input weight for sold-by-weight items" },
     ],
   },
   {
-    group: "Customer",
-    icon: Users,
-    color: "text-purple-600",
+    group: "Customer", icon: Users, color: "text-purple-600",
     actions: [
-      { code: "customer_lookup",   label: "Customer Lookup",       icon: Search,     description: "Attach a customer to this order" },
-      { code: "customer_clear",    label: "Clear Customer",        icon: Users,      description: "Remove customer from current order" },
-      { code: "loyalty_points",    label: "Redeem Loyalty Points", icon: Users,      description: "Apply earned points as discount" },
-      { code: "customer_account",  label: "Customer Balance",      icon: Wallet,     description: "Show customer account balance" },
-      { code: "customer_history",  label: "Purchase History",      icon: FileText,   description: "View customer's recent purchases" },
+      { code: "customer_lookup",  label: "Customer Lookup",      icon: Search,       description: "Attach a customer to this order" },
+      { code: "customer_clear",   label: "Clear Customer",       icon: Users,        description: "Remove customer from current order" },
+      { code: "loyalty_points",   label: "Redeem Loyalty Points",icon: Users,        description: "Apply earned points as discount" },
+      { code: "customer_account", label: "Customer Balance",     icon: Wallet,       description: "Show customer account balance" },
+      { code: "customer_history", label: "Purchase History",     icon: FileText,     description: "View customer's recent purchases" },
     ],
   },
   {
-    group: "Barcode & Search",
-    icon: Search,
-    color: "text-cyan-600",
+    group: "Barcode & Search", icon: Search, color: "text-cyan-600",
     actions: [
-      { code: "barcode_scan",   label: "Scan Barcode",         icon: Search,   description: "Activate barcode scanner input" },
-      { code: "item_search",    label: "Search Items",         icon: Search,   description: "Open text search for items" },
-      { code: "plu",            label: "PLU / Item Code",      icon: Search,   description: "Enter an item code directly" },
+      { code: "barcode_scan",     label: "Scan Barcode",         icon: Search,       description: "Activate barcode scanner input" },
+      { code: "item_search",      label: "Search Items",         icon: Search,       description: "Open text search for items" },
+      { code: "plu",              label: "PLU / Item Code",      icon: Search,       description: "Enter an item code directly" },
     ],
   },
   {
-    group: "Cash Drawer & Journal",
-    icon: DoorOpen,
-    color: "text-orange-600",
+    group: "Cash Drawer & Journal", icon: DoorOpen, color: "text-orange-600",
     actions: [
-      { code: "open_drawer",    label: "Open Drawer",          icon: DoorOpen,   description: "Pop open the cash drawer" },
-      { code: "no_sale",        label: "No Sale",              icon: DoorOpen,   description: "Open drawer without a transaction" },
-      { code: "cash_in",        label: "Cash In",              icon: Banknote,   description: "Record cash added to drawer (e.g. float top-up)" },
-      { code: "cash_out",       label: "Cash Out",             icon: Banknote,   description: "Record cash removed from drawer (e.g. banking)" },
-      { code: "petty_cash",     label: "Petty Cash",           icon: Banknote,   description: "Record a petty cash expense from drawer" },
-      { code: "declare_cash",   label: "Declare Cash",         icon: Banknote,   description: "Count and declare the cash in drawer at shift end" },
+      { code: "open_drawer",      label: "Open Drawer",          icon: DoorOpen,     description: "Pop open the cash drawer" },
+      { code: "no_sale",          label: "No Sale",              icon: DoorOpen,     description: "Open drawer without a transaction" },
+      { code: "cash_in",          label: "Cash In",              icon: Banknote,     description: "Record cash added to drawer" },
+      { code: "cash_out",         label: "Cash Out",             icon: Banknote,     description: "Record cash removed from drawer" },
+      { code: "petty_cash",       label: "Petty Cash",           icon: Banknote,     description: "Record a petty cash expense" },
+      { code: "declare_cash",     label: "Declare Cash",         icon: Banknote,     description: "Count and declare cash at shift end" },
     ],
   },
   {
-    group: "Receipt & Print",
-    icon: Printer,
-    color: "text-gray-600",
+    group: "Receipt & Print", icon: Printer, color: "text-gray-600",
     actions: [
-      { code: "print_receipt",  label: "Print Receipt",        icon: Printer,  description: "Print receipt for last or current sale" },
-      { code: "reprint",        label: "Reprint Receipt",      icon: Printer,  description: "Reprint the last printed receipt" },
-      { code: "email_receipt",  label: "Email Receipt",        icon: Receipt,  description: "Send receipt to customer via email" },
-      { code: "gift_receipt",   label: "Gift Receipt",         icon: Receipt,  description: "Print receipt without prices" },
+      { code: "print_receipt",    label: "Print Receipt",        icon: Printer,      description: "Print receipt for last / current sale" },
+      { code: "reprint",          label: "Reprint Receipt",      icon: Printer,      description: "Reprint the last printed receipt" },
+      { code: "email_receipt",    label: "Email Receipt",        icon: Receipt,      description: "Send receipt to customer via email" },
+      { code: "gift_receipt",     label: "Gift Receipt",         icon: Receipt,      description: "Print receipt without prices" },
     ],
   },
   {
-    group: "Shift & Reports",
-    icon: BarChart2,
-    color: "text-indigo-600",
+    group: "Shift & Reports", icon: BarChart2, color: "text-indigo-600",
     actions: [
-      { code: "clock_in",      label: "Clock In",             icon: Clock,      description: "Cashier clocks in at start of shift" },
-      { code: "clock_out",     label: "Clock Out",            icon: Clock,      description: "Cashier clocks out at end of shift" },
-      { code: "report_x",      label: "X Report (Interim)",   icon: BarChart2,  description: "Print mid-shift sales summary without resetting" },
-      { code: "report_z",      label: "Z Report (End of Day)",icon: BarChart2,  description: "Print end-of-day report and reset counters" },
-      { code: "shift_start",   label: "Start Shift",          icon: Clock,      description: "Open a new cashier shift" },
-      { code: "shift_end",     label: "End Shift",            icon: Clock,      description: "Close current shift" },
+      { code: "clock_in",         label: "Clock In",             icon: Clock,        description: "Cashier clocks in at start of shift" },
+      { code: "clock_out",        label: "Clock Out",            icon: Clock,        description: "Cashier clocks out at end of shift" },
+      { code: "report_x",         label: "X Report (Interim)",   icon: BarChart2,    description: "Print mid-shift sales summary" },
+      { code: "report_z",         label: "Z Report (End of Day)",icon: BarChart2,    description: "Print end-of-day report, reset counters" },
+      { code: "shift_start",      label: "Start Shift",          icon: Clock,        description: "Open a new cashier shift" },
+      { code: "shift_end",        label: "End Shift",            icon: Clock,        description: "Close current shift" },
     ],
   },
   {
-    group: "Accounting / Journal",
-    icon: BookOpen,
-    color: "text-rose-600",
+    group: "Accounting / Journal", icon: BookOpen, color: "text-rose-600",
     actions: [
-      { code: "journal_cash_in",   label: "Journal: Cash In",    icon: BookOpen,  description: "Post a cash-in journal entry to accounting" },
-      { code: "journal_cash_out",  label: "Journal: Cash Out",   icon: BookOpen,  description: "Post a cash-out journal entry to accounting" },
-      { code: "journal_expense",   label: "Journal: Expense",    icon: BookOpen,  description: "Record a petty-cash expense in the ledger" },
-      { code: "journal_correction",label: "Journal: Correction", icon: BookOpen,  description: "Post a manual correction entry" },
-      { code: "vat_summary",       label: "VAT Summary",         icon: FileText,  description: "Show VAT collected for current shift" },
+      { code: "journal_cash_in",     label: "Journal: Cash In",      icon: BookOpen,  description: "Post a cash-in journal entry to the bill" },
+      { code: "journal_cash_out",    label: "Journal: Cash Out",     icon: BookOpen,  description: "Post a cash-out journal entry to the bill" },
+      { code: "journal_expense",     label: "Journal: Expense",      icon: BookOpen,  description: "Record a petty-cash expense in ledger" },
+      { code: "journal_correction",  label: "Journal: Correction",   icon: BookOpen,  description: "Post a manual correction entry" },
+      { code: "journal_tip",         label: "Add Tip / Gratuity",    icon: BookOpen,  description: "Add a tip line to the bill" },
+      { code: "journal_service_chg", label: "Service Charge",        icon: BookOpen,  description: "Apply a service charge to the bill" },
+      { code: "journal_cover",       label: "Cover Charge",          icon: BookOpen,  description: "Add a per-head cover charge" },
+      { code: "vat_summary",         label: "VAT Summary",           icon: FileText,  description: "Show VAT collected for current shift" },
     ],
   },
   {
-    group: "Navigation & Display",
-    icon: LayoutGrid,
-    color: "text-slate-600",
+    group: "Navigation & Display", icon: LayoutGrid, color: "text-slate-600",
     actions: [
-      { code: "page_up",         label: "Page Up",              icon: ChevronUp,    description: "Scroll the product grid up one page" },
-      { code: "page_down",       label: "Page Down",            icon: ChevronDown,  description: "Scroll the product grid down one page" },
-      { code: "show_all_items",  label: "Show All Items",       icon: LayoutGrid,   description: "Clear category filter — show everything" },
-      { code: "numpad",          label: "Numeric Keypad",       icon: Calculator,   description: "Open the numeric input pad" },
-      { code: "notes",           label: "Add Order Note",       icon: AlignLeft,    description: "Attach a free-text note to the order" },
+      { code: "page_up",          label: "Page Up",              icon: ChevronUp,    description: "Scroll the product grid up one page" },
+      { code: "page_down",        label: "Page Down",            icon: ChevronDown,  description: "Scroll the product grid down one page" },
+      { code: "show_all_items",   label: "Show All Items",       icon: LayoutGrid,   description: "Clear category filter" },
+      { code: "numpad",           label: "Numeric Keypad",       icon: Calculator,   description: "Open the numeric input pad" },
+      { code: "notes",            label: "Add Order Note",       icon: AlignLeft,    description: "Attach a free-text note to the order" },
     ],
   },
   {
-    group: "Manager & Security",
-    icon: ShieldAlert,
-    color: "text-red-700",
+    group: "Manager & Security", icon: ShieldAlert, color: "text-red-700",
     actions: [
-      { code: "manager_override", label: "Manager Override",    icon: ShieldAlert, description: "Prompt for manager PIN to authorise action" },
-      { code: "lock_terminal",    label: "Lock Terminal",       icon: ShieldAlert, description: "Lock screen — requires PIN to resume" },
-      { code: "change_cashier",   label: "Change Cashier",      icon: Users,       description: "Switch to a different cashier without closing sale" },
-      { code: "admin_menu",       label: "Admin Menu",          icon: Settings2,   description: "Access terminal administration options" },
+      { code: "manager_override", label: "Manager Override",     icon: ShieldAlert,  description: "Prompt for manager PIN to authorise" },
+      { code: "lock_terminal",    label: "Lock Terminal",        icon: ShieldAlert,  description: "Lock screen — requires PIN to resume" },
+      { code: "change_cashier",   label: "Change Cashier",       icon: Users,        description: "Switch cashier without closing sale" },
+      { code: "admin_menu",       label: "Admin Menu",           icon: Settings2,    description: "Access terminal administration options" },
     ],
   },
 ];
 
-// flat lookup for auto-label
 const ALL_ACTIONS = ACTION_GROUPS.flatMap(g => g.actions);
 
-type ButtonType = "item" | "category" | "action" | "empty";
+// ── Types ──────────────────────────────────────────────────────────────────────
+type ButtonType = "item" | "category" | "action" | "sublayout" | "empty";
+type ShapeType  = "rect" | "round" | "wide" | "tall" | "large";
 
 interface SlotData {
-  position: number;
-  label: string;
-  color: string;
-  buttonType: ButtonType;
-  itemId?: string;
+  position:    number;
+  label:       string;
+  color:       string;
+  buttonType:  ButtonType;
+  itemId?:     string;
   categoryId?: string;
   actionCode?: string;
-  icon?: string;
+  sublayoutId?:string;
+  shape?:      ShapeType;
+  colspan?:    number;
+  rowspan?:    number;
+  icon?:       string;
 }
 
 function makeEmpty(position: number): SlotData {
-  return { position, label: "", color: "#6b7280", buttonType: "empty" };
+  return { position, label: "", color: "#6b7280", buttonType: "empty", shape: "rect", colspan: 1, rowspan: 1 };
+}
+
+function shapeToSpan(shape?: ShapeType): { colspan: number; rowspan: number } {
+  switch (shape) {
+    case "wide":  return { colspan: 2, rowspan: 1 };
+    case "tall":  return { colspan: 1, rowspan: 2 };
+    case "large": return { colspan: 2, rowspan: 2 };
+    default:      return { colspan: 1, rowspan: 1 };
+  }
+}
+
+/** Positions consumed by wide/tall neighbours (not anchor positions themselves) */
+function getConsumedPositions(slots: SlotData[], cols: number): Set<number> {
+  const consumed = new Set<number>();
+  if (cols <= 0) return consumed;
+  for (const slot of slots) {
+    const { colspan = 1, rowspan = 1 } = shapeToSpan(slot.shape);
+    if (colspan === 1 && rowspan === 1) continue;
+    const col = slot.position % cols;
+    const row = Math.floor(slot.position / cols);
+    for (let r = 0; r < rowspan; r++) {
+      for (let c = 0; c < colspan; c++) {
+        if (r === 0 && c === 0) continue;
+        consumed.add((row + r) * cols + (col + c));
+      }
+    }
+  }
+  return consumed;
+}
+
+function radiusClass(radius?: string | null, shape?: ShapeType) {
+  if (shape === "round") return "rounded-full";
+  switch (radius) {
+    case "round":  return "rounded-full";
+    case "square": return "rounded-none";
+    default:       return "rounded-xl";
+  }
 }
 
 function typeChip(type: ButtonType) {
   const map: Record<ButtonType, string> = {
-    item: "bg-blue-100 text-blue-700",
-    category: "bg-purple-100 text-purple-700",
-    action: "bg-amber-100 text-amber-700",
-    empty: "bg-gray-100 text-gray-400",
+    item:      "bg-blue-100 text-blue-700",
+    category:  "bg-purple-100 text-purple-700",
+    action:    "bg-amber-100 text-amber-700",
+    sublayout: "bg-teal-100 text-teal-700",
+    empty:     "bg-gray-100 text-gray-400",
   };
-  return map[type];
+  return map[type] ?? "bg-gray-100 text-gray-400";
 }
 
-// ── Grid button ───────────────────────────────────────────────────────────────
-function GridButton({ slot, onClick, isSelected }: { slot: SlotData; onClick: () => void; isSelected: boolean }) {
+// ── GridButton ─────────────────────────────────────────────────────────────────
+function GridButton({
+  slot, onClick, isSelected, buttonRadius, allLayouts,
+}: {
+  slot: SlotData;
+  onClick: () => void;
+  isSelected: boolean;
+  buttonRadius?: string | null;
+  allLayouts: PosLayoutSet[];
+}) {
   const isEmpty = slot.buttonType === "empty" || !slot.label;
+  const { colspan = 1, rowspan = 1 } = shapeToSpan(slot.shape);
+  const rc = radiusClass(buttonRadius, slot.shape);
+  const subName = slot.sublayoutId
+    ? allLayouts.find(l => l.id === slot.sublayoutId)?.name
+    : null;
+
   return (
     <button
       onClick={onClick}
       data-testid={`grid-btn-${slot.position}`}
+      style={{
+        gridColumn: colspan > 1 ? `span ${colspan}` : undefined,
+        gridRow:    rowspan > 1 ? `span ${rowspan}` : undefined,
+        backgroundColor: isEmpty ? undefined : slot.color + "dd",
+        borderColor:     isEmpty ? undefined : slot.color,
+        aspectRatio: slot.shape === "round" ? "1/1" : undefined,
+      }}
       className={`
-        relative flex flex-col items-center justify-center rounded-lg border-2
-        text-center transition-all h-20 select-none overflow-hidden
+        relative flex flex-col items-center justify-center border-2 text-center
+        transition-all select-none overflow-hidden min-h-[4rem]
+        ${rc}
         ${isSelected ? "ring-2 ring-primary ring-offset-2" : "hover:opacity-90"}
         ${isEmpty ? "border-dashed border-gray-200 bg-gray-50 hover:border-primary/40" : "border-transparent shadow-sm"}
       `}
-      style={isEmpty ? {} : { backgroundColor: slot.color + "dd", borderColor: slot.color }}
     >
       {!isEmpty ? (
         <>
-          <span className="text-white font-semibold text-xs leading-tight px-1 max-h-12 overflow-hidden break-words line-clamp-3">
+          <span className="text-white font-semibold text-xs leading-tight px-1.5 max-h-14 overflow-hidden break-words line-clamp-3 text-center w-full">
             {slot.label}
           </span>
           <span className={`absolute bottom-1 left-1 text-[9px] px-1 py-0.5 rounded ${typeChip(slot.buttonType)} opacity-80`}>
             {slot.buttonType}
           </span>
+          {slot.shape && slot.shape !== "rect" && (
+            <span className="absolute bottom-1 right-1 text-[9px] text-white/60">{slot.shape}</span>
+          )}
+          {subName && (
+            <span className="absolute top-1 right-1 text-[9px] text-white/70 flex items-center gap-0.5">
+              <Layers className="w-2.5 h-2.5" />{subName.slice(0, 8)}
+            </span>
+          )}
         </>
       ) : (
         <span className="text-gray-300 text-xs">+</span>
       )}
-      <span className="absolute top-0.5 right-1 text-[9px] text-white/50 font-mono">{slot.position + 1}</span>
+      <span className="absolute top-0.5 right-1 text-[9px] text-white/40 font-mono">{slot.position + 1}</span>
     </button>
   );
 }
 
-// ── Action group picker ───────────────────────────────────────────────────────
+// ── ActionGroupPicker ──────────────────────────────────────────────────────────
 function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code: string) => void }) {
   const [openGroup, setOpenGroup] = useState<string | null>(() => {
-    if (!value) return ACTION_GROUPS[0].group;
     const g = ACTION_GROUPS.find(g => g.actions.some(a => a.code === value));
     return g?.group ?? ACTION_GROUPS[0].group;
   });
@@ -284,17 +308,13 @@ function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code
             <button
               type="button"
               onClick={() => setOpenGroup(isOpen ? null : group.group)}
-              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium border-b transition-colors ${
-                isOpen ? "bg-muted/60" : "bg-background hover:bg-muted/30"
-              }`}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium border-b transition-colors ${isOpen ? "bg-muted/60" : "bg-background hover:bg-muted/30"}`}
             >
               <span className="flex items-center gap-2">
                 <GroupIcon className={`w-4 h-4 ${group.color}`} />
                 {group.group}
                 {selectedInGroup && (
-                  <Badge variant="secondary" className="text-[10px] h-4 px-1.5 font-normal">
-                    {selectedInGroup.label}
-                  </Badge>
+                  <Badge variant="secondary" className="text-[10px] h-4 px-1.5 font-normal">{selectedInGroup.label}</Badge>
                 )}
               </span>
               <span className="text-muted-foreground text-xs">{group.actions.length}</span>
@@ -303,27 +323,21 @@ function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code
               <div className="divide-y bg-muted/20">
                 {group.actions.map(action => {
                   const ActionIcon = action.icon;
-                  const isSelected = value === action.code;
+                  const isSel = value === action.code;
                   return (
                     <button
                       key={action.code}
                       type="button"
                       onClick={() => onChange(action.code)}
                       data-testid={`action-${action.code}`}
-                      className={`w-full flex items-start gap-3 px-4 py-2.5 text-left transition-colors ${
-                        isSelected
-                          ? "bg-primary/10 text-primary"
-                          : "hover:bg-muted/50"
-                      }`}
+                      className={`w-full flex items-start gap-3 px-4 py-2.5 text-left transition-colors ${isSel ? "bg-primary/10 text-primary" : "hover:bg-muted/50"}`}
                     >
-                      <ActionIcon className={`w-4 h-4 flex-shrink-0 mt-0.5 ${isSelected ? "text-primary" : "text-muted-foreground"}`} />
+                      <ActionIcon className={`w-4 h-4 flex-shrink-0 mt-0.5 ${isSel ? "text-primary" : "text-muted-foreground"}`} />
                       <div className="min-w-0">
                         <p className="text-sm font-medium leading-none">{action.label}</p>
-                        {action.description && (
-                          <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{action.description}</p>
-                        )}
+                        {action.description && <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{action.description}</p>}
                       </div>
-                      {isSelected && <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0 ml-auto mt-0.5" />}
+                      {isSel && <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0 ml-auto mt-0.5" />}
                     </button>
                   );
                 })}
@@ -336,9 +350,41 @@ function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code
   );
 }
 
-// ── Button editor dialog ──────────────────────────────────────────────────────
+// ── ShapePicker ────────────────────────────────────────────────────────────────
+const SHAPES: { id: ShapeType; label: string; icon: any; desc: string }[] = [
+  { id: "rect",  label: "Normal",  icon: Square,              desc: "1×1 — standard button" },
+  { id: "round", label: "Circle",  icon: Circle,              desc: "1×1 — circular, great for action keys" },
+  { id: "wide",  label: "Wide 2×", icon: RectangleHorizontal, desc: "2×1 — spans 2 columns" },
+  { id: "tall",  label: "Tall 2×", icon: Square,              desc: "1×2 — spans 2 rows" },
+  { id: "large", label: "Large 2×2",icon: Square,             desc: "2×2 — dominant button" },
+];
+
+function ShapePicker({ value, onChange }: { value: ShapeType; onChange: (s: ShapeType) => void }) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {SHAPES.map(s => {
+        const Icon = s.icon;
+        const sel = value === s.id;
+        return (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => onChange(s.id)}
+            className={`rounded-lg border p-2.5 flex flex-col items-center gap-1.5 text-center transition-all ${sel ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted/50"}`}
+          >
+            <Icon className={`w-5 h-5 ${s.id === "wide" ? "scale-x-150" : s.id === "tall" ? "scale-y-150" : s.id === "large" ? "scale-125" : ""}`} />
+            <p className="text-xs font-medium leading-none">{s.label}</p>
+            <p className="text-[10px] text-muted-foreground leading-snug">{s.desc}</p>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── ButtonDialog ───────────────────────────────────────────────────────────────
 function ButtonDialog({
-  slot, onSave, onClear, onClose, items, categories,
+  slot, onSave, onClear, onClose, items, categories, allLayouts, currentLayoutId,
 }: {
   slot: SlotData;
   onSave: (s: SlotData) => void;
@@ -346,220 +392,243 @@ function ButtonDialog({
   onClose: () => void;
   items: { id: string; name: string }[];
   categories: { id: string; name: string }[];
+  allLayouts: PosLayoutSet[];
+  currentLayoutId: string;
 }) {
-  const [draft, setDraft] = useState<SlotData>({ ...slot });
-  const set = (patch: Partial<SlotData>) => setDraft(d => ({ ...d, ...patch }));
+  const [draft, setDraft] = useState<SlotData>({ shape: "rect", colspan: 1, rowspan: 1, ...slot });
   const [itemSearch, setItemSearch] = useState("");
+  const set = (patch: Partial<SlotData>) => setDraft(d => ({ ...d, ...patch }));
 
-  // Auto-fill label on selection
+  // Auto-label on selection
   useEffect(() => {
     if (draft.buttonType === "item" && draft.itemId) {
       const item = items.find(i => i.id === draft.itemId);
       if (item) set({ label: item.name.slice(0, 30) });
     }
   }, [draft.itemId]);
-
   useEffect(() => {
     if (draft.buttonType === "category" && draft.categoryId) {
       const cat = categories.find(c => c.id === draft.categoryId);
       if (cat) set({ label: cat.name.slice(0, 30) });
     }
   }, [draft.categoryId]);
-
   useEffect(() => {
     if (draft.buttonType === "action" && draft.actionCode) {
       const act = ALL_ACTIONS.find(a => a.code === draft.actionCode);
       if (act) set({ label: act.label });
     }
   }, [draft.actionCode]);
+  useEffect(() => {
+    if (draft.buttonType === "sublayout" && draft.sublayoutId) {
+      const ly = allLayouts.find(l => l.id === draft.sublayoutId);
+      if (ly && !draft.label) set({ label: ly.name.slice(0, 30) });
+    }
+  }, [draft.sublayoutId]);
+
+  // Sync shape → colspan/rowspan
+  useEffect(() => {
+    const { colspan, rowspan } = shapeToSpan(draft.shape);
+    setDraft(d => ({ ...d, colspan, rowspan }));
+  }, [draft.shape]);
 
   const filteredItems = itemSearch
     ? items.filter(i => i.name.toLowerCase().includes(itemSearch.toLowerCase())).slice(0, 50)
     : items.slice(0, 80);
 
+  const otherLayouts = allLayouts.filter(l => l.id !== currentLayoutId);
+
   const isValid =
     draft.buttonType === "empty" ||
     (draft.label.trim().length > 0 &&
-      (draft.buttonType === "item" ? !!draft.itemId :
-       draft.buttonType === "category" ? !!draft.categoryId :
-       draft.buttonType === "action" ? !!draft.actionCode : true));
+      (draft.buttonType === "item"      ? !!draft.itemId :
+       draft.buttonType === "category"  ? !!draft.categoryId :
+       draft.buttonType === "action"    ? !!draft.actionCode :
+       draft.buttonType === "sublayout" ? !!draft.sublayoutId : true));
+
+  const { colspan = 1, rowspan = 1 } = shapeToSpan(draft.shape);
+  const rc = radiusClass(undefined, draft.shape);
 
   return (
     <Dialog open onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
-        <DialogHeader className="flex-shrink-0">
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0">
+        <DialogHeader className="px-5 pt-4 pb-3 border-b flex-shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Settings2 className="w-4 h-4" />
             Configure Button #{slot.position + 1}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto pr-1 space-y-4">
-          {/* Type selector */}
-          <div>
-            <Label className="mb-2 block text-sm">Button Type</Label>
-            <Tabs
-              value={draft.buttonType}
-              onValueChange={v => set({ buttonType: v as ButtonType, itemId: undefined, categoryId: undefined, actionCode: undefined, label: "" })}
-            >
-              <TabsList className="w-full grid grid-cols-4">
-                <TabsTrigger value="item" data-testid="tab-type-item">
-                  <Package className="w-3.5 h-3.5 mr-1" />Product
-                </TabsTrigger>
-                <TabsTrigger value="category" data-testid="tab-type-category">
-                  <Tag className="w-3.5 h-3.5 mr-1" />Category
-                </TabsTrigger>
-                <TabsTrigger value="action" data-testid="tab-type-action">
-                  <Zap className="w-3.5 h-3.5 mr-1" />Function
-                </TabsTrigger>
-                <TabsTrigger value="empty" data-testid="tab-type-empty">
-                  <EyeOff className="w-3.5 h-3.5 mr-1" />Empty
-                </TabsTrigger>
-              </TabsList>
+        <div className="flex gap-0 flex-1 overflow-hidden">
+          {/* Left panel — type + target */}
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+            {/* Type selector */}
+            <div>
+              <Label className="mb-2 block text-sm">Button Type</Label>
+              <Tabs
+                value={draft.buttonType}
+                onValueChange={v => set({ buttonType: v as ButtonType, itemId: undefined, categoryId: undefined, actionCode: undefined, sublayoutId: undefined, label: "" })}
+              >
+                <TabsList className="w-full grid grid-cols-5 h-auto">
+                  <TabsTrigger value="item"      className="text-xs py-1.5" data-testid="tab-type-item">
+                    <Package className="w-3.5 h-3.5 mr-1" />Product
+                  </TabsTrigger>
+                  <TabsTrigger value="category"  className="text-xs py-1.5" data-testid="tab-type-category">
+                    <Tag className="w-3.5 h-3.5 mr-1" />Category
+                  </TabsTrigger>
+                  <TabsTrigger value="action"    className="text-xs py-1.5" data-testid="tab-type-action">
+                    <Zap className="w-3.5 h-3.5 mr-1" />Function
+                  </TabsTrigger>
+                  <TabsTrigger value="sublayout" className="text-xs py-1.5" data-testid="tab-type-sublayout">
+                    <Layers className="w-3.5 h-3.5 mr-1" />Sub-Menu
+                  </TabsTrigger>
+                  <TabsTrigger value="empty"     className="text-xs py-1.5" data-testid="tab-type-empty">
+                    <EyeOff className="w-3.5 h-3.5 mr-1" />Empty
+                  </TabsTrigger>
+                </TabsList>
 
-              {/* Product picker */}
-              <TabsContent value="item" className="mt-3 space-y-2">
-                <Input
-                  placeholder="Search products…"
-                  value={itemSearch}
-                  onChange={e => setItemSearch(e.target.value)}
-                  data-testid="input-item-search"
-                  className="mb-1"
-                />
-                <ScrollArea className="h-48 border rounded-md">
-                  <div className="p-1">
-                    {filteredItems.map(i => (
-                      <button
-                        key={i.id}
-                        type="button"
-                        onClick={() => set({ itemId: i.id })}
-                        data-testid={`item-option-${i.id}`}
-                        className={`w-full text-left px-3 py-2 rounded text-sm flex items-center justify-between transition-colors ${
-                          draft.itemId === i.id ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted/60"
-                        }`}
-                      >
-                        <span className="truncate">{i.name}</span>
-                        {draft.itemId === i.id && <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 ml-2" />}
+                {/* Product */}
+                <TabsContent value="item" className="mt-3 space-y-2">
+                  <Input placeholder="Search products…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} data-testid="input-item-search" />
+                  <ScrollArea className="h-44 border rounded-md">
+                    <div className="p-1">
+                      {filteredItems.map(i => (
+                        <button key={i.id} type="button" onClick={() => set({ itemId: i.id })} data-testid={`item-option-${i.id}`}
+                          className={`w-full text-left px-3 py-1.5 rounded text-sm flex items-center justify-between transition-colors ${draft.itemId === i.id ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted/60"}`}>
+                          <span className="truncate">{i.name}</span>
+                          {draft.itemId === i.id && <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 ml-2" />}
+                        </button>
+                      ))}
+                      {filteredItems.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">No products found</p>}
+                    </div>
+                  </ScrollArea>
+                  <p className="text-xs text-muted-foreground">{items.length} products available</p>
+                </TabsContent>
+
+                {/* Category */}
+                <TabsContent value="category" className="mt-3">
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {categories.map(c => (
+                      <button key={c.id} type="button" onClick={() => set({ categoryId: c.id })} data-testid={`cat-option-${c.id}`}
+                        className={`text-left px-3 py-2 rounded border text-sm transition-colors ${draft.categoryId === c.id ? "border-primary bg-primary/10 text-primary font-medium" : "border-border hover:bg-muted/50"}`}>
+                        {c.name}
                       </button>
                     ))}
-                    {filteredItems.length === 0 && (
-                      <p className="text-sm text-muted-foreground text-center py-4">No products found</p>
-                    )}
                   </div>
-                </ScrollArea>
-                <p className="text-xs text-muted-foreground">{items.length} products available</p>
-              </TabsContent>
+                </TabsContent>
 
-              {/* Category picker */}
-              <TabsContent value="category" className="mt-3">
-                <div className="grid grid-cols-2 gap-1.5">
-                  {categories.map(c => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => set({ categoryId: c.id })}
-                      data-testid={`cat-option-${c.id}`}
-                      className={`text-left px-3 py-2 rounded border text-sm transition-colors ${
-                        draft.categoryId === c.id
-                          ? "border-primary bg-primary/10 text-primary font-medium"
-                          : "border-border hover:bg-muted/50"
-                      }`}
-                    >
-                      {c.name}
-                    </button>
-                  ))}
+                {/* Action */}
+                <TabsContent value="action" className="mt-3">
+                  <ScrollArea className="h-64">
+                    <ActionGroupPicker value={draft.actionCode ?? ""} onChange={code => set({ actionCode: code })} />
+                  </ScrollArea>
+                </TabsContent>
+
+                {/* Sub-menu (condiments / modifier panel) */}
+                <TabsContent value="sublayout" className="mt-3 space-y-3">
+                  <div className="rounded-lg bg-teal-50 border border-teal-100 p-3 flex gap-2 text-xs text-teal-800">
+                    <Layers className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-teal-600" />
+                    <span>
+                      <strong>Condiments / modifier panel.</strong> When the cashier taps this button an overlay shows the target layout — ideal for add-ons, cooking preferences, sizes, and extras. Common in hospitality.
+                    </span>
+                  </div>
+                  {otherLayouts.length === 0 ? (
+                    <div className="rounded-lg border border-dashed p-4 text-center space-y-1">
+                      <p className="text-sm text-muted-foreground">No other layouts exist yet</p>
+                      <p className="text-xs text-muted-foreground">Create a second layout (e.g. "Burger Add-ons") and it will appear here.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <p className="text-xs font-medium text-muted-foreground mb-1.5">Select target layout</p>
+                      {otherLayouts.map(l => (
+                        <button key={l.id} type="button" onClick={() => set({ sublayoutId: l.id })}
+                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-all ${draft.sublayoutId === l.id ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted/40"}`}>
+                          <Layers className="w-4 h-4 flex-shrink-0 text-teal-600" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium">{l.name}</p>
+                            {l.description && <p className="text-xs text-muted-foreground truncate">{l.description}</p>}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {l.columns}×{l.rows}
+                          </div>
+                          {draft.sublayoutId === l.id && <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="empty" className="mt-3">
+                  <p className="text-sm text-muted-foreground">This slot will appear blank on the terminal — useful for visual spacing between buttons.</p>
+                </TabsContent>
+              </Tabs>
+            </div>
+
+            {draft.buttonType !== "empty" && (
+              <>
+                {/* Label */}
+                <div>
+                  <Label htmlFor="btn-label">Button Label</Label>
+                  <Input id="btn-label" value={draft.label} onChange={e => set({ label: e.target.value })} placeholder="Text shown on the button" maxLength={30} data-testid="input-btn-label" />
+                  <p className="text-xs text-muted-foreground mt-1">{draft.label.length}/30 characters</p>
                 </div>
-              </TabsContent>
 
-              {/* Function / action picker */}
-              <TabsContent value="action" className="mt-3">
-                <ScrollArea className="h-72">
-                  <ActionGroupPicker
-                    value={draft.actionCode ?? ""}
-                    onChange={code => set({ actionCode: code })}
-                  />
-                </ScrollArea>
-              </TabsContent>
+                {/* Color */}
+                <div>
+                  <Label>Button Color</Label>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {PRESET_COLORS.map(c => (
+                      <button key={c} type="button" onClick={() => set({ color: c })}
+                        className={`w-6 h-6 rounded-full border-2 transition-all ${draft.color === c ? "border-foreground scale-110 shadow-md" : "border-transparent"}`}
+                        style={{ backgroundColor: c }} title={c} />
+                    ))}
+                    <label className="w-6 h-6 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer hover:border-primary relative" title="Custom color">
+                      <input type="color" value={draft.color} onChange={e => set({ color: e.target.value })} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
+                      <span className="text-[9px] text-gray-400 pointer-events-none">+</span>
+                    </label>
+                  </div>
+                </div>
 
-              <TabsContent value="empty" className="mt-3">
-                <p className="text-sm text-muted-foreground">This slot will appear blank on the terminal — useful for visual spacing.</p>
-              </TabsContent>
-            </Tabs>
+                {/* Shape */}
+                <div>
+                  <Label className="mb-2 block">Button Shape & Size</Label>
+                  <ShapePicker value={draft.shape ?? "rect"} onChange={s => set({ shape: s })} />
+                </div>
+              </>
+            )}
           </div>
 
+          {/* Right preview panel */}
           {draft.buttonType !== "empty" && (
-            <>
-              {/* Label */}
-              <div>
-                <Label htmlFor="btn-label">Button Label</Label>
-                <Input
-                  id="btn-label"
-                  value={draft.label}
-                  onChange={e => set({ label: e.target.value })}
-                  placeholder="Text shown on the button"
-                  maxLength={30}
-                  data-testid="input-btn-label"
-                />
-                <p className="text-xs text-muted-foreground mt-1">{draft.label.length}/30 characters</p>
+            <div className="w-36 border-l bg-muted/20 flex-shrink-0 flex flex-col items-center justify-start gap-3 px-3 py-5">
+              <p className="text-xs font-medium text-muted-foreground">Preview</p>
+              <div
+                className={`flex items-center justify-center text-white font-semibold text-xs text-center px-2 shadow-sm leading-tight ${rc}`}
+                style={{
+                  backgroundColor: draft.color,
+                  width: colspan >= 2 ? "112px" : "56px",
+                  height: rowspan >= 2 ? "112px" : "56px",
+                }}
+              >
+                {draft.label || "Label"}
               </div>
-
-              {/* Color */}
-              <div>
-                <Label>Button Color</Label>
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {PRESET_COLORS.map(c => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => set({ color: c })}
-                      className={`w-7 h-7 rounded-full border-2 transition-all ${
-                        draft.color === c ? "border-foreground scale-110 shadow-md" : "border-transparent"
-                      }`}
-                      style={{ backgroundColor: c }}
-                      title={c}
-                    />
-                  ))}
-                  <label
-                    className="w-7 h-7 rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer hover:border-primary relative"
-                    title="Custom color"
-                  >
-                    <input
-                      type="color"
-                      value={draft.color}
-                      onChange={e => set({ color: e.target.value })}
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                    />
-                    <span className="text-[9px] text-gray-400 pointer-events-none">+</span>
-                  </label>
-                </div>
-
-                {/* Live preview */}
-                <div className="mt-3 flex items-center gap-3">
-                  <div
-                    className="w-28 h-16 rounded-lg flex items-center justify-center text-white font-semibold text-xs text-center px-2 shadow-sm leading-tight"
-                    style={{ backgroundColor: draft.color }}
-                  >
-                    {draft.label || "Preview"}
-                  </div>
-                  <div className="text-xs text-muted-foreground space-y-0.5">
-                    <p>Hex: <code className="bg-muted px-1 rounded">{draft.color}</code></p>
-                    <p>Type: <span className={`px-1 py-0.5 rounded text-[10px] ${typeChip(draft.buttonType)}`}>{draft.buttonType}</span></p>
-                  </div>
-                </div>
+              <div className="text-[10px] text-muted-foreground text-center space-y-0.5">
+                <p>{colspan}×{rowspan} cells</p>
+                <p className="capitalize">{draft.shape ?? "rect"}</p>
+                <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] ${typeChip(draft.buttonType)}`}>{draft.buttonType}</span>
               </div>
-            </>
+            </div>
           )}
         </div>
 
-        {/* Footer actions */}
-        <div className="flex justify-between pt-3 border-t flex-shrink-0">
+        {/* Footer */}
+        <div className="flex justify-between px-5 py-3 border-t flex-shrink-0">
           <Button variant="outline" size="sm" onClick={onClear} className="text-destructive hover:bg-destructive/10" data-testid="btn-clear-slot">
-            <Trash2 className="w-3.5 h-3.5 mr-1" />Clear Slot
+            <Trash2 className="w-3.5 h-3.5 mr-1" />Clear
           </Button>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>Cancel</Button>
             <Button onClick={() => isValid && onSave(draft)} disabled={!isValid} data-testid="btn-save-slot">
-              <CheckCircle2 className="w-4 h-4 mr-1.5" />Apply
+              <CheckCircle2 className="w-3.5 h-3.5 mr-1" />Apply
             </Button>
           </div>
         </div>
@@ -568,232 +637,406 @@ function ButtonDialog({
   );
 }
 
-// ── Main editor ───────────────────────────────────────────────────────────────
+// ── Small device grid preview ─────────────────────────────────────────────────
+function MiniGrid({ slots, cols, buttonRadius, label, icon: Icon, allLayouts }: {
+  slots: SlotData[]; cols: number; buttonRadius?: string | null;
+  label: string; icon: any; allLayouts: PosLayoutSet[];
+}) {
+  const consumed = getConsumedPositions(slots, cols);
+  const totalSlots = Math.max(slots.length, cols * Math.ceil(slots.length / cols));
+  const grid = Array.from({ length: totalSlots }, (_, i) => slots.find(s => s.position === i) ?? makeEmpty(i));
+
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+        <Icon className="w-3.5 h-3.5" />{label} — {cols} col
+      </p>
+      <div className="rounded-lg border bg-gray-50 p-1.5" style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: "3px" }}>
+        {grid.map((slot, idx) => {
+          if (consumed.has(slot.position)) return <div key={idx} />;
+          const isEmpty = slot.buttonType === "empty" || !slot.label;
+          const { colspan = 1, rowspan = 1 } = shapeToSpan(slot.shape);
+          const rc = radiusClass(buttonRadius, slot.shape);
+          return (
+            <div
+              key={idx}
+              style={{
+                gridColumn: colspan > 1 ? `span ${colspan}` : undefined,
+                gridRow:    rowspan > 1 ? `span ${rowspan}` : undefined,
+                backgroundColor: isEmpty ? "#f3f4f6" : slot.color + "cc",
+                height: "18px",
+              }}
+              className={`${rc} transition-all`}
+              title={slot.label}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
 export default function PosLayoutEditor() {
   const [, params] = useRoute("/pos/layouts/:id/edit");
   const [, navigate] = useLocation();
-  const layoutId = params?.id ?? "";
   const { toast } = useToast();
+  const layoutId = params?.id ?? "";
 
-  const [slots, setSlots] = useState<SlotData[]>([]);
-  const [selectedPos, setSelectedPos] = useState<number | null>(null);
-  const [dirty, setDirty] = useState(false);
-
-  const { data: layout, isLoading: loadingLayout } = useQuery<PosLayoutSet>({
+  const { data: allLayouts = [] } = useQuery<PosLayoutSet[]>({ queryKey: ["/api/pos/layouts"] });
+  const { data: layoutSet, isLoading: loadingSet } = useQuery<PosLayoutSet>({
     queryKey: ["/api/pos/layouts", layoutId],
-    queryFn: async () => {
-      const res = await fetch(`/api/pos/layouts`);
-      const all: PosLayoutSet[] = await res.json();
-      return all.find(l => l.id === layoutId)!;
-    },
+    queryFn: () => apiRequest("GET", `/api/pos/layouts/${layoutId}`).then(r => r.json()),
     enabled: !!layoutId,
   });
-
-  const { data: existingButtons = [], isLoading: loadingButtons } = useQuery<PosLayoutButton[]>({
+  const { data: savedButtons = [], isLoading: loadingBtns } = useQuery<PosLayoutButton[]>({
     queryKey: ["/api/pos/layouts", layoutId, "buttons"],
-    queryFn: async () => {
-      const res = await fetch(`/api/pos/layouts/${layoutId}/buttons`);
-      return res.json();
-    },
+    queryFn: () => apiRequest("GET", `/api/pos/layouts/${layoutId}/buttons`).then(r => r.json()),
     enabled: !!layoutId,
   });
+  const { data: items = [] } = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/items"] });
+  const { data: categories = [] } = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/categories"] });
 
-  const { data: items = [] } = useQuery<{ id: string; name: string }[]>({
-    queryKey: ["/api/items"],
-    select: (data: any[]) => data.map(i => ({ id: i.id, name: i.name })).sort((a, b) => a.name.localeCompare(b.name)),
-  });
+  // Layout meta
+  const [name,         setName]         = useState("");
+  const [description,  setDescription]  = useState("");
+  const [columns,      setColumns]      = useState(4);
+  const [colsTablet,   setColsTablet]   = useState(3);
+  const [colsMobile,   setColsMobile]   = useState(2);
+  const [rows,         setRows]         = useState(5);
+  const [buttonRadius, setButtonRadius] = useState("rounded");
+  const [deviceView,   setDeviceView]   = useState<"desktop" | "tablet" | "phone">("desktop");
+  const [slots,        setSlots]        = useState<SlotData[]>([]);
+  const [selected,     setSelected]     = useState<number | null>(null);
+  const [dirty,        setDirty]        = useState(false);
 
-  const { data: categories = [] } = useQuery<{ id: string; name: string }[]>({
-    queryKey: ["/api/categories"],
-    select: (data: any[]) => data.map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name)),
-  });
-
-  // Build grid from saved buttons
+  // Seed from DB
   useEffect(() => {
-    if (!layout) return;
-    const total = layout.columns * layout.rows;
-    const grid: SlotData[] = Array.from({ length: total }, (_, i) => makeEmpty(i));
-    for (const b of existingButtons) {
-      if (b.position >= 0 && b.position < total) {
-        grid[b.position] = {
-          position: b.position,
-          label: b.label,
-          color: b.color ?? "#6b7280",
-          buttonType: (b.buttonType ?? "empty") as ButtonType,
-          itemId: b.itemId ?? undefined,
-          categoryId: b.categoryId ?? undefined,
-          actionCode: b.actionCode ?? undefined,
-          icon: b.icon ?? undefined,
-        };
-      }
-    }
-    setSlots(grid);
-    setDirty(false);
-  }, [layout, existingButtons]);
+    if (!layoutSet) return;
+    setName(layoutSet.name ?? "");
+    setDescription(layoutSet.description ?? "");
+    setColumns(layoutSet.columns ?? 4);
+    setColsTablet((layoutSet as any).colsTablet ?? 3);
+    setColsMobile((layoutSet as any).colsMobile ?? 2);
+    setRows(layoutSet.rows ?? 5);
+    setButtonRadius((layoutSet as any).buttonRadius ?? "rounded");
+  }, [layoutSet]);
 
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      const nonEmpty = slots.filter(s => s.buttonType !== "empty" && s.label.trim());
-      const res = await apiRequest("PUT", `/api/pos/layouts/${layoutId}/buttons`, { buttons: nonEmpty });
-      return res.json();
+  useEffect(() => {
+    if (!layoutSet) return;
+    const total = (layoutSet.columns ?? 4) * (layoutSet.rows ?? 5);
+    const arr = Array.from({ length: total }, (_, i) => {
+      const b = savedButtons.find(b => b.position === i);
+      if (!b) return makeEmpty(i);
+      return {
+        position:    b.position,
+        label:       b.label,
+        color:       b.color ?? "#6b7280",
+        buttonType:  (b.buttonType as ButtonType) ?? "empty",
+        itemId:      b.itemId ?? undefined,
+        categoryId:  b.categoryId ?? undefined,
+        actionCode:  b.actionCode ?? undefined,
+        sublayoutId: (b as any).sublayoutId ?? undefined,
+        shape:       ((b as any).shape as ShapeType) ?? "rect",
+        colspan:     (b as any).colspan ?? 1,
+        rowspan:     (b as any).rowspan ?? 1,
+        icon:        b.icon ?? undefined,
+      } as SlotData;
+    });
+    setSlots(arr);
+    setDirty(false);
+  }, [savedButtons, layoutSet]);
+
+  const activeColumns = deviceView === "phone" ? colsMobile : deviceView === "tablet" ? colsTablet : columns;
+
+  const saveMeta = useMutation({
+    mutationFn: () => apiRequest("PUT", `/api/pos/layouts/${layoutId}`, {
+      name, description, columns, colsTablet, colsMobile, rows, buttonRadius,
+    }).then(r => r.json()),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/pos/layouts"] }),
+  });
+
+  const saveButtons = useMutation({
+    mutationFn: () => {
+      const payload = slots
+        .filter(s => s.buttonType !== "empty" && s.label.trim())
+        .map(s => ({ ...s, layoutSetId: layoutId }));
+      return apiRequest("PUT", `/api/pos/layouts/${layoutId}/buttons`, { buttons: payload }).then(r => r.json());
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/pos/layouts", layoutId, "buttons"] });
       setDirty(false);
-      toast({ title: "Layout saved", description: "Changes will sync to terminals within 5 minutes." });
+      toast({ title: "Layout saved" });
     },
-    onError: (e: Error) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
   });
 
-  const updateSlot = useCallback((updated: SlotData) => {
-    setSlots(prev => prev.map(s => s.position === updated.position ? updated : s));
-    setDirty(true);
-    setSelectedPos(null);
-  }, []);
-
-  const clearSlot = useCallback((position: number) => {
-    setSlots(prev => prev.map(s => s.position === position ? makeEmpty(position) : s));
-    setDirty(true);
-    setSelectedPos(null);
-  }, []);
-
-  const selectedSlot = selectedPos !== null ? slots.find(s => s.position === selectedPos) : null;
-  const filled = slots.filter(s => s.buttonType !== "empty" && s.label).length;
-  const total = slots.length;
-
-  if (loadingLayout || loadingButtons) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-      </div>
-    );
+  async function handleSave() {
+    await saveMeta.mutateAsync();
+    await saveButtons.mutateAsync();
   }
 
-  if (!layout) {
-    return (
-      <div className="p-6 text-center text-muted-foreground">
-        <p>Layout not found.</p>
-        <Button variant="link" onClick={() => navigate("/pos/layouts")}>← Back to Layouts</Button>
-      </div>
-    );
+  function updateSlot(pos: number, updated: SlotData) {
+    setSlots(prev => prev.map(s => s.position === pos ? updated : s));
+    setDirty(true);
+  }
+
+  function clearSlot(pos: number) {
+    setSlots(prev => prev.map(s => s.position === pos ? makeEmpty(pos) : s));
+    setDirty(true);
+  }
+
+  function resizeGrid(newCols: number, newRows: number) {
+    const total = newCols * newRows;
+    setSlots(prev => {
+      if (total > prev.length) return [...prev, ...Array.from({ length: total - prev.length }, (_, i) => makeEmpty(prev.length + i))];
+      return prev.slice(0, total);
+    });
+    setColumns(newCols);
+    setRows(newRows);
+    setDirty(true);
+  }
+
+  const consumed = getConsumedPositions(slots, activeColumns);
+  const isSaving = saveMeta.isPending || saveButtons.isPending;
+  const isLoading = loadingSet || loadingBtns;
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center h-full py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-background">
-      {/* Sticky header */}
-      <div className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur px-6 py-3 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/pos/layouts")} data-testid="btn-back">
-            <ArrowLeft className="w-4 h-4 mr-1" />Layouts
+    <div className="flex flex-col h-full">
+      {/* ── Top bar ─────────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-4 py-3 border-b bg-background gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <Button variant="ghost" size="icon" onClick={() => navigate("/pos/layouts")} data-testid="btn-back">
+            <ArrowLeft className="w-4 h-4" />
           </Button>
-          <div className="h-4 w-px bg-border" />
           <div className="min-w-0">
-            <h1 className="font-semibold truncate flex items-center gap-1.5">
-              <LayoutGrid className="w-4 h-4 text-primary flex-shrink-0" />
-              {layout.name}
-            </h1>
-            <p className="text-xs text-muted-foreground">
-              {layout.columns} × {layout.rows} grid · {filled}/{total} buttons configured
-            </p>
+            <h1 className="font-semibold truncate leading-none">{name || "Layout Editor"}</h1>
+            <p className="text-xs text-muted-foreground mt-0.5">{slots.filter(s => s.buttonType !== "empty" && s.label).length} buttons · {columns}×{rows}</p>
           </div>
-          {dirty && <Badge variant="secondary" className="text-xs animate-pulse">Unsaved</Badge>}
+          {dirty && <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300 bg-amber-50 flex-shrink-0">Unsaved</Badge>}
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <Button
-            variant="ghost" size="sm"
-            onClick={() => {
-              if (!layout) return;
-              setSlots(Array.from({ length: layout.columns * layout.rows }, (_, i) => makeEmpty(i)));
-              setDirty(true);
-            }}
-            data-testid="btn-reset-all"
-          >
-            <RefreshCw className="w-3.5 h-3.5 mr-1" />Clear All
-          </Button>
-          <Button
-            onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending || !dirty}
-            data-testid="btn-save-layout"
-          >
-            {saveMutation.isPending
-              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              : <Save className="w-4 h-4 mr-2" />
-            }
-            Save Layout
-          </Button>
+
+        {/* Device size selector */}
+        <div className="flex items-center border rounded-lg overflow-hidden">
+          {([
+            { id: "desktop", icon: Monitor,    label: `${columns} col`,   title: "Desktop" },
+            { id: "tablet",  icon: Tablet,     label: `${colsTablet} col`, title: "Tablet" },
+            { id: "phone",   icon: Smartphone, label: `${colsMobile} col`, title: "Phone" },
+          ] as const).map(d => {
+            const Icon = d.icon;
+            const active = deviceView === d.id;
+            return (
+              <button
+                key={d.id}
+                onClick={() => setDeviceView(d.id)}
+                title={d.title}
+                data-testid={`device-view-${d.id}`}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${active ? "bg-primary text-primary-foreground" : "bg-background hover:bg-muted text-muted-foreground"}`}
+              >
+                <Icon className="w-3.5 h-3.5" />{d.label}
+              </button>
+            );
+          })}
         </div>
+
+        <Button onClick={handleSave} disabled={isSaving} data-testid="btn-save-layout" className="flex-shrink-0">
+          {isSaving ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Save className="w-4 h-4 mr-1.5" />}
+          Save Layout
+        </Button>
       </div>
 
-      <div className="flex flex-1 gap-6 p-6">
-        {/* Button grid */}
-        <div className="flex-1">
-          <div
-            className="grid gap-2"
-            style={{ gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))` }}
-            data-testid="layout-grid"
-          >
-            {slots.map(slot => (
-              <GridButton
-                key={slot.position}
-                slot={slot}
-                isSelected={selectedPos === slot.position}
-                onClick={() => setSelectedPos(selectedPos === slot.position ? null : slot.position)}
-              />
-            ))}
-          </div>
-          <p className="text-xs text-muted-foreground mt-3 text-center">Click any slot to configure it</p>
-        </div>
+      <div className="flex flex-1 overflow-hidden">
+        {/* ── Left settings panel ─────────────────────────────────────────── */}
+        <div className="w-64 border-r overflow-y-auto bg-muted/10 flex-shrink-0">
+          <div className="p-4 space-y-5">
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Layout Info</p>
+              <div>
+                <Label htmlFor="layout-name" className="text-xs">Name</Label>
+                <Input id="layout-name" value={name} onChange={e => { setName(e.target.value); setDirty(true); }} className="mt-1" data-testid="input-layout-name" />
+              </div>
+              <div>
+                <Label htmlFor="layout-desc" className="text-xs">Description</Label>
+                <Input id="layout-desc" value={description} onChange={e => { setDescription(e.target.value); setDirty(true); }} placeholder="Optional" className="mt-1" data-testid="input-layout-desc" />
+              </div>
+            </div>
 
-        {/* Sidebar info */}
-        <div className="w-56 flex-shrink-0 space-y-4">
-          <div className="rounded-lg border p-4 space-y-3">
-            <p className="text-sm font-semibold">Button Types</p>
-            <div className="space-y-1.5 text-xs">
-              {([
-                ["item", "Product shortcut — adds item to order instantly"],
-                ["category", "Filter the product list to a category"],
-                ["action", "POS function (pay, discount, open drawer…)"],
-                ["empty", "Blank spacer slot"],
-              ] as const).map(([type, desc]) => (
-                <div key={type} className="flex items-start gap-1.5">
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${typeChip(type)}`}>{type}</span>
-                  <span className="text-muted-foreground leading-snug">{desc}</span>
+            <Separator />
+
+            {/* Responsive column config */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <Monitor className="w-3.5 h-3.5" />Grid Size
+              </p>
+              <div className="space-y-2">
+                <div>
+                  <Label className="text-xs flex items-center gap-1.5 mb-1">
+                    <Monitor className="w-3 h-3" />Desktop columns
+                  </Label>
+                  <Select value={String(columns)} onValueChange={v => resizeGrid(Number(v), rows)}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-desktop-cols">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[2,3,4,5,6,7,8].map(n => <SelectItem key={n} value={String(n)}>{n} columns</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
-              ))}
+                <div>
+                  <Label className="text-xs flex items-center gap-1.5 mb-1">
+                    <Tablet className="w-3 h-3" />Tablet columns
+                  </Label>
+                  <Select value={String(colsTablet)} onValueChange={v => { setColsTablet(Number(v)); setDirty(true); }}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-tablet-cols">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[2,3,4,5,6].map(n => <SelectItem key={n} value={String(n)}>{n} columns</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs flex items-center gap-1.5 mb-1">
+                    <Smartphone className="w-3 h-3" />Phone columns
+                  </Label>
+                  <Select value={String(colsMobile)} onValueChange={v => { setColsMobile(Number(v)); setDirty(true); }}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-phone-cols">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[1,2,3,4].map(n => <SelectItem key={n} value={String(n)}>{n} columns</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs mb-1 block">Rows</Label>
+                  <Select value={String(rows)} onValueChange={v => resizeGrid(columns, Number(v))}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-rows">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[2,3,4,5,6,7,8,10,12].map(n => <SelectItem key={n} value={String(n)}>{n} rows</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Button appearance */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Appearance</p>
+              <div>
+                <Label className="text-xs mb-1.5 block">Default Button Shape</Label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {([
+                    { id: "square",  label: "Square",  cls: "rounded-none" },
+                    { id: "rounded", label: "Rounded", cls: "rounded-lg" },
+                    { id: "round",   label: "Pill",    cls: "rounded-full" },
+                  ] as const).map(s => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => { setButtonRadius(s.id); setDirty(true); }}
+                      data-testid={`radius-${s.id}`}
+                      className={`border py-2.5 text-xs font-medium transition-all ${s.cls} ${buttonRadius === s.id ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted/50"}`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Mini device previews */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Responsive Preview</p>
+              <MiniGrid slots={slots} cols={columns}    buttonRadius={buttonRadius} label="Desktop" icon={Monitor}    allLayouts={allLayouts} />
+              <MiniGrid slots={slots} cols={colsTablet} buttonRadius={buttonRadius} label="Tablet"  icon={Tablet}     allLayouts={allLayouts} />
+              <MiniGrid slots={slots} cols={colsMobile} buttonRadius={buttonRadius} label="Phone"   icon={Smartphone} allLayouts={allLayouts} />
+            </div>
+
+            <Separator />
+
+            {/* Stats */}
+            <div className="space-y-1.5 text-xs text-muted-foreground">
+              <p className="font-semibold text-foreground">Stats</p>
+              {(["item","category","action","sublayout","empty"] as ButtonType[]).map(t => {
+                const count = slots.filter(s => s.buttonType === t).length;
+                return count > 0 ? (
+                  <div key={t} className="flex items-center justify-between">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${typeChip(t)}`}>{t}</span>
+                    <span>{count}</span>
+                  </div>
+                ) : null;
+              })}
+              <div className="flex items-center justify-between pt-1 border-t font-medium text-foreground">
+                <span>Total slots</span><span>{slots.length}</span>
+              </div>
             </div>
           </div>
+        </div>
 
-          <div className="rounded-lg border p-4 space-y-1.5 text-xs text-muted-foreground">
-            <p className="font-semibold text-foreground text-sm">Function groups</p>
-            {ACTION_GROUPS.map(g => {
-              const GIcon = g.icon;
+        {/* ── Main grid ───────────────────────────────────────────────────── */}
+        <div className="flex-1 overflow-auto p-4">
+          {/* Device banner */}
+          <div className="flex items-center gap-2 mb-3 text-xs text-muted-foreground">
+            {deviceView === "desktop" && <><Monitor className="w-3.5 h-3.5" />Desktop — {columns} columns</>}
+            {deviceView === "tablet"  && <><Tablet  className="w-3.5 h-3.5" />Tablet — {colsTablet} columns (tap Desktop tab to edit)</>}
+            {deviceView === "phone"   && <><Smartphone className="w-3.5 h-3.5" />Phone — {colsMobile} columns (tap Desktop tab to edit)</>}
+            {deviceView !== "desktop" && (
+              <Badge variant="outline" className="text-[10px] ml-1">Preview only — click Desktop to edit</Badge>
+            )}
+          </div>
+
+          <div
+            style={{ display: "grid", gridTemplateColumns: `repeat(${activeColumns}, minmax(0, 1fr))`, gap: "8px" }}
+            data-testid="layout-grid"
+          >
+            {slots.map(slot => {
+              if (consumed.has(slot.position)) return <div key={slot.position} data-testid={`grid-placeholder-${slot.position}`} />;
               return (
-                <div key={g.group} className="flex items-center gap-1.5">
-                  <GIcon className={`w-3 h-3 ${g.color}`} />
-                  <span>{g.group} ({g.actions.length})</span>
-                </div>
+                <GridButton
+                  key={slot.position}
+                  slot={slot}
+                  isSelected={selected === slot.position}
+                  onClick={() => setSelected(selected === slot.position ? null : slot.position)}
+                  buttonRadius={buttonRadius}
+                  allLayouts={allLayouts}
+                />
               );
             })}
           </div>
 
-          <div className="rounded-lg border bg-muted/30 p-3 text-xs space-y-0.5">
-            <p className="font-medium text-sm mb-1">Stats</p>
-            <p>Total slots: <strong>{total}</strong></p>
-            <p>Configured: <strong>{filled}</strong></p>
-            <p>Empty: <strong>{total - filled}</strong></p>
+          {/* Help tip */}
+          <div className="mt-4 flex items-start gap-2 text-xs text-muted-foreground">
+            <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+            <span>
+              Click any button to configure it. <strong>Wide/Tall/Large</strong> buttons span multiple cells.
+              Use <strong>Sub-Menu</strong> type to create condiment / modifier panels (hospitality style).
+              Wide + Tall buttons absorb adjacent slots automatically.
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Config dialog */}
-      {selectedPos !== null && selectedSlot && (
+      {/* ── Button edit dialog ─────────────────────────────────────────────── */}
+      {selected !== null && (
         <ButtonDialog
-          slot={selectedSlot}
-          onSave={updateSlot}
-          onClear={() => clearSlot(selectedPos)}
-          onClose={() => setSelectedPos(null)}
+          slot={slots.find(s => s.position === selected) ?? makeEmpty(selected)}
+          onSave={s => { updateSlot(selected, s); setSelected(null); }}
+          onClear={() => { clearSlot(selected); setSelected(null); }}
+          onClose={() => setSelected(null)}
           items={items}
           categories={categories}
+          allLayouts={allLayouts}
+          currentLayoutId={layoutId}
         />
       )}
     </div>

@@ -512,8 +512,11 @@ export const posLayoutSets = pgTable("pos_layout_sets", {
   name: text("name").notNull(),
   description: text("description"),
   locationId: varchar("location_id"),
-  columns: integer("columns").notNull().default(4),
+  columns: integer("columns").notNull().default(4),       // desktop columns
+  colsTablet: integer("cols_tablet").default(3),          // tablet columns (auto if null)
+  colsMobile: integer("cols_mobile").default(2),          // phone columns (auto if null)
   rows: integer("rows").notNull().default(5),
+  buttonRadius: text("button_radius").default("rounded"), // rounded | round | square
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -525,10 +528,14 @@ export const posLayoutButtons = pgTable("pos_layout_buttons", {
   label: text("label").notNull(),
   color: text("color").default("#6b7280"),
   icon: text("icon"),
-  buttonType: text("button_type").notNull().default("item"), // item | category | action | empty
+  buttonType: text("button_type").notNull().default("item"), // item | category | action | sublayout | empty
   itemId: varchar("item_id"),
   categoryId: varchar("category_id"),
   actionCode: text("action_code"),
+  sublayoutId: varchar("sublayout_id"),    // links to another posLayoutSet (condiments / modifiers)
+  colspan: integer("colspan").default(1), // 1=normal, 2=wide
+  rowspan: integer("rowspan").default(1), // 1=normal, 2=tall
+  shape: text("shape").default("rect"),   // rect | round | wide (alias colspan=2) | tall (alias rowspan=2)
 });
 
 export const posOrders = pgTable("pos_orders", {
