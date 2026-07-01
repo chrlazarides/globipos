@@ -50,6 +50,27 @@ export function usePushNotifications() {
       if (!publicKey) throw new Error("VAPID key not configured");
 
       const reg = await navigator.serviceWorker.ready;
+
+      // Always unsubscribe any existing subscription before creating a new one.
+      // This prevents silent failures when the VAPID key has changed: the browser
+      // binds a PushSubscription to the VAPID key used at subscribe time, so a
+      // changed key produces an invalid (stale) subscription that silently drops
+      // every push. Starting fresh guarantees the new subscription matches the
+      // current server-side VAPID key.
+      const existingSub = await reg.pushManager.getSubscription();
+      if (existingSub) {
+        try {
+          // Remove the old endpoint from the server so it is never used again.
+          await apiFetch("/api/customer/push/subscribe", {
+            method: "DELETE",
+            body: JSON.stringify({ endpoint: existingSub.endpoint }),
+          });
+        } catch {
+          // Best-effort — if the server call fails, still unsubscribe locally.
+        }
+        await existingSub.unsubscribe();
+      }
+
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(publicKey),
