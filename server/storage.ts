@@ -1768,7 +1768,7 @@ export class DatabaseStorage implements IStorage {
     if (filters?.status) conditions.push(eq(portalOrders.status, filters.status));
 
     const rows = await db
-      .select({ order: portalOrders, customerName: customers.name, customerCode: customers.code })
+      .select({ order: portalOrders, customerName: customers.name, customerCode: customers.code, customerPhone: customers.phone })
       .from(portalOrders)
       .leftJoin(customers, eq(customers.id, portalOrders.customerId))
       .where(conditions.length ? and(...conditions) : undefined)
@@ -1777,7 +1777,7 @@ export class DatabaseStorage implements IStorage {
     const result = [];
     for (const row of rows) {
       const items = await db.select().from(portalOrderItems).where(eq(portalOrderItems.orderId, row.order.id));
-      result.push({ ...row.order, items, customerName: row.customerName || "Unknown", customerCode: row.customerCode || "" });
+      result.push({ ...row.order, items, customerName: row.customerName || "Unknown", customerCode: row.customerCode || "", customerPhone: row.customerPhone || null });
     }
     return result;
   }

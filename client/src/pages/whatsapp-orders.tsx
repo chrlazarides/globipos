@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX } from "lucide-react";
+import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX, Send } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 
@@ -27,6 +28,7 @@ type PortalOrder = {
   customerId: string;
   customerName: string;
   customerCode: string;
+  customerPhone: string | null;
   source: string;
   status: string;
   subtotal: string;
@@ -57,6 +59,21 @@ function sourceBadge(source: string) {
 
 function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: () => void }) {
   const { toast } = useToast();
+  const [replyText, setReplyText] = useState("");
+
+  const sendReply = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/whatsapp/send", {
+        to: order.customerPhone,
+        message: replyText,
+        orderId: order.id,
+      }),
+    onSuccess: () => {
+      setReplyText("");
+      toast({ title: "Message sent", description: "WhatsApp reply delivered to customer." });
+    },
+    onError: (e: any) => toast({ title: "Failed to send", description: e.message, variant: "destructive" }),
+  });
 
   const updateStatus = useMutation({
     mutationFn: (status: string) =>
@@ -147,6 +164,35 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
             </table>
           </div>
         </div>
+
+        {order.source === "whatsapp" && order.customerPhone && (
+          <div className="border rounded-lg p-3 bg-[#25D366]/5 border-[#25D366]/30 space-y-2">
+            <p className="text-xs font-medium text-[#25D366] flex items-center gap-1.5">
+              <MessageSquare className="w-3.5 h-3.5" />
+              Reply via WhatsApp
+            </p>
+            <Textarea
+              placeholder="Type a message to send to the customer…"
+              value={replyText}
+              onChange={e => setReplyText(e.target.value)}
+              rows={2}
+              className="resize-none text-sm"
+              data-testid="input-whatsapp-reply"
+            />
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                onClick={() => sendReply.mutate()}
+                disabled={sendReply.isPending || !replyText.trim()}
+                data-testid="btn-send-whatsapp-reply"
+                className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebe5d] text-white"
+              >
+                {sendReply.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                Send Message
+              </Button>
+            </div>
+          </div>
+        )}
 
         <DialogFooter className="flex-col sm:flex-row gap-2 pt-2">
           {order.status === "pending" && (

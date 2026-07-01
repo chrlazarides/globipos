@@ -8100,6 +8100,49 @@ export async function registerRoutes(
     res.json(msg);
   });
 
+  // Direct WhatsApp send from order detail — logs message against the customer's active/latest conversation
+  app.post("/api/whatsapp/send", requireAdmin, async (req, res) => {
+    const { to, message, orderId } = req.body;
+    if (!to || !message?.trim()) return res.status(400).json({ error: "to and message are required" });
+
+    // Find or create a conversation for this phone number
+    let [conv] = await db
+      .select()
+      .from(chatConversations)
+      .where(and(eq(chatConversations.waPhoneNumber, to), eq(chatConversations.channel, "whatsapp")))
+      .orderBy(desc(chatConversations.lastMessageAt))
+      .limit(1);
+
+    if (!conv) {
+      // Look up customer by phone to associate the conversation
+      const [matchedCustomer] = await db.select().from(customers).where(eq(customers.phone, to));
+      const [newConv] = await db.insert(chatConversations).values({
+        customerId: matchedCustomer?.id || "unknown",
+        channel: "whatsapp",
+        waPhoneNumber: to,
+        status: "active",
+      }).returning();
+      conv = newConv;
+    }
+
+    // Log the outgoing staff message
+    const [msg] = await db.insert(chatMessages).values({
+      conversationId: conv.id,
+      role: "staff",
+      content: message.trim(),
+      channel: "whatsapp",
+    }).returning();
+
+    await db.update(chatConversations)
+      .set({ lastMessageAt: new Date() })
+      .where(eq(chatConversations.id, conv.id));
+
+    // Send via WhatsApp Cloud API
+    await sendWhatsAppMessage(to, message.trim());
+
+    res.json({ ok: true, messageId: msg.id });
+  });
+
   app.post("/api/chat/conversations/:id/handoff", requireAdmin, async (req, res) => {
     const userId = (req as any).user?.id || null;
     const [conv] = await db.update(chatConversations)
