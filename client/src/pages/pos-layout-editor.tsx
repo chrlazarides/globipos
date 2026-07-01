@@ -875,9 +875,9 @@ export default function PosLayoutEditor() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col" style={{ height: "100%" }}>
       {/* ── Top bar ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-background gap-3">
+      <div className="flex items-center justify-between px-4 py-3 border-b bg-background gap-3 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <Button variant="ghost" size="icon" onClick={() => navigate("/pos/layouts")} data-testid="btn-back">
             <ArrowLeft className="w-4 h-4" />
@@ -918,9 +918,9 @@ export default function PosLayoutEditor() {
         </Button>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-h-0">
         {/* ── Left settings panel ─────────────────────────────────────────── */}
-        <div className="w-64 border-r overflow-y-auto bg-muted/10 flex-shrink-0">
+        <div className="w-64 border-r overflow-y-auto bg-muted/10 flex-shrink-0 min-h-0">
           <div className="p-4 space-y-5">
             <div className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Layout Info</p>
