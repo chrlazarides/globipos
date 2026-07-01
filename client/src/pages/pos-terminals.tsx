@@ -15,7 +15,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Monitor, Plus, Pencil, Trash2, Loader2, Clock } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Monitor, Plus, Pencil, Trash2, Loader2, Clock, LayoutGrid, MapPin, Cpu } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 const formSchema = insertPosTerminalSchema.extend({
@@ -84,6 +85,23 @@ function TerminalForm({ initial, onClose }: { initial?: PosTerminal; onClose: ()
             <FormMessage />
           </FormItem>
         )} />
+        <FormField control={form.control} name="layoutSetId" render={({ field }) => (
+          <FormItem>
+            <FormLabel className="flex items-center gap-1.5"><LayoutGrid className="w-3.5 h-3.5" /> Button Layout</FormLabel>
+            <Select value={field.value ?? "none"} onValueChange={v => field.onChange(v === "none" ? undefined : v)}>
+              <FormControl>
+                <SelectTrigger data-testid="select-terminal-layout">
+                  <SelectValue placeholder="No layout assigned" />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                <SelectItem value="none">— No layout assigned —</SelectItem>
+                {layouts.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Controls which product buttons appear on this terminal's POS screen</p>
+          </FormItem>
+        )} />
         <FormField control={form.control} name="hardwareType" render={({ field }) => (
           <FormItem>
             <FormLabel>Hardware Type</FormLabel>
@@ -93,18 +111,6 @@ function TerminalForm({ initial, onClose }: { initial?: PosTerminal; onClose: ()
                 <SelectItem value="desktop">Desktop</SelectItem>
                 <SelectItem value="tablet">Tablet</SelectItem>
                 <SelectItem value="mobile">Mobile</SelectItem>
-              </SelectContent>
-            </Select>
-          </FormItem>
-        )} />
-        <FormField control={form.control} name="layoutSetId" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Layout Set (optional)</FormLabel>
-            <Select value={field.value ?? "none"} onValueChange={v => field.onChange(v === "none" ? undefined : v)}>
-              <FormControl><SelectTrigger><SelectValue placeholder="No layout assigned" /></SelectTrigger></FormControl>
-              <SelectContent>
-                <SelectItem value="none">No layout assigned</SelectItem>
-                {layouts.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </FormItem>
@@ -137,6 +143,48 @@ function lastSeenLabel(t: any) {
   return { online, label: formatDistanceToNow(new Date(t.lastSeenAt), { addSuffix: true }) };
 }
 
+function QuickLayoutPicker({ terminal, layouts }: { terminal: PosTerminal; layouts: PosLayoutSet[] }) {
+  const { toast } = useToast();
+  const mutation = useMutation({
+    mutationFn: async (layoutSetId: string | null) => {
+      const res = await apiRequest("PUT", `/api/pos/terminals/${terminal.id}`, {
+        ...terminal,
+        layoutSetId: layoutSetId ?? undefined,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pos/terminals"] });
+      toast({ title: "Layout updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Select
+      value={terminal.layoutSetId ?? "none"}
+      onValueChange={v => mutation.mutate(v === "none" ? null : v)}
+      disabled={mutation.isPending}
+    >
+      <SelectTrigger
+        className="h-7 text-xs w-full border-dashed"
+        data-testid={`select-layout-${terminal.id}`}
+      >
+        {mutation.isPending
+          ? <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Saving…</span>
+          : <SelectValue placeholder="No layout" />
+        }
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="none">— No layout —</SelectItem>
+        {layouts.map(l => (
+          <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export default function PosTerminals() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -145,6 +193,7 @@ export default function PosTerminals() {
 
   const { data: terminals = [], isLoading } = useQuery<(PosTerminal & { locationName?: string })[]>({ queryKey: ["/api/pos/terminals"] });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"] });
+  const { data: layouts = [] } = useQuery<PosLayoutSet[]>({ queryKey: ["/api/pos/layouts"] });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/pos/terminals/${id}`); },
@@ -159,7 +208,7 @@ export default function PosTerminals() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><Monitor className="w-6 h-6" />POS Terminals</h1>
-          <p className="text-sm text-muted-foreground mt-1">Manage checkout terminals across all locations</p>
+          <p className="text-sm text-muted-foreground mt-1">Manage checkout terminals and their button layouts</p>
         </div>
         <div className="flex gap-2">
           <Select value={locationFilter} onValueChange={setLocationFilter}>
@@ -182,7 +231,7 @@ export default function PosTerminals() {
           <CardContent className="py-16 text-center text-muted-foreground">
             <Monitor className="w-12 h-12 mx-auto mb-3 opacity-30" />
             <p className="font-medium">No terminals found</p>
-            <p className="text-sm mt-1">{locationFilter ? "No terminals for this location." : "Add your first POS terminal."}</p>
+            <p className="text-sm mt-1">{locationFilter !== "all" ? "No terminals for this location." : "Add your first POS terminal."}</p>
             <Button className="mt-4" onClick={() => { setEditing(undefined); setOpen(true); }}>Add Terminal</Button>
           </CardContent>
         </Card>
@@ -190,29 +239,69 @@ export default function PosTerminals() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map(t => {
             const seen = lastSeenLabel(t);
+            const assignedLayout = layouts.find(l => l.id === t.layoutSetId);
             return (
-              <Card key={t.id} data-testid={`card-terminal-${t.id}`}>
+              <Card key={t.id} data-testid={`card-terminal-${t.id}`} className="relative">
                 <CardHeader className="pb-2">
                   <div className="flex items-start justify-between gap-2">
-                    <div>
+                    <div className="min-w-0">
                       <CardTitle className="text-base flex items-center gap-1.5">
-                        {seen && <span className={`w-2 h-2 rounded-full ${seen.online ? "bg-green-500" : "bg-gray-300"}`} />}
-                        {t.name}
+                        {seen && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${seen.online ? "bg-green-500" : "bg-gray-300"}`} />
+                            </TooltipTrigger>
+                            <TooltipContent>{seen.online ? "Online" : `Last seen ${seen.label}`}</TooltipContent>
+                          </Tooltip>
+                        )}
+                        <span className="truncate">{t.name}</span>
                       </CardTitle>
                       <code className="text-xs text-muted-foreground">{t.code}</code>
                     </div>
-                    <Badge variant={t.active ? "default" : "secondary"}>{t.active ? "Active" : "Inactive"}</Badge>
+                    <Badge variant={t.active ? "default" : "secondary"} className="flex-shrink-0">
+                      {t.active ? "Active" : "Inactive"}
+                    </Badge>
                   </div>
                 </CardHeader>
-                <CardContent className="text-sm space-y-1 text-muted-foreground">
-                  <p>{t.locationName || t.locationId}</p>
-                  <p className="capitalize">{t.hardwareType}</p>
-                  {t.outboxQueueSize > 0 && <p className="text-amber-600 font-medium">{t.outboxQueueSize} pending sync</p>}
-                  {seen && (
-                    <p className="flex items-center gap-1 text-xs"><Clock className="w-3 h-3" /> Last seen {seen.label}</p>
-                  )}
-                  <div className="flex gap-2 pt-2">
-                    <Button size="sm" variant="outline" onClick={() => { setEditing(t as PosTerminal); setOpen(true); }} data-testid={`button-edit-terminal-${t.id}`}>
+                <CardContent className="space-y-3">
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <MapPin className="w-3 h-3 flex-shrink-0" />
+                      <span>{t.locationName || t.locationId}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Cpu className="w-3 h-3 flex-shrink-0" />
+                      <span className="capitalize">{t.hardwareType}</span>
+                    </div>
+                    {seen && (
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="w-3 h-3 flex-shrink-0" />
+                        <span>Last seen {seen.label}</span>
+                      </div>
+                    )}
+                    {t.outboxQueueSize > 0 && (
+                      <p className="text-amber-600 font-medium">{t.outboxQueueSize} pending sync</p>
+                    )}
+                  </div>
+
+                  {/* Layout picker — inline, always visible */}
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-medium text-muted-foreground flex items-center gap-1 uppercase tracking-wide">
+                      <LayoutGrid className="w-3 h-3" /> Button Layout
+                    </p>
+                    <QuickLayoutPicker terminal={t as PosTerminal} layouts={layouts} />
+                    {assignedLayout && (
+                      <a
+                        href="/pos/layouts"
+                        className="text-[10px] text-primary underline underline-offset-2"
+                      >
+                        Edit layout buttons →
+                      </a>
+                    )}
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <Button size="sm" variant="outline" className="flex-1" onClick={() => { setEditing(t as PosTerminal); setOpen(true); }} data-testid={`button-edit-terminal-${t.id}`}>
                       <Pencil className="w-3.5 h-3.5 mr-1" />Edit
                     </Button>
                     <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => deleteMutation.mutate(t.id)} data-testid={`button-delete-terminal-${t.id}`}>
