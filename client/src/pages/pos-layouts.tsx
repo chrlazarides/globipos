@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { useLocation } from "wouter";
 import { LayoutGrid, Plus, Pencil, Trash2, Loader2, Wand2, MapPin, Monitor } from "lucide-react";
 
 const formSchema = insertPosLayoutSetSchema.extend({
@@ -104,6 +105,7 @@ function LayoutForm({ initial, onClose }: { initial?: PosLayoutSet; onClose: () 
 
 export default function PosLayouts() {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<PosLayoutSet | undefined>();
 
@@ -177,12 +179,11 @@ export default function PosLayouts() {
                     </Button>
                     <Button
                       size="sm"
-                      variant="outline"
-                      disabled
-                      title="Button designer available in the Tauri terminal app (Phase 2)"
+                      variant="default"
+                      onClick={() => navigate(`/pos/layouts/${layout.id}/edit`)}
                       data-testid={`button-designer-layout-${layout.id}`}
                     >
-                      <Wand2 className="w-3.5 h-3.5 mr-1" />Launch Designer
+                      <Wand2 className="w-3.5 h-3.5 mr-1" />Edit Buttons
                     </Button>
                     <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => deleteMutation.mutate(layout.id)} data-testid={`button-delete-layout-${layout.id}`}>
                       <Trash2 className="w-3.5 h-3.5" />
