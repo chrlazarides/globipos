@@ -2682,7 +2682,7 @@ export class DatabaseStorage implements IStorage {
       vatAmount: posOrders.vatAmount, total: posOrders.total, paymentMethod: posOrders.paymentMethod,
       amountTendered: posOrders.amountTendered, changeDue: posOrders.changeDue,
       status: posOrders.status, notes: posOrders.notes, receiptPrinted: posOrders.receiptPrinted,
-      syncedAt: posOrders.syncedAt, createdAt: posOrders.createdAt,
+      syncedAt: posOrders.syncedAt, createdAt: posOrders.createdAt, cardTerminalRef: posOrders.cardTerminalRef,
       locationName: posLocations.name, terminalName: posTerminals.name,
     }).from(posOrders)
       .leftJoin(posLocations, eq(posOrders.locationId, posLocations.id))

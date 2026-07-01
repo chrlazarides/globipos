@@ -67,6 +67,12 @@ function OrderDetailDialog({ order, onClose }: { order: OrderWithMeta; onClose: 
               <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">Customer</p>
               <p className="font-medium">{order.customerId ? (order as any).customerName || order.customerId : "Walk-in"}</p>
             </div>
+            {order.paymentMethod === "card" && order.cardTerminalRef && (
+              <div className="col-span-2">
+                <p className="text-muted-foreground text-xs uppercase tracking-wide mb-1">Card Ref</p>
+                <p className="font-medium font-mono text-sm" data-testid="text-card-terminal-ref">{order.cardTerminalRef}</p>
+              </div>
+            )}
           </div>
 
           <div className="border rounded-lg overflow-hidden">
