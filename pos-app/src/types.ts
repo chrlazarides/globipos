@@ -35,7 +35,7 @@ export interface Category {
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
-export type ButtonType = "item" | "category" | "action" | "empty";
+export type ButtonType = "item" | "category" | "action" | "empty" | "sublayout";
 
 export interface LayoutButton {
   position: number;
@@ -46,6 +46,9 @@ export interface LayoutButton {
   item_id?: string;
   category_id?: string;
   action_code?: string;
+  sublayout_id?: string;   // panel this button lives in (null = root); for type=sublayout, also the panel it opens
+  colspan?: number;        // 1–4, default 1
+  rowspan?: number;        // 1–4, default 1
 }
 
 // ── Order Engine ──────────────────────────────────────────────────────────────

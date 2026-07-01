@@ -1,4 +1,7 @@
-import type { LayoutButton, Product, ButtonType } from "../types";
+import { useState } from "react";
+import type { CSSProperties } from "react";
+import { ChevronLeftIcon, LayersIcon } from "lucide-react";
+import type { LayoutButton, Product } from "../types";
 import { formatCurrency } from "../lib/pricing";
 
 interface LayoutGridProps {
@@ -13,16 +16,16 @@ interface LayoutGridProps {
 }
 
 const ACTION_COLORS: Record<string, string> = {
-  PAY_CASH:           "bg-green-800 hover:bg-green-700 text-green-100",
-  PAY_CARD:           "bg-blue-800 hover:bg-blue-700 text-blue-100",
-  VOID_ORDER:         "bg-red-900 hover:bg-red-800 text-red-100",
-  CLEAR_ORDER:        "bg-red-900 hover:bg-red-800 text-red-100",
-  HOLD_ORDER:         "bg-amber-800 hover:bg-amber-700 text-amber-100",
-  RECALL_ORDER:       "bg-amber-800 hover:bg-amber-700 text-amber-100",
-  PRICE_OVERRIDE:     "bg-purple-900 hover:bg-purple-800 text-purple-100",
-  LINE_DISCOUNT_PCT:  "bg-purple-900 hover:bg-purple-800 text-purple-100",
-  ORDER_DISCOUNT_PCT: "bg-purple-900 hover:bg-purple-800 text-purple-100",
-  PROMO_CODE:         "bg-purple-900 hover:bg-purple-800 text-purple-100",
+  PAY_CASH:            "bg-green-700 hover:bg-green-600 text-white",
+  PAY_CARD:            "bg-blue-700 hover:bg-blue-600 text-white",
+  VOID_ORDER:          "bg-red-800 hover:bg-red-700 text-white",
+  CLEAR_ORDER:         "bg-red-800 hover:bg-red-700 text-white",
+  HOLD_ORDER:          "bg-amber-700 hover:bg-amber-600 text-white",
+  RECALL_ORDER:        "bg-amber-700 hover:bg-amber-600 text-white",
+  PRICE_OVERRIDE:      "bg-purple-800 hover:bg-purple-700 text-white",
+  LINE_DISCOUNT_PCT:   "bg-purple-800 hover:bg-purple-700 text-white",
+  ORDER_DISCOUNT_PCT:  "bg-purple-800 hover:bg-purple-700 text-white",
+  PROMO_CODE:          "bg-purple-800 hover:bg-purple-700 text-white",
 };
 
 export function LayoutGrid({
@@ -35,14 +38,42 @@ export function LayoutGrid({
   onCategoryButton,
   onActionButton,
 }: LayoutGridProps) {
+  // Stack of sublayout IDs navigated into. Empty = root panel.
+  const [panelStack, setPanelStack] = useState<string[]>([]);
+  const currentPanelId = panelStack.length > 0 ? panelStack[panelStack.length - 1] : null;
+
   const productMap = new Map(products.map((p) => [p.server_id, p]));
+
+  // Buttons belonging to the current panel
+  const panelButtons = buttons.filter((b) =>
+    currentPanelId === null
+      ? !b.sublayout_id                  // root: no sublayout_id
+      : b.sublayout_id === currentPanelId // child: matching id
+  );
+
   const totalSlots = columns * rows;
 
-  // Fill empty slots
-  const slots: (LayoutButton | null)[] = Array(totalSlots).fill(null);
-  for (const btn of buttons) {
-    if (btn.position >= 0 && btn.position < totalSlots) {
-      slots[btn.position] = btn;
+  // Build a position → button map, then compute grid-area spans
+  // We use CSS grid-column/row span via inline style on each rendered cell.
+  // Occupied positions are tracked so we skip rendering placeholder there.
+  const occupied = new Set<number>();
+  const slotMap = new Map<number, LayoutButton>();
+
+  // Sort by position so earlier slots win on overlap
+  const sorted = [...panelButtons].sort((a, b) => a.position - b.position);
+  for (const btn of sorted) {
+    if (btn.position < 0 || btn.position >= totalSlots) continue;
+    if (occupied.has(btn.position)) continue;
+    slotMap.set(btn.position, btn);
+    const cs = btn.colspan ?? 1;
+    const rs = btn.rowspan ?? 1;
+    const col = btn.position % columns;
+    const row = Math.floor(btn.position / columns);
+    for (let r = 0; r < rs; r++) {
+      for (let c = 0; c < cs; c++) {
+        const pos = (row + r) * columns + (col + c);
+        if (pos < totalSlots) occupied.add(pos);
+      }
     }
   }
 
@@ -52,34 +83,48 @@ export function LayoutGrid({
     return prices[priceLevel - 1] || p.price1;
   }
 
-  function renderButton(btn: LayoutButton | null, index: number) {
-    if (!btn || btn.button_type === "empty") {
-      return (
-        <div
-          key={index}
-          className="rounded-xl border border-dashed border-gray-800 bg-gray-900/30"
-        />
-      );
+  function pushPanel(sublayoutId: string) {
+    setPanelStack((s) => [...s, sublayoutId]);
+  }
+
+  function popPanel() {
+    setPanelStack((s) => s.slice(0, -1));
+  }
+
+  function renderButton(btn: LayoutButton, index: number) {
+    const cs = Math.min(btn.colspan ?? 1, columns);
+    const rs = btn.rowspan ?? 1;
+    const col = (index % columns) + 1;          // CSS grid 1-based
+    const rowStart = Math.floor(index / columns) + 1;
+    // Always use explicit placement so spanning buttons never clash with auto-flow
+    const spanStyle: CSSProperties = {
+      gridColumn: `${col} / span ${cs}`,
+      gridRow: `${rowStart} / span ${rs}`,
+    };
+
+    if (btn.button_type === "empty") {
+      return <div key={index} style={spanStyle} className="rounded-xl border border-dashed border-gray-800 bg-gray-900/30" />;
     }
 
     if (btn.button_type === "item") {
       const product = btn.item_id ? productMap.get(btn.item_id) : null;
+      const price = product ? priceForLevel(product) : null;
       return (
         <button
           key={index}
           onClick={() => product && onItemButton(product)}
           disabled={!product}
-          style={{ backgroundColor: btn.color || "#374151" }}
-          className="rounded-xl p-2 text-left flex flex-col justify-between transition-opacity hover:opacity-90 active:scale-95 disabled:opacity-30 min-h-0 overflow-hidden"
+          style={{ backgroundColor: btn.color || "#374151", ...spanStyle }}
+          className="rounded-xl p-2 text-left flex flex-col justify-between transition-all hover:brightness-110 active:scale-95 disabled:opacity-30 min-h-0 overflow-hidden"
           data-testid={`grid-btn-${index}`}
         >
-          <span className="text-white text-xs font-semibold leading-tight line-clamp-2 flex-1">
+          <span className="text-white text-xs font-semibold leading-tight line-clamp-3 flex-1">
             {btn.label}
           </span>
-          {product && (
-            <span className="text-white/70 text-xs mt-1">
-              {formatCurrency(priceForLevel(product))}
-              {product.timed_price != null && <span className="ml-1 text-amber-300">★</span>}
+          {price != null && (
+            <span className="text-white/75 text-xs mt-1 font-medium">
+              {formatCurrency(price)}
+              {product?.timed_price != null && <span className="ml-1 text-amber-300">★</span>}
             </span>
           )}
         </button>
@@ -91,8 +136,8 @@ export function LayoutGrid({
         <button
           key={index}
           onClick={() => btn.category_id && onCategoryButton(btn.category_id)}
-          style={{ backgroundColor: btn.color || "#1f2937" }}
-          className="rounded-xl p-2 text-left flex items-center justify-center transition-opacity hover:opacity-90 active:scale-95"
+          style={{ backgroundColor: btn.color || "#1f2937", ...spanStyle }}
+          className="rounded-xl p-2 flex items-center justify-center transition-all hover:brightness-110 active:scale-95"
           data-testid={`grid-cat-${index}`}
         >
           <span className="text-white text-xs font-semibold text-center leading-tight">
@@ -110,6 +155,7 @@ export function LayoutGrid({
         <button
           key={index}
           onClick={() => btn.action_code && onActionButton(btn.action_code)}
+          style={spanStyle}
           className={`rounded-xl p-2 text-center flex items-center justify-center font-semibold text-xs transition-all active:scale-95 ${colorClass}`}
           data-testid={`grid-action-${index}`}
         >
@@ -118,18 +164,108 @@ export function LayoutGrid({
       );
     }
 
+    if (btn.button_type === "sublayout") {
+      // Check whether this sublayout has any child buttons
+      const hasChildren = buttons.some((b) => b.sublayout_id === btn.sublayout_id && b !== btn);
+      return (
+        <button
+          key={index}
+          onClick={() => btn.sublayout_id && pushPanel(btn.sublayout_id)}
+          disabled={!btn.sublayout_id}
+          style={{ backgroundColor: btn.color || "#1e3a5f", ...spanStyle }}
+          className="rounded-xl p-2 text-left flex flex-col justify-between transition-all hover:brightness-110 active:scale-95 disabled:opacity-30 overflow-hidden"
+          data-testid={`grid-sublayout-${index}`}
+        >
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-white text-xs font-semibold leading-tight line-clamp-2 flex-1">
+              {btn.label}
+            </span>
+            <LayersIcon className="w-3.5 h-3.5 text-white/60 flex-shrink-0" />
+          </div>
+          {hasChildren && (
+            <span className="text-white/50 text-[10px] mt-1">tap to expand</span>
+          )}
+        </button>
+      );
+    }
+
     return null;
   }
 
+  // Determine the label for the current panel (find the sublayout button that opened it)
+  const currentPanelLabel = currentPanelId
+    ? buttons.find((b) => b.button_type === "sublayout" && b.sublayout_id === currentPanelId)?.label
+    : null;
+
   return (
-    <div
-      className="flex-1 grid gap-1.5 p-2 overflow-hidden"
-      style={{
-        gridTemplateColumns: `repeat(${columns}, 1fr)`,
-        gridTemplateRows: `repeat(${rows}, 1fr)`,
-      }}
-    >
-      {slots.map((btn, i) => renderButton(btn, i))}
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      {/* Breadcrumb / back bar — shown when inside a child panel */}
+      {panelStack.length > 0 && (
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 border-b border-gray-800 flex-shrink-0">
+          <button
+            onClick={popPanel}
+            className="flex items-center gap-1 text-gray-400 hover:text-white text-xs font-medium transition-colors active:scale-95"
+            data-testid="grid-back"
+          >
+            <ChevronLeftIcon className="w-4 h-4" />
+            Back
+          </button>
+          {panelStack.length > 1 && (
+            <>
+              <span className="text-gray-700 text-xs">/</span>
+              {panelStack.slice(0, -1).map((id, i) => {
+                const lbl = buttons.find((b) => b.button_type === "sublayout" && b.sublayout_id === id)?.label ?? id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => setPanelStack((s) => s.slice(0, i + 1))}
+                    className="text-gray-500 hover:text-gray-300 text-xs transition-colors"
+                  >
+                    {lbl}
+                  </button>
+                );
+              })}
+              <span className="text-gray-700 text-xs">/</span>
+            </>
+          )}
+          {currentPanelLabel && (
+            <span className="text-white text-xs font-semibold">{currentPanelLabel}</span>
+          )}
+          <button
+            onClick={() => setPanelStack([])}
+            className="ml-auto text-gray-600 hover:text-gray-400 text-xs transition-colors"
+            data-testid="grid-root"
+          >
+            Root
+          </button>
+        </div>
+      )}
+
+      {/* Grid */}
+      <div
+        className="flex-1 grid gap-1.5 p-2 overflow-hidden"
+        style={{
+          gridTemplateColumns: `repeat(${columns}, 1fr)`,
+          gridTemplateRows: `repeat(${rows}, 1fr)`,
+        }}
+      >
+        {Array.from({ length: totalSlots }, (_, i) => {
+          if (occupied.has(i) && !slotMap.has(i)) return null; // inner span cell — skip
+          const btn = slotMap.get(i);
+          const col = (i % columns) + 1;
+          const rowStart = Math.floor(i / columns) + 1;
+          if (!btn) {
+            return (
+              <div
+                key={i}
+                style={{ gridColumn: `${col}`, gridRow: `${rowStart}` }}
+                className="rounded-xl border border-dashed border-gray-800 bg-gray-900/30"
+              />
+            );
+          }
+          return renderButton(btn, i);
+        })}
+      </div>
     </div>
   );
 }

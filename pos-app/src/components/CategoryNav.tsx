@@ -14,30 +14,45 @@ export function CategoryNav({ categories, selectedId, onSelect }: CategoryNavPro
       {/* All button */}
       <button
         onClick={() => onSelect(null)}
-        className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+        className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-all whitespace-nowrap border ${
           selectedId === null
-            ? "bg-burgundy-700 text-white"
-            : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+            ? "bg-burgundy-700 text-white border-burgundy-600 shadow-md shadow-burgundy-900/50"
+            : "bg-gray-800 text-gray-300 hover:bg-gray-700 border-gray-700"
         }`}
         data-testid="cat-all"
       >
         All
       </button>
 
-      {topLevel.map((cat) => (
-        <button
-          key={cat.id}
-          onClick={() => onSelect(cat.id === selectedId ? null : cat.id)}
-          className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-            selectedId === cat.id
-              ? "bg-burgundy-700 text-white"
-              : "bg-gray-800 text-gray-300 hover:bg-gray-700"
-          }`}
-          data-testid={`cat-${cat.id}`}
-        >
-          {cat.name}
-        </button>
-      ))}
+      {topLevel.map((cat) => {
+        const isActive = selectedId === cat.id;
+        const catColor = (cat as any).color as string | undefined;
+        return (
+          <button
+            key={cat.id}
+            onClick={() => onSelect(cat.id === selectedId ? null : cat.id)}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-all whitespace-nowrap border active:scale-95 ${
+              isActive
+                ? "opacity-100 shadow-lg"
+                : "opacity-80 hover:opacity-100"
+            }`}
+            style={
+              catColor
+                ? {
+                    backgroundColor: isActive ? catColor : catColor + "33",
+                    borderColor: catColor,
+                    color: isActive ? "#fff" : catColor,
+                  }
+                : isActive
+                ? { backgroundColor: "#7c2d44", borderColor: "#9d3654", color: "#fff" }
+                : { backgroundColor: "#1f2937", borderColor: "#374151", color: "#d1d5db" }
+            }
+            data-testid={`cat-${cat.id}`}
+          >
+            {cat.name}
+          </button>
+        );
+      })}
     </div>
   );
 }

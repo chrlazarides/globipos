@@ -64,7 +64,7 @@ export function OrderTicket({
           <div className="divide-y divide-gray-800">
             {activeLines.map((line) => {
               const isSelected = line.id === selectedLineId;
-              const { lineSubtotal, lineDiscount, vatAmount } = computeLineAmounts(line);
+              const { lineDiscount, vatAmount } = computeLineAmounts(line);
               const hasDiscount = line.line_discount_pct > 0 || line.line_discount_fixed > 0 || line.override_price != null;
               return (
                 <div
@@ -77,72 +77,74 @@ export function OrderTicket({
                   }`}
                   data-testid={`ticket-line-${line.id}`}
                 >
-                  <div className="flex items-start gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-white text-sm font-medium leading-tight truncate">
-                        {line.description}
-                      </div>
-                      {line.sku && (
-                        <div className="text-gray-600 text-xs">{line.sku}</div>
-                      )}
-                      {line.note && (
-                        <div className="flex items-center gap-1 text-amber-400 text-xs mt-0.5">
-                          <StickyNoteIcon className="w-3 h-3" />
-                          {line.note}
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <div className="text-white text-sm font-semibold">
-                        {formatCurrency(line.line_total)}
-                      </div>
-                      {line.vat_rate > 0 && (
-                        <div className="text-gray-600 text-xs">VAT {formatCurrency(vatAmount)}</div>
-                      )}
-                    </div>
+                  {/* Name + total */}
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <span className="text-white text-sm font-medium leading-tight flex-1 truncate">
+                      {line.description}
+                    </span>
+                    <span className="text-white text-sm font-semibold flex-shrink-0">
+                      {formatCurrency(line.line_total)}
+                    </span>
                   </div>
 
-                  {/* Qty + unit price row */}
-                  <div className="flex items-center justify-between mt-1.5">
-                    <div className="flex items-center gap-1">
-                      {isSelected && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onSubQty(); }}
-                          className="w-5 h-5 rounded bg-gray-700 hover:bg-gray-600 flex items-center justify-center"
-                          data-testid="button-sub-qty"
-                        >
-                          <MinusIcon className="w-3 h-3 text-gray-300" />
-                        </button>
-                      )}
-                      <span className="text-gray-400 text-xs">
-                        {line.qty} × {formatCurrency(line.override_price ?? line.unit_price)}
-                      </span>
-                      {isSelected && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onAddQty(); }}
-                          className="w-5 h-5 rounded bg-gray-700 hover:bg-gray-600 flex items-center justify-center"
-                          data-testid="button-add-qty"
-                        >
-                          <PlusIcon className="w-3 h-3 text-gray-300" />
-                        </button>
-                      )}
+                  {/* Notes */}
+                  {line.note && (
+                    <div className="flex items-center gap-1 text-amber-400 text-xs mb-1.5">
+                      <StickyNoteIcon className="w-3 h-3" />
+                      {line.note}
                     </div>
+                  )}
+
+                  {/* Inline qty controls — always visible */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      {/* Subtract */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onSelectLine(line.id); onSubQty(); }}
+                        className="w-6 h-6 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center transition-colors active:scale-90"
+                        data-testid={`sub-qty-${line.id}`}
+                      >
+                        <MinusIcon className="w-3 h-3 text-gray-300" />
+                      </button>
+
+                      <span className="text-gray-300 text-xs font-semibold w-6 text-center">
+                        {line.qty}
+                      </span>
+
+                      {/* Add */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onSelectLine(line.id); onAddQty(); }}
+                        className="w-6 h-6 rounded-full bg-green-800 hover:bg-green-700 flex items-center justify-center transition-colors active:scale-90"
+                        data-testid={`add-qty-${line.id}`}
+                      >
+                        <PlusIcon className="w-3 h-3 text-green-100" />
+                      </button>
+
+                      <span className="text-gray-600 text-xs ml-1">
+                        × {formatCurrency(line.override_price ?? line.unit_price)}
+                      </span>
+                    </div>
+
                     <div className="flex items-center gap-1.5">
                       {hasDiscount && (
                         <span className="text-green-400 text-xs">
                           -{formatCurrency(lineDiscount)}
                         </span>
                       )}
-                      {isSelected && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onVoidLine(); }}
-                          className="p-1 text-gray-600 hover:text-red-400 transition-colors"
-                          title="Void line"
-                          data-testid="button-void-line"
-                        >
-                          <TrashIcon className="w-3 h-3" />
-                        </button>
+                      {line.vat_rate > 0 && (
+                        <span className="text-gray-600 text-xs">
+                          VAT {formatCurrency(vatAmount)}
+                        </span>
                       )}
+                      {/* Remove — always visible */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onSelectLine(line.id); onVoidLine(); }}
+                        className="w-6 h-6 rounded-full bg-gray-800 hover:bg-red-900 flex items-center justify-center transition-colors active:scale-90"
+                        title="Remove line"
+                        data-testid={`remove-line-${line.id}`}
+                      >
+                        <TrashIcon className="w-3 h-3 text-gray-500 hover:text-red-400" />
+                      </button>
                     </div>
                   </div>
                 </div>

@@ -184,6 +184,99 @@ type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "pr
 type GridLayout = { columns: number; rows: number };
 type POSMode = "sell" | "sco" | "shift" | "fallback";
 
+interface PaymentSuccessState {
+  total: number;
+  method: string;
+  changeDue: number;
+  tendered: number;
+  orderNumber: string;
+}
+
+function PaymentSuccessOverlay({
+  result,
+  onNewOrder,
+  onPrint,
+}: {
+  result: PaymentSuccessState;
+  onNewOrder: () => void;
+  onPrint: () => void;
+}) {
+  const methodLabel = result.method
+    .replace("card_jcc", "Card — JCC")
+    .replace("card_viva", "Card — Viva")
+    .replace("card_worldpay", "Card — Worldpay")
+    .replace("cash", "Cash")
+    .replace("voucher", "Voucher")
+    .replace("loyalty", "Loyalty Points")
+    .replace("account_credit", "Account Credit")
+    .replace("split", "Split Payment");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-3xl w-full max-w-sm p-8 shadow-2xl flex flex-col items-center gap-4 text-center">
+        {/* Big checkmark */}
+        <div className="w-20 h-20 rounded-full bg-green-700 flex items-center justify-center mb-2 shadow-lg shadow-green-900/60">
+          <svg className="w-10 h-10 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </div>
+
+        <h2 className="text-white text-2xl font-bold">Payment Success!</h2>
+        <p className="text-green-400 text-3xl font-bold">{formatCurrency(result.total)}</p>
+
+        <div className="w-full bg-gray-800 rounded-xl p-4 space-y-2 text-left mt-1">
+          {result.orderNumber && (
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Order</span>
+              <span className="text-gray-200 font-medium">#{result.orderNumber}</span>
+            </div>
+          )}
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-500">Payment</span>
+            <span className="text-gray-200 font-medium">{methodLabel}</span>
+          </div>
+          {result.method === "cash" && result.tendered > 0 && (
+            <>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Tendered</span>
+                <span className="text-gray-200">{formatCurrency(result.tendered)}</span>
+              </div>
+              <div className="flex justify-between text-sm border-t border-gray-700 pt-2 mt-1">
+                <span className="text-gray-300 font-semibold">Change Due</span>
+                <span className="text-green-400 font-bold text-base">{formatCurrency(result.changeDue)}</span>
+              </div>
+            </>
+          )}
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-500">Time</span>
+            <span className="text-gray-400">{new Date().toLocaleTimeString()}</span>
+          </div>
+        </div>
+
+        <div className="w-full flex flex-col gap-2.5 mt-2">
+          <button
+            onClick={onNewOrder}
+            className="w-full py-3.5 bg-green-700 hover:bg-green-600 text-white font-bold rounded-xl text-base transition-colors active:scale-[0.98]"
+            data-testid="button-new-order"
+          >
+            New Order
+          </button>
+          <button
+            onClick={onPrint}
+            className="w-full py-3 border border-gray-600 hover:border-gray-500 text-gray-300 hover:text-white font-medium rounded-xl text-sm transition-colors active:scale-[0.98] flex items-center justify-center gap-2"
+            data-testid="button-print-receipt"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
+            </svg>
+            Print Receipt
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function POS({ config, session, sync, onLogout }: POSProps) {
   const engine  = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
   const perms   = usePermissions(session);
@@ -198,6 +291,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [dialog, setDialog]               = useState<Dialog>(null);
   const [numpadMode, setNumpadModeState]  = useState<NumpadMode>("qty");
   const [mode, setMode]                   = useState<POSMode>(config.sco_mode ? "sco" : "sell");
+  const [paymentSuccess, setPaymentSuccess] = useState<PaymentSuccessState | null>(null);
+  const lastReceiptPrinterCallback = useRef<(() => Promise<void>) | null>(null);
 
   // Load local data on mount
   useEffect(() => {
@@ -379,39 +474,44 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         await shift.recordSale(completedOrder.total, method).catch(() => {});
       }
 
-      // Print full receipt if printer is available
+      // Build receipt lines (reused for both auto-print and manual re-print)
+      const colW = (hw.config?.printer_columns ?? 42) as number;
+      const pad = (left: string, right: string) => {
+        const gap = Math.max(1, colW - left.length - right.length);
+        return `${left}${" ".repeat(gap)}${right}`;
+      };
+      const receiptLines = [
+        { text: config.terminal_code, align: "center" as const, bold: true, size: "big" as const },
+        { divider: true },
+        { text: `Terminal: ${config.terminal_code}  Cashier: ${session.cashier_name}` },
+        { text: `Order: ${completedOrder.order_number}  ${new Date().toLocaleString()}` },
+        { divider: true },
+        ...saleLines.map((l) => ({
+          text: pad(
+            l.description.substring(0, colW - 10),
+            `x${l.qty} ${formatCurrency(l.line_total)}`
+          ),
+        })),
+        { divider: true },
+        { text: pad("Subtotal", formatCurrency(saleOrder.subtotal)) },
+        { text: pad("VAT", formatCurrency(saleOrder.vat_amount)) },
+        { text: pad("TOTAL", formatCurrency(completedOrder.total)), bold: true, size: "big" as const, align: "right" as const },
+        { divider: true },
+        { text: `Payment: ${method.replace("card_", "Card ").replace("_", " ").toUpperCase()}` },
+        ...(result.totalTendered > 0 ? [
+          { text: pad("Tendered", formatCurrency(result.totalTendered)) },
+          { text: pad("Change", formatCurrency(result.changeDue)) },
+        ] : []),
+        ...(paymentRef ? [{ text: `Auth: ${paymentRef}` }] : []),
+        { divider: true },
+        { text: "Thank you for your purchase!", align: "center" as const },
+      ];
+
+      // Store for re-print from success overlay
+      lastReceiptPrinterCallback.current = () => hw.printReceipt(receiptLines);
+
+      // Auto-print if printer available
       if (hw.printerStatus === "online" && hw.config?.printer_enabled) {
-        const colW = (hw.config.printer_columns ?? 42) as number;
-        const pad = (left: string, right: string) => {
-          const gap = Math.max(1, colW - left.length - right.length);
-          return `${left}${" ".repeat(gap)}${right}`;
-        };
-        const receiptLines = [
-          { text: config.terminal_code, align: "center" as const, bold: true, size: "big" as const },
-          { divider: true },
-          { text: `Terminal: ${config.terminal_code}  Cashier: ${session.cashier_name}` },
-          { text: `Order: ${completedOrder.order_number}  ${new Date().toLocaleString()}` },
-          { divider: true },
-          ...saleLines.map((l) => ({
-            text: pad(
-              l.description.substring(0, colW - 10),
-              `x${l.qty} ${formatCurrency(l.line_total)}`
-            ),
-          })),
-          { divider: true },
-          { text: pad("Subtotal", formatCurrency(saleOrder.subtotal)) },
-          { text: pad("VAT", formatCurrency(saleOrder.vat_amount)) },
-          { text: pad("TOTAL", formatCurrency(completedOrder.total)), bold: true, size: "big" as const, align: "right" as const },
-          { divider: true },
-          { text: `Payment: ${method.replace("card_", "Card ").replace("_", " ").toUpperCase()}` },
-          ...(result.totalTendered > 0 ? [
-            { text: pad("Tendered", formatCurrency(result.totalTendered)) },
-            { text: pad("Change", formatCurrency(result.changeDue)) },
-          ] : []),
-          ...(paymentRef ? [{ text: `Auth: ${paymentRef}` }] : []),
-          { divider: true },
-          { text: "Thank you for your purchase!", align: "center" as const },
-        ];
         await hw.printReceipt(receiptLines);
       }
 
@@ -420,6 +520,15 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       if (hasCash && hw.config?.drawer_enabled) {
         await hw.openDrawer();
       }
+
+      // Show success overlay
+      setPaymentSuccess({
+        total: completedOrder.total,
+        method,
+        changeDue: result.changeDue,
+        tendered: result.totalTendered,
+        orderNumber: completedOrder.order_number ?? "",
+      });
     } catch (e) {
       console.error("Payment complete failed:", e);
     }
@@ -612,6 +721,17 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
 
       {/* Customer display — reads from Tauri store; rendered when enabled */}
       {hw.config?.customer_display_enabled && <CustomerDisplay />}
+
+      {/* Payment success overlay */}
+      {paymentSuccess && (
+        <PaymentSuccessOverlay
+          result={paymentSuccess}
+          onNewOrder={() => setPaymentSuccess(null)}
+          onPrint={() => {
+            lastReceiptPrinterCallback.current?.();
+          }}
+        />
+      )}
     </div>
   );
 }
