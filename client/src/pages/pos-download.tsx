@@ -10,8 +10,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Monitor, Laptop, Terminal, Smartphone, Globe,
   Download, CheckCircle2, ExternalLink, Copy, Info,
-  Wifi, KeyRound, Github, Code2, Package, Star,
-  Chrome, Layers, ArrowRight,
+  Wifi, KeyRound, Github, Code2, Package, Zap,
+  ChevronRight, FileCode2, Play, Tag, BookOpen,
+  AlertCircle, Rocket,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { SystemSetting } from "@shared/schema";
@@ -28,17 +29,17 @@ interface Platform {
   icon: any;
   color: string;
   description: string;
-  // PWA install (works on all platforms)
   pwaBrowser: string;
   pwaSteps: PwaStep[];
   pwaNotes?: string;
-  // Native build
   nativeFiles: NativeFile[];
   buildCmd: string;
   buildOutput: string;
   nativePrereqs: string[];
   postInstallSteps: string[];
   nativeNote?: string;
+  localBuildScript?: string;
+  localBuildScriptWin?: string;
 }
 
 const PLATFORMS: Platform[] = [
@@ -50,12 +51,12 @@ const PLATFORMS: Platform[] = [
     description: "Windows 10 / 11 · 64-bit",
     pwaBrowser: "Chrome or Edge",
     pwaSteps: [
-      { step: "Open Chrome or Edge and go to your GlobiPOS URL" },
+      { step: "Open Chrome or Edge and navigate to your GlobiPOS URL" },
       { step: "Click the install icon (⊕) in the address bar", note: "Edge shows it as 'App available'" },
-      { step: 'Click "Install" — Windows adds it to your Start Menu and taskbar' },
+      { step: 'Click "Install" — added to your Start Menu and taskbar' },
       { step: "Launch from Start Menu or taskbar shortcut" },
     ],
-    pwaNotes: "Works without administrator rights. Runs in its own window just like a native app.",
+    pwaNotes: "Works without administrator rights. Runs in its own window exactly like a native app.",
     nativeFiles: [
       { label: "MSI Installer (recommended)", suffix: "_x64_en-US.msi" },
       { label: "Portable EXE", suffix: "_x64-setup.exe" },
@@ -63,16 +64,17 @@ const PLATFORMS: Platform[] = [
     buildCmd: "npm run tauri build",
     buildOutput: "pos-app\\src-tauri\\target\\release\\bundle\\msi\\*.msi",
     nativePrereqs: [
-      "Node.js 20 LTS — nodejs.org",
-      "Rust — rustup.rs (run installer, choose defaults)",
+      "Node.js 20 LTS (nodejs.org)",
+      "Rust (rustup.rs)",
       "VS Build Tools → 'Desktop development with C++'",
+      "WebView2 Runtime (pre-installed on Windows 11)",
     ],
     postInstallSteps: [
-      "Download and double-click the .msi installer",
-      "Click through the install wizard",
+      "Double-click the .msi — click through the wizard",
       'Launch "GlobiPOS Terminal" from Start Menu',
       "Enter your server URL and terminal code → Register",
     ],
+    localBuildScriptWin: "scripts/build-native.ps1",
   },
   {
     id: "macos",
@@ -84,26 +86,26 @@ const PLATFORMS: Platform[] = [
     pwaSteps: [
       { step: "Open Chrome or Edge and navigate to your GlobiPOS URL" },
       { step: "Click the install icon (⊕) in the address bar" },
-      { step: 'Click "Install" — the app appears in Launchpad and Applications' },
-      { step: "Open it from Launchpad or Spotlight (⌘Space → GlobiPOS)" },
+      { step: 'Click "Install" — appears in Launchpad and Applications' },
+      { step: "Open from Launchpad or Spotlight (⌘Space → GlobiPOS)" },
     ],
     pwaNotes: "Safari on macOS 14+ also supports PWA install via File → Add to Dock.",
     nativeFiles: [{ label: "DMG (Universal — Intel + Apple Silicon)", suffix: "_universal.dmg" }],
     buildCmd: "npm run tauri build -- --target universal-apple-darwin",
     buildOutput: "pos-app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg",
     nativePrereqs: [
-      "Node.js 20 LTS — nodejs.org",
-      "Rust — rustup.rs",
+      "Node.js 20 LTS (nodejs.org)",
+      "Rust (rustup.rs)",
       "Xcode Command Line Tools: xcode-select --install",
       "Universal targets: rustup target add aarch64-apple-darwin x86_64-apple-darwin",
     ],
     postInstallSteps: [
-      "Download and open the .dmg",
-      "Drag GlobiPOS Terminal to /Applications",
+      "Open the .dmg and drag GlobiPOS Terminal to /Applications",
       "Right-click → Open on first launch (Gatekeeper bypass)",
       "Enter your server URL and terminal code → Register",
     ],
-    nativeNote: "If blocked: System Settings → Privacy & Security → Open Anyway",
+    nativeNote: "Blocked by Gatekeeper? System Settings → Privacy & Security → Open Anyway",
+    localBuildScript: "scripts/build-native.sh",
   },
   {
     id: "linux",
@@ -115,7 +117,7 @@ const PLATFORMS: Platform[] = [
     pwaSteps: [
       { step: "Open Chrome/Chromium and navigate to your GlobiPOS URL" },
       { step: "Click the install icon (⊕) in the address bar" },
-      { step: "Click Install — the app is added to your application launcher" },
+      { step: "Click Install — added to your application launcher" },
       { step: "Launch from your desktop environment's app menu" },
     ],
     nativeFiles: [
@@ -127,14 +129,15 @@ const PLATFORMS: Platform[] = [
     buildOutput: "pos-app/src-tauri/target/release/bundle/appimage/*.AppImage",
     nativePrereqs: [
       "Node.js 20 LTS",
-      "Rust — rustup.rs",
-      "Build deps: sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev",
+      "Rust (rustup.rs)",
+      "sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev",
     ],
     postInstallSteps: [
-      "AppImage: chmod +x *.AppImage then double-click or ./app.AppImage",
-      "DEB: sudo dpkg -i *.deb, then launch from app menu",
+      "AppImage: chmod +x *.AppImage → double-click or ./app.AppImage",
+      "DEB: sudo dpkg -i *.deb → launch from app menu",
       "Enter your server URL and terminal code → Register",
     ],
+    localBuildScript: "scripts/build-native.sh",
   },
   {
     id: "android",
@@ -147,28 +150,28 @@ const PLATFORMS: Platform[] = [
       { step: "Open Chrome on your Android device" },
       { step: "Go to your GlobiPOS URL" },
       { step: 'Tap the browser menu (⋮) → "Add to Home screen"' },
-      { step: "Tap Add — a GlobiPOS icon appears on your home screen" },
-      { step: "Tap the icon to launch — runs full-screen like a native app" },
+      { step: "Tap Add — GlobiPOS icon appears on home screen" },
+      { step: "Tap the icon — runs full-screen like a native app" },
     ],
     pwaNotes: "No APK, no app store. Works on phones and tablets. Supports offline selling.",
     nativeFiles: [
-      { label: "APK (ARM64 — most phones)", suffix: "_aarch64.apk" },
+      { label: "APK (ARM64 — most modern phones)", suffix: "_aarch64.apk" },
       { label: "APK (ARMv7 — older devices)", suffix: "_armv7.apk" },
     ],
-    buildCmd: "npx tauri android build --apk",
+    buildCmd: "npx tauri android build --apk --split-per-abi",
     buildOutput: "pos-app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk",
     nativePrereqs: [
       "Node.js 20 LTS",
-      "Rust — rustup.rs",
-      "Android Studio + NDK — developer.android.com/studio",
+      "Rust (rustup.rs)",
+      "Android Studio + NDK (developer.android.com/studio)",
       "Set ANDROID_HOME and NDK_HOME environment variables",
     ],
     postInstallSteps: [
       "Settings → Apps → Special access → Install unknown apps → enable for your browser",
-      "Download the APK and tap to install",
+      "Download APK and tap to install",
       "Open GlobiPOS Terminal and register",
     ],
-    nativeNote: "APK not signed for Play Store — enable 'Install unknown apps' once.",
+    nativeNote: "APK not signed for Play Store — enable 'Install unknown apps' once",
   },
   {
     id: "ios",
@@ -185,22 +188,21 @@ const PLATFORMS: Platform[] = [
       { step: "Tap Add — the icon appears on your home screen" },
       { step: "Tap the icon to launch in full-screen mode" },
     ],
-    pwaNotes: "This is the recommended method for iPhone/iPad. No App Store or developer account needed.",
+    pwaNotes: "Recommended for iPhone/iPad. No App Store or Apple Developer account needed.",
     nativeFiles: [],
     buildCmd: "npx tauri ios build",
     buildOutput: "Requires Apple Developer account ($99/yr) + Mac with Xcode",
     nativePrereqs: [
-      "Apple Developer Program membership ($99/yr)",
+      "Apple Developer Program ($99/yr)",
       "Mac with Xcode 15+",
-      "Rust + iOS targets: rustup target add aarch64-apple-ios",
-      "Valid provisioning profile and code-signing certificate",
+      "Rust iOS targets: rustup target add aarch64-apple-ios",
     ],
     postInstallSteps: [
       "Build and archive in Xcode",
       "Distribute via TestFlight or App Store Connect",
-      "Install on device and register with your server URL",
+      "Install on device and register with server URL",
     ],
-    nativeNote: "For most deployments the PWA (above) is the best iOS solution — no account or Mac required.",
+    nativeNote: "For most deployments the PWA (above) is the best iOS solution — no account required.",
   },
 ];
 
@@ -221,7 +223,7 @@ function buildReleaseUrl(repo: string, version: string, suffix: string) {
   return `${repo.replace(/\/$/, "")}/releases/download/${tag}/GlobiPOS.Terminal_${ver}${suffix}`;
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// ── Main component ─────────────────────────────────────────────────────────────
 export default function PosDownload() {
   const detected = detectPlatform();
   const [selected, setSelected] = useState<PlatformId>(detected);
@@ -239,10 +241,14 @@ export default function PosDownload() {
   function copy(text: string, key: string) {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(key);
-      setTimeout(() => setCopied(null), 2000);
+      setTimeout(() => setCopied(null), 2500);
       toast({ title: "Copied to clipboard" });
     });
   }
+
+  const localBuildScript = detected === "windows"
+    ? platform.localBuildScriptWin
+    : platform.localBuildScript;
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
@@ -253,28 +259,30 @@ export default function PosDownload() {
           Install GlobiPOS Terminal
         </h1>
         <p className="text-muted-foreground mt-1">
-          The app is live and ready to install right now — no build or compilation needed.
+          Install instantly as a web app, or compile a native binary for Windows, macOS, Linux, or Android.
         </p>
       </div>
 
-      {/* Hero — ready to run NOW */}
+      {/* Status banner */}
       <Card className="border-primary/30 bg-primary/[0.03]">
-        <CardContent className="pt-5 pb-4">
+        <CardContent className="pt-4 pb-3">
           <div className="flex items-start gap-4">
-            <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+            <div className="w-9 h-9 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0 mt-0.5">
               <CheckCircle2 className="w-5 h-5 text-green-600" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="font-semibold text-base flex items-center gap-2">
-                Ready to install right now
-                <Badge className="bg-green-500 hover:bg-green-500 text-white text-xs">No compilation needed</Badge>
+              <p className="font-semibold flex items-center gap-2 flex-wrap">
+                App is live and ready to install
+                <Badge className="bg-green-500 hover:bg-green-500 text-white text-xs">PWA ready now</Badge>
+                {hasNativeRelease && (
+                  <Badge variant="outline" className="text-xs">Native v{appVersion} available</Badge>
+                )}
               </p>
-              <p className="text-sm text-muted-foreground mt-1">
-                GlobiPOS is a Progressive Web App — it's already compiled and hosted at your server URL.
-                Install it on any device in seconds using the steps below.
+              <p className="text-sm text-muted-foreground mt-0.5">
+                The PWA works on all devices with zero setup. Native compiled binaries need a one-time GitHub build (15 min).
               </p>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                {(["Works offline", "Full-screen app mode", "Auto-updates", "No App Store", "No admin rights"] as const).map(f => (
+              <div className="flex flex-wrap gap-2 mt-2 text-xs text-muted-foreground">
+                {["Works offline", "Full-screen mode", "Auto-updates", "No App Store", "No admin rights"].map(f => (
                   <span key={f} className="flex items-center gap-1 bg-muted px-2 py-0.5 rounded-full">
                     <CheckCircle2 className="w-3 h-3 text-green-500" />{f}
                   </span>
@@ -286,9 +294,9 @@ export default function PosDownload() {
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Platform selector */}
+        {/* Platform picker */}
         <div className="space-y-2">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Select Your Device</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Select Device</p>
           {PLATFORMS.map(p => (
             <button
               key={p.id}
@@ -316,24 +324,30 @@ export default function PosDownload() {
 
         {/* Right panel */}
         <div className="lg:col-span-2 space-y-4">
-          <Tabs defaultValue="pwa">
-            <TabsList className="w-full mb-1">
+          <Tabs defaultValue={hasNativeRelease ? "native" : "pwa"}>
+            <TabsList className="w-full mb-1 h-auto flex-wrap">
               <TabsTrigger value="pwa" className="flex-1" data-testid="tab-pwa">
                 <Globe className="w-3.5 h-3.5 mr-1.5" />
-                Install Now (Web App)
-                <Badge className="ml-1.5 bg-green-500 hover:bg-green-500 text-white text-[10px] h-4 px-1.5 font-normal">Ready</Badge>
+                Web App
+                <Badge className="ml-1.5 bg-green-500 hover:bg-green-500 text-white text-[10px] h-4 px-1.5 font-normal">Ready now</Badge>
               </TabsTrigger>
               {platform.nativeFiles.length > 0 && (
                 <TabsTrigger value="native" className="flex-1" data-testid="tab-native">
-                  <Package className="w-3.5 h-3.5 mr-1.5" />Native App
+                  <Package className="w-3.5 h-3.5 mr-1.5" />Native Binary
+                  {hasNativeRelease && (
+                    <Badge variant="outline" className="ml-1.5 text-[10px] h-4 px-1.5 font-normal">v{appVersion}</Badge>
+                  )}
                 </TabsTrigger>
               )}
               <TabsTrigger value="build" className="flex-1" data-testid="tab-build">
-                <Code2 className="w-3.5 h-3.5 mr-1.5" />Build Source
+                <Rocket className="w-3.5 h-3.5 mr-1.5" />Publish Release
+              </TabsTrigger>
+              <TabsTrigger value="local" className="flex-1" data-testid="tab-local">
+                <Code2 className="w-3.5 h-3.5 mr-1.5" />Local Build
               </TabsTrigger>
             </TabsList>
 
-            {/* ── PWA install tab (primary) ──────────────────────────────── */}
+            {/* ── Web App / PWA ─────────────────────────────────────────── */}
             <TabsContent value="pwa" className="space-y-4 mt-3">
               <Card>
                 <CardHeader className="pb-2">
@@ -345,27 +359,21 @@ export default function PosDownload() {
                   <CardDescription>Follow these steps on your {platform.label} device</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {/* Your URL — copy it */}
                   <div className="rounded-lg bg-muted/50 border p-3 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Your GlobiPOS URL</p>
                     <div className="flex gap-2">
                       <code className="flex-1 px-3 py-2 rounded bg-background border text-sm font-mono select-all break-all">
                         {serverUrl}
                       </code>
-                      <Button variant="outline" size="icon" onClick={() => copy(serverUrl, "url")} data-testid="btn-copy-server-url">
-                        {copied === "url" ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                      <Button variant="outline" size="icon" onClick={() => copy(serverUrl, "pwa-url")} data-testid="btn-copy-server-url">
+                        {copied === "pwa-url" ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
                       </Button>
                     </div>
-                    <p className="text-xs text-muted-foreground">Copy this URL and open it on the target device in {platform.pwaBrowser}</p>
                   </div>
-
-                  {/* Steps */}
                   <ol className="space-y-3">
                     {platform.pwaSteps.map((s, i) => (
                       <li key={i} className="flex gap-3">
-                        <span className="flex-shrink-0 w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold">
-                          {i + 1}
-                        </span>
+                        <span className="flex-shrink-0 w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold">{i + 1}</span>
                         <div>
                           <p className="text-sm">{s.step}</p>
                           {s.note && <p className="text-xs text-muted-foreground mt-0.5">{s.note}</p>}
@@ -373,7 +381,6 @@ export default function PosDownload() {
                       </li>
                     ))}
                   </ol>
-
                   {platform.pwaNotes && (
                     <div className="flex gap-2 rounded-lg bg-blue-50 border border-blue-100 p-3 text-xs text-blue-800">
                       <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-blue-500" />
@@ -384,19 +391,18 @@ export default function PosDownload() {
               </Card>
             </TabsContent>
 
-            {/* ── Native app tab ─────────────────────────────────────────── */}
+            {/* ── Native binary download ─────────────────────────────────── */}
             {platform.nativeFiles.length > 0 && (
               <TabsContent value="native" className="space-y-4 mt-3">
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-base flex items-center gap-2">
-                      <Package className="w-4 h-4" />
-                      Native {platform.label} App
+                      <Package className="w-4 h-4" />Native {platform.label} Binary
                     </CardTitle>
                     <CardDescription>
                       {hasNativeRelease
-                        ? `Version ${appVersion} — download and run`
-                        : "No pre-built release configured yet — configure GitHub repo in Settings"}
+                        ? `Version ${appVersion} — compiled for ${platform.label}`
+                        : "No release published yet — use the Publish Release tab to build one"}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -418,15 +424,21 @@ export default function PosDownload() {
                         </Button>
                       </div>
                     ) : (
-                      <div className="rounded-lg border border-dashed p-4 space-y-2 text-sm">
-                        <div className="flex gap-2 text-muted-foreground">
-                          <Info className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-500" />
-                          <div>
-                            <p className="font-medium text-foreground">GitHub repo not configured</p>
-                            <p className="mt-1">Set <code className="bg-muted px-1 rounded text-xs">pos_github_repo</code> and <code className="bg-muted px-1 rounded text-xs">pos_app_version</code> in{" "}
-                              <a href="/settings" className="underline text-primary">Settings</a> to enable download links.
+                      <div className="rounded-lg border border-dashed p-5 space-y-3">
+                        <div className="flex gap-3">
+                          <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                          <div className="space-y-1">
+                            <p className="font-medium text-sm">No compiled release yet</p>
+                            <p className="text-sm text-muted-foreground">
+                              The source code is complete and ready to compile. Use the <strong>Publish Release</strong> tab to build native binaries via GitHub Actions — it takes about 15 minutes and produces a download link for every platform.
                             </p>
                           </div>
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                          <Badge variant="outline" className="text-xs">Windows .msi</Badge>
+                          <Badge variant="outline" className="text-xs">macOS .dmg</Badge>
+                          <Badge variant="outline" className="text-xs">Linux .AppImage</Badge>
+                          <Badge variant="outline" className="text-xs">Android .apk</Badge>
                         </div>
                       </div>
                     )}
@@ -438,15 +450,12 @@ export default function PosDownload() {
                       <ol className="space-y-2">
                         {platform.postInstallSteps.map((step, i) => (
                           <li key={i} className="flex gap-3 text-sm">
-                            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-semibold">
-                              {i + 1}
-                            </span>
+                            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-semibold">{i + 1}</span>
                             <span className="text-muted-foreground">{step}</span>
                           </li>
                         ))}
                       </ol>
                     </div>
-
                     {platform.nativeNote && (
                       <p className="text-xs text-muted-foreground flex gap-1.5">
                         <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />{platform.nativeNote}
@@ -457,71 +466,209 @@ export default function PosDownload() {
               </TabsContent>
             )}
 
-            {/* ── Build from source tab ──────────────────────────────────── */}
+            {/* ── Publish release (GitHub Actions) ──────────────────────── */}
             <TabsContent value="build" className="space-y-4 mt-3">
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base flex items-center gap-2">
-                    <Code2 className="w-4 h-4" />Build from Source
+                    <Rocket className="w-4 h-4 text-primary" />
+                    Publish a Compiled Release
                   </CardTitle>
-                  <CardDescription>Compile a native app yourself using Tauri</CardDescription>
+                  <CardDescription>
+                    Push a version tag to GitHub → Actions builds all 4 platforms → download links appear automatically
+                  </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <p className="text-sm font-medium mb-2">Prerequisites (install once)</p>
-                    <ul className="text-xs space-y-1 bg-muted/40 rounded p-3 text-muted-foreground">
-                      {platform.nativePrereqs.map((p, i) => (
-                        <li key={i} className="flex gap-1.5"><span>•</span><span>{p}</span></li>
-                      ))}
-                    </ul>
-                  </div>
+                <CardContent className="space-y-5">
+                  {/* Step-by-step */}
+                  <ol className="space-y-4">
+                    {/* Step 1 */}
+                    <li className="flex gap-3">
+                      <span className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground text-sm flex items-center justify-center font-bold">1</span>
+                      <div className="flex-1 space-y-2">
+                        <p className="font-medium text-sm">Push this project to GitHub</p>
+                        <p className="text-xs text-muted-foreground">Create a new repository on github.com, then add it as a remote:</p>
+                        <div className="relative">
+                          <code className="block px-3 py-2.5 rounded bg-muted border text-xs font-mono leading-relaxed whitespace-pre-wrap break-all">
+{`git remote add origin https://github.com/YOUR_ORG/globipos.git
+git push -u origin main`}
+                          </code>
+                          <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-7 w-7" onClick={() => copy("git remote add origin https://github.com/YOUR_ORG/globipos.git\ngit push -u origin main", "step1")}>
+                            {copied === "step1" ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                          </Button>
+                        </div>
+                      </div>
+                    </li>
 
-                  <div>
-                    <p className="text-sm font-medium mb-2">Build command</p>
-                    <div className="flex gap-2">
-                      <code className="flex-1 block px-3 py-2 rounded bg-muted border text-sm font-mono break-all">
-                        cd pos-app &amp;&amp; npm install &amp;&amp; {platform.buildCmd}
-                      </code>
-                      <Button variant="outline" size="icon" onClick={() => copy(`cd pos-app && npm install && ${platform.buildCmd}`, "build")} data-testid="btn-copy-build-cmd">
-                        {copied === "build" ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
-                      </Button>
+                    {/* Step 2 */}
+                    <li className="flex gap-3">
+                      <span className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground text-sm flex items-center justify-center font-bold">2</span>
+                      <div className="flex-1 space-y-2">
+                        <p className="font-medium text-sm">Run the publish script</p>
+                        <p className="text-xs text-muted-foreground">This bumps the version, creates a git tag, and pushes it to GitHub to trigger the build:</p>
+                        <div className="relative">
+                          <code className="block px-3 py-2.5 rounded bg-muted border text-xs font-mono">
+                            chmod +x scripts/publish-release.sh && ./scripts/publish-release.sh 1.0.0
+                          </code>
+                          <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-7 w-7" onClick={() => copy("chmod +x scripts/publish-release.sh && ./scripts/publish-release.sh 1.0.0", "step2")}>
+                            {copied === "step2" ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">Or manually: <code className="bg-muted px-1 rounded">git tag v1.0.0 &amp;&amp; git push origin v1.0.0</code></p>
+                      </div>
+                    </li>
+
+                    {/* Step 3 */}
+                    <li className="flex gap-3">
+                      <span className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground text-sm flex items-center justify-center font-bold">3</span>
+                      <div className="flex-1 space-y-2">
+                        <p className="font-medium text-sm">GitHub Actions builds all platforms (~15 min)</p>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {[
+                            { platform: "Windows", file: ".msi installer + .exe portable", time: "~8 min" },
+                            { platform: "macOS", file: ".dmg (Intel + Apple Silicon)", time: "~12 min" },
+                            { platform: "Linux", file: ".AppImage + .deb + .rpm", time: "~10 min" },
+                            { platform: "Android", file: ".apk (ARM64 + ARMv7)", time: "~15 min" },
+                          ].map(b => (
+                            <div key={b.platform} className="rounded border p-2 bg-muted/30 space-y-0.5">
+                              <p className="font-medium">{b.platform}</p>
+                              <p className="text-muted-foreground">{b.file}</p>
+                              <p className="text-muted-foreground">{b.time}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </li>
+
+                    {/* Step 4 */}
+                    <li className="flex gap-3">
+                      <span className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground text-sm flex items-center justify-center font-bold">4</span>
+                      <div className="flex-1 space-y-2">
+                        <p className="font-medium text-sm">Configure download links here</p>
+                        <p className="text-xs text-muted-foreground">Set these two values in <a href="/settings" className="text-primary underline">Settings</a> to make the Native Binary tab show real download buttons:</p>
+                        <div className="space-y-2">
+                          <div className="rounded border p-2 bg-muted/30 text-xs font-mono space-y-1">
+                            <p><span className="text-muted-foreground">pos_github_repo</span> = https://github.com/YOUR_ORG/globipos</p>
+                            <p><span className="text-muted-foreground">pos_app_version</span> = 1.0.0</p>
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  </ol>
+
+                  <div className="rounded-lg bg-muted/40 border p-3 flex gap-2 text-xs text-muted-foreground">
+                    <FileCode2 className="w-4 h-4 flex-shrink-0 mt-0.5 text-primary" />
+                    <span>
+                      The build workflow is already configured at <code className="bg-background px-1 rounded">.github/workflows/build-pos.yml</code> — no changes needed. It automatically runs on every version tag push.
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ── Local build ────────────────────────────────────────────── */}
+            <TabsContent value="local" className="space-y-4 mt-3">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Code2 className="w-4 h-4" />Build Locally on Your Machine
+                  </CardTitle>
+                  <CardDescription>
+                    Compile the app on your own computer — no GitHub account required
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
+
+                  {/* Quick-start scripts */}
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">Quick-start build scripts (recommended)</p>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div className="rounded-lg border p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Terminal className="w-4 h-4 text-orange-600" />
+                          <span className="font-medium text-sm">macOS / Linux</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">Installs Rust automatically if missing, then builds</p>
+                        <div className="relative">
+                          <code className="block px-2.5 py-2 rounded bg-muted text-xs font-mono whitespace-pre-wrap break-all">
+                            chmod +x scripts/build-native.sh{"\n"}./scripts/build-native.sh
+                          </code>
+                          <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-6 w-6" onClick={() => copy("chmod +x scripts/build-native.sh && ./scripts/build-native.sh", "mac-script")}>
+                            {copied === "mac-script" ? <CheckCircle2 className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Monitor className="w-4 h-4 text-blue-600" />
+                          <span className="font-medium text-sm">Windows</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">Run in PowerShell (as Administrator)</p>
+                        <div className="relative">
+                          <code className="block px-2.5 py-2 rounded bg-muted text-xs font-mono whitespace-pre-wrap break-all">
+                            .\scripts\build-native.ps1
+                          </code>
+                          <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-6 w-6" onClick={() => copy(".\\scripts\\build-native.ps1", "win-script")}>
+                            {copied === "win-script" ? <CheckCircle2 className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+                          </Button>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div>
-                    <p className="text-sm font-medium mb-1">Output location</p>
-                    <code className="block px-3 py-2 rounded bg-muted border text-xs font-mono text-muted-foreground break-all">
-                      {platform.buildOutput}
-                    </code>
+                  <Separator />
+
+                  {/* Manual steps */}
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">Manual build steps</p>
+                    <div className="space-y-2">
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground mb-1.5">Prerequisites (install once)</p>
+                        <ul className="text-xs space-y-1 bg-muted/40 rounded p-3 text-muted-foreground">
+                          {platform.nativePrereqs.map((p, i) => (
+                            <li key={i} className="flex gap-1.5"><span>•</span><span>{p}</span></li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground mb-1.5">Build command</p>
+                        <div className="relative">
+                          <code className="block px-3 py-2.5 rounded bg-muted border text-xs font-mono break-all">
+                            cd pos-app &amp;&amp; npm install &amp;&amp; {platform.buildCmd}
+                          </code>
+                          <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-7 w-7" onClick={() => copy(`cd pos-app && npm install && ${platform.buildCmd}`, "build-cmd")}>
+                            {copied === "build-cmd" ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                          </Button>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground mb-1.5">Output location</p>
+                        <code className="block px-3 py-2 rounded bg-muted border text-xs font-mono text-muted-foreground break-all">{platform.buildOutput}</code>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="rounded-lg bg-muted/40 border p-3 text-xs text-muted-foreground flex gap-2">
-                    <Github className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                    <span>
-                      Push a version tag to trigger automated CI builds for all platforms:{" "}
-                      <code className="bg-background px-1 rounded">git tag v1.0.1 &amp;&amp; git push --tags</code>
-                      {" · "}Workflow: <code className="bg-background px-1 rounded">.github/workflows/build-pos.yml</code>
-                    </span>
+                  <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 flex gap-2 text-xs text-amber-800">
+                    <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-amber-500" />
+                    <span>First build downloads ~200 Rust crates and takes 5–10 minutes. Subsequent builds complete in under 2 minutes.</span>
                   </div>
                 </CardContent>
               </Card>
             </TabsContent>
           </Tabs>
 
-          {/* ── Connection details ────────────────────────────────────────── */}
+          {/* ── Connection details ─────────────────────────────────────── */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 <Wifi className="w-4 h-4 text-primary" />
                 Terminal Connection Details
               </CardTitle>
-              <CardDescription>Enter these on the terminal registration screen on first launch.</CardDescription>
+              <CardDescription>Enter these into the app on first launch to connect to this server.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-1.5">
-                <Label className="flex items-center gap-1.5 text-sm">
-                  <Globe className="w-3.5 h-3.5" />Server URL
-                </Label>
+                <Label className="flex items-center gap-1.5 text-sm"><Globe className="w-3.5 h-3.5" />Server URL</Label>
                 <div className="flex gap-2">
                   <Input value={serverUrl} readOnly className="font-mono text-sm bg-muted" data-testid="input-server-url" />
                   <Button variant="outline" size="icon" onClick={() => copy(serverUrl, "srv")} data-testid="btn-copy-url">
@@ -529,27 +676,22 @@ export default function PosDownload() {
                   </Button>
                 </div>
               </div>
-
               <div className="space-y-1.5">
-                <Label className="flex items-center gap-1.5 text-sm">
-                  <KeyRound className="w-3.5 h-3.5" />Terminal Code
-                </Label>
+                <Label className="flex items-center gap-1.5 text-sm"><KeyRound className="w-3.5 h-3.5" />Terminal Code</Label>
                 <div className="flex items-center gap-3">
                   <code className="px-3 py-2 rounded bg-muted border text-sm font-mono">T001</code>
                   <p className="text-xs text-muted-foreground">
-                    Manage codes in{" "}
-                    <a href="/pos/terminals" className="text-primary underline">POS → Terminals</a>
+                    Manage codes in <a href="/pos/terminals" className="text-primary underline">POS → Terminals</a>
                   </p>
                 </div>
               </div>
-
               <div className="rounded-lg bg-muted/40 border p-3 space-y-1.5">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">What happens on first launch</p>
                 {[
-                  "Terminal registers and receives an auth token from this server",
-                  "Product catalog, button layout, and cashier PINs download automatically",
+                  "Terminal registers with this server and downloads its auth token",
+                  "Product catalog, button layout, and cashier PINs sync automatically",
                   "PIN pad appears — enter any cashier PIN to start selling",
-                  "Terminal syncs every 5 min and works offline when connection drops",
+                  "Terminal syncs every 5 min; works offline when connection drops",
                 ].map((s, i) => (
                   <div key={i} className="flex gap-2 text-xs text-muted-foreground">
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />{s}
