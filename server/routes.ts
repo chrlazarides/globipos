@@ -16,7 +16,7 @@ import path from "path";
 import webpush from "web-push";
 import { execSync } from "child_process";
 import AdmZip from "adm-zip";
-import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser } from "./auth";
+import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser, requireStaff } from "./auth";
 import jwt from "jsonwebtoken";
 import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
 import QRCode from "qrcode";
@@ -5604,7 +5604,7 @@ export async function registerRoutes(
   });
 
   // Card terminal charge — initiates a payment on the physical terminal and polls for result
-  app.post("/api/pos/card-terminal/charge", requireAdmin, async (req, res) => {
+  app.post("/api/pos/card-terminal/charge", requireStaff, async (req, res) => {
     try {
       const { amount, orderId, currency = "EUR" } = req.body;
       if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {

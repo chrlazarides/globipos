@@ -153,7 +153,7 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/terminals" component={PosTerminals} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/layouts" component={PosLayouts} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/orders" component={PosOrders} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/register" component={PosRegister} />}
+      {(user?.role === "admin" || user?.role === "superuser" || user?.role === "staff") && <Route path="/pos/register" component={PosRegister} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/promotions" component={PosPromotions} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/returns" component={PosReturns} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/shifts" component={PosShifts} />}

@@ -122,3 +122,11 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   }
   next();
 }
+
+/** Staff, admin, or superuser — use for POS operations that cashiers must perform */
+export function requireStaff(req: Request, res: Response, next: NextFunction) {
+  if (!req.user || (req.user.role !== "staff" && req.user.role !== "admin" && req.user.role !== "superuser")) {
+    return res.status(403).json({ message: "Staff access required" });
+  }
+  next();
+}
