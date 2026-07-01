@@ -5480,6 +5480,225 @@ export async function registerRoutes(
     }
   });
 
+  // Card terminal charge — initiates a payment on the physical terminal and polls for result
+  app.post("/api/pos/card-terminal/charge", requireAdmin, async (req, res) => {
+    try {
+      const { amount, orderId, currency = "EUR" } = req.body;
+      if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+        return res.status(400).json({ success: false, message: "Invalid amount" });
+      }
+      const amountCents = Math.round(Number(amount) * 100);
+
+      // Look up active provider from system settings
+      const [providerRow] = await db.select().from(systemSettings).where(eq(systemSettings.key, "card_terminal_provider"));
+      const provider = providerRow?.value;
+      if (!provider) {
+        return res.status(400).json({ success: false, message: "No card terminal provider configured. Go to POS → Card Terminal to set one up." });
+      }
+
+      let transactionRef: string | null = null;
+
+      // ─── JCC ─────────────────────────────────────────────────────────────
+      if (provider === "jcc") {
+        if (!process.env.JCC_MERCHANT_ID || !process.env.JCC_API_KEY || !process.env.JCC_TERMINAL_ID) {
+          return res.status(400).json({ success: false, message: "JCC credentials not fully configured." });
+        }
+        const jccEndpoint = process.env.JCC_ENDPOINT || "https://jccpayments.com/api/v1";
+        // Initiate sale
+        const initiateRes = await fetch(`${jccEndpoint}/transactions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${process.env.JCC_API_KEY}`,
+          },
+          body: JSON.stringify({
+            merchantId: process.env.JCC_MERCHANT_ID,
+            terminalId: process.env.JCC_TERMINAL_ID,
+            amount: amountCents,
+            currency,
+            transactionType: "SALE",
+          }),
+        });
+        if (!initiateRes.ok) {
+          const errText = await initiateRes.text().catch(() => "");
+          return res.json({ success: false, message: `JCC initiation failed (${initiateRes.status}): ${errText}` });
+        }
+        const initiateData = await initiateRes.json();
+        const txId: string = initiateData.transactionId || initiateData.id;
+        if (!txId) {
+          return res.json({ success: false, message: "JCC did not return a transaction ID." });
+        }
+
+        // Poll up to 60s for terminal response
+        const deadline = Date.now() + 60_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 3000));
+          const pollRes = await fetch(`${jccEndpoint}/transactions/${txId}`, {
+            headers: { "Authorization": `Bearer ${process.env.JCC_API_KEY}` },
+          });
+          if (pollRes.ok) {
+            const pollData = await pollRes.json();
+            const txStatus: string = (pollData.status || "").toUpperCase();
+            if (txStatus === "APPROVED") {
+              transactionRef = txId;
+              break;
+            }
+            if (txStatus === "DECLINED" || txStatus === "FAILED" || txStatus === "CANCELLED") {
+              return res.json({ success: false, message: `Payment ${txStatus.toLowerCase()} by JCC terminal.` });
+            }
+          }
+        }
+        if (!transactionRef) {
+          return res.json({ success: false, message: "JCC terminal did not respond within 60 seconds. Please retry." });
+        }
+      }
+
+      // ─── Viva Wallet ──────────────────────────────────────────────────────
+      else if (provider === "viva") {
+        if (!process.env.VIVA_CLIENT_ID || !process.env.VIVA_CLIENT_SECRET || !process.env.VIVA_SOURCE_CODE) {
+          return res.status(400).json({ success: false, message: "Viva credentials not fully configured." });
+        }
+        // Obtain OAuth token
+        const tokenRes = await fetch("https://accounts.vivapayments.com/connect/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "client_credentials",
+            client_id: process.env.VIVA_CLIENT_ID,
+            client_secret: process.env.VIVA_CLIENT_SECRET,
+          }),
+        });
+        if (!tokenRes.ok) {
+          return res.json({ success: false, message: `Viva authentication failed (${tokenRes.status}). Check credentials.` });
+        }
+        const { access_token } = await tokenRes.json();
+
+        // Create payment order
+        const orderRes = await fetch("https://api.vivapayments.com/checkout/v2/orders", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${access_token}`,
+          },
+          body: JSON.stringify({
+            amount: amountCents,
+            customerTrns: `POS Sale${orderId ? " #" + orderId : ""}`,
+            customer: { email: "pos@internal", phone: "", fullName: "POS Customer", countryCode: "CY", requestLang: "en-CY" },
+            paymentTimeout: 60,
+            preauth: false,
+            sourceCode: process.env.VIVA_SOURCE_CODE,
+            merchantTrns: orderId || "pos-sale",
+          }),
+        });
+        if (!orderRes.ok) {
+          const errText = await orderRes.text().catch(() => "");
+          return res.json({ success: false, message: `Viva order creation failed (${orderRes.status}): ${errText}` });
+        }
+        const { orderCode } = await orderRes.json();
+
+        // Poll for transaction completion (up to 60s)
+        const deadline = Date.now() + 60_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 3000));
+          const statusRes = await fetch(`https://api.vivapayments.com/checkout/v2/transactions?ordercode=${orderCode}`, {
+            headers: { "Authorization": `Bearer ${access_token}` },
+          });
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            const txList = statusData.transactions || statusData.Transactions || [];
+            const completed = txList.find((t: any) => t.statusId === "F" || t.StatusId === "F");
+            if (completed) {
+              transactionRef = completed.transactionId || completed.TransactionId || String(orderCode);
+              break;
+            }
+            const declined = txList.find((t: any) => ["E", "X", "R"].includes(t.statusId || t.StatusId || ""));
+            if (declined) {
+              return res.json({ success: false, message: "Payment declined by Viva terminal." });
+            }
+          }
+        }
+        if (!transactionRef) {
+          return res.json({ success: false, message: "Viva terminal did not respond within 60 seconds. Please retry." });
+        }
+      }
+
+      // ─── Worldpay ─────────────────────────────────────────────────────────
+      else if (provider === "worldpay") {
+        if (!process.env.WORLDPAY_ENTITY_ID || !process.env.WORLDPAY_API_KEY) {
+          return res.status(400).json({ success: false, message: "Worldpay credentials not fully configured." });
+        }
+        const wpEndpoint = process.env.WORLDPAY_ENDPOINT || "https://access.worldpay.com/api";
+        // Initiate terminal transaction
+        const initiateRes = await fetch(`${wpEndpoint}/terminal/transactions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Basic ${Buffer.from(`${process.env.WORLDPAY_ENTITY_ID}:${process.env.WORLDPAY_API_KEY}`).toString("base64")}`,
+          },
+          body: JSON.stringify({
+            entityId: process.env.WORLDPAY_ENTITY_ID,
+            terminalGroup: process.env.WORLDPAY_TERMINAL_GROUP || "",
+            transactionType: "SALE",
+            amount: { value: amountCents, currency },
+            reference: orderId || `pos-${Date.now()}`,
+          }),
+        });
+        if (!initiateRes.ok) {
+          const errText = await initiateRes.text().catch(() => "");
+          return res.json({ success: false, message: `Worldpay initiation failed (${initiateRes.status}): ${errText}` });
+        }
+        const initiateData = await initiateRes.json();
+        const txId: string = initiateData.transactionId || initiateData.id || initiateData.reference;
+        if (!txId) {
+          return res.json({ success: false, message: "Worldpay did not return a transaction ID." });
+        }
+
+        // Poll for result (up to 60s)
+        const deadline = Date.now() + 60_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 3000));
+          const pollRes = await fetch(`${wpEndpoint}/terminal/transactions/${txId}`, {
+            headers: {
+              "Authorization": `Basic ${Buffer.from(`${process.env.WORLDPAY_ENTITY_ID}:${process.env.WORLDPAY_API_KEY}`).toString("base64")}`,
+            },
+          });
+          if (pollRes.ok) {
+            const pollData = await pollRes.json();
+            const txStatus: string = (pollData.status || pollData.outcome || "").toUpperCase();
+            if (txStatus === "AUTHORIZED" || txStatus === "APPROVED" || txStatus === "SUCCESS") {
+              transactionRef = txId;
+              break;
+            }
+            if (txStatus === "DECLINED" || txStatus === "FAILED" || txStatus === "REFUSED" || txStatus === "CANCELLED") {
+              return res.json({ success: false, message: `Payment ${txStatus.toLowerCase()} by Worldpay terminal.` });
+            }
+          }
+        }
+        if (!transactionRef) {
+          return res.json({ success: false, message: "Worldpay terminal did not respond within 60 seconds. Please retry." });
+        }
+      } else {
+        return res.status(400).json({ success: false, message: `Unknown provider: ${provider}` });
+      }
+
+      // Mark the held order as completed with the terminal reference
+      if (orderId && transactionRef) {
+        const existing = await storage.getPosOrder(orderId);
+        if (!existing) {
+          return res.status(404).json({ success: false, message: "Order not found — cannot record payment." });
+        }
+        if (existing.status !== "held") {
+          return res.status(409).json({ success: false, message: `Order is already '${existing.status}' — duplicate charge prevented.` });
+        }
+        await storage.completeCardPosOrder(orderId, transactionRef, String(Number(amount).toFixed(2)));
+      }
+
+      return res.json({ success: true, transactionRef, provider, message: `Payment approved. Reference: ${transactionRef}` });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
   app.post("/api/settings/card_terminal_provider", requireAdmin, async (req, res) => {
     try {
       const { value } = req.body;
@@ -7076,6 +7295,25 @@ export async function registerRoutes(
     try {
       const { locationId, terminalId } = req.query as any;
       res.json(await storage.getPosOrders(locationId, terminalId));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  // Direct order creation from the web register (not via terminal sync)
+  app.post("/api/pos/orders", requireAdmin, async (req, res) => {
+    try {
+      const { lines = [], ...orderData } = req.body;
+      // Validate that the referenced terminal exists and belongs to the stated location
+      const terminal = await storage.getPosTerminal(orderData.terminalId);
+      if (!terminal) return res.status(400).json({ message: "Terminal not found" });
+      const order = await storage.createPosOrder({ ...orderData, syncedAt: new Date() }, lines);
+      res.status(201).json(order);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.patch("/api/pos/orders/:id/void", requireAdmin, async (req, res) => {
+    try {
+      const o = await storage.getPosOrder(req.params.id);
+      if (!o) return res.status(404).json({ message: "Not found" });
+      await storage.voidPosOrder(req.params.id);
+      res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.get("/api/pos/orders/:id", requireAdmin, async (req, res) => {

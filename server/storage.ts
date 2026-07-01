@@ -203,6 +203,9 @@ export interface IStorage {
   getPosOrders(locationId?: string, terminalId?: string): Promise<PosOrder[]>;
   getPosOrder(id: string): Promise<PosOrder | undefined>;
   createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder>;
+  updatePosOrderCardRef(id: string, cardTerminalRef: string): Promise<void>;
+  completeCardPosOrder(id: string, cardTerminalRef: string, amountTendered: string): Promise<void>;
+  voidPosOrder(id: string): Promise<void>;
 
   createPosShift(data: InsertPosShift & { syncedAt?: Date }): Promise<PosShift>;
 
@@ -2678,6 +2681,21 @@ export class DatabaseStorage implements IStorage {
   }
   async updatePosOrderStatus(id: string, status: string): Promise<void> {
     await db.update(posOrders).set({ status }).where(eq(posOrders.id, id));
+  }
+  async updatePosOrderCardRef(id: string, cardTerminalRef: string): Promise<void> {
+    await db.update(posOrders).set({ cardTerminalRef }).where(eq(posOrders.id, id));
+  }
+  async completeCardPosOrder(id: string, cardTerminalRef: string, amountTendered: string): Promise<void> {
+    await db.update(posOrders).set({
+      status: "completed",
+      cardTerminalRef,
+      amountTendered,
+      changeDue: "0",
+      receiptPrinted: true,
+    }).where(eq(posOrders.id, id));
+  }
+  async voidPosOrder(id: string): Promise<void> {
+    await db.update(posOrders).set({ status: "voided" }).where(eq(posOrders.id, id));
   }
 
   // ─── POS Shifts ───────────────────────────────────────────────────────────

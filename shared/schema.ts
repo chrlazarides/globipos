@@ -547,6 +547,7 @@ export const posOrders = pgTable("pos_orders", {
   amountTendered: numeric("amount_tendered", { precision: 12, scale: 2 }).default("0"),
   changeDue: numeric("change_due", { precision: 12, scale: 2 }).default("0"),
   status: text("status").notNull().default("completed"), // completed | voided | held
+  cardTerminalRef: text("card_terminal_ref"),
   notes: text("notes"),
   receiptPrinted: boolean("receipt_printed").notNull().default(false),
   syncedAt: timestamp("synced_at"),

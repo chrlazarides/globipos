@@ -72,6 +72,7 @@ const adminNav = [
 ];
 
 const posNav = [
+  { title: "Register", url: "/pos/register", icon: ShoppingCart, module: "_admin" },
   { title: "Locations", url: "/pos/locations", icon: MapPin, module: "_admin" },
   { title: "Terminals", url: "/pos/terminals", icon: Monitor, module: "_admin" },
   { title: "Layouts", url: "/pos/layouts", icon: LayoutGrid, module: "_admin" },

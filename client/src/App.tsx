@@ -43,6 +43,7 @@ import PosLocations from "@/pages/pos-locations";
 import PosTerminals from "@/pages/pos-terminals";
 import PosLayouts from "@/pages/pos-layouts";
 import PosOrders from "@/pages/pos-orders";
+import PosRegister from "@/pages/pos-register";
 import PosSyncMonitor from "@/pages/pos-sync-monitor";
 import ChatPanel from "@/pages/chat-panel";
 import FaqEditor from "@/pages/faq-editor";
@@ -149,6 +150,7 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/terminals" component={PosTerminals} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/layouts" component={PosLayouts} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/orders" component={PosOrders} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/register" component={PosRegister} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/promotions" component={PosPromotions} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/returns" component={PosReturns} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/shifts" component={PosShifts} />}
