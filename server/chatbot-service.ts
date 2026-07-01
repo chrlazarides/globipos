@@ -48,6 +48,45 @@ export interface ParsedMessage {
   intent: Intent;
   confidence: number;
   query?: string;
+  itemIndex?: number; // 0-based index into last browse results (AI-parsed)
+  qty?: number;       // quantity (AI-parsed, including word numbers)
+}
+
+// ─── Word → number helper ─────────────────────────────────────────────────────
+const WORD_NUMS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+  seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  a: 1, an: 1, dozen: 12,
+};
+
+export function wordToNumber(text: string): number | null {
+  const lower = text.toLowerCase().trim();
+  if (WORD_NUMS[lower] !== undefined) return WORD_NUMS[lower];
+  const n = parseInt(lower, 10);
+  return isNaN(n) ? null : n;
+}
+
+// ─── Pending-confirmation store (awaiting "yes"/"no" before cart commit) ──────
+export interface WaPendingItem {
+  itemId: string;
+  name: string;
+  sku: string;
+  price: number;
+  qty: number;
+}
+
+const waPendingStore = new Map<string, WaPendingItem>();
+
+export function getPendingItem(convId: string): WaPendingItem | undefined {
+  return waPendingStore.get(convId);
+}
+
+export function setPendingItem(convId: string, item: WaPendingItem) {
+  waPendingStore.set(convId, item);
+}
+
+export function clearPendingItem(convId: string) {
+  waPendingStore.delete(convId);
 }
 
 // ─── Keyword intent matcher (always available) ────────────────────────────────
@@ -98,16 +137,21 @@ Intents: browse | search | add_item | view_cart | checkout | faq | handoff | can
 - faq: question about store info (hours, allergens, location, delivery)
 - search: looking for a specific product
 - browse: wants to see categories or catalog
-- add_item: wants to add something to their cart
+- add_item: customer wants to add an item by its list number (e.g. "add number 3", "2 of item 1", "give me 3 bottles of number 2")
 - view_cart: wants to see or review their cart
 - checkout: wants to place/confirm an order
 - cancel: wants to clear/cancel
 - unknown: anything else
 
+When intent is add_item, also extract:
+- itemIndex: the 1-based product list number the customer refers to (e.g. "item 3" → 3, "number 2" → 2). If no list number is mentioned, omit it.
+- qty: the quantity requested. Convert word numbers to digits (one→1, two→2, etc.). Default to 1 if not specified.
+
 Sample catalog: ${catalogPreview.slice(0, 300)}
 Sample FAQs: ${faqPreview.slice(0, 200)}
 
-Respond ONLY with valid JSON: {"intent":"...","confidence":0.0,"query":"..."}`,
+Respond ONLY with valid JSON. For add_item: {"intent":"add_item","confidence":0.9,"query":"...","itemIndex":2,"qty":3}
+For all other intents: {"intent":"...","confidence":0.0,"query":"..."}`,
         },
         { role: "user", content: text },
       ],
@@ -120,6 +164,8 @@ Respond ONLY with valid JSON: {"intent":"...","confidence":0.0,"query":"..."}`,
       intent: (parsed.intent as Intent) || "unknown",
       confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.8,
       query: typeof parsed.query === "string" ? parsed.query : text,
+      itemIndex: typeof parsed.itemIndex === "number" ? parsed.itemIndex - 1 : undefined, // convert to 0-based
+      qty: typeof parsed.qty === "number" && parsed.qty > 0 ? parsed.qty : undefined,
     };
   } catch {
     return parseIntentKeyword(text);

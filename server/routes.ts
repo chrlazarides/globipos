@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions } from "@shared/schema";
-import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart } from "./chatbot-service";
+import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -8243,6 +8243,31 @@ export async function registerRoutes(
       // If in handoff, don't auto-reply
       if (conv.status === "handoff") return;
 
+      // ── Pending confirmation check (yes/no after add_item preview) ──────────
+      const pendingItem = getPendingItem(conv.id);
+      if (pendingItem) {
+        const lowerText = text.toLowerCase().trim();
+        const isYes = /^(yes|yeah|yep|correct|ok|okay|confirm|sure|add it|go ahead|y)$/i.test(lowerText);
+        const isNo  = /^(no|nope|nah|cancel|wrong|incorrect|n)$/i.test(lowerText);
+        if (isYes) {
+          clearPendingItem(conv.id);
+          addToWaCart(conv.id, { itemId: pendingItem.itemId, name: pendingItem.name, sku: pendingItem.sku, price: pendingItem.price }, pendingItem.qty);
+          const cart = getWaCart(conv.id);
+          const replyYes = `✅ Added *${pendingItem.qty}× ${pendingItem.name}* to your cart.\n\n${formatWaCart(cart)}`;
+          await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: replyYes, channel: "whatsapp", intent: "add_item" });
+          await sendWhatsAppMessage(from, replyYes);
+          return;
+        } else if (isNo) {
+          clearPendingItem(conv.id);
+          const replyNo = "No problem — nothing was added. What else can I help you with?";
+          await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: replyNo, channel: "whatsapp", intent: "cancel" });
+          await sendWhatsAppMessage(from, replyNo);
+          return;
+        }
+        // If the message is neither yes nor no, fall through to normal intent handling
+        // (the pending item remains until explicitly confirmed or cancelled)
+      }
+
       // Check FAQs
       const activeFaqs = await db.select().from(faqEntries).where(eq(faqEntries.active, true));
       const faqAnswer = matchFaq(text, activeFaqs);
@@ -8289,39 +8314,78 @@ export async function registerRoutes(
           }
 
         } else if (parsed.intent === "add_item") {
-          // Try to match item number from last browse results
+          // ── Resolve item index and quantity ─────────────────────────────────
           const resultKey = `browse_${conv.id}`;
           const lastResults: any[] = (global as any)[resultKey] ?? [];
-          const numMatch = text.match(/\b([1-6])\b/);
-          const qtyMatch = text.match(/\b(\d+)\s*(?:bottles?|cases?|pcs?|x)?\b/i);
-          const idx = numMatch ? parseInt(numMatch[1]) - 1 : -1;
-          const qty = qtyMatch && parseInt(qtyMatch[1]) > 1 ? parseInt(qtyMatch[1]) : 1;
+
+          // Priority 1: AI-extracted itemIndex (0-based after conversion in parseIntentAI)
+          let idx = typeof parsed.itemIndex === "number" ? parsed.itemIndex : -1;
+
+          // Priority 2: regex fallback — look for "item N" / "number N" / "#N" patterns first,
+          // then a bare number, to avoid grabbing the quantity digit instead of the item number.
+          if (idx < 0) {
+            const itemNumMatch = text.match(/(?:item|number|#|no\.?)\s*([1-6])/i);
+            if (itemNumMatch) {
+              idx = parseInt(itemNumMatch[1]) - 1;
+            } else {
+              // Last resort: bare single digit 1-6 that isn't immediately preceded by a quantity word
+              const bareMatch = text.match(/(?<!\d)([1-6])(?!\d)/);
+              if (bareMatch) idx = parseInt(bareMatch[1]) - 1;
+            }
+          }
+
+          // Resolve quantity: AI first, then word-number scan, then digit
+          let qty = typeof parsed.qty === "number" && parsed.qty > 0 ? parsed.qty : 0;
+          if (!qty) {
+            // Scan for word numbers ("two bottles", "three cases", etc.)
+            const wordNumMatch = text.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen|a|an)\b/i);
+            if (wordNumMatch) {
+              qty = wordToNumber(wordNumMatch[1]) ?? 1;
+            } else {
+              // Digit quantity — skip any number that was already identified as the item index
+              const digits = [...text.matchAll(/\b(\d+)\b/g)].map(m => parseInt(m[1]));
+              const itemNum = idx + 1; // 1-based for comparison
+              const qtyDigit = digits.find(d => d !== itemNum && d >= 1 && d <= 999);
+              qty = qtyDigit ?? 1;
+            }
+          }
+          qty = Math.max(1, qty);
 
           if (idx >= 0 && idx < lastResults.length) {
+            // We know which item — ask for confirmation before adding
             const it = lastResults[idx];
-            addToWaCart(conv.id, {
+            const pending: WaPendingItem = {
               itemId: it.id,
               name: it.name,
               sku: it.sku || "",
               price: parseFloat(String(it.price1 ?? "0")),
-            }, qty);
-            const cart = getWaCart(conv.id);
-            reply = `✅ Added *${qty}× ${it.name}* to your cart.\n\n${formatWaCart(cart)}`;
+              qty,
+            };
+            setPendingItem(conv.id, pending);
+            reply = `You're about to add *${qty}× ${it.name}* (€${(pending.price * qty).toFixed(2)}) to your cart.\n\nIs that correct? Reply *yes* to confirm or *no* to cancel.`;
+          } else if (idx >= 0) {
+            reply = `That number is outside the current list. Please browse first (e.g. "show red wines") and then reply with a number from the list shown.`;
           } else {
-            // No prior browse — do a quick name search
+            // No item number found — do a quick name search as fallback
             const searchWords = (parsed.query ?? text).toLowerCase().replace(/\d+/g, "").trim();
             if (searchWords.length > 2) {
               const found = await db.select({ id: items.id, name: items.name, sku: items.sku, price1: items.price1 }).from(items)
                 .where(and(eq(items.active, true), ilike(items.name, `%${searchWords.split(" ")[0]}%`))).limit(1);
               if (found.length) {
-                addToWaCart(conv.id, { itemId: found[0].id, name: found[0].name, sku: found[0].sku || "", price: parseFloat(String(found[0].price1 ?? "0")) }, qty);
-                const cart = getWaCart(conv.id);
-                reply = `✅ Added *${qty}× ${found[0].name}* to your cart.\n\n${formatWaCart(cart)}`;
+                const pending: WaPendingItem = {
+                  itemId: found[0].id,
+                  name: found[0].name,
+                  sku: found[0].sku || "",
+                  price: parseFloat(String(found[0].price1 ?? "0")),
+                  qty,
+                };
+                setPendingItem(conv.id, pending);
+                reply = `You're about to add *${qty}× ${found[0].name}* (€${(pending.price * qty).toFixed(2)}) to your cart.\n\nIs that correct? Reply *yes* to confirm or *no* to cancel.`;
               } else {
-                reply = `I couldn't find that item. Please browse first (reply "show wines") then reply with the number.`;
+                reply = `I couldn't find that item. Please browse first (reply "show wines") then reply with the item number.`;
               }
             } else {
-              reply = `Please browse first (e.g. "show red wines") then reply with the item number to add.`;
+              reply = `Please browse first (e.g. "show red wines") then reply with the item number to add. You can also type word quantities like "two bottles of item 3".`;
             }
           }
 
