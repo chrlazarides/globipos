@@ -82,6 +82,7 @@ const posNav = [
   { title: "Shifts & Reports", url: "/pos/shifts", icon: Clock, module: "_admin" },
   { title: "Card Terminal", url: "/pos/card-terminal", icon: CreditCard, module: "_admin" },
   { title: "Sync Monitor", url: "/pos/sync-monitor", icon: Radio, module: "_admin" },
+  { title: "Download App", url: "/pos/download", icon: Download, module: "_admin" },
 ];
 
 const chatNav = [
