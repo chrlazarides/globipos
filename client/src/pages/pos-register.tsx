@@ -99,6 +99,10 @@ function CardPaymentDialog({
   const { toast } = useToast();
   const [phase, setPhase] = useState<"idle" | "waiting" | "approved" | "declined">("idle");
   const [result, setResult] = useState<CardChargeResult | null>(null);
+  // A fresh UUID per charge attempt — prevents duplicate charges if the cashier
+  // double-taps "Charge" while the mutation is in flight. Rotated on every retry
+  // so a declined-then-retried attempt gets its own key.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   const chargeMutation = useMutation({
     mutationFn: () =>
@@ -106,6 +110,7 @@ function CardPaymentDialog({
         amount: total,
         orderId,
         currency: "EUR",
+        idempotencyKey,
       }).then(r => r.json() as Promise<CardChargeResult>),
     onMutate: () => setPhase("waiting"),
     onSuccess: (data) => {
@@ -128,6 +133,8 @@ function CardPaymentDialog({
   const reset = () => {
     setPhase("idle");
     setResult(null);
+    // Rotate key so a retry is treated as a new charge attempt by the provider
+    setIdempotencyKey(crypto.randomUUID());
   };
 
   return (

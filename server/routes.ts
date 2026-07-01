@@ -5606,7 +5606,7 @@ export async function registerRoutes(
   // Card terminal charge — initiates a payment on the physical terminal and polls for result
   app.post("/api/pos/card-terminal/charge", requireStaff, async (req, res) => {
     try {
-      const { amount, orderId, currency = "EUR" } = req.body;
+      const { amount, orderId, currency = "EUR", idempotencyKey } = req.body;
       if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
         return res.status(400).json({ success: false, message: "Invalid amount" });
       }
@@ -5627,13 +5627,15 @@ export async function registerRoutes(
           return res.status(400).json({ success: false, message: "JCC credentials not fully configured." });
         }
         const jccEndpoint = process.env.JCC_ENDPOINT || "https://jccpayments.com/api/v1";
+        const jccHeaders: Record<string, string> = {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.JCC_API_KEY}`,
+        };
+        if (idempotencyKey) jccHeaders["Idempotency-Key"] = idempotencyKey;
         // Initiate sale
         const initiateRes = await fetch(`${jccEndpoint}/transactions`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.JCC_API_KEY}`,
-          },
+          headers: jccHeaders,
           body: JSON.stringify({
             merchantId: process.env.JCC_MERCHANT_ID,
             terminalId: process.env.JCC_TERMINAL_ID,
@@ -5697,6 +5699,8 @@ export async function registerRoutes(
         const { access_token } = await tokenRes.json();
 
         // Create payment order
+        // merchantTrns doubles as an idempotency/dedup reference for Viva
+        const vivaMerchantTrns = idempotencyKey || orderId || "pos-sale";
         const orderRes = await fetch("https://api.vivapayments.com/checkout/v2/orders", {
           method: "POST",
           headers: {
@@ -5710,7 +5714,7 @@ export async function registerRoutes(
             paymentTimeout: 60,
             preauth: false,
             sourceCode: process.env.VIVA_SOURCE_CODE,
-            merchantTrns: orderId || "pos-sale",
+            merchantTrns: vivaMerchantTrns,
           }),
         });
         if (!orderRes.ok) {
@@ -5751,13 +5755,15 @@ export async function registerRoutes(
           return res.status(400).json({ success: false, message: "Worldpay credentials not fully configured." });
         }
         const wpEndpoint = process.env.WORLDPAY_ENDPOINT || "https://access.worldpay.com/api";
+        const wpHeaders: Record<string, string> = {
+          "Content-Type": "application/json",
+          "Authorization": `Basic ${Buffer.from(`${process.env.WORLDPAY_ENTITY_ID}:${process.env.WORLDPAY_API_KEY}`).toString("base64")}`,
+        };
+        if (idempotencyKey) wpHeaders["Idempotency-Key"] = idempotencyKey;
         // Initiate terminal transaction
         const initiateRes = await fetch(`${wpEndpoint}/terminal/transactions`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Basic ${Buffer.from(`${process.env.WORLDPAY_ENTITY_ID}:${process.env.WORLDPAY_API_KEY}`).toString("base64")}`,
-          },
+          headers: wpHeaders,
           body: JSON.stringify({
             entityId: process.env.WORLDPAY_ENTITY_ID,
             terminalGroup: process.env.WORLDPAY_TERMINAL_GROUP || "",
