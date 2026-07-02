@@ -5,6 +5,8 @@ mod migrations;
 mod models;
 mod orders;
 mod sync;
+#[cfg(test)]
+mod tests;
 
 use db::row_to_json;
 use hardware::{HardwareConfig, PaymentConfig, ScaleWeight};

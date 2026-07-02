@@ -1,0 +1,184 @@
+name: CI — POS Terminal
+
+on:
+  push:
+    branches: [ main, dev, 'feature/**' ]
+    paths:
+      - 'pos-app/**'
+      - '.github/workflows/ci-pos.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'pos-app/**'
+      - '.github/workflows/ci-pos.yml'
+
+concurrency:
+  group: ci-pos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Job 1: Frontend — TypeScript + Vite build ───────────────────────────────
+  frontend:
+    name: Frontend (TypeScript + Vite)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: pos-app/package-lock.json
+
+      - name: Install dependencies
+        working-directory: pos-app
+        run: npm ci --prefer-offline || npm install
+
+      - name: TypeScript type-check
+        working-directory: pos-app
+        run: npm run typecheck
+        continue-on-error: true  # Report errors but don't block build
+
+      - name: Vite production build
+        working-directory: pos-app
+        run: npm run build
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: pos-app/dist/
+          retention-days: 3
+
+  # ── Job 2: Rust — check + clippy + format ───────────────────────────────────
+  rust-check:
+    name: Rust (check + clippy + fmt)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev
+
+      - name: Install Rust stable + components
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './pos-app/src-tauri -> target'
+
+      - name: cargo check
+        working-directory: pos-app/src-tauri
+        run: cargo check --workspace
+
+      - name: cargo clippy
+        working-directory: pos-app/src-tauri
+        run: cargo clippy --workspace -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+
+      - name: cargo fmt check
+        working-directory: pos-app/src-tauri
+        run: cargo fmt --all -- --check
+        continue-on-error: true  # Format differences are advisory
+
+  # ── Job 3: Rust unit tests ───────────────────────────────────────────────────
+  rust-test:
+    name: Rust (unit tests)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './pos-app/src-tauri -> target'
+
+      - name: cargo test (lib unit tests)
+        working-directory: pos-app/src-tauri
+        run: cargo test --lib -- --nocapture
+        env:
+          RUST_BACKTRACE: '1'
+
+  # ── Job 4: Smoke build — full compile on Linux, no signing ──────────────────
+  smoke-build:
+    name: Smoke build (Linux full compile)
+    runs-on: ubuntu-22.04
+    needs: [ frontend, rust-check ]  # Only run if fast checks pass
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: pos-app/package-lock.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './pos-app/src-tauri -> target'
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev
+
+      - name: Install frontend dependencies
+        working-directory: pos-app
+        run: npm ci --prefer-offline || npm install
+
+      - name: Regenerate icons
+        working-directory: pos-app
+        run: npx @tauri-apps/cli icon src-tauri/app-icon.png
+
+      - name: Build POS (no bundle — compile only)
+        working-directory: pos-app
+        run: npx tauri build --no-bundle
+        # No TAURI_SIGNING_PRIVATE_KEY → unsigned binary, CI only
+
+      - name: Upload smoke binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pos-smoke-linux
+          path: pos-app/src-tauri/target/release/globipos-terminal
+          retention-days: 3
+          if-no-files-found: warn
