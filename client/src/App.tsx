@@ -158,7 +158,7 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/promotions" component={PosPromotions} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/returns" component={PosReturns} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/shifts" component={PosShifts} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/card-terminal" component={PosCardTerminal} />}
+      {(user?.role === "admin" || user?.role === "superuser" || user?.role === "staff") && <Route path="/pos/card-terminal" component={PosCardTerminal} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/sync-monitor" component={PosSyncMonitor} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/download" component={PosDownload} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/layouts/:id/edit" component={PosLayoutEditor} />}
