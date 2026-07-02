@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Separator } from "@/components/ui/separator";
 import {
   ShoppingCart, CreditCard, Banknote, Trash2, Plus, Minus,
-  CheckCircle2, AlertCircle, Loader2, Search, X,
+  CheckCircle2, AlertCircle, Loader2, Search, X, ShieldCheck,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 
@@ -76,11 +76,12 @@ function CartRow({ line, onQtyChange, onRemove }: {
  * Card payment dialog.
  *
  * State machine:
- *  idle → waiting (charge in flight) → approved | declined
+ *  idle → waiting (charge in flight) → approved | declined | already_charged
  *
  * The order has already been created as "held" before this dialog opens.
- * On approval  → backend marks it completed; onSuccess() fires.
- * On decline   → onCancel(void=true) fires so the caller can void the held order.
+ * On approval       → backend marks it completed; onSuccess() fires.
+ * On decline        → onCancel(void=true) fires so the caller can void the held order.
+ * On already_charged→ order was already paid; onCancel(void=false) fires (do NOT void).
  * On user-cancel before charging → onCancel(void=true) voids the held order.
  */
 function CardPaymentDialog({
@@ -97,7 +98,7 @@ function CardPaymentDialog({
   onCancel: (voidOrder: boolean) => void;
 }) {
   const { toast } = useToast();
-  const [phase, setPhase] = useState<"idle" | "waiting" | "approved" | "declined">("idle");
+  const [phase, setPhase] = useState<"idle" | "waiting" | "approved" | "declined" | "already_charged">("idle");
   const [result, setResult] = useState<CardChargeResult | null>(null);
   // A fresh UUID per charge attempt — prevents duplicate charges if the cashier
   // double-taps "Charge" while the mutation is in flight. Rotated on every retry
@@ -105,16 +106,26 @@ function CardPaymentDialog({
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   const chargeMutation = useMutation({
-    mutationFn: () =>
-      apiRequest("POST", "/api/pos/card-terminal/charge", {
-        amount: total,
-        orderId,
-        currency: "EUR",
-        idempotencyKey,
-      }).then(r => r.json() as Promise<CardChargeResult>),
+    mutationFn: async () => {
+      // Use raw fetch so we can inspect the HTTP status code before throwing.
+      // A 409 means the order was already charged — a distinct UX state, not a
+      // generic decline.
+      const res = await fetch("/api/pos/card-terminal/charge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: total, orderId, currency: "EUR", idempotencyKey }),
+        credentials: "include",
+      });
+      const data = await res.json() as CardChargeResult;
+      return { data, httpStatus: res.status };
+    },
     onMutate: () => setPhase("waiting"),
-    onSuccess: (data) => {
+    onSuccess: ({ data, httpStatus }) => {
       setResult(data);
+      if (httpStatus === 409) {
+        setPhase("already_charged");
+        return;
+      }
       if (data.success) {
         setPhase("approved");
         onSuccess(data.transactionRef!, data.provider!);
@@ -141,7 +152,9 @@ function CardPaymentDialog({
     <Dialog open={open} onOpenChange={o => {
       if (!o && phase !== "waiting") {
         reset();
-        onCancel(phase !== "approved");
+        // "approved" and "already_charged" must NOT void the order —
+        // the order is either complete or was already complete.
+        onCancel(phase !== "approved" && phase !== "already_charged");
       }
     }}>
       <DialogContent className="max-w-sm">
@@ -231,6 +244,32 @@ function CardPaymentDialog({
                   Cancel Sale
                 </Button>
               </div>
+            </>
+          )}
+
+          {phase === "already_charged" && (
+            <>
+              <div className="rounded-full bg-amber-100 dark:bg-amber-900/30 p-6">
+                <ShieldCheck className="w-10 h-10 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div className="text-center space-y-2">
+                <p className="font-semibold text-amber-700 dark:text-amber-400" data-testid="text-already-charged-title">
+                  Already Charged
+                </p>
+                <p className="text-sm text-muted-foreground" data-testid="text-already-charged-body">
+                  This order has already been paid — no further charge was made.
+                </p>
+                <p className="text-sm font-medium" data-testid="text-already-charged-instruction">
+                  Please check the order list to confirm the payment.
+                </p>
+              </div>
+              <Button
+                className="w-full"
+                onClick={() => { reset(); onCancel(false); }}
+                data-testid="btn-already-charged-close"
+              >
+                Close — Do Not Retry
+              </Button>
             </>
           )}
         </div>
