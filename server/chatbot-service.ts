@@ -131,6 +131,44 @@ export function consumeExpiredPendingFlag(convId: string): boolean {
   return false;
 }
 
+// ─── WhatsApp browse results TTL cache ────────────────────────────────────────
+// Stores the last product list shown to each conversation so item-number replies
+// survive a server restart (instead of silently picking the wrong item or giving
+// a confusing "outside current list" error).
+const BROWSE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+interface WaBrowseEntry {
+  results: any[];
+  expiresAt: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const waBrowseStore = new Map<string, WaBrowseEntry>();
+
+export function getBrowseResults(convId: string): any[] | null {
+  const entry = waBrowseStore.get(convId);
+  if (!entry) return null; // null = never browsed / expired — caller should prompt re-browse
+  if (Date.now() > entry.expiresAt) {
+    clearTimeout(entry.timer);
+    waBrowseStore.delete(convId);
+    return null;
+  }
+  return entry.results;
+}
+
+export function setBrowseResults(convId: string, results: any[]) {
+  const existing = waBrowseStore.get(convId);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => waBrowseStore.delete(convId), BROWSE_TTL_MS);
+  waBrowseStore.set(convId, { results, expiresAt: Date.now() + BROWSE_TTL_MS, timer });
+}
+
+export function clearBrowseResults(convId: string) {
+  const existing = waBrowseStore.get(convId);
+  if (existing) clearTimeout(existing.timer);
+  waBrowseStore.delete(convId);
+}
+
 // ─── Keyword intent matcher (always available) ────────────────────────────────
 const KEYWORD_MAP: [Intent, string[]][] = [
   ["handoff", ["agent", "human", "person", "staff", "speak to someone", "real person", "support", "help me please"]],

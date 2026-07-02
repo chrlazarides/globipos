@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions } from "@shared/schema";
-import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, wordToNumber, type WaPendingItem } from "./chatbot-service";
+import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, clearBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -8400,8 +8400,7 @@ export async function registerRoutes(
             .limit(6);
           if (matches.length > 0) {
             // Store browse results in the conversation's cart context for add_item
-            const resultKey = `browse_${conv.id}`;
-            (global as any)[resultKey] = matches; // temp; cleared on checkout/cancel
+            setBrowseResults(conv.id, matches); // TTL cache — survives server restarts within 30 min
             reply = `🍷 *Products found:*\n` +
               matches.map((i, idx) => `${idx + 1}. ${i.name}${i.brand ? ` (${i.brand})` : ""} — €${parseFloat(String(i.price1 ?? "0")).toFixed(2)}`).join("\n") +
               `\n\nReply with the *number* to add to cart, or "cart" to view your cart.`;
@@ -8411,8 +8410,7 @@ export async function registerRoutes(
 
         } else if (parsed.intent === "add_item") {
           // ── Resolve item index and quantity ─────────────────────────────────
-          const resultKey = `browse_${conv.id}`;
-          const lastResults: any[] = (global as any)[resultKey] ?? [];
+          const lastResults: any[] | null = getBrowseResults(conv.id);
 
           // Priority 1: AI-extracted itemIndex (0-based after conversion in parseIntentAI)
           let idx = typeof parsed.itemIndex === "number" ? parsed.itemIndex : -1;
@@ -8447,7 +8445,10 @@ export async function registerRoutes(
           }
           qty = Math.max(1, qty);
 
-          if (idx >= 0 && idx < lastResults.length) {
+          if (lastResults === null && idx >= 0) {
+            // Browse list expired (TTL) or server was restarted — proactively ask to browse again
+            reply = `Your previous product list has expired. Please browse again (e.g. "show red wines") and then reply with the item number.`;
+          } else if (lastResults !== null && idx >= 0 && idx < lastResults.length) {
             // We know which item — ask for confirmation before adding
             const it = lastResults[idx];
             const pending: WaPendingItem = {
@@ -8459,8 +8460,8 @@ export async function registerRoutes(
             };
             setPendingItem(conv.id, pending);
             reply = `You're about to add *${qty}× ${it.name}* (€${(pending.price * qty).toFixed(2)}) to your cart.\n\nIs that correct? Reply *yes* to confirm or *no* to cancel.`;
-          } else if (idx >= 0) {
-            reply = `That number is outside the current list. Please browse first (e.g. "show red wines") and then reply with a number from the list shown.`;
+          } else if (lastResults !== null && idx >= 0) {
+            reply = `That number is outside the current list. Please reply with a number from the list shown, or browse again (e.g. "show red wines").`;
           } else {
             // No item number found — do a quick name search as fallback
             const searchWords = (parsed.query ?? text).toLowerCase().replace(/\d+/g, "").trim();
@@ -8521,6 +8522,7 @@ export async function registerRoutes(
                 }))
               );
               clearWaCart(conv.id);
+              clearBrowseResults(conv.id);
               // Notify all subscribed staff of the new WhatsApp order
               sendPushToAllStaff({
                 title: "New WhatsApp Order",
@@ -8535,6 +8537,7 @@ export async function registerRoutes(
 
         } else if (parsed.intent === "cancel") {
           clearWaCart(conv.id);
+          clearBrowseResults(conv.id);
           reply = "Cart cleared. Start browsing again by replying 'show wines' or 'browse spirits'.";
 
         } else if (parsed.intent === "faq") {
