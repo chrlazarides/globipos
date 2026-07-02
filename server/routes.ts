@@ -9,7 +9,7 @@ import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail } from "./email";
 import { db } from "./db";
-import { sql, and, or, eq, gte, lte, gt, desc, isNull, ilike } from "drizzle-orm";
+import { sql, and, or, eq, gte, lte, gt, desc, isNull, ilike, inArray } from "drizzle-orm";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -8177,6 +8177,23 @@ export async function registerRoutes(
       await sendWhatsAppMessage(conv.waPhoneNumber, message.trim());
     }
     res.json(msg);
+  });
+
+  // GET messages for a WhatsApp phone number (across all conversations, sorted by time)
+  app.get("/api/whatsapp/messages-by-phone/:phone", requireAdmin, async (req, res) => {
+    const phone = decodeURIComponent(req.params.phone);
+    const convs = await db
+      .select({ id: chatConversations.id })
+      .from(chatConversations)
+      .where(and(eq(chatConversations.waPhoneNumber, phone), eq(chatConversations.channel, "whatsapp")));
+    if (!convs.length) return res.json([]);
+    const convIds = convs.map(c => c.id);
+    const msgs = await db
+      .select()
+      .from(chatMessages)
+      .where(inArray(chatMessages.conversationId, convIds))
+      .orderBy(chatMessages.createdAt);
+    res.json(msgs);
   });
 
   // Direct WhatsApp send from order detail — logs message against the customer's active/latest conversation

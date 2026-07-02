@@ -41,6 +41,16 @@ type PortalOrder = {
   items: OrderItem[];
 };
 
+type ChatMessage = {
+  id: string;
+  conversationId: string;
+  role: string;
+  content: string;
+  channel: string;
+  intent: string | null;
+  createdAt: string;
+};
+
 function statusBadge(status: string) {
   const map: Record<string, { label: string; className: string }> = {
     pending: { label: "Pending", className: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300" },
@@ -59,10 +69,78 @@ function sourceBadge(source: string) {
   return <Badge variant="secondary" className="text-xs">Portal</Badge>;
 }
 
+function MessageThread({ phone, latestSentAt }: { phone: string; latestSentAt?: string }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const { data: messages = [], isLoading } = useQuery<ChatMessage[]>({
+    queryKey: ["/api/whatsapp/messages-by-phone", phone, latestSentAt],
+    queryFn: () =>
+      fetch(`/api/whatsapp/messages-by-phone/${encodeURIComponent(phone)}`, { credentials: "include" })
+        .then(r => r.json()),
+    enabled: !!phone,
+  });
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 py-2">
+        <Skeleton className="h-8 w-3/4" />
+        <Skeleton className="h-8 w-2/3 ml-auto" />
+        <Skeleton className="h-8 w-1/2" />
+      </div>
+    );
+  }
+
+  if (messages.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground text-center py-3 italic">
+        No messages yet for this customer.
+      </p>
+    );
+  }
+
+  return (
+    <div
+      ref={scrollRef}
+      className="flex flex-col gap-2 max-h-56 overflow-y-auto px-1 py-2"
+      data-testid="whatsapp-message-thread"
+    >
+      {messages.map(msg => {
+        const isStaff = msg.role === "staff";
+        const isBot = msg.role === "bot";
+        const bubbleAlign = isStaff ? "items-end" : "items-start";
+        const bubbleBg = isStaff
+          ? "bg-[#25D366] text-white"
+          : isBot
+          ? "bg-muted/80 text-foreground border border-border"
+          : "bg-white dark:bg-muted text-foreground border border-border";
+        const label = isStaff ? "Staff" : isBot ? "Bot" : "Customer";
+
+        return (
+          <div key={msg.id} className={`flex flex-col ${bubbleAlign} gap-0.5`} data-testid={`msg-bubble-${msg.id}`}>
+            <div className={`rounded-2xl px-3 py-1.5 text-sm max-w-[80%] leading-snug ${bubbleBg}`}>
+              {msg.content}
+            </div>
+            <span className="text-[10px] text-muted-foreground px-1">
+              {label} · {format(new Date(msg.createdAt), "dd MMM HH:mm")}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: () => void }) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const [replyText, setReplyText] = useState("");
+  const [lastSentAt, setLastSentAt] = useState<string | undefined>(undefined);
 
   const sendReply = useMutation({
     mutationFn: () =>
@@ -73,6 +151,8 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
       }),
     onSuccess: () => {
       setReplyText("");
+      setLastSentAt(new Date().toISOString());
+      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/messages-by-phone", order.customerPhone] });
       toast({ title: "Message sent", description: "WhatsApp reply delivered to customer." });
     },
     onError: (e: any) => toast({ title: "Failed to send", description: e.message, variant: "destructive" }),
@@ -110,7 +190,7 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
 
   return (
     <Dialog open onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessageSquare className="w-5 h-5 text-[#25D366]" />
@@ -194,30 +274,36 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
         </div>
 
         {order.source === "whatsapp" && order.customerPhone && (
-          <div className="border rounded-lg p-3 bg-[#25D366]/5 border-[#25D366]/30 space-y-2">
-            <p className="text-xs font-medium text-[#25D366] flex items-center gap-1.5">
-              <MessageSquare className="w-3.5 h-3.5" />
-              Reply via WhatsApp
-            </p>
-            <Textarea
-              placeholder="Type a message to send to the customer…"
-              value={replyText}
-              onChange={e => setReplyText(e.target.value)}
-              rows={2}
-              className="resize-none text-sm"
-              data-testid="input-whatsapp-reply"
-            />
-            <div className="flex justify-end">
-              <Button
-                size="sm"
-                onClick={() => sendReply.mutate()}
-                disabled={sendReply.isPending || !replyText.trim()}
-                data-testid="btn-send-whatsapp-reply"
-                className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebe5d] text-white"
-              >
-                {sendReply.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                Send Message
-              </Button>
+          <div className="border rounded-lg bg-[#25D366]/5 border-[#25D366]/30 overflow-hidden">
+            <div className="px-3 pt-3 pb-1">
+              <p className="text-xs font-semibold text-[#25D366] flex items-center gap-1.5 mb-2">
+                <MessageSquare className="w-3.5 h-3.5" />
+                Chat History
+              </p>
+              <MessageThread phone={order.customerPhone} latestSentAt={lastSentAt} />
+            </div>
+            <div className="border-t border-[#25D366]/20 px-3 py-3 space-y-2 bg-[#25D366]/5">
+              <p className="text-xs font-medium text-[#25D366]">Reply via WhatsApp</p>
+              <Textarea
+                placeholder="Type a message to send to the customer…"
+                value={replyText}
+                onChange={e => setReplyText(e.target.value)}
+                rows={2}
+                className="resize-none text-sm"
+                data-testid="input-whatsapp-reply"
+              />
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  onClick={() => sendReply.mutate()}
+                  disabled={sendReply.isPending || !replyText.trim()}
+                  data-testid="btn-send-whatsapp-reply"
+                  className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebe5d] text-white"
+                >
+                  {sendReply.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  Send Message
+                </Button>
+              </div>
             </div>
           </div>
         )}
@@ -303,7 +389,6 @@ function PushToggle() {
           toast({ title: "Push not configured", description: "VAPID keys are not set up on this server.", variant: "destructive" });
           return;
         }
-        // Convert URL-safe base64 VAPID public key to Uint8Array
         const padding = "=".repeat((4 - (publicKey.length % 4)) % 4);
         const base64 = (publicKey + padding).replace(/-/g, "+").replace(/_/g, "/");
         const rawKey = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
