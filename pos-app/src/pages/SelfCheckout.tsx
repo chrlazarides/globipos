@@ -21,7 +21,8 @@ import { v4 as uuidv4 } from "uuid";
 import AgeVerificationDialog from "../components/AgeVerificationDialog";
 import type { Product } from "../types";
 import type { OrderLine } from "../types";
-import { createLine, computeOrderTotals } from "../lib/pricing";
+import { createLine, setLinePriceOverride, computeOrderTotals } from "../lib/pricing";
+import { parseScaleBarcode } from "../lib/scaleBarcode";
 import { nextOrderNumber, saveOrder } from "../lib/db";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -85,7 +86,28 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
     setProcessing(true);
 
     try {
-      const product = await invoke<Product | null>("get_product_by_barcode", { barcode: barcode.trim() });
+      const code = barcode.trim();
+
+      // ── Scale barcode detection ───────────────────────────────────────────
+      const scale = parseScaleBarcode(code);
+      let resolvedBarcode = code;
+      let scaleQty: number | undefined;
+      let scalePrice: number | undefined;
+
+      if (scale) {
+        // Try PLU first; fall back to the full scale EAN
+        const pluProduct = await invoke<Product | null>("get_product_by_barcode", { barcode: scale.plu });
+        if (pluProduct) {
+          resolvedBarcode = scale.plu;
+        }
+        if (scale.type === "weight" && scale.value > 0) {
+          scaleQty = parseFloat(scale.value.toFixed(3));
+        } else if (scale.type === "price" && scale.value > 0) {
+          scalePrice = parseFloat(scale.value.toFixed(2));
+        }
+      }
+
+      const product = await invoke<Product | null>("get_product_by_barcode", { barcode: resolvedBarcode });
 
       if (!product) {
         callAttendant("item_not_found");
@@ -102,7 +124,7 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
 
       // Container deposit
       const deposit = (product as any).deposit_amount;
-      addProductToOrder(product);
+      addProductToOrder(product, scaleQty ?? 1, scalePrice);
       if (deposit > 0) {
         // Auto-add deposit line
         const depositProduct: Product = {
@@ -122,8 +144,11 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
     }
   }, [lines]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function addProductToOrder(product: Product, qty = 1) {
-    const line = createLine(product, 1, qty, new Map());
+  function addProductToOrder(product: Product, qty = 1, overridePrice?: number) {
+    let line = createLine(product, 1, qty, new Map());
+    if (overridePrice != null && overridePrice > 0) {
+      line = setLinePriceOverride(line, overridePrice);
+    }
     const newLine: OrderLine = { ...line, id: uuidv4(), order_id: "sco" };
     setLines((prev) => [...prev, newLine]);
   }

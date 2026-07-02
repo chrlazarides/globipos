@@ -388,8 +388,32 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     enabled: mode === "sell" && dialog === null,
     onScan: async (barcode) => {
       const { getProductByBarcode } = await import("../lib/db");
-      const product = await getProductByBarcode(barcode);
-      if (product) engine.addProduct(product);
+      const { parseScaleBarcode } = await import("../lib/scaleBarcode");
+
+      const scale = parseScaleBarcode(barcode);
+
+      if (scale) {
+        // Try the 5-digit PLU first; fall back to the full barcode
+        let product = await getProductByBarcode(scale.plu);
+        if (!product) product = await getProductByBarcode(barcode);
+
+        if (product) {
+          if (scale.type === "weight" && scale.value > 0) {
+            // qty = weight in kg (e.g. 1.500)
+            engine.addProduct(product, parseFloat(scale.value.toFixed(3)));
+          } else if (scale.type === "price" && scale.value > 0) {
+            // embedded price overrides the catalogue price
+            engine.addProduct(product, 1, parseFloat(scale.value.toFixed(2)));
+          } else {
+            // PLU-only — plain add at qty 1
+            engine.addProduct(product);
+          }
+        }
+      } else {
+        // Standard (non-scale) barcode lookup
+        const product = await getProductByBarcode(barcode);
+        if (product) engine.addProduct(product);
+      }
     },
   });
 

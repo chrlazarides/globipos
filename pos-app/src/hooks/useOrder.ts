@@ -30,7 +30,7 @@ export interface UseOrderReturn {
   lastLineId: string | null;
 
   // Order management (#1–15)
-  addProduct: (product: Product, qty?: number) => void;
+  addProduct: (product: Product, qty?: number, overridePrice?: number) => void;
   addQty: () => void;                     // #2 +1 to selected line
   subtractQty: () => void;                // #3 -1 from selected line
   setQty: (qty: number) => void;          // #4 set qty on selected line
@@ -121,8 +121,12 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
   const selectedLine = lines.find((l) => l.id === selectedLineId) ?? null;
 
   // ── #1 Add product ──────────────────────────────────────────────────────────
-  const addProduct = useCallback((product: Product, qty = 1) => {
-    const line = createLine(product, order.price_level, qty, timedPricesRef.current);
+  const addProduct = useCallback((product: Product, qty = 1, overridePrice?: number) => {
+    let line = createLine(product, order.price_level, qty, timedPricesRef.current);
+    // Apply scale-barcode embedded price (or any caller-supplied override)
+    if (overridePrice != null && overridePrice > 0) {
+      line = setLinePriceOverride(line, overridePrice);
+    }
     const newLine = { ...line, order_id: order.id };
     const newLines = [...lines, newLine];
     updateLines(newLines);
