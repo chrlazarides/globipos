@@ -138,7 +138,10 @@ export default function PosOrders() {
     if (methodFilter !== "all" && o.paymentMethod !== methodFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      if (!o.orderNumber.toLowerCase().includes(q) && !(o.cashierName || "").toLowerCase().includes(q)) return false;
+      const matchesOrder = o.orderNumber.toLowerCase().includes(q);
+      const matchesCashier = (o.cashierName || "").toLowerCase().includes(q);
+      const matchesCardRef = (o.cardTerminalRef || "").toLowerCase().includes(q);
+      if (!matchesOrder && !matchesCashier && !matchesCardRef) return false;
     }
     return true;
   });
@@ -163,7 +166,7 @@ export default function PosOrders() {
       <div className="flex gap-3 flex-wrap">
         <div className="relative flex-1 min-w-48">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search order # or cashier…" className="pl-9" data-testid="input-order-search" />
+          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search order #, cashier or card ref…" className="pl-9" data-testid="input-order-search" />
         </div>
         <Select value={locationFilter} onValueChange={setLocationFilter}>
           <SelectTrigger className="w-44"><SelectValue placeholder="All locations" /></SelectTrigger>
