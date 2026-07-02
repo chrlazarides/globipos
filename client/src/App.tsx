@@ -57,6 +57,7 @@ import PosDownload from "@/pages/pos-download";
 import PosLayoutEditor from "@/pages/pos-layout-editor";
 import WhatsAppOrders from "@/pages/whatsapp-orders";
 import type { Customer } from "@shared/schema";
+import { isPosAdmin, isPosStaff } from "@/lib/pos-permissions";
 import { Loader2 } from "lucide-react";
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
@@ -150,18 +151,23 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/users" component={UsersPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/activity-logs" component={ActivityLogsPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/version-control" component={VersionControl} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/locations" component={PosLocations} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/terminals" component={PosTerminals} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/layouts" component={PosLayouts} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/orders" component={PosOrders} />}
-      {(user?.role === "admin" || user?.role === "superuser" || user?.role === "staff") && <Route path="/pos/register" component={PosRegister} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/promotions" component={PosPromotions} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/returns" component={PosReturns} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/shifts" component={PosShifts} />}
-      {(user?.role === "admin" || user?.role === "superuser" || user?.role === "staff") && <Route path="/pos/card-terminal" component={PosCardTerminal} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/sync-monitor" component={PosSyncMonitor} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/download" component={PosDownload} />}
-      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/pos/layouts/:id/edit" component={PosLayoutEditor} />}
+      {/* ── POS routes ────────────────────────────────────────────────────────
+           Staff (cashier) tier  : register + card-terminal only.
+           Admin (management) tier: all other POS screens are admin/superuser.
+           See client/src/lib/pos-permissions.ts for the canonical definitions.
+      ──────────────────────────────────────────────────────────────────────── */}
+      {isPosAdmin(user) && <Route path="/pos/locations" component={PosLocations} />}
+      {isPosAdmin(user) && <Route path="/pos/terminals" component={PosTerminals} />}
+      {isPosAdmin(user) && <Route path="/pos/layouts" component={PosLayouts} />}
+      {isPosAdmin(user) && <Route path="/pos/orders" component={PosOrders} />}
+      {isPosStaff(user) && <Route path="/pos/register" component={PosRegister} />}
+      {isPosAdmin(user) && <Route path="/pos/promotions" component={PosPromotions} />}
+      {isPosAdmin(user) && <Route path="/pos/returns" component={PosReturns} />}
+      {isPosAdmin(user) && <Route path="/pos/shifts" component={PosShifts} />}
+      {isPosStaff(user) && <Route path="/pos/card-terminal" component={PosCardTerminal} />}
+      {isPosAdmin(user) && <Route path="/pos/sync-monitor" component={PosSyncMonitor} />}
+      {isPosAdmin(user) && <Route path="/pos/download" component={PosDownload} />}
+      {isPosAdmin(user) && <Route path="/pos/layouts/:id/edit" component={PosLayoutEditor} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/chat-panel" component={ChatPanel} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/faq-editor" component={FaqEditor} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/customer-push" component={CustomerPushPage} />}
