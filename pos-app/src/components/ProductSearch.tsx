@@ -9,9 +9,9 @@ interface ProductSearchProps {
   onSelect: (product: Product) => void;
 }
 
-function debounce<T extends (...args: unknown[]) => void>(fn: T, ms: number): T {
+function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   let t: ReturnType<typeof setTimeout>;
-  return ((...args: unknown[]) => {
+  return ((...args: any[]) => {
     clearTimeout(t);
     t = setTimeout(() => fn(...args), ms);
   }) as T;

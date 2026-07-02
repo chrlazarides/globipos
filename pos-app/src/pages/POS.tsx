@@ -556,7 +556,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       ];
 
       // Store for re-print from success overlay
-      lastReceiptPrinterCallback.current = () => hw.printReceipt(receiptLines);
+      lastReceiptPrinterCallback.current = async () => { await hw.printReceipt(receiptLines); };
 
       // Auto-print if printer available
       if (hw.printerStatus === "online" && hw.config?.printer_enabled) {

@@ -91,7 +91,7 @@ export function useShift(): UseShiftReturn {
     refreshShift();
   }, [refreshShift]);
 
-  const isShiftOpen = currentShift?.status === "open" ?? false;
+  const isShiftOpen = currentShift?.status === "open";
 
   // ── Open shift ──────────────────────────────────────────────────────────────
 

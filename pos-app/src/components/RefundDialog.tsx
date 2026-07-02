@@ -112,7 +112,7 @@ export default function RefundDialog({
       }
       setOriginalOrder(order);
       // Pre-select all lines
-      const allIds = new Set(order.lines.map((l) => l.id));
+      const allIds = new Set<string>(order.lines.map((l) => l.id));
       setSelectedLineIds(allIds);
       // Default qty = original qty
       const qtyMap: Record<string, number> = {};
