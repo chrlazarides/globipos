@@ -190,6 +190,7 @@ interface PaymentSuccessState {
   changeDue: number;
   tendered: number;
   orderNumber: string;
+  cardRef?: string;
 }
 
 function PaymentSuccessOverlay({
@@ -246,6 +247,12 @@ function PaymentSuccessOverlay({
                 <span className="text-green-400 font-bold text-base">{formatCurrency(result.changeDue)}</span>
               </div>
             </>
+          )}
+          {result.cardRef && (
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Card Ref</span>
+              <span className="text-gray-200 font-mono" data-testid="text-success-card-ref">{result.cardRef}</span>
+            </div>
           )}
           <div className="flex justify-between text-sm">
             <span className="text-gray-500">Time</span>
@@ -543,7 +550,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           { text: pad("Tendered", formatCurrency(result.totalTendered)) },
           { text: pad("Change", formatCurrency(result.changeDue)) },
         ] : []),
-        ...(paymentRef ? [{ text: `Auth: ${paymentRef}` }] : []),
+        ...(paymentRef ? [{ text: `Card Ref: ${paymentRef}` }] : []),
         { divider: true },
         { text: "Thank you for your purchase!", align: "center" as const },
       ];
@@ -569,6 +576,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         changeDue: result.changeDue,
         tendered: result.totalTendered,
         orderNumber: completedOrder.order_number ?? "",
+        cardRef: paymentRef,
       });
     } catch (e) {
       console.error("Payment complete failed:", e);
