@@ -97,7 +97,7 @@ export default function AgeVerificationDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={(o) => { if (!o) { onReject(); reset(); } }}
+      onOpenChange={(o: boolean) => { if (!o) { onReject(); reset(); } }}
     >
       <DialogContent className="sm:max-w-md" data-testid="age-verification-dialog">
         <DialogHeader>
