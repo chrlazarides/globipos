@@ -301,6 +301,13 @@ async function autoCreateJournalEntry(opts: {
   }
 }
 
+// In-flight idempotency key tracker for card-terminal charges.
+// Tracks keys that are currently being processed (or were recently sent to a provider).
+// Because Node.js is single-threaded, the synchronous check+add before the first `await`
+// is race-free: a second request with the same key arriving while the first is awaiting
+// will always see the key already in the Set and receive a 409.
+const chargeInflightKeys = new Set<string>();
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -5606,12 +5613,41 @@ export async function registerRoutes(
 
   // Card terminal charge — initiates a payment on the physical terminal and polls for result
   app.post("/api/pos/card-terminal/charge", requireStaff, async (req, res) => {
+    const { amount, orderId, currency = "EUR", idempotencyKey } = req.body;
+
+    // ── Idempotency guard (synchronous, before any await) ──────────────────────
+    // Node.js is single-threaded: this check+add runs atomically before any I/O yield.
+    // A second request with the same key arriving while the first is awaiting will
+    // always see the key in the Set and receive a 409 — preventing duplicate charges.
+    if (idempotencyKey) {
+      if (chargeInflightKeys.has(idempotencyKey)) {
+        return res.status(409).json({
+          success: false,
+          message: "A charge with this idempotency key is already in progress. Duplicate charge prevented.",
+        });
+      }
+      chargeInflightKeys.add(idempotencyKey);
+    }
+
     try {
-      const { amount, orderId, currency = "EUR", idempotencyKey } = req.body;
       if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
         return res.status(400).json({ success: false, message: "Invalid amount" });
       }
       const amountCents = Math.round(Number(amount) * 100);
+
+      // ── Pre-charge order status guard ─────────────────────────────────────────
+      // Check the order BEFORE calling the payment provider. If the order is already
+      // in a non-'held' state it means a previous charge succeeded — reject immediately
+      // without wasting an API call to the terminal provider.
+      if (orderId) {
+        const preCheckOrder = await storage.getPosOrder(orderId);
+        if (preCheckOrder && preCheckOrder.status !== "held") {
+          return res.status(409).json({
+            success: false,
+            message: `Order is already '${preCheckOrder.status}' — duplicate charge prevented.`,
+          });
+        }
+      }
 
       // Look up active provider from system settings
       const [providerRow] = await db.select().from(systemSettings).where(eq(systemSettings.key, "card_terminal_provider"));
@@ -5826,6 +5862,11 @@ export async function registerRoutes(
       return res.json({ success: true, transactionRef, provider, message: `Payment approved. Reference: ${transactionRef}` });
     } catch (e: any) {
       return res.status(500).json({ success: false, message: e.message });
+    } finally {
+      // Always release the inflight key so the Set doesn't grow without bound.
+      // A genuine retry by the cashier will arrive with a new key (the frontend rotates
+      // the UUID on every decline/reset), so releasing here is safe.
+      if (idempotencyKey) chargeInflightKeys.delete(idempotencyKey);
     }
   });
 
