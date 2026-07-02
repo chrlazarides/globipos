@@ -37,5 +37,17 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "RWSclAspdunS3kF6/i+8IhItWNzmDsoVy4zzrXLe8+QjGbwnNTI5az7C",
+      "endpoints": [
+        "https://github.com/chrlazarides/globipos/releases/latest/download/latest.json"
+      ],
+      "dialog": false,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

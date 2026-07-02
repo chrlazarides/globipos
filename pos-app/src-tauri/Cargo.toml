@@ -15,10 +15,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri              = { version = "2", features = [] }
-tauri-plugin-http  = "2"
-tauri-plugin-store = "2"
-tauri-plugin-shell = "2"
+tauri               = { version = "2", features = [] }
+tauri-plugin-http   = "2"
+tauri-plugin-store  = "2"
+tauri-plugin-shell  = "2"
+tauri-plugin-updater = "2"
 
 # SQLite via sqlx (Rust-side DB access)
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros"] }

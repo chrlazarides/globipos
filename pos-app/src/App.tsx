@@ -11,6 +11,8 @@ import { Setup } from "./pages/Setup";
 import { Login } from "./pages/Login";
 import { POS } from "./pages/POS";
 import { useSync } from "./hooks/useSync";
+import { useUpdater } from "./hooks/useUpdater";
+import { UpdateBanner } from "./components/UpdateBanner";
 
 type Screen = "loading" | "setup" | "login" | "pos";
 
@@ -19,7 +21,8 @@ export function App() {
   const [config, setConfig]   = useState<TerminalConfig | null>(null);
   const [session, setSession] = useState<CashierSession | null>(null);
 
-  const sync = useSync(config !== null, config);
+  const sync        = useSync(config !== null, config);
+  const updateState = useUpdater();
 
   // On mount: init SQLite and check if we have a stored config
   useEffect(() => {
@@ -67,15 +70,30 @@ export function App() {
   }
 
   if (screen === "setup") {
-    return <Setup onComplete={handleSetupComplete} />;
+    return (
+      <>
+        <Setup onComplete={handleSetupComplete} />
+        <UpdateBanner state={updateState} />
+      </>
+    );
   }
 
   if (screen === "login" && config) {
-    return <Login config={config} onLogin={handleLogin} />;
+    return (
+      <>
+        <Login config={config} onLogin={handleLogin} />
+        <UpdateBanner state={updateState} />
+      </>
+    );
   }
 
   if (screen === "pos" && config && session) {
-    return <POS config={config} session={session} sync={sync} onLogout={handleLogout} />;
+    return (
+      <>
+        <POS config={config} session={session} sync={sync} onLogout={handleLogout} />
+        <UpdateBanner state={updateState} />
+      </>
+    );
   }
 
   // Fallback — shouldn't reach here
