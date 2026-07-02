@@ -2,6 +2,24 @@ import { createContext, useContext, useEffect, useRef, useState, useCallback } f
 import { useAuth } from "@/App";
 
 const CHIME_MUTED_KEY = "whatsapp_alert_muted";
+const SEEN_IDS_KEY = "whatsapp_alert_seen_ids";
+
+function loadSeenIds(): Set<string> | null {
+  try {
+    const raw = sessionStorage.getItem(SEEN_IDS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return new Set(parsed as string[]);
+    }
+  } catch {}
+  return null;
+}
+
+function saveSeenIds(ids: Set<string>) {
+  try {
+    sessionStorage.setItem(SEEN_IDS_KEY, JSON.stringify(Array.from(ids)));
+  } catch {}
+}
 
 interface WhatsAppAlertContextValue {
   newOrderCount: number;
@@ -55,7 +73,7 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
   const [chimeMuted, setChimeMuted] = useState(() => {
     try { return localStorage.getItem(CHIME_MUTED_KEY) === "true"; } catch { return false; }
   });
-  const seenIdsRef = useRef<Set<string> | null>(null);
+  const seenIdsRef = useRef<Set<string> | null>(loadSeenIds());
   const chimeMutedRef = useRef(chimeMuted);
 
   useEffect(() => {
@@ -74,6 +92,7 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
 
       if (seenIdsRef.current === null) {
         seenIdsRef.current = currentIds;
+        saveSeenIds(currentIds);
         return;
       }
 
@@ -92,6 +111,7 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
       }
 
       seenIdsRef.current = currentIds;
+      saveSeenIds(currentIds);
     } catch {
     }
   }, [isAdmin]);
