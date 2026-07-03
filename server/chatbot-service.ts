@@ -24,6 +24,11 @@ export function addToWaCart(convId: string, item: Omit<WaCartItem, "qty">, qty =
 
 export function clearWaCart(convId: string) {
   waCartStore.delete(convId);
+  // Tie browse-result validity to cart lifecycle: whenever the cart is cleared
+  // (checkout, "cancel"/"clear" command, or any future server-side clear such as
+  // an admin action or cart expiry), the stale product list must go with it so a
+  // customer can never reply with a number from an old list and add the wrong item.
+  clearBrowseResults(convId);
 }
 
 export function formatWaCart(cart: WaCartItem[]): string {

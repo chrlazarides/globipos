@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions } from "@shared/schema";
-import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, clearBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
+import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -8620,8 +8620,7 @@ export async function registerRoutes(
                   total: String((c.price * c.qty).toFixed(2)),
                 }))
               );
-              clearWaCart(conv.id);
-              clearBrowseResults(conv.id);
+              clearWaCart(conv.id); // also invalidates the browse-results cache
               // Notify all subscribed staff of the new WhatsApp order
               sendPushToAllStaff({
                 title: "New WhatsApp Order",
@@ -8635,8 +8634,7 @@ export async function registerRoutes(
           }
 
         } else if (parsed.intent === "cancel") {
-          clearWaCart(conv.id);
-          clearBrowseResults(conv.id);
+          clearWaCart(conv.id); // also invalidates the browse-results cache
           reply = "Cart cleared. Start browsing again by replying 'show wines' or 'browse spirits'.";
 
         } else if (parsed.intent === "faq") {
