@@ -8,3 +8,4 @@
 - [Tauri updater latest.json failures](tauri-updater-latest-json.md) — needs createUpdaterArtifacts:true in tauri.conf.json; "Signature not found" can also mean broken signing key, not a naming bug
 - [Customer JWT auth in tests](customer-jwt-test-auth.md) — /api/customer/* uses a separate JWT secret+shape from admin/staff tokens; don't mix them in Playwright tests
 - [WhatsApp chatbot state persistence](wa-cart-persistence.md) — dual-write pattern: in-memory Maps (cart/pending/browse) as hot path, single `wa_cart_state` table mirror, 24h prune, rehydrate + re-arm timers on boot
+- [Missing GET route masked by SPA fallback](missing-get-route-spa-fallback.md) — page "not loading data" bugs can be a missing single-resource GET route silently falling through to index.html instead of a 404

@@ -7484,6 +7484,13 @@ export async function registerRoutes(
       res.json(await storage.createPosLayoutSet(data));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
+  app.get("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
+    try {
+      const layout = await storage.getPosLayoutSet(req.params.id);
+      if (!layout) return res.status(404).json({ message: "Layout not found" });
+      res.json(layout);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
   app.put("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
     try { res.json(await storage.updatePosLayoutSet(req.params.id, req.body)); } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
