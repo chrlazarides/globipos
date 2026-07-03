@@ -40,118 +40,118 @@ const ACTION_GROUPS: ActionGroup[] = [
   {
     group: "Payments", icon: CreditCard, color: "text-green-600",
     actions: [
-      { code: "pay_cash",         label: "Pay Cash",             icon: Banknote,     description: "Accept cash, calculate change" },
-      { code: "pay_card",         label: "Pay Card",             icon: CreditCard,   description: "Process card via connected terminal" },
-      { code: "pay_split",        label: "Split Payment",        icon: Wallet,       description: "Split across cash and card" },
-      { code: "pay_account",      label: "Charge to Account",    icon: AlignLeft,    description: "Post to customer account / credit" },
-      { code: "pay_voucher",      label: "Redeem Voucher",       icon: Receipt,      description: "Accept a gift voucher or coupon code" },
-      { code: "pay_layaway",      label: "Layaway / Deposit",    icon: Wallet,       description: "Take partial payment, hold order" },
+      { code: "PAY_CASH",         label: "Pay Cash",             icon: Banknote,     description: "Accept cash, calculate change" },
+      { code: "PAY_CARD",         label: "Pay Card",             icon: CreditCard,   description: "Process card via connected terminal" },
+      { code: "PAY_SPLIT",        label: "Split Payment",        icon: Wallet,       description: "Split across cash and card" },
+      { code: "PAY_ACCOUNT",      label: "Charge to Account",    icon: AlignLeft,    description: "Post to customer account / credit" },
+      { code: "PAY_VOUCHER",      label: "Redeem Voucher",       icon: Receipt,      description: "Accept a gift voucher or coupon code" },
+      { code: "PAY_LAYAWAY",      label: "Layaway / Deposit",    icon: Wallet,       description: "Take partial payment, hold order" },
     ],
   },
   {
     group: "Sale Management", icon: Receipt, color: "text-blue-600",
     actions: [
-      { code: "new_sale",         label: "New Sale",             icon: Receipt,      description: "Clear current order and start fresh" },
-      { code: "hold_sale",        label: "Hold Sale",            icon: Receipt,      description: "Park current order, serve another customer" },
-      { code: "recall_sale",      label: "Recall Held Sale",     icon: Receipt,      description: "Bring back a parked order" },
-      { code: "void_line",        label: "Void Line",            icon: Minus,        description: "Remove currently selected line" },
-      { code: "void_sale",        label: "Void Sale",            icon: RotateCcw,    description: "Cancel the entire current order" },
-      { code: "refund",           label: "Refund / Return",      icon: RotateCcw,    description: "Process a return against a prior sale" },
-      { code: "exchange",         label: "Exchange",             icon: RotateCcw,    description: "Swap an item for another" },
-      { code: "suspend_sale",     label: "Suspend Sale",         icon: Receipt,      description: "Save order without payment" },
+      { code: "NEW_SALE",         label: "New Sale",             icon: Receipt,      description: "Clear current order and start fresh" },
+      { code: "HOLD",             label: "Hold Sale",            icon: Receipt,      description: "Park current order, serve another customer" },
+      { code: "RECALL",           label: "Recall Held Sale",     icon: Receipt,      description: "Bring back a parked order" },
+      { code: "VOID_LINE",        label: "Void Line",            icon: Minus,        description: "Remove currently selected line" },
+      { code: "VOID_SALE",        label: "Void Sale",            icon: RotateCcw,    description: "Cancel the entire current order" },
+      { code: "REFUND",           label: "Refund / Return",      icon: RotateCcw,    description: "Process a return against a prior sale" },
+      { code: "EXCHANGE",         label: "Exchange",             icon: RotateCcw,    description: "Swap an item for another" },
+      { code: "SUSPEND_SALE",     label: "Suspend Sale",         icon: Receipt,      description: "Save order without payment" },
     ],
   },
   {
     group: "Price & Modifiers", icon: Calculator, color: "text-amber-600",
     actions: [
-      { code: "qty",              label: "Enter Quantity",       icon: Calculator,   description: "Numeric keypad to set line quantity" },
-      { code: "discount_pct",     label: "Line Discount %",      icon: TrendingDown, description: "Percentage discount on selected line" },
-      { code: "discount_fixed",   label: "Line Discount (Fixed)",icon: TrendingDown, description: "Fixed-amount discount on selected line" },
-      { code: "order_discount_pct",label:"Order Discount %",     icon: TrendingDown, description: "Percentage discount on whole order" },
-      { code: "price_override",   label: "Price Override",       icon: Calculator,   description: "Manually set the price of a line" },
-      { code: "price_check",      label: "Price Check",          icon: Search,       description: "Look up item price by barcode" },
-      { code: "weight",           label: "Enter Weight",         icon: Calculator,   description: "Input weight for sold-by-weight items" },
+      { code: "QTY",              label: "Enter Quantity",       icon: Calculator,   description: "Numeric keypad to set line quantity" },
+      { code: "DISCOUNT_PCT",     label: "Line Discount %",      icon: TrendingDown, description: "Percentage discount on selected line" },
+      { code: "DISCOUNT_FIXED",   label: "Line Discount (Fixed)",icon: TrendingDown, description: "Fixed-amount discount on selected line" },
+      { code: "ORDER_DISCOUNT_PCT",label:"Order Discount %",     icon: TrendingDown, description: "Percentage discount on whole order" },
+      { code: "PRICE_OVERRIDE",   label: "Price Override",       icon: Calculator,   description: "Manually set the price of a line" },
+      { code: "PRICE_CHECK",      label: "Price Check",          icon: Search,       description: "Look up item price by barcode" },
+      { code: "WEIGHT",           label: "Enter Weight",         icon: Calculator,   description: "Input weight for sold-by-weight items" },
     ],
   },
   {
     group: "Customer", icon: Users, color: "text-purple-600",
     actions: [
-      { code: "customer_lookup",  label: "Customer Lookup",      icon: Search,       description: "Attach a customer to this order" },
-      { code: "customer_clear",   label: "Clear Customer",       icon: Users,        description: "Remove customer from current order" },
-      { code: "loyalty_points",   label: "Redeem Loyalty Points",icon: Users,        description: "Apply earned points as discount" },
-      { code: "customer_account", label: "Customer Balance",     icon: Wallet,       description: "Show customer account balance" },
-      { code: "customer_history", label: "Purchase History",     icon: FileText,     description: "View customer's recent purchases" },
+      { code: "CUSTOMER_LOOKUP",  label: "Customer Lookup",      icon: Search,       description: "Attach a customer to this order" },
+      { code: "CUSTOMER_CLEAR",   label: "Clear Customer",       icon: Users,        description: "Remove customer from current order" },
+      { code: "LOYALTY_POINTS",   label: "Redeem Loyalty Points",icon: Users,        description: "Apply earned points as discount" },
+      { code: "CUSTOMER_ACCOUNT", label: "Customer Balance",     icon: Wallet,       description: "Show customer account balance" },
+      { code: "CUSTOMER_HISTORY", label: "Purchase History",     icon: FileText,     description: "View customer's recent purchases" },
     ],
   },
   {
     group: "Barcode & Search", icon: Search, color: "text-cyan-600",
     actions: [
-      { code: "barcode_scan",     label: "Scan Barcode",         icon: Search,       description: "Activate barcode scanner input" },
-      { code: "item_search",      label: "Search Items",         icon: Search,       description: "Open text search for items" },
-      { code: "plu",              label: "PLU / Item Code",      icon: Search,       description: "Enter an item code directly" },
+      { code: "BARCODE_SCAN",     label: "Scan Barcode",         icon: Search,       description: "Activate barcode scanner input" },
+      { code: "ITEM_SEARCH",      label: "Search Items",         icon: Search,       description: "Open text search for items" },
+      { code: "PLU",              label: "PLU / Item Code",      icon: Search,       description: "Enter an item code directly" },
     ],
   },
   {
     group: "Cash Drawer & Journal", icon: DoorOpen, color: "text-orange-600",
     actions: [
-      { code: "open_drawer",      label: "Open Drawer",          icon: DoorOpen,     description: "Pop open the cash drawer" },
-      { code: "no_sale",          label: "No Sale",              icon: DoorOpen,     description: "Open drawer without a transaction" },
-      { code: "cash_in",          label: "Cash In",              icon: Banknote,     description: "Record cash added to drawer" },
-      { code: "cash_out",         label: "Cash Out",             icon: Banknote,     description: "Record cash removed from drawer" },
-      { code: "petty_cash",       label: "Petty Cash",           icon: Banknote,     description: "Record a petty cash expense" },
-      { code: "declare_cash",     label: "Declare Cash",         icon: Banknote,     description: "Count and declare cash at shift end" },
+      { code: "OPEN_DRAWER",      label: "Open Drawer",          icon: DoorOpen,     description: "Pop open the cash drawer" },
+      { code: "NO_SALE",          label: "No Sale",              icon: DoorOpen,     description: "Open drawer without a transaction" },
+      { code: "CASH_IN",          label: "Cash In",              icon: Banknote,     description: "Record cash added to drawer" },
+      { code: "CASH_OUT",         label: "Cash Out",             icon: Banknote,     description: "Record cash removed from drawer" },
+      { code: "PETTY_CASH",       label: "Petty Cash",           icon: Banknote,     description: "Record a petty cash expense" },
+      { code: "DECLARE_CASH",     label: "Declare Cash",         icon: Banknote,     description: "Count and declare cash at shift end" },
     ],
   },
   {
     group: "Receipt & Print", icon: Printer, color: "text-gray-600",
     actions: [
-      { code: "print_receipt",    label: "Print Receipt",        icon: Printer,      description: "Print receipt for last / current sale" },
-      { code: "reprint",          label: "Reprint Receipt",      icon: Printer,      description: "Reprint the last printed receipt" },
-      { code: "email_receipt",    label: "Email Receipt",        icon: Receipt,      description: "Send receipt to customer via email" },
-      { code: "gift_receipt",     label: "Gift Receipt",         icon: Receipt,      description: "Print receipt without prices" },
+      { code: "PRINT_RECEIPT",    label: "Print Receipt",        icon: Printer,      description: "Print receipt for last / current sale" },
+      { code: "REPRINT",          label: "Reprint Receipt",      icon: Printer,      description: "Reprint the last printed receipt" },
+      { code: "EMAIL_RECEIPT",    label: "Email Receipt",        icon: Receipt,      description: "Send receipt to customer via email" },
+      { code: "GIFT_RECEIPT",     label: "Gift Receipt",         icon: Receipt,      description: "Print receipt without prices" },
     ],
   },
   {
     group: "Shift & Reports", icon: BarChart2, color: "text-indigo-600",
     actions: [
-      { code: "clock_in",         label: "Clock In",             icon: Clock,        description: "Cashier clocks in at start of shift" },
-      { code: "clock_out",        label: "Clock Out",            icon: Clock,        description: "Cashier clocks out at end of shift" },
-      { code: "report_x",         label: "X Report (Interim)",   icon: BarChart2,    description: "Print mid-shift sales summary" },
-      { code: "report_z",         label: "Z Report (End of Day)",icon: BarChart2,    description: "Print end-of-day report, reset counters" },
-      { code: "shift_start",      label: "Start Shift",          icon: Clock,        description: "Open a new cashier shift" },
-      { code: "shift_end",        label: "End Shift",            icon: Clock,        description: "Close current shift" },
+      { code: "CLOCK_IN",         label: "Clock In",             icon: Clock,        description: "Cashier clocks in at start of shift" },
+      { code: "CLOCK_OUT",        label: "Clock Out",            icon: Clock,        description: "Cashier clocks out at end of shift" },
+      { code: "REPORT_X",         label: "X Report (Interim)",   icon: BarChart2,    description: "Print mid-shift sales summary" },
+      { code: "REPORT_Z",         label: "Z Report (End of Day)",icon: BarChart2,    description: "Print end-of-day report, reset counters" },
+      { code: "SHIFT_START",      label: "Start Shift",          icon: Clock,        description: "Open a new cashier shift" },
+      { code: "SHIFT_END",        label: "End Shift",            icon: Clock,        description: "Close current shift" },
     ],
   },
   {
     group: "Accounting / Journal", icon: BookOpen, color: "text-rose-600",
     actions: [
-      { code: "journal_cash_in",     label: "Journal: Cash In",      icon: BookOpen,  description: "Post a cash-in journal entry to the bill" },
-      { code: "journal_cash_out",    label: "Journal: Cash Out",     icon: BookOpen,  description: "Post a cash-out journal entry to the bill" },
-      { code: "journal_expense",     label: "Journal: Expense",      icon: BookOpen,  description: "Record a petty-cash expense in ledger" },
-      { code: "journal_correction",  label: "Journal: Correction",   icon: BookOpen,  description: "Post a manual correction entry" },
-      { code: "journal_tip",         label: "Add Tip / Gratuity",    icon: BookOpen,  description: "Add a tip line to the bill" },
-      { code: "journal_service_chg", label: "Service Charge",        icon: BookOpen,  description: "Apply a service charge to the bill" },
-      { code: "journal_cover",       label: "Cover Charge",          icon: BookOpen,  description: "Add a per-head cover charge" },
-      { code: "vat_summary",         label: "VAT Summary",           icon: FileText,  description: "Show VAT collected for current shift" },
+      { code: "JOURNAL_CASH_IN",     label: "Journal: Cash In",      icon: BookOpen,  description: "Post a cash-in journal entry to the bill" },
+      { code: "JOURNAL_CASH_OUT",    label: "Journal: Cash Out",     icon: BookOpen,  description: "Post a cash-out journal entry to the bill" },
+      { code: "JOURNAL_EXPENSE",     label: "Journal: Expense",      icon: BookOpen,  description: "Record a petty-cash expense in ledger" },
+      { code: "JOURNAL_CORRECTION",  label: "Journal: Correction",   icon: BookOpen,  description: "Post a manual correction entry" },
+      { code: "JOURNAL_TIP",         label: "Add Tip / Gratuity",    icon: BookOpen,  description: "Add a tip line to the bill" },
+      { code: "JOURNAL_SERVICE_CHG", label: "Service Charge",        icon: BookOpen,  description: "Apply a service charge to the bill" },
+      { code: "JOURNAL_COVER",       label: "Cover Charge",          icon: BookOpen,  description: "Add a per-head cover charge" },
+      { code: "VAT_SUMMARY",         label: "VAT Summary",           icon: FileText,  description: "Show VAT collected for current shift" },
     ],
   },
   {
     group: "Navigation & Display", icon: LayoutGrid, color: "text-slate-600",
     actions: [
-      { code: "page_up",          label: "Page Up",              icon: ChevronUp,    description: "Scroll the product grid up one page" },
-      { code: "page_down",        label: "Page Down",            icon: ChevronDown,  description: "Scroll the product grid down one page" },
-      { code: "show_all_items",   label: "Show All Items",       icon: LayoutGrid,   description: "Clear category filter" },
-      { code: "numpad",           label: "Numeric Keypad",       icon: Calculator,   description: "Open the numeric input pad" },
-      { code: "notes",            label: "Add Order Note",       icon: AlignLeft,    description: "Attach a free-text note to the order" },
+      { code: "PAGE_UP",          label: "Page Up",              icon: ChevronUp,    description: "Scroll the product grid up one page" },
+      { code: "PAGE_DOWN",        label: "Page Down",            icon: ChevronDown,  description: "Scroll the product grid down one page" },
+      { code: "SHOW_ALL_ITEMS",   label: "Show All Items",       icon: LayoutGrid,   description: "Clear category filter" },
+      { code: "NUMPAD",           label: "Numeric Keypad",       icon: Calculator,   description: "Open the numeric input pad" },
+      { code: "NOTES",            label: "Add Order Note",       icon: AlignLeft,    description: "Attach a free-text note to the order" },
     ],
   },
   {
     group: "Manager & Security", icon: ShieldAlert, color: "text-red-700",
     actions: [
-      { code: "manager_override", label: "Manager Override",     icon: ShieldAlert,  description: "Prompt for manager PIN to authorise" },
-      { code: "lock_terminal",    label: "Lock Terminal",        icon: ShieldAlert,  description: "Lock screen — requires PIN to resume" },
-      { code: "change_cashier",   label: "Change Cashier",       icon: Users,        description: "Switch cashier without closing sale" },
-      { code: "admin_menu",       label: "Admin Menu",           icon: Settings2,    description: "Access terminal administration options" },
+      { code: "MANAGER_OVERRIDE", label: "Manager Override",     icon: ShieldAlert,  description: "Prompt for manager PIN to authorise" },
+      { code: "LOCK_TERMINAL",    label: "Lock Terminal",        icon: ShieldAlert,  description: "Lock screen — requires PIN to resume" },
+      { code: "CHANGE_CASHIER",   label: "Change Cashier",       icon: Users,        description: "Switch cashier without closing sale" },
+      { code: "ADMIN_MENU",       label: "Admin Menu",           icon: Settings2,    description: "Access terminal administration options" },
     ],
   },
 ];
@@ -313,8 +313,9 @@ function GridButton({
 
 // ── ActionGroupPicker ──────────────────────────────────────────────────────────
 function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code: string) => void }) {
+  const normalizedValue = value?.toUpperCase() ?? "";
   const [openGroup, setOpenGroup] = useState<string | null>(() => {
-    const g = ACTION_GROUPS.find(g => g.actions.some(a => a.code === value));
+    const g = ACTION_GROUPS.find(g => g.actions.some(a => a.code === normalizedValue));
     return g?.group ?? ACTION_GROUPS[0].group;
   });
 
@@ -323,7 +324,7 @@ function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code
       {ACTION_GROUPS.map(group => {
         const GroupIcon = group.icon;
         const isOpen = openGroup === group.group;
-        const selectedInGroup = group.actions.find(a => a.code === value);
+        const selectedInGroup = group.actions.find(a => a.code === normalizedValue);
         return (
           <div key={group.group}>
             <button
@@ -344,7 +345,7 @@ function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code
               <div className="divide-y bg-muted/20">
                 {group.actions.map(action => {
                   const ActionIcon = action.icon;
-                  const isSel = value === action.code;
+                  const isSel = normalizedValue === action.code;
                   return (
                     <button
                       key={action.code}
@@ -533,7 +534,7 @@ function ButtonDialog({
   }, [draft.categoryId]);
   useEffect(() => {
     if (draft.buttonType === "action" && draft.actionCode) {
-      const act = ALL_ACTIONS.find(a => a.code === draft.actionCode);
+      const act = ALL_ACTIONS.find(a => a.code === draft.actionCode?.toUpperCase());
       if (act) set({ label: act.label });
     }
   }, [draft.actionCode]);
