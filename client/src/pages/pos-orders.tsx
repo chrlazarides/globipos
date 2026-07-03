@@ -128,6 +128,8 @@ export default function PosOrders() {
   const [search, setSearch] = useState("");
   const [locationFilter, setLocationFilter] = useState("all");
   const [methodFilter, setMethodFilter] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [selectedOrder, setSelectedOrder] = useState<OrderWithMeta | null>(null);
 
   const { data: orders = [], isLoading } = useQuery<OrderWithMeta[]>({ queryKey: ["/api/pos/orders"] });
@@ -136,6 +138,19 @@ export default function PosOrders() {
   const filtered = orders.filter(o => {
     if (locationFilter !== "all" && o.locationId !== locationFilter) return false;
     if (methodFilter !== "all" && o.paymentMethod !== methodFilter) return false;
+    if (dateFrom || dateTo) {
+      const orderDate = new Date(o.createdAt);
+      if (dateFrom) {
+        const from = new Date(dateFrom);
+        from.setHours(0, 0, 0, 0);
+        if (orderDate < from) return false;
+      }
+      if (dateTo) {
+        const to = new Date(dateTo);
+        to.setHours(23, 59, 59, 999);
+        if (orderDate > to) return false;
+      }
+    }
     if (search) {
       const q = search.toLowerCase();
       const matchesOrder = o.orderNumber.toLowerCase().includes(q);
@@ -184,6 +199,35 @@ export default function PosOrders() {
             <SelectItem value="mixed">Mixed</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex items-center gap-2">
+          <Input
+            type="date"
+            value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)}
+            className="w-40"
+            aria-label="From date"
+            data-testid="input-date-from"
+          />
+          <span className="text-muted-foreground text-sm">to</span>
+          <Input
+            type="date"
+            value={dateTo}
+            onChange={e => setDateTo(e.target.value)}
+            className="w-40"
+            aria-label="To date"
+            data-testid="input-date-to"
+          />
+          {(dateFrom || dateTo) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setDateFrom(""); setDateTo(""); }}
+              data-testid="button-clear-date-filter"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
 
       {isLoading ? (
