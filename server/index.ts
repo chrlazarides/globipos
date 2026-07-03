@@ -149,6 +149,21 @@ app.use((req, res, next) => {
     console.error("[migration] staff_push_subscriptions table error:", e);
   }
 
+  // Schema migration: create wa_cart_state table if it doesn't exist (WhatsApp cart/pending-item persistence)
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS wa_cart_state (
+        conversation_id VARCHAR PRIMARY KEY,
+        cart JSONB NOT NULL DEFAULT '[]',
+        pending_item JSONB,
+        pending_expires_at TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+      );
+    `);
+  } catch (e) {
+    console.error("[migration] wa_cart_state table error:", e);
+  }
+
   // One-time opening balance migration — sets carry-over balances from previous system
   // Idempotent: only sets where opening_balance is still 0
   try {
@@ -169,6 +184,14 @@ app.use((req, res, next) => {
     console.log("[migration] Opening balances applied.");
   } catch (e) {
     console.error("[migration] Opening balance migration error:", e);
+  }
+
+  try {
+    const { loadWaStateFromDb, startWaCartPruning } = await import("./chatbot-service");
+    await loadWaStateFromDb();
+    startWaCartPruning();
+  } catch (e) {
+    console.error("[wa-cart] startup restore failed:", e);
   }
 
   await registerRoutes(httpServer, app);

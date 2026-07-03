@@ -861,3 +861,16 @@ export const staffPushSubscriptions = pgTable("staff_push_subscriptions", {
 export const insertStaffPushSubscriptionSchema = createInsertSchema(staffPushSubscriptions).omit({ id: true, createdAt: true });
 export type InsertStaffPushSubscription = z.infer<typeof insertStaffPushSubscriptionSchema>;
 export type StaffPushSubscription = typeof staffPushSubscriptions.$inferSelect;
+
+// ── WhatsApp cart/pending-item persistence (survives server restarts) ─────────
+export const waCartState = pgTable("wa_cart_state", {
+  conversationId: varchar("conversation_id").primaryKey(),
+  cart: jsonb("cart").notNull().default([]), // WaCartItem[]
+  pendingItem: jsonb("pending_item"), // WaPendingItem | null
+  pendingExpiresAt: timestamp("pending_expires_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertWaCartStateSchema = createInsertSchema(waCartState).omit({ updatedAt: true });
+export type InsertWaCartState = z.infer<typeof insertWaCartStateSchema>;
+export type WaCartState = typeof waCartState.$inferSelect;

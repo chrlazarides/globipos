@@ -1,6 +1,13 @@
 import OpenAI from "openai";
+import { db } from "./db";
+import { waCartState } from "@shared/schema";
+import { eq, lt, and, isNull } from "drizzle-orm";
 
-// ─── WhatsApp in-chat cart store (per conversation, in-memory) ────────────────
+// ─── WhatsApp in-chat cart store (per conversation, in-memory + DB-backed) ────
+// The in-memory Maps below are the hot path for every message; every mutation
+// is also persisted to the wa_cart_state table so a server restart doesn't
+// silently wipe active carts/pending confirmations. On boot, loadWaStateFromDb()
+// repopulates the Maps (and re-arms pending-item timers) from surviving rows.
 export interface WaCartItem {
   itemId: string;
   name: string;
@@ -20,6 +27,7 @@ export function addToWaCart(convId: string, item: Omit<WaCartItem, "qty">, qty =
   const existing = cart.find((c) => c.itemId === item.itemId);
   if (existing) { existing.qty += qty; } else { cart.push({ ...item, qty }); }
   waCartStore.set(convId, cart);
+  persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
 export function clearWaCart(convId: string) {
@@ -29,6 +37,7 @@ export function clearWaCart(convId: string) {
   // an admin action or cart expiry), the stale product list must go with it so a
   // customer can never reply with a number from an old list and add the wrong item.
   clearBrowseResults(convId);
+  persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
 export function formatWaCart(cart: WaCartItem[]): string {
@@ -109,6 +118,7 @@ export function getPendingItem(convId: string): WaPendingItem | undefined {
     clearTimeout(entry.timer);
     waPendingStore.delete(convId);
     waPendingExpired.add(convId);
+    persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
     return undefined;
   }
   return entry.item;
@@ -122,11 +132,13 @@ export function setPendingItem(convId: string, item: WaPendingItem) {
   const timer = setTimeout(() => {
     waPendingStore.delete(convId);
     waPendingExpired.add(convId);
+    persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
   }, PENDING_TTL_MS);
 
   waPendingStore.set(convId, { item, expiresAt: Date.now() + PENDING_TTL_MS, timer });
   waPendingExpired.delete(convId); // reset expired flag on new pending item
   waExpiredReplySentAt.delete(convId); // fresh pending item — allow a future expiry reply again
+  persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
 export function clearPendingItem(convId: string) {
@@ -134,6 +146,7 @@ export function clearPendingItem(convId: string) {
   if (entry) clearTimeout(entry.timer);
   waPendingStore.delete(convId);
   waPendingExpired.delete(convId);
+  persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
 /**
@@ -198,6 +211,137 @@ export function clearBrowseResults(convId: string) {
   const existing = waBrowseStore.get(convId);
   if (existing) clearTimeout(existing.timer);
   waBrowseStore.delete(convId);
+}
+
+// ─── DB persistence for cart + pending item (survives server restarts) ───────
+// Serializes DB writes per conversation so a burst of rapid mutations (e.g.
+// add → clear → add within the same message handler) always lands in the
+// order they were issued, instead of racing and letting an older write
+// overwrite a newer one.
+const persistQueues = new Map<string, Promise<void>>();
+
+async function writeWaStateNow(convId: string): Promise<void> {
+  // Re-read current in-memory state at execution time (not enqueue time) so
+  // the write always reflects the latest state, even if it was queued behind
+  // an earlier pending write.
+  const cart = waCartStore.get(convId) ?? [];
+  const pendingEntry = waPendingStore.get(convId);
+
+  if (!cart.length && !pendingEntry) {
+    // Nothing worth keeping — drop the row entirely.
+    await db.delete(waCartState).where(eq(waCartState.conversationId, convId));
+    return;
+  }
+
+  await db
+    .insert(waCartState)
+    .values({
+      conversationId: convId,
+      cart: cart as any,
+      pendingItem: (pendingEntry?.item as any) ?? null,
+      pendingExpiresAt: pendingEntry ? new Date(pendingEntry.expiresAt) : null,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: waCartState.conversationId,
+      set: {
+        cart: cart as any,
+        pendingItem: (pendingEntry?.item as any) ?? null,
+        pendingExpiresAt: pendingEntry ? new Date(pendingEntry.expiresAt) : null,
+        updatedAt: new Date(),
+      },
+    });
+}
+
+function persistWaState(convId: string): Promise<void> {
+  const prior = persistQueues.get(convId) ?? Promise.resolve();
+  const next = prior
+    .catch(() => {}) // don't let an earlier failure block later writes
+    .then(() => writeWaStateNow(convId));
+  persistQueues.set(
+    convId,
+    next.finally(() => {
+      // Only clear the queue slot if nothing else was chained on after us.
+      if (persistQueues.get(convId) === next) persistQueues.delete(convId);
+    })
+  );
+  return next;
+}
+
+/**
+ * Rehydrates the in-memory cart/pending-item Maps from the DB on server boot.
+ * Pending items that already expired while the server was down are dropped
+ * (and their row cleaned up) instead of being silently resurrected.
+ */
+export async function loadWaStateFromDb(): Promise<void> {
+  try {
+    const rows = await db.select().from(waCartState);
+    const now = Date.now();
+    let restoredCarts = 0;
+    let restoredPending = 0;
+
+    for (const row of rows) {
+      const cart = (row.cart as unknown as WaCartItem[]) ?? [];
+      if (cart.length) {
+        waCartStore.set(row.conversationId, cart);
+        restoredCarts++;
+      }
+
+      if (row.pendingItem && row.pendingExpiresAt) {
+        const expiresAt = new Date(row.pendingExpiresAt).getTime();
+        if (expiresAt > now) {
+          const remaining = expiresAt - now;
+          const item = row.pendingItem as unknown as WaPendingItem;
+          const timer = setTimeout(() => {
+            waPendingStore.delete(row.conversationId);
+            waPendingExpired.add(row.conversationId);
+            persistWaState(row.conversationId).catch((e) => console.error("[wa-cart] persist failed:", e));
+          }, remaining);
+          waPendingStore.set(row.conversationId, { item, expiresAt, timer });
+          restoredPending++;
+        } else {
+          // Expired while the server was offline — clean it up rather than resurrect it.
+          persistWaState(row.conversationId).catch((e) => console.error("[wa-cart] persist failed:", e));
+        }
+      }
+    }
+
+    if (restoredCarts || restoredPending) {
+      console.log(`[wa-cart] restored ${restoredCarts} cart(s) and ${restoredPending} pending item(s) from DB after restart`);
+    }
+  } catch (e) {
+    console.error("[wa-cart] failed to load state from DB on startup:", e);
+  }
+}
+
+const STALE_CART_MS = 48 * 60 * 60 * 1000; // 48h with no activity = abandoned cart, safe to prune
+const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
+
+/** Deletes DB rows for carts abandoned long enough that keeping them serves no purpose. */
+export async function pruneStaleWaCartState(): Promise<void> {
+  try {
+    const cutoff = new Date(Date.now() - STALE_CART_MS);
+    const deleted = await db
+      .delete(waCartState)
+      .where(and(isNull(waCartState.pendingItem), lt(waCartState.updatedAt, cutoff)))
+      .returning({ conversationId: waCartState.conversationId });
+
+    for (const row of deleted) {
+      waCartStore.delete(row.conversationId);
+    }
+    if (deleted.length) {
+      console.log(`[wa-cart] pruned ${deleted.length} stale abandoned cart(s)`);
+    }
+  } catch (e) {
+    console.error("[wa-cart] prune failed:", e);
+  }
+}
+
+/** Starts the periodic pruning job. Call once on server startup. */
+export function startWaCartPruning(): void {
+  setInterval(() => {
+    pruneStaleWaCartState().catch((e) => console.error("[wa-cart] prune failed:", e));
+  }, PRUNE_INTERVAL_MS);
 }
 
 // ─── Keyword intent matcher (always available) ────────────────────────────────
