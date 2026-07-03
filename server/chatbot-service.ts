@@ -3,11 +3,13 @@ import { db } from "./db";
 import { waCartState } from "@shared/schema";
 import { eq, lt, and, isNull } from "drizzle-orm";
 
-// ─── WhatsApp in-chat cart store (per conversation, in-memory + DB-backed) ────
+// ─── WhatsApp in-chat session store (per conversation, in-memory + DB-backed) ─
 // The in-memory Maps below are the hot path for every message; every mutation
-// is also persisted to the wa_cart_state table so a server restart doesn't
-// silently wipe active carts/pending confirmations. On boot, loadWaStateFromDb()
-// repopulates the Maps (and re-arms pending-item timers) from surviving rows.
+// is also persisted to the wa_cart_state table so a server restart — or a
+// customer who closes WhatsApp and returns hours later — doesn't silently
+// lose their cart, browse list, or pending confirmation. On boot,
+// loadWaStateFromDb() repopulates the Maps (and re-arms pending-item timers)
+// from surviving rows.
 export interface WaCartItem {
   itemId: string;
   name: string;
@@ -16,13 +18,13 @@ export interface WaCartItem {
   qty: number;
 }
 
-const waCartStore = new Map<string, WaCartItem[]>(); // key = conversationId
+const waCartStore = new Map<string, WaCartItem[]>();
 
-export function getWaCart(convId: string): WaCartItem[] {
+export async function getWaCart(convId: string): Promise<WaCartItem[]> {
   return waCartStore.get(convId) ?? [];
 }
 
-export function addToWaCart(convId: string, item: Omit<WaCartItem, "qty">, qty = 1) {
+export async function addToWaCart(convId: string, item: Omit<WaCartItem, "qty">, qty = 1) {
   const cart = waCartStore.get(convId) ?? [];
   const existing = cart.find((c) => c.itemId === item.itemId);
   if (existing) { existing.qty += qty; } else { cart.push({ ...item, qty }); }
@@ -30,13 +32,13 @@ export function addToWaCart(convId: string, item: Omit<WaCartItem, "qty">, qty =
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
-export function clearWaCart(convId: string) {
+export async function clearWaCart(convId: string) {
   waCartStore.delete(convId);
   // Tie browse-result validity to cart lifecycle: whenever the cart is cleared
   // (checkout, "cancel"/"clear" command, or any future server-side clear such as
   // an admin action or cart expiry), the stale product list must go with it so a
   // customer can never reply with a number from an old list and add the wrong item.
-  clearBrowseResults(convId);
+  await clearBrowseResults(convId);
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
@@ -99,19 +101,20 @@ interface WaPendingEntry {
 
 const waPendingStore = new Map<string, WaPendingEntry>();
 
-// Tracks conversations where a pending item recently expired — lets routes.ts
-// give the customer a helpful "browse again" reply instead of a confusing response.
+// Tracks conversations whose pending item expired without the customer
+// confirming, so a subsequent message can trigger a one-time "timed out" reply.
 const waPendingExpired = new Set<string>();
 
 // Dedup window: WhatsApp (and other providers) can redeliver the same webhook
 // event, and near-simultaneous "yes" messages can otherwise both slip through
-// before the flag above is cleared. Track the last time we actually sent the
-// "timed out" reply per conversation so re-deliveries/rapid repeats within the
-// window are suppressed instead of sending a flood of duplicate replies.
-const waExpiredReplySentAt = new Map<string, number>();
+// before the flag above is cleared. We persist the last time we actually sent
+// the "timed out" reply (pendingExpiredReplySentAt) so re-deliveries/rapid
+// repeats within the window are suppressed instead of sending a flood of
+// duplicate replies — even across a server restart.
 const EXPIRED_REPLY_DEDUPE_MS = 60_000;
+const waExpiredReplySentAt = new Map<string, number>();
 
-export function getPendingItem(convId: string): WaPendingItem | undefined {
+export async function getPendingItem(convId: string): Promise<WaPendingItem | undefined> {
   const entry = waPendingStore.get(convId);
   if (!entry) return undefined;
   if (Date.now() > entry.expiresAt) {
@@ -124,7 +127,7 @@ export function getPendingItem(convId: string): WaPendingItem | undefined {
   return entry.item;
 }
 
-export function setPendingItem(convId: string, item: WaPendingItem) {
+export async function setPendingItem(convId: string, item: WaPendingItem) {
   // Cancel any existing timer first
   const existing = waPendingStore.get(convId);
   if (existing) clearTimeout(existing.timer);
@@ -141,21 +144,22 @@ export function setPendingItem(convId: string, item: WaPendingItem) {
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
-export function clearPendingItem(convId: string) {
+export async function clearPendingItem(convId: string) {
   const entry = waPendingStore.get(convId);
   if (entry) clearTimeout(entry.timer);
   waPendingStore.delete(convId);
   waPendingExpired.delete(convId);
+  waExpiredReplySentAt.delete(convId);
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
 /**
- * Returns true (and clears the flag) if a pending item expired for this conversation
- * and we haven't already sent a "timed out" reply for it very recently. This guards
- * against duplicate webhook deliveries or rapid repeat "yes" messages racing each
- * other and each triggering their own timeout reply.
+ * Returns true (and records the reply time) if a pending item expired for this
+ * conversation and we haven't already sent a "timed out" reply for it very
+ * recently. This guards against duplicate webhook deliveries or rapid repeat
+ * "yes" messages racing each other and each triggering their own timeout reply.
  */
-export function consumeExpiredPendingFlag(convId: string): boolean {
+export async function consumeExpiredPendingFlag(convId: string): Promise<boolean> {
   if (!waPendingExpired.has(convId)) return false;
 
   const now = Date.now();
@@ -166,54 +170,46 @@ export function consumeExpiredPendingFlag(convId: string): boolean {
     return false;
   }
 
-  waPendingExpired.delete(convId);
   waExpiredReplySentAt.set(convId, now);
-  setTimeout(() => {
-    // Clean up so the map doesn't grow unbounded with stale entries.
-    if (waExpiredReplySentAt.get(convId) === now) waExpiredReplySentAt.delete(convId);
-  }, EXPIRED_REPLY_DEDUPE_MS).unref?.();
+  persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
   return true;
 }
 
-// ─── WhatsApp browse results TTL cache ────────────────────────────────────────
+// ─── WhatsApp browse results TTL cache ─────────────────────────────────────────
 // Stores the last product list shown to each conversation so item-number replies
-// survive a server restart (instead of silently picking the wrong item or giving
-// a confusing "outside current list" error).
+// survive a server restart or a long absence (instead of silently picking the
+// wrong item or giving a confusing "outside current list" error).
 const BROWSE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 interface WaBrowseEntry {
   results: any[];
   expiresAt: number;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 const waBrowseStore = new Map<string, WaBrowseEntry>();
 
-export function getBrowseResults(convId: string): any[] | null {
+export async function getBrowseResults(convId: string): Promise<any[] | null> {
   const entry = waBrowseStore.get(convId);
   if (!entry) return null; // null = never browsed / expired — caller should prompt re-browse
   if (Date.now() > entry.expiresAt) {
-    clearTimeout(entry.timer);
     waBrowseStore.delete(convId);
+    persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
     return null;
   }
   return entry.results;
 }
 
-export function setBrowseResults(convId: string, results: any[]) {
-  const existing = waBrowseStore.get(convId);
-  if (existing) clearTimeout(existing.timer);
-  const timer = setTimeout(() => waBrowseStore.delete(convId), BROWSE_TTL_MS);
-  waBrowseStore.set(convId, { results, expiresAt: Date.now() + BROWSE_TTL_MS, timer });
+export async function setBrowseResults(convId: string, results: any[]) {
+  waBrowseStore.set(convId, { results, expiresAt: Date.now() + BROWSE_TTL_MS });
+  persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
-export function clearBrowseResults(convId: string) {
-  const existing = waBrowseStore.get(convId);
-  if (existing) clearTimeout(existing.timer);
+export async function clearBrowseResults(convId: string) {
   waBrowseStore.delete(convId);
+  persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
-// ─── DB persistence for cart + pending item (survives server restarts) ───────
+// ─── DB persistence for cart + browse + pending item (survives server restarts) ─
 // Serializes DB writes per conversation so a burst of rapid mutations (e.g.
 // add → clear → add within the same message handler) always lands in the
 // order they were issued, instead of racing and letting an older write
@@ -226,30 +222,34 @@ async function writeWaStateNow(convId: string): Promise<void> {
   // an earlier pending write.
   const cart = waCartStore.get(convId) ?? [];
   const pendingEntry = waPendingStore.get(convId);
+  const browseEntry = waBrowseStore.get(convId);
+  const pendingExpiredFlag = waPendingExpired.has(convId);
+  const replySentAt = waExpiredReplySentAt.get(convId);
 
-  if (!cart.length && !pendingEntry) {
+  if (!cart.length && !pendingEntry && !browseEntry && !pendingExpiredFlag) {
     // Nothing worth keeping — drop the row entirely.
     await db.delete(waCartState).where(eq(waCartState.conversationId, convId));
     return;
   }
 
+  const values = {
+    conversationId: convId,
+    cart: cart as any,
+    browseResults: (browseEntry?.results as any) ?? null,
+    browseExpiresAt: browseEntry ? new Date(browseEntry.expiresAt) : null,
+    pendingItem: (pendingEntry?.item as any) ?? null,
+    pendingExpiresAt: pendingEntry ? new Date(pendingEntry.expiresAt) : null,
+    pendingExpiredFlag,
+    pendingExpiredReplySentAt: replySentAt ? new Date(replySentAt) : null,
+    updatedAt: new Date(),
+  };
+
   await db
     .insert(waCartState)
-    .values({
-      conversationId: convId,
-      cart: cart as any,
-      pendingItem: (pendingEntry?.item as any) ?? null,
-      pendingExpiresAt: pendingEntry ? new Date(pendingEntry.expiresAt) : null,
-      updatedAt: new Date(),
-    })
+    .values(values)
     .onConflictDoUpdate({
       target: waCartState.conversationId,
-      set: {
-        cart: cart as any,
-        pendingItem: (pendingEntry?.item as any) ?? null,
-        pendingExpiresAt: pendingEntry ? new Date(pendingEntry.expiresAt) : null,
-        updatedAt: new Date(),
-      },
+      set: values,
     });
 }
 
@@ -269,9 +269,10 @@ function persistWaState(convId: string): Promise<void> {
 }
 
 /**
- * Rehydrates the in-memory cart/pending-item Maps from the DB on server boot.
- * Pending items that already expired while the server was down are dropped
- * (and their row cleaned up) instead of being silently resurrected.
+ * Rehydrates the in-memory cart/browse/pending-item Maps from the DB on server
+ * boot. Pending items that already expired while the server was down are
+ * treated as a fresh expiry (one "timed out" reply still gets sent) rather
+ * than being silently resurrected or silently dropped.
  */
 export async function loadWaStateFromDb(): Promise<void> {
   try {
@@ -279,12 +280,21 @@ export async function loadWaStateFromDb(): Promise<void> {
     const now = Date.now();
     let restoredCarts = 0;
     let restoredPending = 0;
+    let restoredBrowse = 0;
 
     for (const row of rows) {
       const cart = (row.cart as unknown as WaCartItem[]) ?? [];
       if (cart.length) {
         waCartStore.set(row.conversationId, cart);
         restoredCarts++;
+      }
+
+      if (row.browseResults && row.browseExpiresAt) {
+        const expiresAt = new Date(row.browseExpiresAt).getTime();
+        if (expiresAt > now) {
+          waBrowseStore.set(row.conversationId, { results: row.browseResults as any[], expiresAt });
+          restoredBrowse++;
+        }
       }
 
       if (row.pendingItem && row.pendingExpiresAt) {
@@ -300,21 +310,28 @@ export async function loadWaStateFromDb(): Promise<void> {
           waPendingStore.set(row.conversationId, { item, expiresAt, timer });
           restoredPending++;
         } else {
-          // Expired while the server was offline — clean it up rather than resurrect it.
-          persistWaState(row.conversationId).catch((e) => console.error("[wa-cart] persist failed:", e));
+          // Expired while the server was offline — treat as a fresh expiry so
+          // the customer still gets one "timed out" reply next time they write.
+          waPendingExpired.add(row.conversationId);
         }
+      } else if (row.pendingExpiredFlag) {
+        waPendingExpired.add(row.conversationId);
+      }
+
+      if (row.pendingExpiredReplySentAt) {
+        waExpiredReplySentAt.set(row.conversationId, new Date(row.pendingExpiredReplySentAt).getTime());
       }
     }
 
-    if (restoredCarts || restoredPending) {
-      console.log(`[wa-cart] restored ${restoredCarts} cart(s) and ${restoredPending} pending item(s) from DB after restart`);
+    if (restoredCarts || restoredPending || restoredBrowse) {
+      console.log(`[wa-cart] restored ${restoredCarts} cart(s), ${restoredPending} pending item(s), ${restoredBrowse} browse list(s) from DB after restart`);
     }
   } catch (e) {
     console.error("[wa-cart] failed to load state from DB on startup:", e);
   }
 }
 
-const STALE_CART_MS = 48 * 60 * 60 * 1000; // 48h with no activity = abandoned cart, safe to prune
+const STALE_CART_MS = 24 * 60 * 60 * 1000; // 24h with no activity = abandoned session, safe to prune
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
 /** Deletes DB rows for carts abandoned long enough that keeping them serves no purpose. */

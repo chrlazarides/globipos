@@ -8430,12 +8430,12 @@ export async function registerRoutes(
       if (conv.status === "handoff") return;
 
       // ── Pending confirmation check (yes/no after add_item preview) ──────────
-      const pendingItem = getPendingItem(conv.id);
+      const pendingItem = await getPendingItem(conv.id);
       const lowerText = text.toLowerCase().trim();
       const isYes = /^(yes|yeah|yep|correct|ok|okay|confirm|sure|add it|go ahead|y)$/i.test(lowerText);
 
       // If no pending item but one recently expired, tell the customer to browse again
-      if (!pendingItem && isYes && consumeExpiredPendingFlag(conv.id)) {
+      if (!pendingItem && isYes && await consumeExpiredPendingFlag(conv.id)) {
         const expiredReply = "⏱️ Your confirmation timed out after 10 minutes — the item wasn't added. Please browse and select the item again when you're ready!";
         await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: expiredReply, channel: "whatsapp", intent: "unknown" });
         await sendWhatsAppMessage(from, expiredReply);
@@ -8445,15 +8445,15 @@ export async function registerRoutes(
       if (pendingItem) {
         const isNo  = /^(no|nope|nah|cancel|wrong|incorrect|n)$/i.test(lowerText);
         if (isYes) {
-          clearPendingItem(conv.id);
-          addToWaCart(conv.id, { itemId: pendingItem.itemId, name: pendingItem.name, sku: pendingItem.sku, price: pendingItem.price }, pendingItem.qty);
-          const cart = getWaCart(conv.id);
+          await clearPendingItem(conv.id);
+          await addToWaCart(conv.id, { itemId: pendingItem.itemId, name: pendingItem.name, sku: pendingItem.sku, price: pendingItem.price }, pendingItem.qty);
+          const cart = await getWaCart(conv.id);
           const replyYes = `✅ Added *${pendingItem.qty}× ${pendingItem.name}* to your cart.\n\n${formatWaCart(cart)}`;
           await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: replyYes, channel: "whatsapp", intent: "add_item" });
           await sendWhatsAppMessage(from, replyYes);
           return;
         } else if (isNo) {
-          clearPendingItem(conv.id);
+          await clearPendingItem(conv.id);
           const replyNo = "No problem — nothing was added. What else can I help you with?";
           await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: replyNo, channel: "whatsapp", intent: "cancel" });
           await sendWhatsAppMessage(from, replyNo);
@@ -8499,7 +8499,7 @@ export async function registerRoutes(
             .limit(6);
           if (matches.length > 0) {
             // Store browse results in the conversation's cart context for add_item
-            setBrowseResults(conv.id, matches); // TTL cache — survives server restarts within 30 min
+            await setBrowseResults(conv.id, matches); // persisted — survives server restarts and long absences
             reply = `🍷 *Products found:*\n` +
               matches.map((i, idx) => `${idx + 1}. ${i.name}${i.brand ? ` (${i.brand})` : ""} — €${parseFloat(String(i.price1 ?? "0")).toFixed(2)}`).join("\n") +
               `\n\nReply with the *number* to add to cart, or "cart" to view your cart.`;
@@ -8509,7 +8509,7 @@ export async function registerRoutes(
 
         } else if (parsed.intent === "add_item") {
           // ── Resolve item index and quantity ─────────────────────────────────
-          const lastResults: any[] | null = getBrowseResults(conv.id);
+          const lastResults: any[] | null = await getBrowseResults(conv.id);
 
           // Priority 1: AI-extracted itemIndex (0-based after conversion in parseIntentAI)
           let idx = typeof parsed.itemIndex === "number" ? parsed.itemIndex : -1;
@@ -8557,7 +8557,7 @@ export async function registerRoutes(
               price: parseFloat(String(it.price1 ?? "0")),
               qty,
             };
-            setPendingItem(conv.id, pending);
+            await setPendingItem(conv.id, pending);
             reply = `You're about to add *${qty}× ${it.name}* (€${(pending.price * qty).toFixed(2)}) to your cart.\n\nIs that correct? Reply *yes* to confirm or *no* to cancel.`;
           } else if (lastResults !== null && idx >= 0) {
             reply = `That number is outside the current list. Please reply with a number from the list shown, or browse again (e.g. "show red wines").`;
@@ -8575,7 +8575,7 @@ export async function registerRoutes(
                   price: parseFloat(String(found[0].price1 ?? "0")),
                   qty,
                 };
-                setPendingItem(conv.id, pending);
+                await setPendingItem(conv.id, pending);
                 reply = `You're about to add *${qty}× ${found[0].name}* (€${(pending.price * qty).toFixed(2)}) to your cart.\n\nIs that correct? Reply *yes* to confirm or *no* to cancel.`;
               } else {
                 reply = `I couldn't find that item. Please browse first (reply "show wines") then reply with the item number.`;
@@ -8586,11 +8586,11 @@ export async function registerRoutes(
           }
 
         } else if (parsed.intent === "view_cart") {
-          const cart = getWaCart(conv.id);
+          const cart = await getWaCart(conv.id);
           reply = formatWaCart(cart);
 
         } else if (parsed.intent === "checkout") {
-          const cart = getWaCart(conv.id);
+          const cart = await getWaCart(conv.id);
           if (!cart.length) {
             reply = "Your cart is empty. Browse our catalog first, then add items to order.";
           } else {
@@ -8620,7 +8620,7 @@ export async function registerRoutes(
                   total: String((c.price * c.qty).toFixed(2)),
                 }))
               );
-              clearWaCart(conv.id); // also invalidates the browse-results cache
+              await clearWaCart(conv.id); // also invalidates the browse-results cache
               // Notify all subscribed staff of the new WhatsApp order
               sendPushToAllStaff({
                 title: "New WhatsApp Order",
@@ -8634,14 +8634,14 @@ export async function registerRoutes(
           }
 
         } else if (parsed.intent === "cancel") {
-          clearWaCart(conv.id); // also invalidates the browse-results cache
+          await clearWaCart(conv.id); // also invalidates the browse-results cache
           reply = "Cart cleared. Start browsing again by replying 'show wines' or 'browse spirits'.";
 
         } else if (parsed.intent === "faq") {
           reply = "For store information, opening hours and delivery queries, please reply 'agent' to speak with our team.";
 
         } else {
-          const cart = getWaCart(conv.id);
+          const cart = await getWaCart(conv.id);
           reply = `Thanks for your message! You can:\n• 🍷 Browse: "show red wines" or "search whisky"\n• 🛒 View cart: "my cart"\n• ✅ Order: "checkout"\n• 👤 Get help: "agent"${cart.length ? `\n\nYou have ${cart.length} item(s) in your cart.` : ""}`;
         }
       }

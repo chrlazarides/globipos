@@ -860,14 +860,24 @@ export const staffPushSubscriptions = pgTable("staff_push_subscriptions", {
 
 export const insertStaffPushSubscriptionSchema = createInsertSchema(staffPushSubscriptions).omit({ id: true, createdAt: true });
 export type InsertStaffPushSubscription = z.infer<typeof insertStaffPushSubscriptionSchema>;
+
 export type StaffPushSubscription = typeof staffPushSubscriptions.$inferSelect;
 
-// ── WhatsApp cart/pending-item persistence (survives server restarts) ─────────
+// ── WhatsApp cart/browse/pending-item persistence (survives server restarts & long absences) ─
+// Single source of truth for a WhatsApp conversation's session state. The in-memory
+// Maps in chatbot-service.ts are the hot path for every message; every mutation is
+// also mirrored here so a server restart doesn't silently wipe active carts, browse
+// lists, or pending confirmations. On boot, loadWaStateFromDb() repopulates the Maps
+// (and re-arms pending-item timers) from surviving rows.
 export const waCartState = pgTable("wa_cart_state", {
   conversationId: varchar("conversation_id").primaryKey(),
   cart: jsonb("cart").notNull().default([]), // WaCartItem[]
+  browseResults: jsonb("browse_results"), // any[] | null
+  browseExpiresAt: timestamp("browse_expires_at"),
   pendingItem: jsonb("pending_item"), // WaPendingItem | null
   pendingExpiresAt: timestamp("pending_expires_at"),
+  pendingExpiredFlag: boolean("pending_expired_flag").notNull().default(false),
+  pendingExpiredReplySentAt: timestamp("pending_expired_reply_sent_at"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
