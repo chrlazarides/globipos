@@ -35,6 +35,10 @@ interface CardChargeResult {
   // still unknown (e.g. server restarted mid-charge) — do not retry yet, but it
   // is not necessarily "already charged".
   reason?: "already_paid" | "in_progress";
+  // Only present on a 409 response with reason "already_paid" — the terminal
+  // reference recorded on the order, so the cashier can verify with the
+  // customer which transaction was actually charged.
+  existingRef?: string | null;
 }
 
 interface ChargeStatusResult {
@@ -373,10 +377,12 @@ function CardPaymentDialog({
                   Already Charged
                 </p>
                 <p className="text-sm text-muted-foreground" data-testid="text-already-charged-body">
-                  This order has already been paid — no further charge was made.
+                  {result?.existingRef
+                    ? `Order already paid — ref: ${result.existingRef}`
+                    : "This order has already been paid — no further charge was made."}
                 </p>
                 <p className="text-sm font-medium" data-testid="text-already-charged-instruction">
-                  Please check the order list to confirm the payment.
+                  Please verify this reference with the customer to confirm the payment.
                 </p>
               </div>
               <Button

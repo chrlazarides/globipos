@@ -251,6 +251,13 @@ test.describe.serial("Card Terminal — Duplicate Charge Prevention", () => {
       /completed|duplicate|already/i.test(body.message),
       `message should mention the order state or duplicate prevention. Got: "${body.message}"`
     ).toBe(true);
+
+    // The 409 body must surface the original terminal reference so the cashier
+    // can verify the charge with the customer instead of seeing a generic message.
+    expect(
+      body.existingRef,
+      `409 response should include the stored cardTerminalRef. Body: ${JSON.stringify(body)}`
+    ).toBe("prev-tx-ref");
   });
 
   // ── TEST 3: Held order can still be charged (guard does not over-block) ───────

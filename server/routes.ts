@@ -5715,6 +5715,9 @@ export async function registerRoutes(
             // retry might be safe once the in-flight window elapses.
             reason: "already_paid",
             message: `Order is already '${preCheckOrder.status}' — duplicate charge prevented.`,
+            // The stored terminal reference (if any) lets the cashier verify the
+            // charge with the customer instead of just seeing a generic message.
+            existingRef: (preCheckOrder as any).cardTerminalRef || null,
           });
         }
 
@@ -5957,7 +5960,12 @@ export async function registerRoutes(
           return res.status(404).json({ success: false, message: "Order not found — cannot record payment." });
         }
         if (existing.status !== "held") {
-          return res.status(409).json({ success: false, message: `Order is already '${existing.status}' — duplicate charge prevented.` });
+          return res.status(409).json({
+            success: false,
+            reason: "already_paid",
+            message: `Order is already '${existing.status}' — duplicate charge prevented.`,
+            existingRef: (existing as any).cardTerminalRef || null,
+          });
         }
         await storage.completeCardPosOrder(orderId, transactionRef, String(Number(amount).toFixed(2)));
       }
