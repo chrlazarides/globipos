@@ -525,6 +525,7 @@ export const posLayoutSets = pgTable("pos_layout_sets", {
   colsTV: integer("cols_tv").default(8),                   // 4K / TV columns (2560px+)
   rows: integer("rows").notNull().default(5),
   buttonRadius: text("button_radius").default("rounded"), // rounded | round | square
+  colorTheme: text("color_theme").default("standard"),     // standard (dark) | light
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

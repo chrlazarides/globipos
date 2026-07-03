@@ -10,12 +10,15 @@ export function useWindowWidth(): number {
   return width;
 }
 
+export type PosColorTheme = "standard" | "light";
+
 export interface LayoutColumnConfig {
   columns: number;    // 1024–1919 px (laptop / desktop)
   colsTablet: number; // 640–1023 px
   colsMobile: number; // < 640 px
   colsLarge: number;  // 1920–2559 px (large monitor)
   colsTV: number;     // 2560 px+ (4K / TV)
+  colorTheme?: PosColorTheme; // standard (dark, low-light) | light (well-lit)
 }
 
 const DEFAULTS: LayoutColumnConfig = {
@@ -24,6 +27,7 @@ const DEFAULTS: LayoutColumnConfig = {
   colsMobile: 2,
   colsLarge: 6,
   colsTV: 8,
+  colorTheme: "standard",
 };
 
 export function useResponsiveColumns(config: LayoutColumnConfig | null): number {

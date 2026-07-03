@@ -615,8 +615,10 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const selectedLine = engine.lines.find((l) => l.id === engine.selectedLineId);
   const hasLines = engine.lines.length > 0;
 
+  const posTheme = layoutConfig?.colorTheme ?? "standard";
+
   return (
-    <div className="flex flex-col h-screen bg-gray-950 overflow-hidden">
+    <div className={`flex flex-col h-screen overflow-hidden ${posTheme === "light" ? "bg-gray-100" : "bg-gray-950"}`}>
       {/* Sync header */}
       <SyncHeader
         config={config}
@@ -652,6 +654,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
             columns={activeColumns}
             rows={activeRows}
             priceLevel={engine.order.price_level}
+            colorTheme={layoutConfig?.colorTheme ?? "standard"}
             onItemButton={engine.addProduct}
             onCategoryButton={setSelectedCategory}
             onActionButton={handleAction}

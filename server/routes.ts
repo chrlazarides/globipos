@@ -7975,7 +7975,7 @@ export async function registerRoutes(
   app.get("/api/pos/sync/layout-config", requireTerminal, async (req, res) => {
     try {
       const terminal = (req as any).terminal;
-      const fallback = { columns: 4, colsTablet: 3, colsMobile: 2, colsLarge: 6, colsTV: 8, buttonRadius: "rounded" };
+      const fallback = { columns: 4, colsTablet: 3, colsMobile: 2, colsLarge: 6, colsTV: 8, buttonRadius: "rounded", colorTheme: "standard" };
       if (!terminal.layoutSetId) return res.json(fallback);
       const ls = await storage.getPosLayoutSet(terminal.layoutSetId);
       if (!ls) return res.json(fallback);
@@ -7986,6 +7986,7 @@ export async function registerRoutes(
         colsLarge:    (ls as any).colsLarge    ?? 6,
         colsTV:       (ls as any).colsTV       ?? 8,
         buttonRadius: (ls as any).buttonRadius ?? "rounded",
+        colorTheme:   (ls as any).colorTheme   ?? "standard",
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

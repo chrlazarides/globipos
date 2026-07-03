@@ -177,6 +177,27 @@ interface SlotData {
   icon?:       string;
 }
 
+// ── Screen resolution presets (inspired by IdealPOS's screen-resolution guide) ──
+interface ResolutionPreset {
+  id:      string;
+  label:   string;
+  note:    string;
+  tier:    "desktop" | "large"; // which grid tier this preset drives (desktop = master columns/rows, large = colsLarge)
+  columns: number;
+  rows:    number;
+  scaling?: string; // recommended Windows display scaling, if any
+}
+
+const RESOLUTION_PRESETS: ResolutionPreset[] = [
+  { id: "1024x768",         label: "1024×768 (4:3)",         note: "Default resolution — balanced grid.",              tier: "desktop", columns: 4, rows: 5 },
+  { id: "1024x600",         label: "1024×600 (15:9)",        note: "Shorter screen — fewer rows fit.",                 tier: "desktop", columns: 4, rows: 4 },
+  { id: "1280x800",         label: "1280×800 (16:10)",       note: "Wider desktop layout, more columns.",              tier: "desktop", columns: 5, rows: 5 },
+  { id: "1366x768",         label: "1366×768 (16:9)",        note: "Common laptop resolution — longer button list.",   tier: "desktop", columns: 5, rows: 4 },
+  { id: "1920x1080",        label: "1920×1080 (16:9)",       note: "Full HD monitor.",                                  tier: "large",   columns: 6, rows: 5, scaling: "125%" },
+  { id: "1920x1080-retail", label: "1920×1080 Retail (16:9)",note: "Full-width sale window layout.",                    tier: "large",   columns: 7, rows: 5, scaling: "125%" },
+  { id: "1920x1280",        label: "1920×1280 (3:2)",        note: "Surface Go 3 — use larger touch targets.",         tier: "large",   columns: 6, rows: 6, scaling: "125–150%" },
+];
+
 function makeEmpty(position: number): SlotData {
   return { position, label: "", color: "#6b7280", buttonType: "empty", shape: "rect", colspan: 1, rowspan: 1 };
 }
@@ -777,6 +798,7 @@ export default function PosLayoutEditor() {
   const [colsTV,       setColsTV]       = useState(8);
   const [rows,         setRows]         = useState(5);
   const [buttonRadius, setButtonRadius] = useState("rounded");
+  const [colorTheme,   setColorTheme]   = useState<"standard" | "light">("standard");
   const [deviceView,   setDeviceView]   = useState<"desktop" | "tablet" | "phone" | "large" | "tv">("desktop");
   const [slots,        setSlots]        = useState<SlotData[]>([]);
   const [selected,     setSelected]     = useState<number | null>(null);
@@ -794,6 +816,7 @@ export default function PosLayoutEditor() {
     setColsTV((layoutSet as any).colsTV ?? 8);
     setRows(layoutSet.rows ?? 5);
     setButtonRadius((layoutSet as any).buttonRadius ?? "rounded");
+    setColorTheme(((layoutSet as any).colorTheme ?? "standard") === "light" ? "light" : "standard");
   }, [layoutSet]);
 
   useEffect(() => {
@@ -830,7 +853,7 @@ export default function PosLayoutEditor() {
 
   const saveMeta = useMutation({
     mutationFn: () => apiRequest("PUT", `/api/pos/layouts/${layoutId}`, {
-      name, description, columns, colsTablet, colsMobile, colsLarge, colsTV, rows, buttonRadius,
+      name, description, columns, colsTablet, colsMobile, colsLarge, colsTV, rows, buttonRadius, colorTheme,
     }).then(r => r.json()),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/pos/layouts"] }),
   });
@@ -873,6 +896,19 @@ export default function PosLayoutEditor() {
     setColumns(newCols);
     setRows(newRows);
     setDirty(true);
+  }
+
+  function applyResolutionPreset(preset: ResolutionPreset) {
+    if (preset.tier === "desktop") {
+      resizeGrid(preset.columns, preset.rows);
+      setDeviceView("desktop");
+    } else {
+      setColsLarge(preset.columns);
+      setRows(preset.rows);
+      resizeGrid(columns, preset.rows);
+      setDeviceView("large");
+    }
+    toast({ title: `Applied ${preset.label} preset` });
   }
 
   const consumed = getConsumedPositions(slots, activeColumns);
@@ -1034,6 +1070,33 @@ export default function PosLayoutEditor() {
 
             <Separator />
 
+            {/* Screen resolution presets */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <Monitor className="w-3.5 h-3.5" />Screen Resolution
+              </p>
+              <p className="text-[11px] text-muted-foreground -mt-1.5">Pick the terminal's screen resolution to pre-fill a sensible grid size.</p>
+              <div className="space-y-1.5">
+                {RESOLUTION_PRESETS.map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => applyResolutionPreset(p)}
+                    data-testid={`resolution-${p.id}`}
+                    className="w-full text-left border rounded-lg px-2.5 py-1.5 hover:bg-muted/50 transition-colors border-border"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium">{p.label}</span>
+                      {p.scaling && <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">{p.scaling}</Badge>}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{p.note}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <Separator />
+
             {/* Button appearance */}
             <div className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Appearance</p>
@@ -1053,6 +1116,27 @@ export default function PosLayoutEditor() {
                       className={`border py-2.5 text-xs font-medium transition-all ${s.cls} ${buttonRadius === s.id ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted/50"}`}
                     >
                       {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs mb-1.5 block">Color Theme</Label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {([
+                    { id: "standard", label: "Standard", hint: "Dark · low-light" },
+                    { id: "light",    label: "Light",    hint: "Well-lit" },
+                  ] as const).map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => { setColorTheme(t.id); setDirty(true); }}
+                      data-testid={`theme-${t.id}`}
+                      className={`border rounded-lg py-2 text-xs font-medium transition-all flex flex-col items-center gap-0.5 ${colorTheme === t.id ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted/50"}`}
+                    >
+                      <span className={`w-full h-3 rounded-sm ${t.id === "light" ? "bg-gray-100 border border-gray-300" : "bg-gray-900"}`} />
+                      {t.label}
+                      <span className="text-[9px] text-muted-foreground font-normal">{t.hint}</span>
                     </button>
                   ))}
                 </div>

@@ -6,6 +6,7 @@ import {
 } from "./icons/PosIcons";
 import type { LayoutButton, Product } from "../types";
 import { formatCurrency } from "../lib/pricing";
+import type { PosColorTheme } from "../hooks/useWindowSize";
 
 interface LayoutGridProps {
   buttons: LayoutButton[];
@@ -13,6 +14,7 @@ interface LayoutGridProps {
   columns: number;
   rows: number;
   priceLevel: number;
+  colorTheme?: PosColorTheme;
   onItemButton: (product: Product) => void;
   onCategoryButton: (categoryId: string) => void;
   onActionButton: (actionCode: string) => void;
@@ -55,10 +57,20 @@ export function LayoutGrid({
   columns,
   rows,
   priceLevel,
+  colorTheme = "standard",
   onItemButton,
   onCategoryButton,
   onActionButton,
 }: LayoutGridProps) {
+  const isLight = colorTheme === "light";
+  const emptySlotClass = isLight
+    ? "rounded-xl border border-dashed border-gray-300 bg-gray-200/40"
+    : "rounded-xl border border-dashed border-gray-800 bg-gray-900/30";
+  const barClass = isLight
+    ? "bg-gray-50 border-b border-gray-200"
+    : "bg-gray-900 border-b border-gray-800";
+  const barTextMuted = isLight ? "text-gray-500 hover:text-gray-800" : "text-gray-400 hover:text-white";
+  const barTextLabel = isLight ? "text-gray-900" : "text-white";
   // Stack of sublayout IDs navigated into. Empty = root panel.
   const [panelStack, setPanelStack] = useState<string[]>([]);
   const currentPanelId = panelStack.length > 0 ? panelStack[panelStack.length - 1] : null;
@@ -124,7 +136,7 @@ export function LayoutGrid({
     };
 
     if (btn.button_type === "empty") {
-      return <div key={index} style={spanStyle} className="rounded-xl border border-dashed border-gray-800 bg-gray-900/30" />;
+      return <div key={index} style={spanStyle} className={emptySlotClass} />;
     }
 
     if (btn.button_type === "item") {
@@ -224,10 +236,10 @@ export function LayoutGrid({
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* Breadcrumb / back bar — shown when inside a child panel */}
       {panelStack.length > 0 && (
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 border-b border-gray-800 flex-shrink-0">
+        <div className={`flex items-center gap-2 px-3 py-1.5 flex-shrink-0 ${barClass}`}>
           <button
             onClick={popPanel}
-            className="flex items-center gap-1 text-gray-400 hover:text-white text-xs font-medium transition-colors active:scale-95"
+            className={`flex items-center gap-1 text-xs font-medium transition-colors active:scale-95 ${barTextMuted}`}
             data-testid="grid-back"
           >
             <ChevronLeftIcon className="w-4 h-4" />
@@ -235,28 +247,28 @@ export function LayoutGrid({
           </button>
           {panelStack.length > 1 && (
             <>
-              <span className="text-gray-700 text-xs">/</span>
+              <span className={`text-xs ${isLight ? "text-gray-300" : "text-gray-700"}`}>/</span>
               {panelStack.slice(0, -1).map((id, i) => {
                 const lbl = buttons.find((b) => b.button_type === "sublayout" && b.sublayout_id === id)?.label ?? id;
                 return (
                   <button
                     key={id}
                     onClick={() => setPanelStack((s) => s.slice(0, i + 1))}
-                    className="text-gray-500 hover:text-gray-300 text-xs transition-colors"
+                    className={`text-xs transition-colors ${isLight ? "text-gray-500 hover:text-gray-800" : "text-gray-500 hover:text-gray-300"}`}
                   >
                     {lbl}
                   </button>
                 );
               })}
-              <span className="text-gray-700 text-xs">/</span>
+              <span className={`text-xs ${isLight ? "text-gray-300" : "text-gray-700"}`}>/</span>
             </>
           )}
           {currentPanelLabel && (
-            <span className="text-white text-xs font-semibold">{currentPanelLabel}</span>
+            <span className={`text-xs font-semibold ${barTextLabel}`}>{currentPanelLabel}</span>
           )}
           <button
             onClick={() => setPanelStack([])}
-            className="ml-auto text-gray-600 hover:text-gray-400 text-xs transition-colors"
+            className={`ml-auto text-xs transition-colors ${isLight ? "text-gray-400 hover:text-gray-700" : "text-gray-600 hover:text-gray-400"}`}
             data-testid="grid-root"
           >
             Root
@@ -282,7 +294,7 @@ export function LayoutGrid({
               <div
                 key={i}
                 style={{ gridColumn: `${col}`, gridRow: `${rowStart}` }}
-                className="rounded-xl border border-dashed border-gray-800 bg-gray-900/30"
+                className={emptySlotClass}
               />
             );
           }
