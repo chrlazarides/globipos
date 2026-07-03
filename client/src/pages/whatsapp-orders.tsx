@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX, Send, ExternalLink } from "lucide-react";
+import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX, Send, ExternalLink, PhoneOff } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
@@ -301,6 +301,56 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
                   className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebe5d] text-white"
                 >
                   {sendReply.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  Send Message
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {order.source === "whatsapp" && !order.customerPhone && (
+          <div
+            className="border rounded-lg bg-muted/40 border-dashed border-muted-foreground/30 overflow-hidden"
+            data-testid="whatsapp-no-phone-panel"
+          >
+            <div className="px-4 py-4 flex flex-col gap-2">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <PhoneOff className="w-4 h-4 flex-shrink-0" />
+                <p className="text-sm font-medium">WhatsApp reply unavailable</p>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                No phone number is saved on this customer record. Add a mobile number to the customer profile to enable WhatsApp replies.
+              </p>
+              <div className="pt-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { onClose(); navigate("/customers"); }}
+                  data-testid="btn-go-to-customer"
+                  className="flex items-center gap-1.5 text-xs h-8"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Open Customer Record
+                </Button>
+              </div>
+            </div>
+            <div className="border-t border-dashed border-muted-foreground/20 px-4 py-3 bg-muted/20 space-y-2 opacity-50 pointer-events-none">
+              <p className="text-xs font-medium text-muted-foreground">Reply via WhatsApp</p>
+              <Textarea
+                placeholder="No phone number — reply disabled"
+                disabled
+                rows={2}
+                className="resize-none text-sm"
+                data-testid="input-whatsapp-reply-disabled"
+              />
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  disabled
+                  data-testid="btn-send-whatsapp-reply-disabled"
+                  className="flex items-center gap-1.5"
+                >
+                  <Send className="w-3.5 h-3.5" />
                   Send Message
                 </Button>
               </div>
