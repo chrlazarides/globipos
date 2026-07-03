@@ -31,7 +31,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { RotateCcw, Search, Loader2, AlertCircle, Check, Plus, Trash2 } from "lucide-react";
+import { Search, Loader2, AlertCircle, Check, Plus, Trash2 } from "lucide-react";
+import { RefundIcon } from "./icons/PosIcons";
 import { invoke } from "@tauri-apps/api/core";
 import { v4 as uuidv4 } from "uuid";
 
@@ -251,7 +252,7 @@ export default function RefundDialog({
       <DialogContent className="sm:max-w-lg" data-testid="refund-dialog">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <RotateCcw className="h-5 w-5 text-primary" />
+            <RefundIcon className="h-5 w-5 text-primary" />
             Return / Refund
           </DialogTitle>
         </DialogHeader>
@@ -448,7 +449,7 @@ export default function RefundDialog({
                 disabled={loading || selectedLines.length === 0 || refundTotal <= 0}
                 className="bg-amber-600 hover:bg-amber-700 text-white"
               >
-                {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RotateCcw className="h-4 w-4 mr-1" />}
+                {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefundIcon className="h-4 w-4 mr-1" />}
                 Refund €{refundTotal.toFixed(2)}
               </Button>
             </DialogFooter>

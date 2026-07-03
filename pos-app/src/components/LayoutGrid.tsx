@@ -1,6 +1,9 @@
 import { useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ComponentType, SVGProps } from "react";
 import { ChevronLeftIcon, LayersIcon } from "lucide-react";
+import {
+  CashIcon, CardIcon, VoidIcon, HoldIcon, RecallIcon, DiscountIcon, SubtotalIcon,
+} from "./icons/PosIcons";
 import type { LayoutButton, Product } from "../types";
 import { formatCurrency } from "../lib/pricing";
 
@@ -26,6 +29,24 @@ const ACTION_COLORS: Record<string, string> = {
   LINE_DISCOUNT_PCT:   "bg-purple-800 hover:bg-purple-700 text-white",
   ORDER_DISCOUNT_PCT:  "bg-purple-800 hover:bg-purple-700 text-white",
   PROMO_CODE:          "bg-purple-800 hover:bg-purple-700 text-white",
+};
+
+const ACTION_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
+  PAY_CASH:            CashIcon,
+  PAY_CARD:            CardIcon,
+  VOID_ORDER:          VoidIcon,
+  CLEAR_ORDER:         VoidIcon,
+  HOLD_ORDER:          HoldIcon,
+  RECALL_ORDER:        RecallIcon,
+  PRICE_OVERRIDE:      DiscountIcon,
+  LINE_DISCOUNT_PCT:   DiscountIcon,
+  LINE_DISCOUNT_FIXED: DiscountIcon,
+  ORDER_DISCOUNT_PCT:  DiscountIcon,
+  ORDER_DISCOUNT_FIXED:DiscountIcon,
+  REMOVE_DISCOUNT:     DiscountIcon,
+  PROMO_CODE:          DiscountIcon,
+  MANUAL_PROMO:        DiscountIcon,
+  PRICE_CHECK:         SubtotalIcon,
 };
 
 export function LayoutGrid({
@@ -151,14 +172,16 @@ export function LayoutGrid({
       const colorClass = btn.action_code
         ? ACTION_COLORS[btn.action_code] ?? "bg-gray-700 hover:bg-gray-600 text-white"
         : "bg-gray-700 hover:bg-gray-600 text-white";
+      const ActionIcon = btn.action_code ? ACTION_ICONS[btn.action_code] : undefined;
       return (
         <button
           key={index}
           onClick={() => btn.action_code && onActionButton(btn.action_code)}
           style={spanStyle}
-          className={`rounded-xl p-2 text-center flex items-center justify-center font-semibold text-xs transition-all active:scale-95 ${colorClass}`}
+          className={`rounded-xl p-2 text-center flex flex-col items-center justify-center gap-1 font-semibold text-xs transition-all active:scale-95 ${colorClass}`}
           data-testid={`grid-action-${index}`}
         >
+          {ActionIcon && <ActionIcon className="w-5 h-5" />}
           {btn.label}
         </button>
       );

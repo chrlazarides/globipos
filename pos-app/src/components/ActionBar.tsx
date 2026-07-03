@@ -1,8 +1,9 @@
 import {
-  PauseIcon, PlayIcon, XCircleIcon, StickyNoteIcon, RepeatIcon,
-  PercentIcon, TagIcon, SmartphoneIcon, ShieldIcon, RotateCcwIcon,
-  RotateCcw, CalendarClock, MonitorSmartphone,
+  StickyNoteIcon, RepeatIcon,
+  SmartphoneIcon, ShieldIcon, RotateCcwIcon,
+  CalendarClock, MonitorSmartphone,
 } from "lucide-react";
+import { HoldIcon, RecallIcon, VoidIcon, RefundIcon, DiscountIcon } from "./icons/PosIcons";
 import type { NumpadMode } from "../types";
 
 interface ActionBarProps {
@@ -52,21 +53,21 @@ export function ActionBar({
   const buttons: Btn[] = [
     {
       label: "Hold",
-      icon: PauseIcon,
+      icon: HoldIcon,
       onClick: onHold,
       enabled: hasLines,
       testId: "action-hold",
     },
     {
       label: "Recall",
-      icon: PlayIcon,
+      icon: RecallIcon,
       onClick: onRecall,
       enabled: true,
       testId: "action-recall",
     },
     {
       label: "Void Order",
-      icon: XCircleIcon,
+      icon: VoidIcon,
       onClick: onVoidOrder,
       enabled: hasLines,
       className: "text-red-400 hover:bg-red-950",
@@ -95,21 +96,21 @@ export function ActionBar({
     },
     {
       label: "Line %",
-      icon: PercentIcon,
+      icon: DiscountIcon,
       onClick: () => onNumpad("line_discount_pct"),
       enabled: hasSelectedLine,
       testId: "action-line-pct",
     },
     {
       label: "Line €",
-      icon: TagIcon,
+      icon: DiscountIcon,
       onClick: () => onNumpad("line_discount_fixed"),
       enabled: hasSelectedLine,
       testId: "action-line-fixed",
     },
     {
       label: "Order %",
-      icon: PercentIcon,
+      icon: DiscountIcon,
       onClick: () => onNumpad("order_discount_pct"),
       enabled: hasLines,
       testId: "action-order-pct",
@@ -123,7 +124,7 @@ export function ActionBar({
     },
     {
       label: "Promo Code",
-      icon: TagIcon,
+      icon: DiscountIcon,
       onClick: onPromoCode,
       enabled: hasLines,
       testId: "action-promo",
@@ -144,7 +145,7 @@ export function ActionBar({
     },
     ...(onRefund ? [{
       label: "Refund",
-      icon: RotateCcw,
+      icon: RefundIcon,
       onClick: onRefund,
       enabled: true,
       className: "text-amber-400 hover:bg-amber-950",

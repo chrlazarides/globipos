@@ -1,4 +1,5 @@
 import { PlusIcon, MinusIcon, TrashIcon, StickyNoteIcon, MessageSquareIcon } from "lucide-react";
+import { SubtotalIcon, PayIcon } from "./icons/PosIcons";
 import type { OrderLine, Order } from "../types";
 import { formatCurrency, computeLineAmounts } from "../lib/pricing";
 
@@ -172,7 +173,10 @@ export function OrderTicket({
         {order.discount_amount > 0 && (
           <>
             <div className="flex justify-between text-sm text-gray-400">
-              <span>Subtotal</span>
+              <span className="flex items-center gap-1.5">
+                <SubtotalIcon className="w-3.5 h-3.5" />
+                Subtotal
+              </span>
               <span>{formatCurrency(order.subtotal + order.discount_amount)}</span>
             </div>
             <div className="flex justify-between text-sm text-green-400">
@@ -198,9 +202,10 @@ export function OrderTicket({
         <button
           onClick={onPay}
           disabled={isEmpty || order.total <= 0}
-          className="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-3.5 rounded-xl text-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.98]"
+          className="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-3.5 rounded-xl text-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.98] flex items-center justify-center gap-2"
           data-testid="button-pay"
         >
+          <PayIcon className="w-5 h-5" />
           PAY {!isEmpty ? formatCurrency(order.total) : ""}
         </button>
       </div>

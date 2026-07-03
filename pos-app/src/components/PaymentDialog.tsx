@@ -19,9 +19,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 import {
-  Banknote, CreditCard, Gift, Star, Building2,
-  Loader2, Check, X, ChevronRight, Trash2, DeleteIcon,
+  Building2,
+  Loader2, Check, X, Trash2, DeleteIcon,
 } from "lucide-react";
+import { CashIcon, CardIcon, VoucherIcon, LoyaltyIcon, PayIcon } from "./icons/PosIcons";
 import { usePayment, type PaymentResult, type TenderMethod } from "../hooks/usePayment";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -73,12 +74,12 @@ function fmt(n: number) {
 
 function methodIcon(m: TenderMethod) {
   switch (m) {
-    case "cash":          return <Banknote className="h-3.5 w-3.5" />;
+    case "cash":          return <CashIcon className="h-3.5 w-3.5" />;
     case "card_jcc":
     case "card_viva":
-    case "card_worldpay": return <CreditCard className="h-3.5 w-3.5" />;
-    case "voucher":       return <Gift className="h-3.5 w-3.5" />;
-    case "loyalty":       return <Star className="h-3.5 w-3.5" />;
+    case "card_worldpay": return <CardIcon className="h-3.5 w-3.5" />;
+    case "voucher":       return <VoucherIcon className="h-3.5 w-3.5" />;
+    case "loyalty":       return <LoyaltyIcon className="h-3.5 w-3.5" />;
     case "account_credit":return <Building2 className="h-3.5 w-3.5" />;
   }
 }
@@ -282,7 +283,7 @@ export default function PaymentDialog({
                   >
                     {payment.pendingCard
                       ? <Loader2 className="h-4 w-4 animate-spin" />
-                      : <><CreditCard className="h-4 w-4 mr-1.5" />Pay</>
+                      : <><CardIcon className="h-4 w-4 mr-1.5" />Pay</>
                     }
                   </Button>
                 </div>
@@ -441,7 +442,7 @@ export default function PaymentDialog({
                 disabled={!payment.isComplete}
                 onClick={handleComplete}
               >
-                Complete <ChevronRight className="h-4 w-4 ml-1" />
+                Complete <PayIcon className="h-4 w-4 ml-1" />
               </Button>
             </div>
           </div>
