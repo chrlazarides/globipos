@@ -158,6 +158,15 @@ const ACTION_GROUPS: ActionGroup[] = [
 
 const ALL_ACTIONS = ACTION_GROUPS.flatMap(g => g.actions);
 
+// Stable empty-array references for query defaults — using a fresh `[]` literal as a
+// destructuring default creates a NEW array every render while the query is still
+// loading, which can make it an unstable useEffect dependency and trigger a
+// "Maximum update depth exceeded" render loop.
+const EMPTY_LAYOUTS: PosLayoutSet[] = [];
+const EMPTY_BUTTONS: PosLayoutButton[] = [];
+const EMPTY_ITEMS: { id: string; name: string }[] = [];
+const EMPTY_CATEGORIES: { id: string; name: string }[] = [];
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 type ButtonType  = "item" | "category" | "action" | "sublayout" | "empty";
 type CornerStyle = "rect" | "round"; // rect = rounded-xl, round = rounded-full (circle)
@@ -774,19 +783,19 @@ export default function PosLayoutEditor() {
   const { toast } = useToast();
   const layoutId = params?.id ?? "";
 
-  const { data: allLayouts = [] } = useQuery<PosLayoutSet[]>({ queryKey: ["/api/pos/layouts"] });
+  const { data: allLayouts = EMPTY_LAYOUTS } = useQuery<PosLayoutSet[]>({ queryKey: ["/api/pos/layouts"] });
   const { data: layoutSet, isLoading: loadingSet } = useQuery<PosLayoutSet>({
     queryKey: ["/api/pos/layouts", layoutId],
     queryFn: () => apiRequest("GET", `/api/pos/layouts/${layoutId}`).then(r => r.json()),
     enabled: !!layoutId,
   });
-  const { data: savedButtons = [], isLoading: loadingBtns } = useQuery<PosLayoutButton[]>({
+  const { data: savedButtons = EMPTY_BUTTONS, isLoading: loadingBtns } = useQuery<PosLayoutButton[]>({
     queryKey: ["/api/pos/layouts", layoutId, "buttons"],
     queryFn: () => apiRequest("GET", `/api/pos/layouts/${layoutId}/buttons`).then(r => r.json()),
     enabled: !!layoutId,
   });
-  const { data: items = [] } = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/items"] });
-  const { data: categories = [] } = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/categories"] });
+  const { data: items = EMPTY_ITEMS } = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/items"] });
+  const { data: categories = EMPTY_CATEGORIES } = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/categories"] });
 
   // Layout meta
   const [name,         setName]         = useState("");

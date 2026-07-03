@@ -9,3 +9,4 @@
 - [Customer JWT auth in tests](customer-jwt-test-auth.md) — /api/customer/* uses a separate JWT secret+shape from admin/staff tokens; don't mix them in Playwright tests
 - [WhatsApp chatbot state persistence](wa-cart-persistence.md) — dual-write pattern: in-memory Maps (cart/pending/browse) as hot path, single `wa_cart_state` table mirror, 24h prune, rehydrate + re-arm timers on boot
 - [Missing GET route masked by SPA fallback](missing-get-route-spa-fallback.md) — page "not loading data" bugs can be a missing single-resource GET route silently falling through to index.html instead of a 404
+- [useQuery default `= []` render loop](usequery-default-array-loop.md) — fresh array/object literal as destructuring default while query is loading can be an unstable useEffect dep, causing "Maximum update depth exceeded" and parts of the UI failing to render
