@@ -4789,9 +4789,21 @@ export async function registerRoutes(
     try {
       const { endpoint, keys } = req.body;
       if (!endpoint) return res.status(400).json({ message: "endpoint required" });
+      const userAgent = (req.headers["user-agent"] as string | undefined) || null;
       await db.insert(customerPushSubscriptions)
-        .values({ customerId: req.params.id, endpoint, p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent: req.headers["user-agent"] || null })
-        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: req.params.id } });
+        .values({ customerId: req.params.id, endpoint, p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent })
+        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: req.params.id, p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent } });
+      // Prune older subscriptions for this customer on the same device (same userAgent, different
+      // endpoint) — happens when a browser reinstall / re-subscribe issues a new push endpoint.
+      if (userAgent) {
+        await db.delete(customerPushSubscriptions).where(
+          and(
+            eq(customerPushSubscriptions.customerId, req.params.id),
+            eq(customerPushSubscriptions.userAgent, userAgent),
+            sql`${customerPushSubscriptions.endpoint} != ${endpoint}`
+          )
+        );
+      }
       res.json({ message: "Subscribed" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -4997,7 +5009,14 @@ export async function registerRoutes(
             { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
             JSON.stringify(payload)
           );
-        } catch { /* individual delivery failure is non-fatal */ }
+        } catch (err: any) {
+          // 404/410 means the push service considers the endpoint gone — prune it so we
+          // stop wasting attempts on dead devices (e.g. customer uninstalled/reinstalled the PWA).
+          const statusCode = err?.statusCode;
+          if (statusCode === 404 || statusCode === 410) {
+            try { await db.delete(customerPushSubscriptions).where(eq(customerPushSubscriptions.id, sub.id)); } catch { /* ignore */ }
+          }
+        }
       }
     } catch { /* push send is always non-fatal */ }
   }
@@ -5441,9 +5460,23 @@ export async function registerRoutes(
       const { endpoint, keys } = req.body;
       if (!endpoint || !keys?.p256dh || !keys?.auth) return res.status(400).json({ message: "Invalid subscription" });
 
+      const userAgent = (req.headers["user-agent"] as string | undefined) || null;
       await db.insert(customerPushSubscriptions)
-        .values({ customerId: auth.customerId, endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent: req.headers["user-agent"] || null })
-        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: auth.customerId, p256dh: keys.p256dh, auth: keys.auth } });
+        .values({ customerId: auth.customerId, endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent })
+        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: auth.customerId, p256dh: keys.p256dh, auth: keys.auth, userAgent } });
+
+      // Prune older subscriptions for this customer on the same device (same userAgent, different
+      // endpoint) — happens when a browser reinstall / re-subscribe issues a new push endpoint,
+      // so the old dead endpoint doesn't keep piling up and drawing 410 Gone responses.
+      if (userAgent) {
+        await db.delete(customerPushSubscriptions).where(
+          and(
+            eq(customerPushSubscriptions.customerId, auth.customerId),
+            eq(customerPushSubscriptions.userAgent, userAgent),
+            sql`${customerPushSubscriptions.endpoint} != ${endpoint}`
+          )
+        );
+      }
 
       res.json({ message: "Subscribed" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
