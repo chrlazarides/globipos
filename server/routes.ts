@@ -3420,7 +3420,10 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/settings", async (req, res) => {
+  // Generic settings bulk-upsert can change any key (including
+  // card_terminal_provider), so it must be admin-only — otherwise staff could
+  // bypass the dedicated /api/settings/card_terminal_provider guard below.
+  app.put("/api/settings", requireAdmin, async (req, res) => {
     try {
       const { settings } = req.body;
       if (!Array.isArray(settings)) return res.status(400).json({ message: "Settings array required" });
@@ -5599,7 +5602,10 @@ export async function registerRoutes(
   });
 
   // Card terminal status & test
-  app.get("/api/pos/card-terminal/status", requireAdmin, async (_req, res) => {
+  // Status is view-only (no secrets returned) so staff can see connection state
+  // without being able to change any configuration — see requireAdmin below on
+  // the test/activate/config-mutating endpoints.
+  app.get("/api/pos/card-terminal/status", requireStaff, async (_req, res) => {
     const [providerRow] = await db.select().from(systemSettings).where(eq(systemSettings.key, "card_terminal_provider"));
     res.json({
       activeProvider: providerRow?.value || null,

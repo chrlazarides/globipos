@@ -11,7 +11,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { CreditCard, CheckCircle2, AlertCircle, ExternalLink, Settings, Loader2, Wifi, WifiOff } from "lucide-react";
+import { useAuth } from "@/App";
+import { isPosAdmin } from "@/lib/pos-permissions";
+import { CreditCard, CheckCircle2, AlertCircle, ExternalLink, Settings, Loader2, Wifi, WifiOff, Lock } from "lucide-react";
 
 interface CardTerminalStatus {
   provider: string | null;
@@ -86,6 +88,8 @@ const PROVIDERS = [
 
 export default function PosCardTerminal() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canManage = isPosAdmin(user);
   const [activeTab, setActiveTab] = useState("jcc");
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -139,9 +143,22 @@ export default function PosCardTerminal() {
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
       <PageHeader
         title="Card Terminal Integration"
-        subtitle="Connect a card payment terminal (JCC, Viva Wallet, or Worldpay) to your POS"
+        subtitle={canManage ? "Connect a card payment terminal (JCC, Viva Wallet, or Worldpay) to your POS" : "View card terminal connection status"}
         icon={<CreditCard className="w-5 h-5" />}
       />
+
+      {!canManage && (
+        <Card className="border-dashed" data-testid="banner-staff-view-only">
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-3">
+              <Lock className="w-4 h-4 text-muted-foreground shrink-0" />
+              <p className="text-xs text-muted-foreground">
+                You have view-only access to terminal status. Ask an admin to change the provider or credentials.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Active provider banner */}
       <Card className={activeProvider ? "border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/20" : "border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/20"}>
@@ -240,28 +257,35 @@ export default function PosCardTerminal() {
 
                 <Separator />
 
-                {/* Actions */}
-                <div className="flex items-center gap-3 flex-wrap">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => testMutation.mutate(provider.id)}
-                    disabled={testMutation.isPending}
-                    data-testid={`button-test-${provider.id}`}
-                  >
-                    {testMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Settings className="w-3.5 h-3.5 mr-1.5" />}
-                    Test Connection
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => setProviderMutation.mutate(provider.id)}
-                    disabled={setProviderMutation.isPending || activeProvider === provider.id}
-                    data-testid={`button-activate-${provider.id}`}
-                  >
-                    {setProviderMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <CreditCard className="w-3.5 h-3.5 mr-1.5" />}
-                    {activeProvider === provider.id ? "Active" : "Set as Active"}
-                  </Button>
-                </div>
+                {/* Actions — admin/superuser only; staff have view-only access */}
+                {canManage ? (
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => testMutation.mutate(provider.id)}
+                      disabled={testMutation.isPending}
+                      data-testid={`button-test-${provider.id}`}
+                    >
+                      {testMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Settings className="w-3.5 h-3.5 mr-1.5" />}
+                      Test Connection
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => setProviderMutation.mutate(provider.id)}
+                      disabled={setProviderMutation.isPending || activeProvider === provider.id}
+                      data-testid={`button-activate-${provider.id}`}
+                    >
+                      {setProviderMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <CreditCard className="w-3.5 h-3.5 mr-1.5" />}
+                      {activeProvider === provider.id ? "Active" : "Set as Active"}
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1.5" data-testid={`text-readonly-${provider.id}`}>
+                    <Lock className="w-3 h-3" />
+                    Only admins can test connections or change the active provider.
+                  </p>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
