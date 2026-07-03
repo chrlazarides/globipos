@@ -94,6 +94,14 @@ const waPendingStore = new Map<string, WaPendingEntry>();
 // give the customer a helpful "browse again" reply instead of a confusing response.
 const waPendingExpired = new Set<string>();
 
+// Dedup window: WhatsApp (and other providers) can redeliver the same webhook
+// event, and near-simultaneous "yes" messages can otherwise both slip through
+// before the flag above is cleared. Track the last time we actually sent the
+// "timed out" reply per conversation so re-deliveries/rapid repeats within the
+// window are suppressed instead of sending a flood of duplicate replies.
+const waExpiredReplySentAt = new Map<string, number>();
+const EXPIRED_REPLY_DEDUPE_MS = 60_000;
+
 export function getPendingItem(convId: string): WaPendingItem | undefined {
   const entry = waPendingStore.get(convId);
   if (!entry) return undefined;
@@ -118,6 +126,7 @@ export function setPendingItem(convId: string, item: WaPendingItem) {
 
   waPendingStore.set(convId, { item, expiresAt: Date.now() + PENDING_TTL_MS, timer });
   waPendingExpired.delete(convId); // reset expired flag on new pending item
+  waExpiredReplySentAt.delete(convId); // fresh pending item — allow a future expiry reply again
 }
 
 export function clearPendingItem(convId: string) {
@@ -127,13 +136,30 @@ export function clearPendingItem(convId: string) {
   waPendingExpired.delete(convId);
 }
 
-/** Returns true (and clears the flag) if a pending item expired for this conversation. */
+/**
+ * Returns true (and clears the flag) if a pending item expired for this conversation
+ * and we haven't already sent a "timed out" reply for it very recently. This guards
+ * against duplicate webhook deliveries or rapid repeat "yes" messages racing each
+ * other and each triggering their own timeout reply.
+ */
 export function consumeExpiredPendingFlag(convId: string): boolean {
-  if (waPendingExpired.has(convId)) {
-    waPendingExpired.delete(convId);
-    return true;
+  if (!waPendingExpired.has(convId)) return false;
+
+  const now = Date.now();
+  const lastSentAt = waExpiredReplySentAt.get(convId);
+  if (lastSentAt !== undefined && now - lastSentAt < EXPIRED_REPLY_DEDUPE_MS) {
+    // Already replied for this expiry very recently — suppress the duplicate,
+    // but keep the flag so a genuinely later message still doesn't get a normal reply.
+    return false;
   }
-  return false;
+
+  waPendingExpired.delete(convId);
+  waExpiredReplySentAt.set(convId, now);
+  setTimeout(() => {
+    // Clean up so the map doesn't grow unbounded with stale entries.
+    if (waExpiredReplySentAt.get(convId) === now) waExpiredReplySentAt.delete(convId);
+  }, EXPIRED_REPLY_DEDUPE_MS).unref?.();
+  return true;
 }
 
 // ─── WhatsApp browse results TTL cache ────────────────────────────────────────
