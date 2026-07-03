@@ -6,3 +6,4 @@
 - [POS terminal registration](pos-terminal-registration.md) — PUBLIC_PATHS exempt, camelCase serde fix, cashier sync on registration, supermarket test data seed
 - [pos-app build setup](pos-app-build.md) — @/ alias needed in both vite.config.ts and tsconfig.json; shadcn UI lives in pos-app/src/components/ui/ (native Tailwind, no radix); noImplicitAny:false in tsconfig
 - [Tauri updater latest.json failures](tauri-updater-latest-json.md) — needs createUpdaterArtifacts:true in tauri.conf.json; "Signature not found" can also mean broken signing key, not a naming bug
+- [Customer JWT auth in tests](customer-jwt-test-auth.md) — /api/customer/* uses a separate JWT secret+shape from admin/staff tokens; don't mix them in Playwright tests
