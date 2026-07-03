@@ -4894,6 +4894,7 @@ export async function registerRoutes(
       const allOrders = await storage.getAllPortalOrders();
       const order = allOrders.find((o: any) => o.id === req.params.id);
       if (!order) return res.status(404).json({ message: "Order not found" });
+      if (order.invoiceId) return res.status(409).json({ message: "Order has already been converted to an invoice" });
       const customer = await storage.getCustomer(order.customerId);
       if (!customer) return res.status(404).json({ message: "Customer not found" });
 

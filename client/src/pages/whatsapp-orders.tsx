@@ -380,15 +380,17 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
                 {updateStatus.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
                 Confirm
               </Button>
-              <Button
-                onClick={() => convertToInvoice.mutate()}
-                disabled={convertToInvoice.isPending}
-                data-testid="btn-convert-invoice"
-                className="flex items-center gap-1"
-              >
-                {convertToInvoice.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                Confirm & Create Invoice
-              </Button>
+              {!order.invoiceId && (
+                <Button
+                  onClick={() => convertToInvoice.mutate()}
+                  disabled={convertToInvoice.isPending}
+                  data-testid="btn-convert-invoice"
+                  className="flex items-center gap-1"
+                >
+                  {convertToInvoice.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                  Confirm & Create Invoice
+                </Button>
+              )}
             </>
           )}
           {order.status !== "pending" && (
