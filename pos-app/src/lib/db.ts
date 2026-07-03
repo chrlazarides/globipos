@@ -12,6 +12,7 @@ import type {
   FallbackRule,
   TerminalConfig,
   SyncStatus,
+  CreditNote,
 } from "../types";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -164,3 +165,27 @@ export const getOutboxCounts = (): Promise<{
   failed: number;
   synced: number;
 }> => invoke("get_outbox_counts");
+
+// ── Credit notes (store credit) ──────────────────────────────────────────────
+
+export const issueCreditNote = (
+  amount: number,
+  cashierId: string,
+  cashierName: string,
+  opts?: { orderId?: string; orderNumber?: string; customerId?: string; reason?: string }
+): Promise<CreditNote> =>
+  invoke<CreditNote>("issue_credit_note", {
+    orderId: opts?.orderId,
+    orderNumber: opts?.orderNumber,
+    customerId: opts?.customerId,
+    amount,
+    reason: opts?.reason,
+    cashierId,
+    cashierName,
+  });
+
+export const findCreditNote = (code: string): Promise<CreditNote | null> =>
+  invoke<CreditNote | null>("find_credit_note", { code });
+
+export const redeemCreditNote = (id: string, amount: number): Promise<CreditNote> =>
+  invoke<CreditNote>("redeem_credit_note", { id, amount });

@@ -24,6 +24,13 @@ import {
 } from "lucide-react";
 import { CashIcon, CardIcon, VoucherIcon, LoyaltyIcon, PayIcon } from "./icons/PosIcons";
 import { usePayment, type PaymentResult, type TenderMethod } from "../hooks/usePayment";
+import { findCreditNote } from "../lib/db";
+
+const CURRENCY_RATES: Record<string, number> = {
+  EUR: 1,
+  USD: 1.08,
+  GBP: 0.86,
+};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -81,6 +88,8 @@ function methodIcon(m: TenderMethod) {
     case "voucher":       return <VoucherIcon className="h-3.5 w-3.5" />;
     case "loyalty":       return <LoyaltyIcon className="h-3.5 w-3.5" />;
     case "account_credit":return <Building2 className="h-3.5 w-3.5" />;
+    case "cheque":        return <CardIcon className="h-3.5 w-3.5" />;
+    case "credit_note":   return <VoucherIcon className="h-3.5 w-3.5" />;
   }
 }
 
@@ -100,6 +109,11 @@ export default function PaymentDialog({
   const [numpadValue, setNumpadValue] = useState("");
   const [voucherCode, setVoucherCode] = useState("");
   const [loyaltyPointsToRedeem, setLoyaltyPointsToRedeem] = useState(0);
+  const [chequeNumber, setChequeNumber] = useState("");
+  const [creditNoteCode, setCreditNoteCode] = useState("");
+  const [creditNoteLookup, setCreditNoteLookup] = useState<{ id: string; code: string; remaining: number } | null>(null);
+  const [creditNoteError, setCreditNoteError] = useState<string | null>(null);
+  const [displayCurrency, setDisplayCurrency] = useState<string>("EUR");
 
   // Reset on open
   useEffect(() => {
@@ -109,6 +123,11 @@ export default function PaymentDialog({
       setNumpadValue("");
       setVoucherCode("");
       setLoyaltyPointsToRedeem(0);
+      setChequeNumber("");
+      setCreditNoteCode("");
+      setCreditNoteLookup(null);
+      setCreditNoteError(null);
+      setDisplayCurrency("EUR");
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -169,6 +188,44 @@ export default function PaymentDialog({
     setLoyaltyPointsToRedeem(0);
   }
 
+  // ── Cheque ──────────────────────────────────────────────────────────────────
+
+  function addCheque() {
+    if (parsedAmount <= 0) return;
+    payment.addChequeTender(parsedAmount, chequeNumber);
+    setChequeNumber("");
+    setNumpadValue("");
+  }
+
+  // ── Credit note ─────────────────────────────────────────────────────────────
+
+  async function lookupCreditNote() {
+    setCreditNoteError(null);
+    setCreditNoteLookup(null);
+    if (!creditNoteCode.trim()) return;
+    try {
+      const note = await findCreditNote(creditNoteCode.trim());
+      if (!note) {
+        setCreditNoteError("Credit note not found");
+      } else if (note.status !== "open" || note.remaining <= 0) {
+        setCreditNoteError("Credit note has no remaining balance");
+      } else {
+        setCreditNoteLookup({ id: note.id, code: note.code, remaining: note.remaining });
+      }
+    } catch {
+      setCreditNoteError("Lookup failed");
+    }
+  }
+
+  function applyCreditNote() {
+    if (!creditNoteLookup) return;
+    const amount = Math.min(creditNoteLookup.remaining, payment.balance);
+    if (amount <= 0) return;
+    payment.addCreditNoteTender(amount, creditNoteLookup.id, creditNoteLookup.code);
+    setCreditNoteCode("");
+    setCreditNoteLookup(null);
+  }
+
   // ── Complete ────────────────────────────────────────────────────────────────
 
   function handleComplete() {
@@ -185,10 +242,28 @@ export default function PaymentDialog({
         <DialogHeader className="px-6 pt-5 pb-4 border-b">
           <DialogTitle className="flex items-center justify-between">
             <span>Payment</span>
-            <span className="text-2xl font-bold font-mono text-primary" data-testid="payment-total">
-              {fmt(orderTotal)}
-            </span>
+            <div className="flex items-center gap-3">
+              <select
+                data-testid="select-display-currency"
+                value={displayCurrency}
+                onChange={(e) => setDisplayCurrency(e.target.value)}
+                className="text-xs font-medium bg-muted rounded-md px-1.5 py-1 border-none outline-none"
+              >
+                {Object.keys(CURRENCY_RATES).map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <span className="text-2xl font-bold font-mono text-primary" data-testid="payment-total">
+                {fmt(orderTotal)}
+              </span>
+            </div>
           </DialogTitle>
+          {displayCurrency !== "EUR" && (
+            <p className="text-xs text-muted-foreground text-right" data-testid="text-currency-converted">
+              ≈ {displayCurrency} {(orderTotal * (CURRENCY_RATES[displayCurrency] ?? 1)).toFixed(2)}
+              {" "}(rate {CURRENCY_RATES[displayCurrency]})
+            </p>
+          )}
         </DialogHeader>
 
         <div className="flex flex-col sm:flex-row">
@@ -351,6 +426,70 @@ export default function PaymentDialog({
                     </div>
                   </div>
                 )}
+
+                {/* Cheque */}
+                <div className="space-y-1">
+                  <p className="text-muted-foreground font-medium">Cheque</p>
+                  <div className="flex gap-2">
+                    <Input
+                      data-testid="input-cheque-number"
+                      placeholder="Cheque number"
+                      value={chequeNumber}
+                      onChange={(e) => setChequeNumber(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      data-testid="btn-add-cheque"
+                      variant="outline"
+                      onClick={addCheque}
+                      disabled={parsedAmount <= 0}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Enter amount on keypad, then add cheque number</p>
+                </div>
+
+                {/* Credit note */}
+                <div className="space-y-1">
+                  <p className="text-muted-foreground font-medium">Credit Note</p>
+                  <div className="flex gap-2">
+                    <Input
+                      data-testid="input-credit-note-code"
+                      placeholder="Credit note code"
+                      value={creditNoteCode}
+                      onChange={(e) => { setCreditNoteCode(e.target.value); setCreditNoteLookup(null); setCreditNoteError(null); }}
+                    />
+                    <Button
+                      size="sm"
+                      data-testid="btn-lookup-credit-note"
+                      variant="outline"
+                      onClick={lookupCreditNote}
+                      disabled={!creditNoteCode.trim()}
+                    >
+                      Find
+                    </Button>
+                  </div>
+                  {creditNoteError && (
+                    <p className="text-xs text-red-500" data-testid="text-credit-note-error">{creditNoteError}</p>
+                  )}
+                  {creditNoteLookup && (
+                    <div className="flex items-center justify-between rounded border p-2">
+                      <div>
+                        <p className="font-medium">{creditNoteLookup.code}</p>
+                        <p className="text-muted-foreground text-xs">Available: {fmt(creditNoteLookup.remaining)}</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid="btn-apply-credit-note"
+                        onClick={applyCreditNote}
+                      >
+                        Apply
+                      </Button>
+                    </div>
+                  )}
+                </div>
 
                 {/* Account credit */}
                 {accountCredit > 0 && (

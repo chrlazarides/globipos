@@ -22,7 +22,9 @@ export type TenderMethod =
   | "card_worldpay"
   | "loyalty"
   | "voucher"
-  | "account_credit";
+  | "account_credit"
+  | "cheque"
+  | "credit_note";
 
 export interface Tender {
   id: string;
@@ -63,6 +65,8 @@ export interface UsePaymentReturn {
   addVoucherTender: (barcode: string, amount: number) => void;
   addLoyaltyTender: (points: number, valuePerPoint: number) => void;
   addAccountCreditTender: (amount: number) => void;
+  addChequeTender: (amount: number, chequeNumber: string) => void;
+  addCreditNoteTender: (amount: number, creditNoteId: string, creditNoteCode?: string) => void;
   removeTender: (id: string) => void;
   clearTenders: () => void;
 
@@ -80,6 +84,8 @@ function tenderLabel(method: TenderMethod): string {
     case "loyalty":       return "Loyalty Points";
     case "voucher":       return "Voucher";
     case "account_credit":return "Account Credit";
+    case "cheque":        return "Cheque";
+    case "credit_note":   return "Credit Note";
   }
 }
 
@@ -223,6 +229,38 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
     ]);
   }, []);
 
+  // ── Cheque ──────────────────────────────────────────────────────────────────
+
+  const addChequeTender = useCallback((amount: number, chequeNumber: string) => {
+    if (amount <= 0) return;
+    setTenders((prev) => [
+      ...prev,
+      {
+        id: uuidv4(),
+        method: "cheque",
+        amount,
+        reference: chequeNumber,
+        label: `Cheque${chequeNumber ? ` (#${chequeNumber})` : ""}`,
+      },
+    ]);
+  }, []);
+
+  // ── Credit note (store credit issued from a prior return) ────────────────────
+
+  const addCreditNoteTender = useCallback((amount: number, creditNoteId: string, creditNoteCode?: string) => {
+    if (amount <= 0) return;
+    setTenders((prev) => [
+      ...prev,
+      {
+        id: uuidv4(),
+        method: "credit_note",
+        amount,
+        reference: creditNoteId,
+        label: `Credit Note${creditNoteCode ? ` (${creditNoteCode})` : ""}`,
+      },
+    ]);
+  }, []);
+
   // ── Remove / clear ──────────────────────────────────────────────────────────
 
   const removeTender = useCallback((id: string) => {
@@ -259,6 +297,8 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
     addVoucherTender,
     addLoyaltyTender,
     addAccountCreditTender,
+    addChequeTender,
+    addCreditNoteTender,
     removeTender,
     clearTenders,
     finalise,

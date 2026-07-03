@@ -893,6 +893,109 @@ async fn save_return_order(
     Ok(())
 }
 
+// ── Credit notes (store credit) ───────────────────────────────────────────────
+
+#[tauri::command]
+async fn issue_credit_note(
+    state:       State<'_, AppState>,
+    order_id:    Option<String>,
+    order_number: Option<String>,
+    customer_id: Option<String>,
+    amount:      f64,
+    reason:      Option<String>,
+    cashier_id:  String,
+    cashier_name: String,
+) -> Result<Value, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    // Short human-readable redemption code, e.g. CN-A1B2C3
+    let code = format!("CN-{}", &id.to_uppercase().replace('-', "")[0..6]);
+
+    sqlx::query(
+        r#"INSERT INTO pos_credit_notes
+           (id, code, order_id, order_number, customer_id, amount, remaining, reason, cashier_id, cashier_name, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')"#
+    )
+    .bind(&id)
+    .bind(&code)
+    .bind(&order_id)
+    .bind(&order_number)
+    .bind(&customer_id)
+    .bind(amount)
+    .bind(amount)
+    .bind(&reason)
+    .bind(&cashier_id)
+    .bind(&cashier_name)
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    let row = sqlx::query("SELECT * FROM pos_credit_notes WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+    let note_json = row_to_json(row);
+
+    // Queue for server sync
+    let outbox_id = uuid::Uuid::new_v4().to_string();
+    let payload = serde_json::json!({ "type": "credit_note_issued", "credit_note": note_json.clone() });
+    sqlx::query("INSERT INTO pos_outbox (id, order_id, payload, status) VALUES (?, ?, ?, 'pending')")
+        .bind(&outbox_id)
+        .bind(&id)
+        .bind(payload.to_string())
+        .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    Ok(note_json)
+}
+
+#[tauri::command]
+async fn find_credit_note(
+    state: State<'_, AppState>,
+    code:  String,
+) -> Result<Option<Value>, String> {
+    let row = sqlx::query("SELECT * FROM pos_credit_notes WHERE code = ? COLLATE NOCASE")
+        .bind(code.trim())
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(row.map(row_to_json))
+}
+
+#[tauri::command]
+async fn redeem_credit_note(
+    state:  State<'_, AppState>,
+    id:     String,
+    amount: f64,
+) -> Result<Value, String> {
+    let row = sqlx::query("SELECT * FROM pos_credit_notes WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?
+        .ok_or_else(|| "Credit note not found".to_string())?;
+
+    let existing = row_to_json(row);
+    let remaining = existing.get("remaining").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let status = existing.get("status").and_then(|v| v.as_str()).unwrap_or("open");
+
+    if status != "open" {
+        return Err("Credit note is not open for redemption".to_string());
+    }
+    if amount <= 0.0 || amount > remaining + 0.001 {
+        return Err("Redemption amount exceeds remaining balance".to_string());
+    }
+
+    let new_remaining = (remaining - amount).max(0.0);
+    let new_status = if new_remaining <= 0.001 { "redeemed" } else { "open" };
+
+    sqlx::query(
+        "UPDATE pos_credit_notes SET remaining = ?, status = ?, redeemed_at = CASE WHEN ? = 'redeemed' THEN datetime('now') ELSE redeemed_at END WHERE id = ?"
+    )
+    .bind(new_remaining)
+    .bind(new_status)
+    .bind(new_status)
+    .bind(&id)
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    let updated = sqlx::query("SELECT * FROM pos_credit_notes WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+
+    Ok(row_to_json(updated))
+}
+
 // ── Phase 3: Hardware commands ────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1080,6 +1183,10 @@ pub fn run() {
             // ── Phase 3: Returns ─────────────────────────────────────────────
             get_order_by_number,
             save_return_order,
+            // ── Credit notes ─────────────────────────────────────────────────
+            issue_credit_note,
+            find_credit_note,
+            redeem_credit_note,
             // ── Phase 3: Hardware ────────────────────────────────────────────
             get_hardware_config,
             save_hardware_config,

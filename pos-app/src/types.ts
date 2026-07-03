@@ -81,6 +81,8 @@ export interface Order {
   price_level: number;          // 1-5
   order_discount_pct: number;   // % discount applied to order
   order_discount_fixed: number; // fixed € discount applied to order
+  surcharge_pct: number;        // % additional charge/surcharge applied to order (e.g. cover/service charge)
+  surcharge_amount: number;     // computed € value of the surcharge
   subtotal: number;             // sum of line totals before order discount
   discount_amount: number;      // total discount (line + order)
   vat_amount: number;
@@ -158,7 +160,13 @@ export type NumpadMode =
   | "order_discount_pct"
   | "order_discount_fixed"
   | "amount_tendered"
-  | "price_check";
+  | "price_check"
+  | "qty_multiplier"
+  | "surcharge_pct"
+  | "cash_in"
+  | "cash_out"
+  | "petty_cash"
+  | "dept_sale";
 
 // ── Action codes ──────────────────────────────────────────────────────────────
 
@@ -189,4 +197,32 @@ export type ActionCode =
   | "PAY_CARD"
   | "OPEN_DRAWER"
   | "END_SHIFT"
-  | "FALLBACK_RULES";
+  | "FALLBACK_RULES"
+  | "NUMPAD"
+  | "NO_SALE"
+  | "CASH_IN"
+  | "CASH_OUT"
+  | "PETTY_CASH"
+  | "DECLARE_CASH"
+  | "SURCHARGE_PCT"
+  | "DEPT_SALE"
+  | "ISSUE_CREDIT_NOTE"
+  | "REDEEM_CREDIT_NOTE";
+
+// ── Credit notes ──────────────────────────────────────────────────────────────
+
+export interface CreditNote {
+  id: string;
+  code: string;
+  order_id?: string;
+  order_number?: string;
+  customer_id?: string;
+  amount: number;
+  remaining: number;
+  reason?: string;
+  cashier_id: string;
+  cashier_name: string;
+  status: "open" | "redeemed" | "void";
+  created_at: string;
+  redeemed_at?: string;
+}

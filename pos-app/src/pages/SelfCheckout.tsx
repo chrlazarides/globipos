@@ -244,6 +244,8 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
             price_level: 1,
             order_discount_pct: 0,
             order_discount_fixed: 0,
+            surcharge_pct: 0,
+            surcharge_amount: 0,
             subtotal: totals.subtotal,
             discount_amount: totals.discountAmount,
             vat_amount: totals.vatAmount,

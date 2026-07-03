@@ -19,11 +19,18 @@ const MODE_LABELS: Record<NumpadMode, string> = {
   order_discount_fixed:"Order Discount €",
   amount_tendered:     "Amount Tendered",
   price_check:         "Price Check",
+  qty_multiplier:      "Qty × (before scan)",
+  surcharge_pct:       "Surcharge / Cover %",
+  cash_in:             "Cash In Amount",
+  cash_out:            "Cash Out Amount",
+  petty_cash:          "Petty Cash Amount",
+  dept_sale:           "Department Amount",
 };
 
 const MODE_SUFFIX: Partial<Record<NumpadMode, string>> = {
   line_discount_pct:   "%",
   order_discount_pct:  "%",
+  surcharge_pct:       "%",
 };
 
 const MODE_PREFIX: Partial<Record<NumpadMode, string>> = {
@@ -31,13 +38,17 @@ const MODE_PREFIX: Partial<Record<NumpadMode, string>> = {
   line_discount_fixed: "€",
   order_discount_fixed:"€",
   amount_tendered:     "€",
+  cash_in:             "€",
+  cash_out:            "€",
+  petty_cash:          "€",
+  dept_sale:           "€",
 };
 
 export function Numpad({ mode, onConfirm, onClose, currentValue }: NumpadProps) {
   const [display, setDisplay] = useState(
     currentValue != null && currentValue > 0 ? String(currentValue) : ""
   );
-  const hasDecimal = mode !== "qty";
+  const hasDecimal = mode !== "qty" && mode !== "qty_multiplier";
   const prefix = MODE_PREFIX[mode] ?? "";
   const suffix = MODE_SUFFIX[mode] ?? "";
   const label  = MODE_LABELS[mode] ?? "Enter Value";

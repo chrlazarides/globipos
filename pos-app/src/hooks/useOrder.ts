@@ -4,7 +4,7 @@
  */
 import { useState, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
-import type { Order, OrderLine, Product, NumpadMode } from "../types";
+import type { Order, OrderLine, Product, Category, NumpadMode } from "../types";
 import {
   createLine,
   setLineQty,
@@ -60,6 +60,17 @@ export interface UseOrderReturn {
   setTaxOverride: (vatRate: number) => void;    // #25
   applyTimedPrices: (overrides: Map<string, number>) => void; // #26
 
+  // Surcharge (additional charge / cover / service charge)
+  setSurchargePct: (pct: number) => void;
+
+  // Department-key sale — open amount against a category, no product lookup
+  addDepartmentLine: (category: Category, amount: number) => void;
+
+  // Quantity multiplier — set a pending qty that the next scan/item-button consumes
+  pendingMultiplier: number | null;
+  setPendingMultiplier: (qty: number) => void;
+  clearPendingMultiplier: () => void;
+
   // Payment
   completeOrder: (
     paymentMethod: string,
@@ -83,6 +94,8 @@ function makeEmptyOrder(cashierId: string, cashierName: string): Order {
     price_level: 1,
     order_discount_pct: 0,
     order_discount_fixed: 0,
+    surcharge_pct: 0,
+    surcharge_amount: 0,
     subtotal: 0,
     discount_amount: 0,
     vat_amount: 0,
@@ -92,12 +105,18 @@ function makeEmptyOrder(cashierId: string, cashierName: string): Order {
 }
 
 function rebuildOrderTotals(order: Order, lines: OrderLine[]): Order {
-  const totals = computeOrderTotals(lines, order.order_discount_pct, order.order_discount_fixed);
+  const totals = computeOrderTotals(
+    lines,
+    order.order_discount_pct,
+    order.order_discount_fixed,
+    order.surcharge_pct
+  );
   return {
     ...order,
     subtotal: totals.subtotal,
     discount_amount: totals.discountAmount,
     vat_amount: totals.vatAmount,
+    surcharge_amount: totals.surchargeAmount,
     total: totals.total,
   };
 }
@@ -110,6 +129,7 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
   const [numpadMode, setNumpadMode] = useState<NumpadMode>("qty");
   const [lastLineId, setLastLineId] = useState<string | null>(null);
+  const [pendingMultiplier, setPendingMultiplierState] = useState<number | null>(null);
   const timedPricesRef = useRef<Map<string, number>>(new Map());
 
   // Helper: update lines and rebuild order totals
@@ -122,7 +142,12 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
 
   // ── #1 Add product ──────────────────────────────────────────────────────────
   const addProduct = useCallback((product: Product, qty = 1, overridePrice?: number) => {
-    let line = createLine(product, order.price_level, qty, timedPricesRef.current);
+    // Consume any pending quantity multiplier (NUMPAD "×Qty before scan") unless
+    // the caller explicitly passed a qty (e.g. scale-barcode weight).
+    const effectiveQty = qty === 1 && pendingMultiplier != null && pendingMultiplier > 0
+      ? pendingMultiplier
+      : qty;
+    let line = createLine(product, order.price_level, effectiveQty, timedPricesRef.current);
     // Apply scale-barcode embedded price (or any caller-supplied override)
     if (overridePrice != null && overridePrice > 0) {
       line = setLinePriceOverride(line, overridePrice);
@@ -132,7 +157,15 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     updateLines(newLines);
     setSelectedLineId(newLine.id);
     setLastLineId(newLine.id);
-  }, [lines, order.id, order.price_level, updateLines]);
+    if (pendingMultiplier != null) setPendingMultiplierState(null);
+  }, [lines, order.id, order.price_level, updateLines, pendingMultiplier]);
+
+  // ── Quantity multiplier (NUMPAD action) ─────────────────────────────────────
+  const setPendingMultiplier = useCallback((qty: number) => {
+    if (qty > 0) setPendingMultiplierState(qty);
+  }, []);
+
+  const clearPendingMultiplier = useCallback(() => setPendingMultiplierState(null), []);
 
   // ── #2 Add qty ──────────────────────────────────────────────────────────────
   const addQty = useCallback(() => {
@@ -349,6 +382,35 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     writeAudit("tax_override", "order_line", selectedLine.id, `VAT set to ${vatRate}%`, cashierId, cashierName);
   }, [lines, selectedLine, updateLines, cashierId, cashierName]);
 
+  // ── Surcharge % (additional charge / cover / service charge) ───────────────
+  const setSurchargePct = useCallback((pct: number) => {
+    setOrder((prev) => rebuildOrderTotals({ ...prev, surcharge_pct: pct }, lines));
+    writeAudit("surcharge_pct", "order", order.id, `Surcharge set to ${pct}%`, cashierId, cashierName);
+  }, [order.id, lines, cashierId, cashierName]);
+
+  // ── Department-key sale — open amount against a category, no product ───────
+  const addDepartmentLine = useCallback((category: Category, amount: number) => {
+    if (amount <= 0) return;
+    const partial: Omit<OrderLine, "line_total" | "vat_amount"> = {
+      id: uuidv4(),
+      order_id: order.id,
+      description: `${category.name} (dept.)`,
+      qty: 1,
+      unit_price: amount,
+      line_discount_pct: 0,
+      line_discount_fixed: 0,
+      vat_rate: category.vat_rate,
+      voided: false,
+    };
+    const { lineTotal, vatAmount } = computeLineAmounts(partial);
+    const newLine: OrderLine = { ...partial, line_total: lineTotal, vat_amount: vatAmount };
+    const newLines = [...lines, newLine];
+    updateLines(newLines);
+    setSelectedLineId(newLine.id);
+    setLastLineId(newLine.id);
+    writeAudit("dept_sale", "order_line", newLine.id, `${category.name}: €${amount}`, cashierId, cashierName);
+  }, [order.id, lines, updateLines, cashierId, cashierName]);
+
   // ── #26 Apply timed prices from inbox ───────────────────────────────────────
   const applyTimedPrices = useCallback((overrides: Map<string, number>) => {
     timedPricesRef.current = overrides;
@@ -398,6 +460,9 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     selectedLineId,
     numpadMode,
     lastLineId,
+    pendingMultiplier,
+    setPendingMultiplier,
+    clearPendingMultiplier,
     addProduct,
     addQty,
     subtractQty,
@@ -425,6 +490,8 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     removeDiscount,
     setTaxOverride,
     applyTimedPrices,
+    setSurchargePct,
+    addDepartmentLine,
     completeOrder,
     setNumpadMode,
   };

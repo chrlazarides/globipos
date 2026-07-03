@@ -3,6 +3,7 @@ import type { CSSProperties, ComponentType, SVGProps } from "react";
 import { ChevronLeftIcon, LayersIcon } from "lucide-react";
 import {
   CashIcon, CardIcon, VoidIcon, HoldIcon, RecallIcon, DiscountIcon, SubtotalIcon,
+  VoucherIcon, RefundIcon, PayIcon,
 } from "./icons/PosIcons";
 import type { LayoutButton, Product } from "../types";
 import { formatCurrency } from "../lib/pricing";
@@ -31,6 +32,17 @@ const ACTION_COLORS: Record<string, string> = {
   LINE_DISCOUNT_PCT:   "bg-purple-800 hover:bg-purple-700 text-white",
   ORDER_DISCOUNT_PCT:  "bg-purple-800 hover:bg-purple-700 text-white",
   PROMO_CODE:          "bg-purple-800 hover:bg-purple-700 text-white",
+  NUMPAD:              "bg-slate-700 hover:bg-slate-600 text-white",
+  OPEN_DRAWER:         "bg-teal-700 hover:bg-teal-600 text-white",
+  NO_SALE:             "bg-teal-700 hover:bg-teal-600 text-white",
+  CASH_IN:             "bg-emerald-700 hover:bg-emerald-600 text-white",
+  CASH_OUT:            "bg-orange-700 hover:bg-orange-600 text-white",
+  PETTY_CASH:          "bg-orange-700 hover:bg-orange-600 text-white",
+  DECLARE_CASH:        "bg-teal-700 hover:bg-teal-600 text-white",
+  SURCHARGE_PCT:       "bg-purple-800 hover:bg-purple-700 text-white",
+  DEPT_SALE:           "bg-indigo-700 hover:bg-indigo-600 text-white",
+  ISSUE_CREDIT_NOTE:   "bg-pink-800 hover:bg-pink-700 text-white",
+  REDEEM_CREDIT_NOTE:  "bg-pink-800 hover:bg-pink-700 text-white",
 };
 
 const ACTION_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
@@ -49,6 +61,14 @@ const ACTION_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   PROMO_CODE:          DiscountIcon,
   MANUAL_PROMO:        DiscountIcon,
   PRICE_CHECK:         SubtotalIcon,
+  CASH_IN:             CashIcon,
+  CASH_OUT:            CashIcon,
+  PETTY_CASH:          CashIcon,
+  OPEN_DRAWER:         CashIcon,
+  DECLARE_CASH:        CashIcon,
+  DEPT_SALE:           PayIcon,
+  ISSUE_CREDIT_NOTE:   VoucherIcon,
+  REDEEM_CREDIT_NOTE:  RefundIcon,
 };
 
 export function LayoutGrid({

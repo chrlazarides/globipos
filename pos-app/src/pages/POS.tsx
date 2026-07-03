@@ -19,7 +19,7 @@ import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
 } from "../types";
-import { getProducts, getCategories, getLayout, getHeldOrders, getOrderLines } from "../lib/db";
+import { getProducts, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
 import { useOrder } from "../hooks/useOrder";
 import { useBarcode } from "../hooks/useBarcode";
@@ -127,6 +127,189 @@ function PromoDialog({
   );
 }
 
+// ── Cash journal dialog (cash-in / cash-out / petty cash) ────────────────────
+
+const CASH_DIALOG_LABELS: Record<"cash_in" | "cash_out" | "petty_cash", string> = {
+  cash_in: "Cash In",
+  cash_out: "Cash Out",
+  petty_cash: "Petty Cash",
+};
+
+function CashDialog({
+  mode, onConfirm, onClose,
+}: { mode: "cash_in" | "cash_out" | "petty_cash"; onConfirm: (amount: number, note: string) => void; onClose: () => void; }) {
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const parsed = parseFloat(amount) || 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">{CASH_DIALOG_LABELS[mode]}</h2>
+        <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+        <input
+          type="number"
+          step="0.01"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="0.00"
+          autoFocus
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="input-cash-dialog-amount"
+        />
+        <label className="text-gray-400 text-xs mb-1 block">Note</label>
+        <input
+          type="text"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Reason (optional)"
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="input-cash-dialog-note"
+        />
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Cancel</button>
+          <button
+            onClick={() => { if (parsed > 0) { onConfirm(parsed, note); onClose(); } }}
+            disabled={parsed <= 0}
+            className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
+            data-testid="button-confirm-cash-dialog"
+          >
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Department sale dialog ────────────────────────────────────────────────────
+
+function DeptSaleDialog({
+  categories, onConfirm, onClose,
+}: { categories: Category[]; onConfirm: (category: Category, amount: number) => void; onClose: () => void; }) {
+  const [categoryId, setCategoryId] = useState<string>(categories[0]?.id ?? "");
+  const [amount, setAmount] = useState("");
+  const parsed = parseFloat(amount) || 0;
+  const selected = categories.find((c) => c.id === categoryId);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">Department Sale</h2>
+        <label className="text-gray-400 text-xs mb-1 block">Department</label>
+        <select
+          value={categoryId}
+          onChange={(e) => setCategoryId(e.target.value)}
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="select-dept-sale-category"
+        >
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+        <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+        <input
+          type="number"
+          step="0.01"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="0.00"
+          autoFocus
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="input-dept-sale-amount"
+        />
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Cancel</button>
+          <button
+            onClick={() => { if (selected && parsed > 0) { onConfirm(selected, parsed); onClose(); } }}
+            disabled={!selected || parsed <= 0}
+            className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
+            data-testid="button-confirm-dept-sale"
+          >
+            Add to Order
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Issue credit note dialog ──────────────────────────────────────────────────
+
+function IssueCreditNoteDialog({
+  onIssue, onClose,
+}: { onIssue: (amount: number, reason: string) => Promise<{ code: string }>; onClose: () => void; }) {
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [issuedCode, setIssuedCode] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const parsed = parseFloat(amount) || 0;
+
+  async function handleIssue() {
+    if (parsed <= 0 || busy) return;
+    setBusy(true);
+    try {
+      const result = await onIssue(parsed, reason);
+      setIssuedCode(result.code);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">Issue Credit Note</h2>
+        {issuedCode ? (
+          <div className="text-center py-4">
+            <p className="text-gray-400 text-sm mb-2">Credit note issued</p>
+            <p className="text-2xl font-mono font-bold text-burgundy-400" data-testid="text-issued-credit-note-code">{issuedCode}</p>
+            <p className="text-gray-500 text-xs mt-2">Give this code to the customer for redemption</p>
+          </div>
+        ) : (
+          <>
+            <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+            <input
+              type="number"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+              autoFocus
+              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+              data-testid="input-issue-credit-note-amount"
+            />
+            <label className="text-gray-400 text-xs mb-1 block">Reason</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Reason (optional)"
+              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+              data-testid="input-issue-credit-note-reason"
+            />
+          </>
+        )}
+        <div className="flex gap-3 mt-4">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
+            {issuedCode ? "Done" : "Cancel"}
+          </button>
+          {!issuedCode && (
+            <button
+              onClick={handleIssue}
+              disabled={parsed <= 0 || busy}
+              className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
+              data-testid="button-confirm-issue-credit-note"
+            >
+              {busy ? "Issuing…" : "Issue"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Recall dialog ─────────────────────────────────────────────────────────────
 
 function RecallDialog({ onRecall, onClose }: {
@@ -181,7 +364,8 @@ function RecallDialog({ onRecall, onClose }: {
 
 // ── Main POS Screen ───────────────────────────────────────────────────────────
 
-type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | null;
+type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | null;
+type CashDialogMode = "cash_in" | "cash_out" | "petty_cash";
 type POSMode = "sell" | "sco" | "shift" | "fallback";
 
 interface PaymentSuccessState {
@@ -303,6 +487,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [dialog, setDialog]               = useState<Dialog>(null);
   const [numpadMode, setNumpadModeState]  = useState<NumpadMode>("qty");
+  const [cashDialogMode, setCashDialogMode] = useState<CashDialogMode>("cash_in");
   const [mode, setMode]                   = useState<POSMode>(config.sco_mode ? "sco" : "sell");
   const [paymentSuccess, setPaymentSuccess] = useState<PaymentSuccessState | null>(null);
   const lastReceiptPrinterCallback = useRef<(() => Promise<void>) | null>(null);
@@ -450,8 +635,24 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "FALLBACK_RULES": setMode("fallback"); break;
       case "PAY_CASH":
       case "PAY_CARD": setDialog("payment"); break;
+      // ── Quantity multiplier before scan ──────────────────────────────────
+      case "NUMPAD": setNumpadModeState("qty_multiplier"); setDialog("numpad"); break;
+      // ── Cash drawer & journal group ──────────────────────────────────────
+      case "OPEN_DRAWER": hw.openDrawer(); break;
+      case "NO_SALE": shift.noSale(); break;
+      case "CASH_IN": setCashDialogMode("cash_in"); setDialog("cash_dialog"); break;
+      case "CASH_OUT": setCashDialogMode("cash_out"); setDialog("cash_dialog"); break;
+      case "PETTY_CASH": setCashDialogMode("petty_cash"); setDialog("cash_dialog"); break;
+      case "DECLARE_CASH": setMode("shift"); break;
+      // ── Surcharge % ───────────────────────────────────────────────────────
+      case "SURCHARGE_PCT": perms.requestAction("discount", () => { setNumpadModeState("surcharge_pct"); setDialog("numpad"); }); break;
+      // ── Department-key sale ──────────────────────────────────────────────
+      case "DEPT_SALE": setDialog("dept_sale"); break;
+      // ── Credit notes ──────────────────────────────────────────────────────
+      case "ISSUE_CREDIT_NOTE": perms.requestAction("discount", () => { setDialog("issue_credit_note"); }); break;
+      case "REDEEM_CREDIT_NOTE": setDialog("payment"); break;
     }
-  }, [engine, perms]);
+  }, [engine, perms, hw, shift]);
 
   // ── Numpad confirm ────────────────────────────────────────────────────────
   function handleNumpadConfirm(value: number) {
@@ -462,6 +663,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "line_discount_fixed":  engine.setLineFixed(value); break;
       case "order_discount_pct":   engine.setOrderPct(value); break;
       case "order_discount_fixed": engine.setOrderFixed(value); break;
+      case "qty_multiplier":       engine.setPendingMultiplier(value); break;
+      case "surcharge_pct":        engine.setSurchargePct(value); break;
     }
   }
 
@@ -764,6 +967,40 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       {dialog === "recall" && (
         <RecallDialog
           onRecall={(heldOrder, heldLines) => { engine.recallOrder(heldOrder, heldLines); }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+
+      {dialog === "cash_dialog" && (
+        <CashDialog
+          mode={cashDialogMode}
+          onConfirm={(amount, note) => {
+            if (cashDialogMode === "cash_in") shift.addCashIn(amount, note);
+            else if (cashDialogMode === "cash_out") shift.addCashOut(amount, note);
+            else shift.addCashOut(amount, note ? `Petty cash: ${note}` : "Petty cash");
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+
+      {dialog === "dept_sale" && (
+        <DeptSaleDialog
+          categories={categories}
+          onConfirm={(category, amount) => engine.addDepartmentLine(category, amount)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+
+      {dialog === "issue_credit_note" && (
+        <IssueCreditNoteDialog
+          onIssue={async (amount, reason) => {
+            const note = await issueCreditNote(amount, session.cashier_id, session.cashier_name, {
+              orderNumber: engine.order.order_number || undefined,
+              reason: reason || undefined,
+            });
+            sync.triggerOutboxFlush();
+            return { code: note.code };
+          }}
           onClose={() => setDialog(null)}
         />
       )}

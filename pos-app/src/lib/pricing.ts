@@ -46,14 +46,22 @@ export interface OrderTotals {
   orderDiscount: number; // order-level discount amount
   taxableAmount: number; // subtotal - orderDiscount
   vatAmount: number;     // VAT on taxableAmount
-  total: number;         // taxableAmount + vatAmount
+  surchargeAmount: number; // additional charge/surcharge (e.g. cover/service charge), applied after discount, before VAT
+  total: number;         // taxableAmount + surchargeAmount + vatAmount
   discountAmount: number; // total discounts (line + order)
 }
 
+/**
+ * Compute full order totals.
+ * `surchargePct` implements the CPLPOS "Additional Charge" function — a % surcharge
+ * (e.g. cover charge / service charge) applied to the discounted subtotal, and itself
+ * subject to VAT like the rest of the order.
+ */
 export function computeOrderTotals(
   lines: OrderLine[],
   orderDiscountPct: number,
-  orderDiscountFixed: number
+  orderDiscountFixed: number,
+  surchargePct: number = 0
 ): OrderTotals {
   const activeLines = lines.filter((l) => !l.voided);
 
@@ -69,24 +77,36 @@ export function computeOrderTotals(
   const orderDiscount = round2(orderDiscountPctAmt + orderDiscountFixed);
   const afterOrderDiscount = Math.max(0, round2(subtotal - orderDiscount));
 
-  // Re-compute VAT on the proportional residual amounts
+  const surchargeAmount = round2(afterOrderDiscount * (surchargePct / 100));
+  const taxableBase = round2(afterOrderDiscount + surchargeAmount);
+
+  // Re-compute VAT on the proportional residual amounts (surcharge follows the
+  // blended VAT rate of the order, since it isn't tied to any single line's rate)
+  const blendedVatRate = subtotal > 0
+    ? activeLines.reduce((s, l) => {
+        const { lineNet } = computeLineAmounts(l);
+        return s + (lineNet / subtotal) * l.vat_rate;
+      }, 0)
+    : 0;
+
   const vatAmount = round2(
     activeLines.reduce((s, l) => {
       const { lineNet } = computeLineAmounts(l);
       const proportion = subtotal > 0 ? lineNet / subtotal : 0;
       const allocatedNet = round2(afterOrderDiscount * proportion);
       return s + round2(allocatedNet * (l.vat_rate / 100));
-    }, 0)
+    }, 0) + round2(surchargeAmount * (blendedVatRate / 100))
   );
 
-  const total = round2(afterOrderDiscount + vatAmount);
+  const total = round2(taxableBase + vatAmount);
   const discountAmount = round2(lineDiscountTotal + orderDiscount);
 
   return {
     subtotal,
     orderDiscount,
-    taxableAmount: afterOrderDiscount,
+    taxableAmount: taxableBase,
     vatAmount,
+    surchargeAmount,
     total,
     discountAmount,
   };

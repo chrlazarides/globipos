@@ -297,6 +297,25 @@ async fn run_v3(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             line_total REAL NOT NULL,
             restocked INTEGER NOT NULL DEFAULT 1
         )"#,
+        // Credit notes (store credit) — issued from returns, redeemable against future orders
+        r#"CREATE TABLE IF NOT EXISTS pos_credit_notes (
+            id TEXT PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            order_id TEXT,
+            order_number TEXT,
+            customer_id TEXT,
+            amount REAL NOT NULL DEFAULT 0,
+            remaining REAL NOT NULL DEFAULT 0,
+            reason TEXT,
+            cashier_id TEXT NOT NULL,
+            cashier_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            redeemed_at TEXT,
+            synced_at TEXT
+        )"#,
+        "CREATE INDEX IF NOT EXISTS idx_credit_notes_code ON pos_credit_notes(code)",
+        "CREATE INDEX IF NOT EXISTS idx_credit_notes_customer ON pos_credit_notes(customer_id)",
         "CREATE INDEX IF NOT EXISTS idx_return_lines_return ON pos_return_order_lines(return_order_id)",
         // Additive column migrations — silently ignored on fresh DBs that already have it
         "ALTER TABLE pos_orders ADD COLUMN payment_ref TEXT",
