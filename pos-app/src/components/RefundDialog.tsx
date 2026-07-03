@@ -35,6 +35,8 @@ import { Search, Loader2, AlertCircle, Check, Plus, Trash2 } from "lucide-react"
 import { RefundIcon } from "./icons/PosIcons";
 import { invoke } from "@tauri-apps/api/core";
 import { v4 as uuidv4 } from "uuid";
+import type { PrintReceiptLine } from "@/hooks/useHardware";
+import { formatCurrency } from "@/lib/pricing";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -52,6 +54,7 @@ interface OriginalOrder {
   order_number: string;
   total: number;
   payment_method: string;
+  payment_ref?: string | null;
   created_at: string;
   lines: OriginalLine[];
 }
@@ -63,6 +66,9 @@ interface RefundDialogProps {
   open: boolean;
   cashierId: string;
   cashierName: string;
+  terminalCode?: string;
+  printerColumns?: number;
+  onPrint?: (lines: PrintReceiptLine[]) => Promise<boolean> | void;
   onComplete: (refundTotal: number, method: RefundMethod) => void;
   onCancel: () => void;
 }
@@ -73,6 +79,9 @@ export default function RefundDialog({
   open,
   cashierId,
   cashierName,
+  terminalCode,
+  printerColumns,
+  onPrint,
   onComplete,
   onCancel,
 }: RefundDialogProps) {
@@ -238,6 +247,40 @@ export default function RefundDialog({
         lines: returnLines,
       });
 
+      // Print refund receipt — includes Card Ref for card refunds so customers
+      // can match the return credit to their bank statement (same label as sale receipts).
+      if (onPrint) {
+        const colW = printerColumns ?? 42;
+        const pad = (left: string, right: string) => {
+          const gap = Math.max(1, colW - left.length - right.length);
+          return `${left}${" ".repeat(gap)}${right}`;
+        };
+        const cardRef = refundMethod === "card" ? originalOrder?.payment_ref : undefined;
+        const receiptLines: PrintReceiptLine[] = [
+          { text: terminalCode ?? "REFUND", align: "center", bold: true, size: "big" },
+          { divider: true },
+          { text: "REFUND / RETURN", align: "center", bold: true },
+          { text: `Terminal: ${terminalCode ?? "-"}  Cashier: ${cashierName}` },
+          { text: `Order: ${originalOrder?.order_number ?? "NO-RECEIPT"}  ${new Date().toLocaleString()}` },
+          { divider: true },
+          ...selectedLines.map((l) => ({
+            text: pad(
+              l.description.substring(0, colW - 10),
+              `x${returnQty[l.id] ?? l.qty} ${formatCurrency(l.unit_price * (returnQty[l.id] ?? l.qty))}`
+            ),
+          })),
+          { divider: true },
+          { text: pad("REFUND TOTAL", formatCurrency(refundTotal)), bold: true, size: "big" as const, align: "right" as const },
+          { divider: true },
+          { text: `Refund method: ${refundMethod.replace("_", " ").toUpperCase()}` },
+          ...(cardRef ? [{ text: `Card Ref: ${cardRef}` }] : []),
+          ...(refundNotes ? [{ text: `Reason: ${refundNotes}` }] : []),
+          { divider: true },
+          { text: "Please retain this receipt", align: "center" },
+        ];
+        await onPrint(receiptLines);
+      }
+
       setStage("done");
       onComplete(refundTotal, refundMethod);
     } catch (e: any) {
@@ -245,7 +288,7 @@ export default function RefundDialog({
     } finally {
       setLoading(false);
     }
-  }, [selectedLines, originalOrder, cashierId, cashierName, refundMethod, refundTotal, refundNotes, returnQty, onComplete]);
+  }, [selectedLines, originalOrder, cashierId, cashierName, refundMethod, refundTotal, refundNotes, returnQty, onComplete, onPrint, terminalCode, printerColumns]);
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) { onCancel(); reset(); } }}>

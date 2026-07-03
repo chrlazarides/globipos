@@ -706,6 +706,13 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         open={dialog === "refund"}
         cashierId={session.cashier_id}
         cashierName={session.cashier_name}
+        terminalCode={config.terminal_code}
+        printerColumns={hw.config?.printer_columns}
+        onPrint={
+          hw.printerStatus === "online" && hw.config?.printer_enabled
+            ? (lines) => hw.printReceipt(lines)
+            : undefined
+        }
         onComplete={(refundTotal, method) => {
           setDialog(null);
           sync.triggerOutboxFlush();
