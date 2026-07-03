@@ -195,6 +195,7 @@ export const invoices = pgTable("invoices", {
   notes: text("notes"),
   deliveryLocation: text("delivery_location"),
   linkedInvoiceId: varchar("linked_invoice_id"),
+  portalOrderId: varchar("portal_order_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

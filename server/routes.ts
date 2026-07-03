@@ -4931,6 +4931,7 @@ export async function registerRoutes(
           notes: order.notes || `Converted from ${order.source === "whatsapp" ? "WhatsApp" : "portal"} order`,
           status: "draft",
           currency: settings.find((s: any) => s.key === "currency_symbol")?.value || "€",
+          portalOrderId: order.id,
         },
         lineItems
       );

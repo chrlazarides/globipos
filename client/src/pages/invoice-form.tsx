@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard, FileText, Lock, History, Hash } from "lucide-react";
+import { Plus, Trash2, ScanBarcode, Download, Info, FileOutput, Printer, Send, Loader2, WifiOff, Wifi, ChevronLeft, CheckCircle, XCircle, RotateCcw, CreditCard, FileText, Lock, History, Hash, MessageCircle } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { StatusBadge } from "./dashboard";
@@ -897,6 +897,19 @@ export default function InvoiceForm() {
 
   return (
     <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+      {existingInvoice?.portalOrderId && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800" data-testid="banner-portal-order-link">
+          <MessageCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span className="text-sm text-emerald-700 dark:text-emerald-300 font-medium">From WhatsApp/Portal order</span>
+          <a
+            href="/whatsapp-orders"
+            data-testid="link-portal-order"
+            className="ml-auto inline-flex items-center gap-1 text-sm font-medium text-emerald-700 dark:text-emerald-300 underline hover:no-underline"
+          >
+            View order in queue
+          </a>
+        </div>
+      )}
       {!isOnline && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800" data-testid="offline-banner">
           <WifiOff className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />

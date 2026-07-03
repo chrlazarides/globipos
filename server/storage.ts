@@ -463,7 +463,9 @@ export class DatabaseStorage implements IStorage {
         total: invoices.total,
         status: invoices.status,
         notes: invoices.notes,
+        deliveryLocation: invoices.deliveryLocation,
         linkedInvoiceId: invoices.linkedInvoiceId,
+        portalOrderId: invoices.portalOrderId,
         createdAt: invoices.createdAt,
         customerName: customers.name,
       })
@@ -495,7 +497,9 @@ export class DatabaseStorage implements IStorage {
         total: invoices.total,
         status: invoices.status,
         notes: invoices.notes,
+        deliveryLocation: invoices.deliveryLocation,
         linkedInvoiceId: invoices.linkedInvoiceId,
+        portalOrderId: invoices.portalOrderId,
         createdAt: invoices.createdAt,
         customerName: customers.name,
       })
