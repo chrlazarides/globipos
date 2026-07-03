@@ -10,3 +10,4 @@
 - [WhatsApp chatbot state persistence](wa-cart-persistence.md) — dual-write pattern: in-memory Maps (cart/pending/browse) as hot path, single `wa_cart_state` table mirror, 24h prune, rehydrate + re-arm timers on boot
 - [Missing GET route masked by SPA fallback](missing-get-route-spa-fallback.md) — page "not loading data" bugs can be a missing single-resource GET route silently falling through to index.html instead of a 404
 - [useQuery default `= []` render loop](usequery-default-array-loop.md) — fresh array/object literal as destructuring default while query is loading can be an unstable useEffect dep, causing "Maximum update depth exceeded" and parts of the UI failing to render
+- [Persisted idempotency claim design](persisted-idempotency-claim.md) — a DB-backed in-flight guard must never treat "same key resubmitted" as an auto-success path, or a post-restart retry re-triggers the real side effect

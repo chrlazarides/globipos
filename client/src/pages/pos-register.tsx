@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -30,6 +30,20 @@ interface CardChargeResult {
   transactionRef?: string;
   provider?: string;
   message: string;
+  // Only present on a 409 response. "already_paid" means the order is genuinely
+  // completed/voided — retrying is wrong. "in_progress" means the outcome is
+  // still unknown (e.g. server restarted mid-charge) — do not retry yet, but it
+  // is not necessarily "already charged".
+  reason?: "already_paid" | "in_progress";
+}
+
+interface ChargeStatusResult {
+  success: boolean;
+  orderId: string;
+  status: "held" | "completed" | "voided";
+  cardTerminalRef: string | null;
+  inProgress: boolean;
+  ageSeconds: number | null;
 }
 
 interface CardTerminalStatus {
@@ -98,12 +112,62 @@ function CardPaymentDialog({
   onCancel: (voidOrder: boolean) => void;
 }) {
   const { toast } = useToast();
-  const [phase, setPhase] = useState<"idle" | "waiting" | "approved" | "declined" | "already_charged">("idle");
+  const [phase, setPhase] = useState<"idle" | "waiting" | "approved" | "declined" | "already_charged" | "verifying">("idle");
   const [result, setResult] = useState<CardChargeResult | null>(null);
   // A fresh UUID per charge attempt — prevents duplicate charges if the cashier
   // double-taps "Charge" while the mutation is in flight. Rotated on every retry
   // so a declined-then-retried attempt gets its own key.
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+
+  // If the server restarted mid-charge (deploy/crash), the connection to the
+  // in-flight fetch above drops and lands in onError below. Rather than assume
+  // that means "declined" (which would let the cashier retry and risk a
+  // duplicate charge), we check the persisted charge-status for the order. If
+  // it says the charge may still be in-flight with the provider, we show a
+  // "verifying — do not retry" state and poll until it resolves.
+  const checkChargeStatus = useCallback(async (): Promise<ChargeStatusResult | null> => {
+    if (!orderId) return null;
+    try {
+      const res = await fetch(`/api/pos/card-terminal/charge-status/${orderId}`, { credentials: "include" });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }, [orderId]);
+
+  const enterVerifying = useCallback(async () => {
+    setPhase("verifying");
+    const poll = async () => {
+      const status = await checkChargeStatus();
+      if (!status) {
+        // Server still unreachable — keep waiting rather than guessing.
+        setTimeout(poll, 3000);
+        return;
+      }
+      if (status.status === "completed" && status.cardTerminalRef) {
+        setResult({ success: true, transactionRef: status.cardTerminalRef, provider: "unknown", message: "Payment approved." });
+        setPhase("approved");
+        onSuccess(status.cardTerminalRef, "unknown");
+        return;
+      }
+      if (status.status === "voided") {
+        setResult({ success: false, message: "This order was voided." });
+        setPhase("declined");
+        return;
+      }
+      if (status.inProgress) {
+        // Still within the window where the provider may respond — keep polling.
+        setTimeout(poll, 3000);
+        return;
+      }
+      // Held, and no longer considered in-progress — the guard has been
+      // released, so a retry with a fresh key is safe.
+      setResult({ success: false, message: "The terminal did not confirm the charge before the connection dropped. It is now safe to retry." });
+      setPhase("declined");
+    };
+    poll();
+  }, [checkChargeStatus, onSuccess]);
 
   const chargeMutation = useMutation({
     mutationFn: async () => {
@@ -123,7 +187,14 @@ function CardPaymentDialog({
     onSuccess: ({ data, httpStatus }) => {
       setResult(data);
       if (httpStatus === 409) {
-        setPhase("already_charged");
+        if (data.reason === "in_progress") {
+          // The outcome is still unknown (e.g. a prior attempt on this order
+          // hasn't resolved yet) — not necessarily "already charged". Poll the
+          // authoritative status instead of guessing.
+          enterVerifying();
+        } else {
+          setPhase("already_charged");
+        }
         return;
       }
       if (data.success) {
@@ -134,10 +205,12 @@ function CardPaymentDialog({
         toast({ variant: "destructive", title: "Payment declined", description: data.message });
       }
     },
-    onError: (e: any) => {
-      setPhase("declined");
-      setResult({ success: false, message: e.message });
-      toast({ variant: "destructive", title: "Terminal error", description: e.message });
+    onError: () => {
+      // The request failed outright (e.g. the server restarted mid-charge). We
+      // cannot assume this means "declined" — the charge may still be
+      // in-flight with the provider. Verify against the persisted order state
+      // before letting the cashier retry.
+      enterVerifying();
     },
   });
 
@@ -148,9 +221,29 @@ function CardPaymentDialog({
     setIdempotencyKey(crypto.randomUUID());
   };
 
+  // Guard against reopening the dialog (e.g. after a page reload right after a
+  // server restart) straight into "idle" when a charge for this order is still
+  // recorded as in-progress — that would let the cashier start a fresh charge
+  // attempt while the original one might still complete on the terminal side.
+  useEffect(() => {
+    if (!open || !orderId) return;
+    let cancelled = false;
+    checkChargeStatus().then(status => {
+      if (cancelled || !status) return;
+      if (status.status === "completed" && status.cardTerminalRef) {
+        setResult({ success: true, transactionRef: status.cardTerminalRef, provider: "unknown", message: "Payment approved." });
+        setPhase("approved");
+      } else if (status.inProgress) {
+        enterVerifying();
+      }
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, orderId]);
+
   return (
     <Dialog open={open} onOpenChange={o => {
-      if (!o && phase !== "waiting") {
+      if (!o && phase !== "waiting" && phase !== "verifying") {
         reset();
         // "approved" and "already_charged" must NOT void the order —
         // the order is either complete or was already complete.
@@ -205,6 +298,29 @@ function CardPaymentDialog({
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Polling terminal (up to 60s)
+              </div>
+            </>
+          )}
+
+          {phase === "verifying" && (
+            <>
+              <div className="rounded-full bg-amber-100 dark:bg-amber-900/30 p-6 animate-pulse">
+                <ShieldCheck className="w-10 h-10 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div className="text-center space-y-2">
+                <p className="font-semibold text-amber-700 dark:text-amber-400" data-testid="text-verifying-title">
+                  Terminal charge is still being verified
+                </p>
+                <p className="text-sm text-muted-foreground" data-testid="text-verifying-body">
+                  The connection to the server dropped while the charge was in progress. We're checking whether it went through.
+                </p>
+                <p className="text-sm font-medium" data-testid="text-verifying-instruction">
+                  Do not retry or close this window.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Checking order status…
               </div>
             </>
           )}

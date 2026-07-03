@@ -565,6 +565,12 @@ export const posOrders = pgTable("pos_orders", {
   changeDue: numeric("change_due", { precision: 12, scale: 2 }).default("0"),
   status: text("status").notNull().default("completed"), // completed | voided | held
   cardTerminalRef: text("card_terminal_ref"),
+  // Persisted idempotency guard for card-terminal charges. Unlike the in-memory
+  // chargeInflightKeys Set, this survives a server restart — so a cashier who
+  // retries with the same key after a crash/deploy still gets blocked instead
+  // of slipping through the in-flight guard.
+  idempotencyKey: text("idempotency_key"),
+  chargeAttemptedAt: timestamp("charge_attempted_at"),
   notes: text("notes"),
   receiptPrinted: boolean("receipt_printed").notNull().default(false),
   syncedAt: timestamp("synced_at"),

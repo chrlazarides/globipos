@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray } from "drizzle-orm";
+import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import {
   users, categories, items, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
@@ -209,6 +209,9 @@ export interface IStorage {
   updatePosOrderCardRef(id: string, cardTerminalRef: string): Promise<void>;
   completeCardPosOrder(id: string, cardTerminalRef: string, amountTendered: string): Promise<void>;
   voidPosOrder(id: string): Promise<void>;
+  beginCardCharge(id: string, idempotencyKey: string, staleAfterMs: number): Promise<boolean>;
+  clearCardChargeAttempt(id: string): Promise<void>;
+  getHeldOrdersWithRecentChargeAttempt(sinceMs: number): Promise<PosOrder[]>;
 
   createPosShift(data: InsertPosShift & { syncedAt?: Date }): Promise<PosShift>;
 
@@ -2693,6 +2696,7 @@ export class DatabaseStorage implements IStorage {
       amountTendered: posOrders.amountTendered, changeDue: posOrders.changeDue,
       status: posOrders.status, notes: posOrders.notes, receiptPrinted: posOrders.receiptPrinted,
       syncedAt: posOrders.syncedAt, createdAt: posOrders.createdAt, cardTerminalRef: posOrders.cardTerminalRef,
+      idempotencyKey: posOrders.idempotencyKey, chargeAttemptedAt: posOrders.chargeAttemptedAt,
       locationName: posLocations.name, terminalName: posTerminals.name,
     }).from(posOrders)
       .leftJoin(posLocations, eq(posOrders.locationId, posLocations.id))
@@ -2733,6 +2737,56 @@ export class DatabaseStorage implements IStorage {
   }
   async voidPosOrder(id: string): Promise<void> {
     await db.update(posOrders).set({ status: "voided" }).where(eq(posOrders.id, id));
+  }
+
+  // Atomically claims the "in-flight" slot for a card charge attempt by persisting
+  // the idempotency key + attempt timestamp on the order row. This survives a
+  // server restart (unlike the in-memory chargeInflightKeys Set): if the row
+  // already has a recent attempt recorded, the claim fails so a duplicate/late
+  // retry after a crash cannot slip through the guard and re-charge the provider.
+  // Only claims when there is NO existing recent attempt on record — i.e. this
+  // is either the very first attempt (no key yet) or the prior attempt is
+  // older than `staleAfterMs` and is treated as abandoned. Deliberately does
+  // NOT special-case "same key resubmitted": a matching key with a still-recent
+  // attempt means the previous call to this same endpoint has not yet reached a
+  // definitive outcome, so it must be blocked and routed to verification rather
+  // than allowed to re-initiate a real charge against the payment provider a
+  // second time (that would defeat the whole point of the guard). Once the
+  // window elapses without a definitive outcome, the prior attempt is treated
+  // as abandoned so a fresh attempt is allowed to proceed — otherwise a single
+  // ambiguous timeout would lock the order out of card payment forever.
+  async beginCardCharge(id: string, idempotencyKey: string, staleAfterMs: number): Promise<boolean> {
+    const staleCutoff = new Date(Date.now() - staleAfterMs);
+    const result = await db.update(posOrders)
+      .set({ idempotencyKey, chargeAttemptedAt: new Date() })
+      .where(and(
+        eq(posOrders.id, id),
+        eq(posOrders.status, "held"),
+        or(
+          isNull(posOrders.idempotencyKey),
+          lt(posOrders.chargeAttemptedAt, staleCutoff)
+        )
+      ))
+      .returning({ id: posOrders.id });
+    return result.length > 0;
+  }
+  // Releases the persisted in-flight claim once the provider gave a definitive
+  // (non-ambiguous) answer — e.g. an explicit decline — so a genuine retry with a
+  // freshly rotated key is not blocked by the stale claim.
+  async clearCardChargeAttempt(id: string): Promise<void> {
+    await db.update(posOrders).set({ idempotencyKey: null, chargeAttemptedAt: null }).where(eq(posOrders.id, id));
+  }
+  // Used on server boot (and by the charge-status endpoint) to find held orders
+  // whose most recent charge attempt is recent enough that it may still be
+  // in-flight with the payment provider — i.e. the server may have restarted
+  // mid-charge before it could record a definitive outcome.
+  async getHeldOrdersWithRecentChargeAttempt(sinceMs: number): Promise<PosOrder[]> {
+    const cutoff = new Date(Date.now() - sinceMs);
+    return db.select().from(posOrders).where(and(
+      eq(posOrders.status, "held"),
+      isNotNull(posOrders.chargeAttemptedAt),
+      gte(posOrders.chargeAttemptedAt, cutoff)
+    ));
   }
 
   // ─── POS Shifts ───────────────────────────────────────────────────────────

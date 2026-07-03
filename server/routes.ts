@@ -308,10 +308,34 @@ async function autoCreateJournalEntry(opts: {
 // will always see the key already in the Set and receive a 409.
 const chargeInflightKeys = new Set<string>();
 
+// How long a "held" order's most recent charge attempt is considered possibly
+// still in-flight with the payment provider (matches the 60s poll windows used
+// by JCC/Viva/Worldpay below, plus a buffer for network/DB latency). After this
+// window elapses without a definitive outcome, the persisted claim is treated
+// as abandoned so a fresh idempotency key is allowed to try again — otherwise a
+// single ambiguous timeout would lock the order out of card payment forever.
+const CHARGE_IN_PROGRESS_WINDOW_MS = 90_000;
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // ── Boot-time reconciliation for card-terminal charges ──────────────────────
+  // The in-memory chargeInflightKeys Set is always empty right after a restart, so
+  // it can no longer flag a charge that was in-flight when the process died. Any
+  // "held" order whose charge attempt is still within the in-progress window is
+  // logged here so ops can see it, and the /api/pos/card-terminal/charge-status
+  // endpoint will independently report it to the POS UI as "still being verified".
+  storage.getHeldOrdersWithRecentChargeAttempt(CHARGE_IN_PROGRESS_WINDOW_MS).then(orders => {
+    if (orders.length > 0) {
+      console.warn(
+        `[card-terminal] Server restarted with ${orders.length} held order(s) whose card charge may still be in-flight: ` +
+        orders.map(o => o.id).join(", ") +
+        `. These will be reported as "in progress" to the POS until the window elapses or they are resolved.`
+      );
+    }
+  }).catch(e => console.error("[card-terminal] Boot reconciliation check failed:", e));
 
   // Serve sw.js with no-cache headers so browsers always get the latest version
   app.get("/sw.js", (req: Request, res: Response, next: NextFunction) => {
@@ -5664,6 +5688,7 @@ export async function registerRoutes(
       if (chargeInflightKeys.has(idempotencyKey)) {
         return res.status(409).json({
           success: false,
+          reason: "in_progress",
           message: "A charge with this idempotency key is already in progress. Duplicate charge prevented.",
         });
       }
@@ -5685,8 +5710,32 @@ export async function registerRoutes(
         if (preCheckOrder && preCheckOrder.status !== "held") {
           return res.status(409).json({
             success: false,
+            // "already_paid" means the order is genuinely done (completed/voided) —
+            // distinct from "in_progress", where the outcome is still unknown and a
+            // retry might be safe once the in-flight window elapses.
+            reason: "already_paid",
             message: `Order is already '${preCheckOrder.status}' — duplicate charge prevented.`,
           });
+        }
+
+        // ── Persisted in-flight guard ─────────────────────────────────────────
+        // The chargeInflightKeys Set above only protects against duplicates within
+        // the same server process. If the server restarts (deploy/crash) mid-charge,
+        // that Set is wiped and a retry with the same key would sail through it. This
+        // DB-backed claim survives a restart: it fails if the order already has a
+        // *different*, still-recent idempotency key recorded, and succeeds (idempotently)
+        // if it's the same key retrying, OR if the prior attempt is older than
+        // CHARGE_IN_PROGRESS_WINDOW_MS (treated as abandoned so the order isn't locked
+        // out of card payment forever after a single ambiguous timeout).
+        if (idempotencyKey) {
+          const claimed = await storage.beginCardCharge(orderId, idempotencyKey, CHARGE_IN_PROGRESS_WINDOW_MS);
+          if (!claimed) {
+            return res.status(409).json({
+              success: false,
+              reason: "in_progress",
+              message: "A charge for this order is already recorded as in-progress — do not retry. Check the order list to confirm the payment before trying again.",
+            });
+          }
         }
       }
 
@@ -5694,6 +5743,7 @@ export async function registerRoutes(
       const [providerRow] = await db.select().from(systemSettings).where(eq(systemSettings.key, "card_terminal_provider"));
       const provider = providerRow?.value;
       if (!provider) {
+        if (orderId) await storage.clearCardChargeAttempt(orderId);
         return res.status(400).json({ success: false, message: "No card terminal provider configured. Go to POS → Card Terminal to set one up." });
       }
 
@@ -5724,11 +5774,13 @@ export async function registerRoutes(
         });
         if (!initiateRes.ok) {
           const errText = await initiateRes.text().catch(() => "");
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
           return res.json({ success: false, message: `JCC initiation failed (${initiateRes.status}): ${errText}` });
         }
         const initiateData = await initiateRes.json();
         const txId: string = initiateData.transactionId || initiateData.id;
         if (!txId) {
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
           return res.json({ success: false, message: "JCC did not return a transaction ID." });
         }
 
@@ -5747,6 +5799,9 @@ export async function registerRoutes(
               break;
             }
             if (txStatus === "DECLINED" || txStatus === "FAILED" || txStatus === "CANCELLED") {
+              // Definitive answer from the provider — safe to release the persisted
+              // in-flight claim so a retry with a fresh key isn't blocked.
+              if (orderId) await storage.clearCardChargeAttempt(orderId);
               return res.json({ success: false, message: `Payment ${txStatus.toLowerCase()} by JCC terminal.` });
             }
           }
@@ -5772,6 +5827,7 @@ export async function registerRoutes(
           }),
         });
         if (!tokenRes.ok) {
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
           return res.json({ success: false, message: `Viva authentication failed (${tokenRes.status}). Check credentials.` });
         }
         const { access_token } = await tokenRes.json();
@@ -5797,6 +5853,7 @@ export async function registerRoutes(
         });
         if (!orderRes.ok) {
           const errText = await orderRes.text().catch(() => "");
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
           return res.json({ success: false, message: `Viva order creation failed (${orderRes.status}): ${errText}` });
         }
         const { orderCode } = await orderRes.json();
@@ -5818,6 +5875,7 @@ export async function registerRoutes(
             }
             const declined = txList.find((t: any) => ["E", "X", "R"].includes(t.statusId || t.StatusId || ""));
             if (declined) {
+              if (orderId) await storage.clearCardChargeAttempt(orderId);
               return res.json({ success: false, message: "Payment declined by Viva terminal." });
             }
           }
@@ -5852,11 +5910,13 @@ export async function registerRoutes(
         });
         if (!initiateRes.ok) {
           const errText = await initiateRes.text().catch(() => "");
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
           return res.json({ success: false, message: `Worldpay initiation failed (${initiateRes.status}): ${errText}` });
         }
         const initiateData = await initiateRes.json();
         const txId: string = initiateData.transactionId || initiateData.id || initiateData.reference;
         if (!txId) {
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
           return res.json({ success: false, message: "Worldpay did not return a transaction ID." });
         }
 
@@ -5877,6 +5937,7 @@ export async function registerRoutes(
               break;
             }
             if (txStatus === "DECLINED" || txStatus === "FAILED" || txStatus === "REFUSED" || txStatus === "CANCELLED") {
+              if (orderId) await storage.clearCardChargeAttempt(orderId);
               return res.json({ success: false, message: `Payment ${txStatus.toLowerCase()} by Worldpay terminal.` });
             }
           }
@@ -5885,6 +5946,7 @@ export async function registerRoutes(
           return res.json({ success: false, message: "Worldpay terminal did not respond within 60 seconds. Please retry." });
         }
       } else {
+        if (orderId) await storage.clearCardChargeAttempt(orderId);
         return res.status(400).json({ success: false, message: `Unknown provider: ${provider}` });
       }
 
@@ -5908,6 +5970,32 @@ export async function registerRoutes(
       // A genuine retry by the cashier will arrive with a new key (the frontend rotates
       // the UUID on every decline/reset), so releasing here is safe.
       if (idempotencyKey) chargeInflightKeys.delete(idempotencyKey);
+    }
+  });
+
+  // Charge status — lets the POS UI check whether a held order's card charge is
+  // still considered "in progress" (e.g. right after a server restart wiped the
+  // in-memory guard) so it can tell the cashier not to retry instead of silently
+  // allowing a duplicate charge or spinning forever.
+  app.get("/api/pos/card-terminal/charge-status/:orderId", requireStaff, async (req, res) => {
+    try {
+      const order = await storage.getPosOrder(req.params.orderId);
+      if (!order) {
+        return res.status(404).json({ success: false, message: "Order not found" });
+      }
+      const attemptedAt = (order as any).chargeAttemptedAt ? new Date((order as any).chargeAttemptedAt) : null;
+      const ageMs = attemptedAt ? Date.now() - attemptedAt.getTime() : null;
+      const inProgress = order.status === "held" && !!(order as any).idempotencyKey && ageMs !== null && ageMs < CHARGE_IN_PROGRESS_WINDOW_MS;
+      return res.json({
+        success: true,
+        orderId: order.id,
+        status: order.status,
+        cardTerminalRef: order.cardTerminalRef || null,
+        inProgress,
+        ageSeconds: ageMs !== null ? Math.round(ageMs / 1000) : null,
+      });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
     }
   });
 
