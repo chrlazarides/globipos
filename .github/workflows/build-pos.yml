@@ -76,6 +76,11 @@ jobs:
         working-directory: pos-app
         run: npx @tauri-apps/cli icon src-tauri/app-icon.png
 
+      - name: Clean stale bundle output
+        working-directory: pos-app/src-tauri
+        shell: bash
+        run: rm -rf target/release/bundle target/universal-apple-darwin/release/bundle
+
       - name: Build and upload to release
         uses: tauri-apps/tauri-action@v0
         env:
