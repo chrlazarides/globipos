@@ -271,6 +271,11 @@ export default function PosOrders() {
                     <span className={`px-2 py-0.5 rounded text-xs font-medium ${paymentBadge(o.paymentMethod)}`}>
                       {o.paymentMethod}
                     </span>
+                    {o.paymentMethod === "card" && o.cardTerminalRef && (
+                      <div className="text-[10px] font-mono text-muted-foreground mt-1" data-testid={`text-card-ref-${o.id}`}>
+                        {o.cardTerminalRef}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right font-semibold">€{parseFloat(o.total).toFixed(2)}</td>
                   <td className="px-4 py-3 text-center">{statusBadge(o.status)}</td>
