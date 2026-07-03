@@ -54,6 +54,7 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
   const [pinError, setPinError] = useState("");
   const [processing, setProcessing] = useState(false);
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
+  const [cardRef, setCardRef] = useState<string | null>(null);
   const barcodeRef = useRef<HTMLInputElement>(null);
 
   const activeLines = lines.filter((l) => !l.voided);
@@ -69,6 +70,7 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
   const startSession = () => {
     setLines([]);
     setOrderNumber(null);
+    setCardRef(null);
     setMode("scanning");
     invoke("write_audit", {
       cashierId,
@@ -254,6 +256,7 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
           activeLines
         );
         setOrderNumber(orderNum);
+        setCardRef(result.reference ?? null);
         setMode("done");
       } else {
         setMode("scanning"); // payment failed → try again
@@ -377,6 +380,11 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
               <p className="text-2xl font-light">Thank You!</p>
               <p className="text-gray-400">Please take your receipt</p>
               <p className="text-sm text-gray-500">Order #{orderNumber}</p>
+              {cardRef && (
+                <p className="text-sm text-gray-500" data-testid="text-sco-card-ref">
+                  Card Ref: <span className="font-mono text-gray-300">{cardRef}</span>
+                </p>
+              )}
               <Button
                 className="mt-4 bg-[#7c1d3f] hover:bg-[#6b1836]"
                 onClick={startSession}
