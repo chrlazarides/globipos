@@ -4,9 +4,11 @@ description: How to sign a valid customer bearer token for testing /api/customer
 ---
 
 `/api/customer/*` routes use a separate JWT secret from admin/staff routes:
-`(process.env.SESSION_SECRET || "fallback") + "_customer"`, with payload
-`{ customerId, customerCode, type: "customer" }`. Admin/staff tokens use
-`process.env.SESSION_SECRET || "vintrade-secret-key-2024"` with `{ id, username, email, role }`.
+`process.env.SESSION_SECRET + "_customer"` suffix, with payload
+`{ customerId, customerCode, type: "customer" }`. Admin/staff tokens sign with
+`process.env.SESSION_SECRET` (see `server/routes.ts` for the exact fallback
+literal if `SESSION_SECRET` is unset — do not copy that literal here) with
+payload `{ id, username, email, role }`.
 
 **Why:** These are two independent `jwt.sign`/`jwt.verify` scopes defined inline in
 `server/routes.ts`. A token signed with the wrong secret or shape silently fails
