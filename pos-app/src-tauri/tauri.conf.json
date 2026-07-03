@@ -41,7 +41,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "RWSclAspdunS3kF6/i+8IhItWNzmDsoVy4zzrXLe8+QjGbwnNTI5az7C",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVBQkRENjhGNDJBOTJGQjEKUldTeEw2bENqOWE5NnZRYWRLNjRNeVR0UnN2RXN4d2NXaW5yRjBySG1Wdnd3ckxzMUhkeUd1ekwK",
       "endpoints": [
         "https://github.com/chrlazarides/globipos/releases/latest/download/latest.json"
       ],
