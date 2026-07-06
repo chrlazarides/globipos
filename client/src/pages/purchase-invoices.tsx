@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, type Column } from "@/components/data-table";
@@ -49,9 +50,18 @@ interface PurchaseSummary {
 }
 
 export default function PurchaseInvoices() {
+  const search = useSearch();
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    const openId = new URLSearchParams(search).get("open");
+    if (openId) {
+      setEditingId(openId);
+      setFormOpen(true);
+    }
+  }, [search]);
 
   const { data: invoices = [], isLoading } = useQuery<PurchaseInvoiceWithSupplier[]>({ queryKey: ["/api/purchase-invoices"] });
   const { data: summary } = useQuery<PurchaseSummary>({ queryKey: ["/api/purchase-invoices/summary"] });

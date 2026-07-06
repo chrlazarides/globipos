@@ -161,7 +161,7 @@ function GrvRow({ grv, suppliers, catalogItems }: { grv: Grv; suppliers: Supplie
       <TableCell>
         {grv.purchaseInvoiceId ? (
           <a
-            href={`/invoices/${grv.purchaseInvoiceId}`}
+            href={`/purchase-invoices?open=${grv.purchaseInvoiceId}`}
             className="text-xs text-primary underline"
             data-testid={`link-purchase-invoice-${grv.id}`}
           >

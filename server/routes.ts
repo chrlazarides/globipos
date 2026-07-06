@@ -4421,6 +4421,64 @@ export async function registerRoutes(
     }
   });
 
+  // Shared purchase-invoice posting logic — used by both the manual /api/purchase-invoices route
+  // and the PDA GRV finalize route, so due-date derivation, stock updates (with pack-size
+  // conversion), supplier-balance updates, and journal-entry creation are never duplicated.
+  async function postPurchaseInvoice(
+    data: import("@shared/schema").InsertPurchaseInvoice,
+    parsedItems: import("@shared/schema").InsertPurchaseInvoiceItem[],
+  ) {
+    if (!data.dueDate && data.supplierId) {
+      const supplier = await storage.getSupplier(data.supplierId);
+      if (supplier) {
+        const piDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+        const daysMatch = supplier.paymentTerms.match(/credit_(\d+)/);
+        const days = daysMatch ? parseInt(daysMatch[1]) : 0;
+        const due = new Date(piDate);
+        due.setDate(due.getDate() + days);
+        (data as any).dueDate = due.toISOString().split("T")[0];
+      }
+    }
+
+    const inv = await storage.createPurchaseInvoice(data, parsedItems);
+
+    for (const li of parsedItems) {
+      const item = await storage.getItem(li.itemId);
+      if (item) {
+        const bottlesToAdd = li.purchaseUnit === "pack" ? li.quantity * item.packSize : li.quantity;
+        await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
+      }
+    }
+
+    const supplier = await storage.getSupplier(data.supplierId);
+    if (supplier) {
+      const newBalance = parseFloat(supplier.currentBalance) + parseFloat(String(data.total));
+      await storage.updateSupplier(data.supplierId, { currentBalance: newBalance.toFixed(2) });
+    }
+
+    const piTotal = parseFloat(String(data.total || 0));
+    const piVat = parseFloat(String(data.vatAmount || 0));
+    const piNet = piTotal - piVat;
+    const piDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+
+    if (piTotal > 0) {
+      await autoCreateJournalEntry({
+        sourceType: "purchase",
+        sourceId: inv.id,
+        date: piDate,
+        description: `Purchase Invoice ${inv.invoiceNumber}`,
+        reference: inv.invoiceNumber,
+        lines: [
+          { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
+          { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
+          { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
+        ],
+      });
+    }
+
+    return inv;
+  }
+
   // Purchase Invoices
   app.get("/api/purchase-invoices", async (_req, res) => {
     const invs = await storage.getPurchaseInvoices();
@@ -4455,58 +4513,12 @@ export async function registerRoutes(
       }
       const data = insertPurchaseInvoiceSchema.parse(invoiceData);
 
-      if (!data.dueDate && data.supplierId) {
-        const supplier = await storage.getSupplier(data.supplierId);
-        if (supplier) {
-          const piDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
-          const daysMatch = supplier.paymentTerms.match(/credit_(\d+)/);
-          const days = daysMatch ? parseInt(daysMatch[1]) : 0;
-          const due = new Date(piDate);
-          due.setDate(due.getDate() + days);
-          (data as any).dueDate = due.toISOString().split("T")[0];
-        }
-      }
-
       if (!lineItems?.length) {
         return res.status(400).json({ message: "At least one line item is required" });
       }
 
       const parsedItems = lineItems.map((li: any) => insertPurchaseInvoiceItemSchema.parse(li));
-      const inv = await storage.createPurchaseInvoice(data, parsedItems);
-
-      for (const li of parsedItems) {
-        const item = await storage.getItem(li.itemId);
-        if (item) {
-          const bottlesToAdd = li.purchaseUnit === "pack" ? li.quantity * item.packSize : li.quantity;
-          await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
-        }
-      }
-
-      const supplier = await storage.getSupplier(data.supplierId);
-      if (supplier) {
-        const newBalance = parseFloat(supplier.currentBalance) + parseFloat(String(data.total));
-        await storage.updateSupplier(data.supplierId, { currentBalance: newBalance.toFixed(2) });
-      }
-
-      const piTotal = parseFloat(String(data.total || 0));
-      const piVat = parseFloat(String(data.vatAmount || 0));
-      const piNet = piTotal - piVat;
-      const piDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
-
-      if (piTotal > 0) {
-        await autoCreateJournalEntry({
-          sourceType: "purchase",
-          sourceId: inv.id,
-          date: piDate,
-          description: `Purchase Invoice ${inv.invoiceNumber}`,
-          reference: inv.invoiceNumber,
-          lines: [
-            { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
-            { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
-            { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
-          ],
-        });
-      }
+      const inv = await postPurchaseInvoice(data, parsedItems);
 
       res.json(inv);
     } catch (e: any) {
@@ -8166,39 +8178,20 @@ export async function registerRoutes(
       res.json(result);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
+  // Finalizing a GRV posts a real purchase invoice through the exact same `postPurchaseInvoice`
+  // helper the manual /api/purchase-invoices route uses, so due-date derivation, stock updates,
+  // supplier-balance updates, and journal-entry creation are identical and never duplicated.
   app.post("/api/pda/grv/:id/finalize", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const before = await storage.getGoodsReceivedVoucher(req.params.id);
-      if (!before) return res.status(404).json({ message: "GRV not found" });
-      const alreadyCompleted = before.status === "completed";
-      const grv = await storage.finalizeGoodsReceivedVoucher(req.params.id);
-      if (!grv) return res.status(404).json({ message: "GRV not found" });
+      const prep = await storage.prepareGrvFinalization(req.params.id);
+      if (!prep) return res.status(404).json({ message: "GRV not found" });
+      if (prep.alreadyCompleted) return res.json(prep.existing);
 
-      // Mirror the manual /api/purchase-invoices journal-entry side effect exactly —
-      // only on the transition into "completed", never on an idempotent re-call.
-      if (!alreadyCompleted && grv.purchaseInvoiceId) {
-        const inv = await storage.getPurchaseInvoice(grv.purchaseInvoiceId);
-        if (inv) {
-          const piTotal = parseFloat(String(inv.total || 0));
-          const piVat = parseFloat(String(inv.vatAmount || 0));
-          const piNet = piTotal - piVat;
-          const piDate = typeof inv.date === "string" ? inv.date : new Date().toISOString().split("T")[0];
-          if (piTotal > 0) {
-            await autoCreateJournalEntry({
-              sourceType: "purchase",
-              sourceId: inv.id,
-              date: piDate,
-              description: `Purchase Invoice ${inv.invoiceNumber}`,
-              reference: inv.invoiceNumber,
-              lines: [
-                { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
-                { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
-                { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
-              ],
-            });
-          }
-        }
-      }
+      const data = insertPurchaseInvoiceSchema.parse(prep.invoiceData);
+      const parsedItems = prep.invoiceLineItems.map((li: any) => insertPurchaseInvoiceItemSchema.parse(li));
+      const inv = await postPurchaseInvoice(data, parsedItems);
+
+      const grv = await storage.completeGrvFinalization(req.params.id, inv.id, prep.hasDiscrepancies);
       res.json(grv);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
