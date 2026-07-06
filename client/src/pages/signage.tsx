@@ -264,6 +264,8 @@ function PlaylistsTab() {
   const [selectedPlaylist, setSelectedPlaylist] = useState<SignagePlaylist | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAddItemOpen, setIsAddItemOpen] = useState(false);
+  const [newItemContentType, setNewItemContentType] = useState<string>("media");
+  const [newItemResourceId, setNewItemResourceId] = useState<string>("");
 
   const { data: playlists = [] } = useQuery<SignagePlaylist[]>({
     queryKey: ["/api/signage/playlists"],
@@ -317,6 +319,8 @@ function PlaylistsTab() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/signage/playlists", selectedPlaylist?.id, "items"] });
       setIsAddItemOpen(false);
+      setNewItemContentType("media");
+      setNewItemResourceId("");
       toast({ title: "Item added to playlist" });
     },
   });
@@ -472,11 +476,15 @@ function PlaylistsTab() {
             onSubmit={(e) => {
               e.preventDefault();
               const formData = new FormData(e.currentTarget);
+              if (!newItemResourceId) {
+                toast({ title: "Select a resource to add", variant: "destructive" });
+                return;
+              }
               addItemMutation.mutate({
-                contentType: formData.get("contentType"),
-                mediaId: formData.get("mediaId") || null,
-                itemId: formData.get("itemId") || null,
-                offerId: formData.get("offerId") || null,
+                contentType: newItemContentType,
+                mediaId: newItemContentType === "media" ? newItemResourceId : null,
+                itemId: newItemContentType === "item" ? newItemResourceId : null,
+                offerId: newItemContentType === "offer" ? newItemResourceId : null,
                 durationSeconds: parseInt(formData.get("duration") as string),
                 startDate: formData.get("startDate") || null,
                 endDate: formData.get("endDate") || null,
@@ -491,7 +499,10 @@ function PlaylistsTab() {
           >
             <div className="col-span-2 space-y-2">
               <Label>Content Type</Label>
-              <Select name="contentType" defaultValue="media">
+              <Select
+                value={newItemContentType}
+                onValueChange={(v) => { setNewItemContentType(v); setNewItemResourceId(""); }}
+              >
                 <SelectTrigger data-testid="select-item-type">
                   <SelectValue />
                 </SelectTrigger>
@@ -505,17 +516,42 @@ function PlaylistsTab() {
 
             <div className="col-span-2 space-y-2">
               <Label>Select Resource</Label>
-              {/* Note: In a real app we'd switch inputs based on contentType */}
-              <Select name="mediaId">
-                <SelectTrigger data-testid="select-resource">
-                  <SelectValue placeholder="Select media..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {media.map((m) => (
-                    <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {newItemContentType === "media" && (
+                <Select value={newItemResourceId} onValueChange={setNewItemResourceId}>
+                  <SelectTrigger data-testid="select-resource">
+                    <SelectValue placeholder="Select media..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {media.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {newItemContentType === "item" && (
+                <Select value={newItemResourceId} onValueChange={setNewItemResourceId}>
+                  <SelectTrigger data-testid="select-resource">
+                    <SelectValue placeholder="Select product item..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {items.map((i) => (
+                      <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {newItemContentType === "offer" && (
+                <Select value={newItemResourceId} onValueChange={setNewItemResourceId}>
+                  <SelectTrigger data-testid="select-resource">
+                    <SelectValue placeholder="Select seasonal offer..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {offers.map((o) => (
+                      <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
 
             <div className="space-y-2">
