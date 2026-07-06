@@ -17,3 +17,11 @@ required"}` for anonymous callers, because the path prefix wasn't in `PUBLIC_PAT
 codes, kiosk/player pages, webhook receivers, bootstrap endpoints), add its path
 prefix to `PUBLIC_PATHS` in `server/auth.ts` and verify with an unauthenticated
 curl request, not just by reading the route handler.
+
+**Webhook auth pattern:** for opened-up webhook receivers (e.g. Meta/WhatsApp),
+pair the PUBLIC_PATHS entry with source-specific authenticity checks instead of
+session auth — GET verification via a shared `hub.verify_token` query param, POST
+via HMAC signature header (`X-Hub-Signature-256`) computed over the raw body
+(needs `express.json({ verify })` capturing `req.rawBody`) and compared with
+`crypto.timingSafeEqual`. If the signing secret isn't configured yet, skip the
+check gracefully rather than blocking the feature.

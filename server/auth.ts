@@ -87,6 +87,7 @@ const PUBLIC_PATHS = [
   "/api/customer",
   "/api/pos/terminals/register", // bootstrap — no session cookie on first launch
   "/api/signage/play", // screen-facing player, keyed by pairing code, no session
+  "/api/webhooks/whatsapp", // Meta webhook — no session; verified via hub.verify_token (GET) / X-Hub-Signature-256 (POST)
 ];
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {

@@ -8929,6 +8929,21 @@ export async function registerRoutes(
 
   // ── WhatsApp webhook: receive message ────────────────────────────────────
   app.post("/api/webhooks/whatsapp", async (req, res) => {
+    const appSecret = process.env.WHATSAPP_APP_SECRET;
+    if (appSecret) {
+      const signatureHeader = req.headers["x-hub-signature-256"];
+      const rawBody = req.rawBody as Buffer | undefined;
+      if (typeof signatureHeader !== "string" || !rawBody) {
+        return res.sendStatus(401);
+      }
+      const expected = "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody).digest("hex");
+      const sigBuf = Buffer.from(signatureHeader);
+      const expBuf = Buffer.from(expected);
+      if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+        console.warn("[WhatsApp] Rejected webhook: invalid X-Hub-Signature-256");
+        return res.sendStatus(401);
+      }
+    }
     res.sendStatus(200); // Always respond quickly
     try {
       const body = req.body;
