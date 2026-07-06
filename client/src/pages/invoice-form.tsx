@@ -902,7 +902,7 @@ export default function InvoiceForm() {
           <MessageCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
           <span className="text-sm text-emerald-700 dark:text-emerald-300 font-medium">From WhatsApp/Portal order</span>
           <a
-            href="/whatsapp-orders"
+            href={`/whatsapp-orders?orderId=${existingInvoice.portalOrderId}`}
             data-testid="link-portal-order"
             className="ml-auto inline-flex items-center gap-1 text-sm font-medium text-emerald-700 dark:text-emerald-300 underline hover:no-underline"
           >

@@ -670,11 +670,17 @@ function QuietHoursSettings() {
 }
 
 export default function WhatsAppOrders() {
+  const targetOrderId = useRef<string | null>(
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("orderId") : null
+  ).current;
   const [statusFilter, setStatusFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [selectedOrder, setSelectedOrder] = useState<PortalOrder | null>(null);
+  const [highlightedOrderId, setHighlightedOrderId] = useState<string | null>(targetOrderId);
   const [, navigate] = useLocation();
   const { clearNewOrders, chimeMuted, toggleChimeMuted } = useWhatsAppAlert();
+  const orderRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const hasScrolledRef = useRef(false);
 
   useEffect(() => {
     clearNewOrders();
@@ -692,6 +698,23 @@ export default function WhatsAppOrders() {
     },
     refetchInterval: 30000,
   });
+
+  useEffect(() => {
+    if (!targetOrderId || hasScrolledRef.current || isLoading) return;
+    const found = orders.find(o => o.id === targetOrderId);
+    if (!found) return;
+    const el = orderRefs.current[targetOrderId];
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      hasScrolledRef.current = true;
+    }
+  }, [orders, isLoading, targetOrderId]);
+
+  useEffect(() => {
+    if (!highlightedOrderId) return;
+    const timer = setTimeout(() => setHighlightedOrderId(null), 4000);
+    return () => clearTimeout(timer);
+  }, [highlightedOrderId]);
 
   const pendingCount = orders.filter(o => o.status === "pending").length;
   const whatsappCount = orders.filter(o => o.source === "whatsapp").length;
@@ -814,7 +837,12 @@ export default function WhatsAppOrders() {
           {orders.map(order => (
             <Card
               key={order.id}
-              className="cursor-pointer hover:shadow-md transition-shadow border"
+              ref={el => { orderRefs.current[order.id] = el; }}
+              className={`cursor-pointer hover:shadow-md transition-shadow border ${
+                highlightedOrderId === order.id
+                  ? "ring-2 ring-emerald-500 border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20"
+                  : ""
+              }`}
               onClick={() => setSelectedOrder(order)}
               data-testid={`order-card-${order.id}`}
             >
