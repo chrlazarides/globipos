@@ -1180,6 +1180,16 @@ export async function registerRoutes(
     res.json(cust);
   });
 
+  app.get("/api/customers/:id/has-whatsapp-orders", async (req, res) => {
+    try {
+      const orders = await storage.getPortalOrders(req.params.id);
+      const hasWhatsappOrder = orders.some((o) => o.source === "whatsapp");
+      res.json({ hasWhatsappOrder });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   app.get("/api/customers/:id/analytics", async (req, res) => {
     try {
       const customerId = req.params.id;

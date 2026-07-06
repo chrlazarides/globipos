@@ -377,6 +377,12 @@ function CustomerProfileDialog({
     enabled: open,
   });
 
+  const { data: whatsappData } = useQuery<{ hasWhatsappOrder: boolean }>({
+    queryKey: ["/api/customers", customer.id, "has-whatsapp-orders"],
+    queryFn: () => fetch(`/api/customers/${customer.id}/has-whatsapp-orders`, { credentials: "include" }).then(r => r.json()),
+    enabled: open,
+  });
+
   const paymentTermsLabel: Record<string, string> = {
     cash: "Cash", credit_7: "7 Days", credit_14: "14 Days", credit_30: "30 Days", credit_60: "60 Days", credit_90: "90 Days",
   };
@@ -502,6 +508,7 @@ function CustomerProfileDialog({
               onSubmit={onSave}
               isPending={isPending}
               priceLevelNames={priceLevelNames}
+              hasWhatsappOrder={whatsappData?.hasWhatsappOrder}
               defaultValues={{
                 name: customer.name,
                 code: customer.code,
@@ -714,7 +721,7 @@ function CustomerLocationsTab({ customerId, open }: { customerId: string; open: 
   );
 }
 
-function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: { onSubmit: (d: any) => void; isPending: boolean; defaultValues?: any; priceLevelNames: string[] }) {
+function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames, hasWhatsappOrder }: { onSubmit: (d: any) => void; isPending: boolean; defaultValues?: any; priceLevelNames: string[]; hasWhatsappOrder?: boolean }) {
   const isEditing = !!defaultValues?.code;
   const { data: nextCodeData } = useQuery<{ code: string }>({
     queryKey: ["/api/customers/next-code"],
@@ -729,6 +736,9 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: {
       paymentTerms: "cash", creditLimit: "0", currentBalance: "0", priceLevel: 1, notes: "", location: "", active: true,
     },
   });
+
+  const phoneValue = form.watch("phone");
+  const showWhatsappPhoneWarning = hasWhatsappOrder && (!phoneValue || !phoneValue.trim());
 
   return (
     <Form {...form}>
@@ -782,6 +792,15 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames }: {
             </FormItem>
           )} />
         </div>
+        {showWhatsappPhoneWarning && (
+          <div
+            className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 px-3 py-2 text-xs text-amber-800 dark:text-amber-300"
+            data-testid="warning-whatsapp-missing-phone"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>This customer has WhatsApp orders — adding a phone number enables staff replies</span>
+          </div>
+        )}
         <FormField control={form.control} name="address" render={({ field }) => (
           <FormItem>
             <FormLabel>Address</FormLabel>
