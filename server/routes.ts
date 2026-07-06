@@ -2235,7 +2235,7 @@ export async function registerRoutes(
   <!-- COVER -->
   <div class="cover">
     <div class="cover-logo">${manualCompanyName}</div>
-    <div class="cover-subtitle">Wholesale ERP</div>
+    <div class="cover-subtitle">Retail &amp; Hospitality POS + ERP</div>
     <div class="cover-title">Instructions for Use — Complete System Guide</div>
     <div class="cover-meta">For internal use &nbsp;·&nbsp; June 2026</div>
   </div>

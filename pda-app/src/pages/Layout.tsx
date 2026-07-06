@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { ScanBarcode, ClipboardList, Tags, ArrowLeftRight, FileText, LogOut, ScanLine } from "lucide-react";
+import { ScanBarcode, ClipboardList, Tags, ArrowLeftRight, FileText, LogOut, ScanLine, BookOpen } from "lucide-react";
 import { type StaffSession, hasModuleAccess, clearToken } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import PriceLookup from "./PriceLookup";
@@ -75,6 +75,14 @@ export default function Layout({ staff, onLogout }: LayoutProps) {
             </button>
           </Link>
         ))}
+        <button
+          onClick={() => window.open("/api/manual", "_blank", "noopener,noreferrer")}
+          className="flex flex-col items-center gap-0.5 py-2 px-2 text-xs flex-1 text-muted-foreground"
+          data-testid="nav-manual"
+        >
+          <BookOpen className="w-5 h-5" />
+          Manual
+        </button>
       </nav>
     </div>
   );

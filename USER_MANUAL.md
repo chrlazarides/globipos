@@ -1,6 +1,6 @@
 # GlobiPOS User Manual
 
-GlobiPOS is a wholesale wine & spirits management system with an integrated multi-location point-of-sale (POS) platform. This manual covers all four applications that make up the system:
+GlobiPOS is a Retail and Hospitality POS solution — a complete ERP and point-of-sale (POS) platform covering catalog and customer management, sales documents, purchasing, accounting, multi-location POS, and mobile/handheld operations. This manual covers all four applications that make up the system:
 
 1. **Main App** — back-office administration and the customer web portal
 2. **PDA App** — handheld scanner tools for warehouse/floor staff

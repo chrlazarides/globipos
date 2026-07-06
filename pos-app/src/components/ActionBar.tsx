@@ -1,7 +1,7 @@
 import {
   StickyNoteIcon, RepeatIcon,
   SmartphoneIcon, ShieldIcon, RotateCcwIcon,
-  CalendarClock, MonitorSmartphone, BarcodeIcon,
+  CalendarClock, MonitorSmartphone, BarcodeIcon, BookOpenIcon,
 } from "lucide-react";
 import { HoldIcon, RecallIcon, VoidIcon, RefundIcon, DiscountIcon } from "./icons/PosIcons";
 import type { NumpadMode } from "../types";
@@ -25,6 +25,7 @@ interface ActionBarProps {
   onRefund?: () => void;
   onShift?: () => void;
   onSco?: () => void;
+  onManual?: () => void;
 }
 
 export function ActionBar({
@@ -45,6 +46,7 @@ export function ActionBar({
   onRefund,
   onShift,
   onSco,
+  onManual,
 }: ActionBarProps) {
   const isLight = theme === "light";
   type Btn = {
@@ -177,6 +179,13 @@ export function ActionBar({
       onClick: onSco,
       enabled: true,
       testId: "action-sco",
+    }] : []),
+    ...(onManual ? [{
+      label: "Manual",
+      icon: BookOpenIcon,
+      onClick: onManual,
+      enabled: true,
+      testId: "action-manual",
     }] : []),
   ];
 

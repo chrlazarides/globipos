@@ -15,6 +15,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { load as loadStore } from "@tauri-apps/plugin-store";
+import { open as openShell } from "@tauri-apps/plugin-shell";
 import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
@@ -1100,6 +1101,12 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         onRefund={() => setDialog("refund")}
         onShift={() => setMode("shift")}
         onSco={() => setMode("sco")}
+        onManual={() => {
+          const base = config.server_url.replace(/\/$/, "");
+          openShell(`${base}/api/manual`).catch(() => {
+            window.open(`${base}/api/manual`, "_blank", "noopener,noreferrer");
+          });
+        }}
       />
 
       {/* ── Dialogs ── */}
