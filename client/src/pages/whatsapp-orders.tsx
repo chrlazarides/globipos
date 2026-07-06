@@ -81,6 +81,8 @@ function MessageThread({ phone, latestSentAt }: { phone: string; latestSentAt?: 
       fetch(`/api/whatsapp/messages-by-phone/${encodeURIComponent(phone)}`, { credentials: "include" })
         .then(r => r.json()),
     enabled: !!phone,
+    refetchInterval: 12000,
+    refetchIntervalInBackground: false,
   });
 
   useEffect(() => {
