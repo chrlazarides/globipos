@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ShoppingBag, Loader2, Search, Eye } from "lucide-react";
+import { ShoppingBag, Loader2, Search, Eye, Download } from "lucide-react";
 import { format } from "date-fns";
 
 type OrderWithMeta = PosOrder & { locationName?: string; terminalName?: string; lines?: PosOrderLine[] };
@@ -170,6 +170,42 @@ export default function PosOrders() {
 
   const totalRevenue = filtered.filter(o => o.status === "completed").reduce((s, o) => s + parseFloat(o.total || "0"), 0);
 
+  function escapeCsv(value: string) {
+    if (value.includes(",") || value.includes("\"") || value.includes("\n")) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  }
+
+  function handleExport() {
+    const headers = ["Order #", "Date", "Location/Terminal", "Cashier", "Payment Method", "Total", "Status"];
+    const rows = filtered.map(o => {
+      const locationLabel = [o.locationName || o.locationId, o.terminalName].filter(Boolean).join(" / ");
+      return [
+        o.orderNumber,
+        format(new Date(o.createdAt), "dd MMM yyyy HH:mm"),
+        locationLabel,
+        o.cashierName || "—",
+        o.paymentMethod,
+        parseFloat(o.total).toFixed(2),
+        o.status,
+      ];
+    });
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => escapeCsv(String(cell))).join(","))
+      .join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const timestamp = format(new Date(), "yyyy-MM-dd_HHmm");
+    link.href = url;
+    link.download = `pos-orders_${timestamp}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -177,12 +213,23 @@ export default function PosOrders() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><ShoppingBag className="w-6 h-6" />POS Orders</h1>
           <p className="text-sm text-muted-foreground mt-1">Completed bills from all GlobiPOS terminals</p>
         </div>
-        {filtered.length > 0 && (
-          <div className="text-right">
-            <p className="text-2xl font-bold">€{totalRevenue.toFixed(2)}</p>
-            <p className="text-xs text-muted-foreground">{filtered.filter(o => o.status === "completed").length} completed orders</p>
-          </div>
-        )}
+        <div className="flex items-center gap-4">
+          {filtered.length > 0 && (
+            <div className="text-right">
+              <p className="text-2xl font-bold">€{totalRevenue.toFixed(2)}</p>
+              <p className="text-xs text-muted-foreground">{filtered.filter(o => o.status === "completed").length} completed orders</p>
+            </div>
+          )}
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={filtered.length === 0}
+            data-testid="button-export-orders"
+          >
+            <Download className="w-4 h-4 mr-2" />
+            Export
+          </Button>
+        </div>
       </div>
 
       <div className="flex gap-3 flex-wrap">
