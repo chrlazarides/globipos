@@ -48,14 +48,17 @@ export interface ScaleBarcode {
  * Used whenever the admin-configured rules haven't loaded yet (or on terminals
  * running fully offline before their first config sync).
  *
- * Note: prefixes "28" and "29" are classified as WEIGHT (not price) by default,
- * matching manufacturer weight-embedded PLU labels (e.g. Pittas) rather than the
- * classic scale "5-9 = price" flag convention.
+ * Notes:
+ *  - Prefix "20" is a scale PRICE label: "20 CCCCC PPPPP Z" — 5-digit item code,
+ *    5-digit price in minor units (00150 → £1.50), EAN-13 check digit.
+ *  - Prefixes "28" and "29" are classified as WEIGHT (not price) by default,
+ *    matching manufacturer weight-embedded PLU labels (e.g. Pittas) rather than
+ *    the classic scale "5-9 = price" flag convention.
  */
 export const DEFAULT_BARCODE_CONFIG: BarcodeConfig = {
   enabled: true,
   rules: [
-    { id: "plu-20", label: "PLU only (20xxx)", prefix: "20", kind: "plu", plu_digits: 5, value_digits: 5, value_divisor: 1, check_digit: true, enabled: true },
+    { id: "price-20", label: "Scale price label (20xxx)", prefix: "20", kind: "price", plu_digits: 5, value_digits: 5, value_divisor: 100, check_digit: true, enabled: true },
     { id: "weight-21-24", label: "Scale weight (21-24xxx)", prefix: "21", kind: "weight", plu_digits: 5, value_digits: 5, value_divisor: 1000, check_digit: true, enabled: true },
     { id: "price-25-27", label: "Scale price (25-27xxx)", prefix: "25", kind: "price", plu_digits: 5, value_digits: 5, value_divisor: 100, check_digit: true, enabled: true },
     { id: "weight-28", label: "Manufacturer weight PLU (28xxx)", prefix: "28", kind: "weight", plu_digits: 5, value_digits: 5, value_divisor: 1000, check_digit: true, enabled: true },

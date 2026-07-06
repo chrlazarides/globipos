@@ -56,14 +56,16 @@ impl Default for BarcodeConfig {
         BarcodeConfig {
             enabled: true,
             rules: vec![
+                // Scale price label: "20 CCCCC PPPPP Z" — code (5 digits) + price (5 digits,
+                // minor units e.g. 00150 = £1.50) + EAN-13 check digit.
                 BarcodeRule {
-                    id: "plu-20".into(),
-                    label: "PLU only (20xxx)".into(),
+                    id: "price-20".into(),
+                    label: "Scale price label (20xxx)".into(),
                     prefix: "20".into(),
-                    kind: BarcodeRuleKind::Plu,
+                    kind: BarcodeRuleKind::Price,
                     plu_digits: 5,
                     value_digits: 5,
-                    value_divisor: 1.0,
+                    value_divisor: 100.0,
                     check_digit: true,
                     enabled: true,
                 },
