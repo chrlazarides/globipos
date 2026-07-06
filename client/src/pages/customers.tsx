@@ -110,9 +110,15 @@ export default function Customers() {
     setProfileOpen(true);
   };
 
-  const filtered = customers.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase()) || c.code.toLowerCase().includes(search.toLowerCase())
-  );
+  const [missingPhoneOnly, setMissingPhoneOnly] = useState(false);
+
+  const missingPhoneCount = customers.filter((c) => !c.phone || !c.phone.trim()).length;
+
+  const filtered = customers
+    .filter((c) =>
+      c.name.toLowerCase().includes(search.toLowerCase()) || c.code.toLowerCase().includes(search.toLowerCase())
+    )
+    .filter((c) => (missingPhoneOnly ? !c.phone || !c.phone.trim() : true));
 
   const paymentTermsLabel: Record<string, string> = {
     cash: "Cash", credit_7: "7 Days", credit_14: "14 Days", credit_30: "30 Days", credit_60: "60 Days", credit_90: "90 Days",
@@ -187,7 +193,18 @@ export default function Customers() {
         return <span className="text-sm">{name || <span className="text-muted-foreground">—</span>}</span>;
       },
     },
-    { key: "phone", header: "Phone", cell: (row) => <span className="text-sm text-muted-foreground">{row.phone || "-"}</span> },
+    {
+      key: "phone",
+      header: "Phone",
+      cell: (row) =>
+        row.phone && row.phone.trim() ? (
+          <span className="text-sm text-muted-foreground">{row.phone}</span>
+        ) : (
+          <Badge variant="destructive" className="flex items-center gap-1 w-fit text-xs" data-testid={`badge-no-phone-${row.id}`}>
+            <Phone className="w-3 h-3" /> No Phone
+          </Badge>
+        ),
+    },
     { key: "email", header: "Email", cell: (row) => <span className="text-sm text-muted-foreground">{row.email || "-"}</span> },
     { key: "city", header: "City", cell: (row) => <span className="text-sm">{row.city || "-"}</span> },
     {
@@ -282,9 +299,26 @@ export default function Customers() {
 
       <Card>
         <CardContent className="p-4">
-          <div className="mb-4 relative max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search customers..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" data-testid="input-search-customers" />
+          <div className="mb-4 flex items-center gap-3 flex-wrap">
+            <div className="relative max-w-md flex-1 min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input placeholder="Search customers..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" data-testid="input-search-customers" />
+            </div>
+            <Button
+              variant={missingPhoneOnly ? "default" : "outline"}
+              size="sm"
+              onClick={() => setMissingPhoneOnly((v) => !v)}
+              data-testid="button-filter-missing-phone"
+              className="flex items-center gap-1.5"
+            >
+              <Phone className="w-4 h-4" />
+              Missing Phone
+              {missingPhoneCount > 0 && (
+                <Badge variant={missingPhoneOnly ? "secondary" : "destructive"} className="ml-1 text-xs">
+                  {missingPhoneCount}
+                </Badge>
+              )}
+            </Button>
           </div>
           <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No customers found" onRowClick={handleRowClick} />
         </CardContent>
