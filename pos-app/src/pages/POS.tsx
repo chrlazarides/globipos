@@ -618,8 +618,31 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   // Customer display: publish order state to shared Tauri store on every change.
   // The CustomerDisplay component (in its own window or same window) polls this store.
   const cdStoreRef = useRef<Awaited<ReturnType<typeof loadStore>> | null>(null);
+
+  // Signage polling state
+  const [signage, setSignage] = useState<any[]>([]);
   useEffect(() => {
-    if (!hw.config?.customer_display_enabled) return;
+    const fetchSignage = async () => {
+      try {
+        const base = config.server_url.replace(/\/$/, "");
+        const resp = await fetch(`${base}/api/pos/signage/playlist`, {
+          headers: { "X-Terminal-Code": config.terminal_code },
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          setSignage(data.items || []);
+        }
+      } catch (err) {
+        console.error("Signage fetch error:", err);
+      }
+    };
+    fetchSignage();
+    const timer = setInterval(fetchSignage, 5 * 60 * 1000); // Poll every 5 minutes
+    return () => clearInterval(timer);
+  }, [config.server_url, config.terminal_code]);
+
+  useEffect(() => {
+    if (!hw.config?.customer_display_enabled && !hw.config?.vfd_enabled) return;
 
     async function publishDisplayState() {
       try {
@@ -628,27 +651,44 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         }
         const store = cdStoreRef.current;
         const hasLines = engine.lines.length > 0;
-        await store.set("state", {
-          mode: hasLines ? "scanning" : "idle",
-          items: engine.lines.map((l) => ({
-            description: l.description,
-            qty: l.qty,
-            unit_price: l.unit_price,
-            line_total: l.line_total,
-          })),
-          subtotal: engine.order.subtotal,
-          vat:      engine.order.vat_amount,
-          total:    engine.order.total,
-          store_name: config.terminal_name,
-        });
-        await store.save();
+        
+        // Push to secondary screen multimedia display
+        if (hw.config?.customer_display_enabled) {
+          await store.set("state", {
+            mode: hasLines ? "scanning" : "idle",
+            items: engine.lines.map((l) => ({
+              description: l.description,
+              qty: l.qty,
+              unit_price: l.unit_price,
+              line_total: l.line_total,
+            })),
+            subtotal: engine.order.subtotal,
+            vat:      engine.order.vat_amount,
+            total:    engine.order.total,
+            store_name: config.terminal_name,
+            signage,
+          });
+          await store.save();
+        }
+
+        // Push to hardware VFD (serial 2x20)
+        if (hw.config?.vfd_enabled) {
+          if (hasLines) {
+            const lastLine = engine.lines[engine.lines.length - 1];
+            const line1 = lastLine.description.toUpperCase();
+            const line2 = `TOTAL: €${engine.order.total.toFixed(2)}`;
+            hw.writeVfd(line1, line2);
+          } else {
+            hw.writeVfd("WELCOME", config.terminal_name.toUpperCase());
+          }
+        }
       } catch {
-        // Display store unavailable — non-critical
+        // ignore — window may be closing
       }
     }
 
     publishDisplayState();
-  }, [engine.lines, engine.order, hw.config?.customer_display_enabled, config.terminal_name]);
+  }, [engine.lines, engine.order, hw.config, signage, config.terminal_name]);
 
   // Start / stop scale weight polling based on config and mode
   useEffect(() => {

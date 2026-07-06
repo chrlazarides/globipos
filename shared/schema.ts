@@ -72,6 +72,7 @@ export const items = pgTable("items", {
   brand: text("brand"),
   origin: text("origin"),
   vintage: text("vintage"),
+  imageUrl: text("image_url"),
   active: boolean("active").default(true).notNull(),
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
@@ -891,3 +892,66 @@ export const waCartState = pgTable("wa_cart_state", {
 export const insertWaCartStateSchema = createInsertSchema(waCartState).omit({ updatedAt: true });
 export type InsertWaCartState = z.infer<typeof insertWaCartStateSchema>;
 export type WaCartState = typeof waCartState.$inferSelect;
+
+// ── Digital signage: media library, playlists (with scheduling), and screens ──
+// Screens are addressed by a public `pairingCode` for browser-based menu boards
+// and shelf monitors (any TV/streaming box browser can point at
+// /signage/play/:pairingCode). POS customer-facing displays are a special
+// screenType auto-provisioned/linked to a terminal on registration.
+export const signageMedia = pgTable("signage_media", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  mediaType: text("media_type").notNull().default("image"), // 'image' | 'video'
+  url: text("url").notNull(),
+  durationSeconds: integer("duration_seconds").notNull().default(8),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const signagePlaylists = pgTable("signage_playlists", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const signagePlaylistItems = pgTable("signage_playlist_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  playlistId: varchar("playlist_id").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  contentType: text("content_type").notNull().default("media"), // 'media' | 'item' | 'offer'
+  mediaId: varchar("media_id"),
+  itemId: varchar("item_id"),
+  offerId: varchar("offer_id"),
+  durationSeconds: integer("duration_seconds").notNull().default(8),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  daysOfWeek: text("days_of_week"), // csv "0,1,2,3,4,5,6" (0=Sun); null = every day
+  startTime: text("start_time"), // "09:00"; null = all day
+  endTime: text("end_time"), // "21:00"; null = all day
+  enabled: boolean("enabled").notNull().default(true),
+});
+
+export const signageScreens = pgTable("signage_screens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  screenType: text("screen_type").notNull().default("menu_board"), // 'pos_customer_display' | 'menu_board' | 'shelf_monitor'
+  pairingCode: text("pairing_code").notNull().unique(),
+  posTerminalId: varchar("pos_terminal_id"),
+  playlistId: varchar("playlist_id"),
+  status: text("status").notNull().default("unpaired"), // 'unpaired' | 'online' | 'offline'
+  lastSeenAt: timestamp("last_seen_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertSignageMediaSchema = createInsertSchema(signageMedia).omit({ id: true, createdAt: true });
+export const insertSignagePlaylistSchema = createInsertSchema(signagePlaylists).omit({ id: true, createdAt: true });
+export const insertSignagePlaylistItemSchema = createInsertSchema(signagePlaylistItems).omit({ id: true });
+export const insertSignageScreenSchema = createInsertSchema(signageScreens).omit({ id: true, createdAt: true, pairingCode: true, status: true, lastSeenAt: true });
+
+export type InsertSignageMedia = z.infer<typeof insertSignageMediaSchema>;
+export type SignageMedia = typeof signageMedia.$inferSelect;
+export type InsertSignagePlaylist = z.infer<typeof insertSignagePlaylistSchema>;
+export type SignagePlaylist = typeof signagePlaylists.$inferSelect;
+export type InsertSignagePlaylistItem = z.infer<typeof insertSignagePlaylistItemSchema>;
+export type SignagePlaylistItem = typeof signagePlaylistItems.$inferSelect;
+export type InsertSignageScreen = z.infer<typeof insertSignageScreenSchema>;
+export type SignageScreen = typeof signageScreens.$inferSelect;

@@ -56,6 +56,8 @@ import PosCardTerminal from "@/pages/pos-card-terminal";
 import PosDownload from "@/pages/pos-download";
 import PosLayoutEditor from "@/pages/pos-layout-editor";
 import WhatsAppOrders from "@/pages/whatsapp-orders";
+import DigitalSignage from "@/pages/signage";
+import SignagePlayer from "@/pages/signage-player";
 import type { Customer } from "@shared/schema";
 import { isPosAdmin, isPosStaff } from "@/lib/pos-permissions";
 import { Loader2 } from "lucide-react";
@@ -172,6 +174,7 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/faq-editor" component={FaqEditor} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/customer-push" component={CustomerPushPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/whatsapp-orders" component={WhatsAppOrders} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/signage" component={DigitalSignage} />}
       <Route component={NotFound} />
     </Switch>
   );
@@ -268,11 +271,16 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 function App() {
   const [location] = useLocation();
   const isPortal = location.startsWith("/portal");
+  const isSignagePlayer = location.startsWith("/signage/play/");
 
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        {isPortal ? (
+        {isSignagePlayer ? (
+          <Switch>
+            <Route path="/signage/play/:code" component={SignagePlayer} />
+          </Switch>
+        ) : isPortal ? (
           <PortalWrapper />
         ) : (
           <AuthGate>

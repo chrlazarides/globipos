@@ -34,6 +34,11 @@ pub struct HardwareConfig {
     // Customer display
     pub customer_display_enabled: bool,
     pub customer_display_port:    String,
+    // VFD Display
+    pub vfd_enabled:              bool,
+    pub vfd_port:                 String,
+    pub vfd_baud:                 u32,      // default 9600
+    pub vfd_protocol:             String,   // "generic"
     // Payment provider (see also schema_meta 'payment_config' for credentials)
     pub payment_provider:         String,   // "mock" | "jcc" | "viva" | "worldpay"
 }
@@ -55,7 +60,7 @@ impl Default for ScaleWeight {
 /// Validates a device port path against a strict allowlist.
 /// Rejects any string containing shell metacharacters, whitespace, or path traversal.
 /// Allowed: /dev/ttyXxx, /dev/usb/lpN, /dev/lpN, COMn, USBnnn.
-fn validate_port(port: &str) -> Result<(), String> {
+pub fn validate_port(port: &str) -> Result<(), String> {
     if port.is_empty() { return Ok(()); }
 
     // Reject shell metacharacters, whitespace, quotes, and path traversal
@@ -94,6 +99,7 @@ pub async fn save_hardware_config(pool: &SqlitePool, cfg: &HardwareConfig) -> Re
     validate_port(&cfg.scale_port)?;
     validate_port(&cfg.printer_port)?;
     validate_port(&cfg.customer_display_port)?;
+    validate_port(&cfg.vfd_port)?;
 
     let json = serde_json::to_string(cfg).map_err(|e| e.to_string())?;
     sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('hardware_config', ?)")
@@ -216,7 +222,7 @@ pub async fn check_printer_status(app: &tauri::AppHandle, cfg: &HardwareConfig) 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Write bytes to a uniquely-named temp file; returns the path.
-fn write_temp_file(data: &[u8]) -> Result<String, String> {
+pub fn write_temp_file(data: &[u8]) -> Result<String, String> {
     use std::io::Write;
     let path = format!("/tmp/globipos_hw_{}.bin", uuid::Uuid::new_v4().simple());
     let mut f = std::fs::File::create(&path).map_err(|e| e.to_string())?;

@@ -86,6 +86,10 @@ const posNav = [
   { title: "Download App", url: "/pos/download", icon: Download, module: "_admin" },
 ];
 
+const signageNav = [
+  { title: "Digital Signage", url: "/signage", icon: Monitor, module: "_admin" },
+];
+
 const chatNav = [
   { title: "Chat Panel", url: "/chat-panel", icon: MessageCircle, module: "_admin" },
   { title: "WhatsApp Orders", url: "/whatsapp-orders", icon: ShoppingBag, module: "_admin" },
@@ -212,6 +216,7 @@ export function AppSidebar() {
         <NavSection label="Analytics" items={filter(reportNav)} />
         <NavSection label="System" items={filter(systemNav)} />
         {isAdmin && <NavSection label="GlobiPOS" items={posNav} />}
+        {isAdmin && <NavSection label="Digital Signage" items={signageNav} />}
         {isAdmin && <NavSection label="Chat & FAQ" items={chatNavWithBadge} />}
         {isAdmin && <NavSection label="Admin" items={adminNav} />}
       </SidebarContent>

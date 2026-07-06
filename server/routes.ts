@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema } from "@shared/schema";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -7664,6 +7664,173 @@ export async function registerRoutes(
     try { await storage.deletePosInboxItem(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // ─── Digital Signage ──────────────────────────────────────────────────────
+  function generatePairingCode(): string {
+    // 6-char human-friendly code, avoids ambiguous chars (0/O, 1/I/L)
+    const chars = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    let code = "";
+    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
+
+  function isSignageItemActiveNow(it: { startDate: string | null; endDate: string | null; daysOfWeek: string | null; startTime: string | null; endTime: string | null; enabled: boolean }): boolean {
+    if (!it.enabled) return false;
+    const now = new Date();
+    if (it.startDate && now < new Date(it.startDate + "T00:00:00")) return false;
+    if (it.endDate && now > new Date(it.endDate + "T23:59:59")) return false;
+    if (it.daysOfWeek) {
+      const days = it.daysOfWeek.split(",").map(d => parseInt(d.trim(), 10));
+      if (!days.includes(now.getDay())) return false;
+    }
+    if (it.startTime || it.endTime) {
+      const hhmm = now.getHours() * 60 + now.getMinutes();
+      const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+      if (it.startTime && hhmm < toMin(it.startTime)) return false;
+      if (it.endTime && hhmm > toMin(it.endTime)) return false;
+    }
+    return true;
+  }
+
+  async function resolveSignagePlaylist(playlistId: string | null) {
+    if (!playlistId) return [];
+    const items = await storage.getSignagePlaylistItems(playlistId);
+    const active = items.filter(isSignageItemActiveNow);
+    const [mediaList, itemsList, offersList] = await Promise.all([
+      storage.getSignageMedia(),
+      storage.getItems(),
+      storage.getSeasonalOffers(),
+    ]);
+    const mediaById = new Map(mediaList.map(m => [m.id, m]));
+    const itemById = new Map(itemsList.map(i => [i.id, i]));
+    const offerById = new Map(offersList.map(o => [o.id, o]));
+    return active.map(it => {
+      let resolved: any = null;
+      if (it.contentType === "media" && it.mediaId) {
+        const m = mediaById.get(it.mediaId);
+        if (m) resolved = { kind: "media", url: m.url, mediaType: m.mediaType, name: m.name };
+      } else if (it.contentType === "item" && it.itemId) {
+        const p = itemById.get(it.itemId);
+        if (p) resolved = { kind: "item", name: p.name, imageUrl: p.imageUrl, price: p.price1, brand: p.brand };
+      } else if (it.contentType === "offer" && it.offerId) {
+        const o = offerById.get(it.offerId);
+        if (o) resolved = { kind: "offer", name: o.name, description: o.description, discountPercentage: o.discountPercentage };
+      }
+      return { id: it.id, contentType: it.contentType, durationSeconds: it.durationSeconds, resolved };
+    }).filter(r => r.resolved);
+  }
+
+  const signageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+  app.get("/api/signage/media", requireAdmin, async (_req, res) => {
+    try { res.json(await storage.getSignageMedia()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/media", requireAdmin, signageUpload.single("file"), async (req, res) => {
+    try {
+      let body: any = { ...req.body };
+      if (req.file) {
+        const isVideo = req.file.mimetype.startsWith("video/");
+        body.mediaType = body.mediaType || (isVideo ? "video" : "image");
+        body.url = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
+        body.name = body.name || req.file.originalname;
+      }
+      if (body.durationSeconds) body.durationSeconds = parseInt(body.durationSeconds, 10);
+      const parsed = insertSignageMediaSchema.parse(body);
+      res.status(201).json(await storage.createSignageMedia(parsed));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/signage/media/:id", requireAdmin, async (req, res) => {
+    try { await storage.deleteSignageMedia(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/signage/playlists", requireAdmin, async (_req, res) => {
+    try {
+      const playlists = await storage.getSignagePlaylists();
+      const withItems = await Promise.all(playlists.map(async p => ({ ...p, items: await storage.getSignagePlaylistItems(p.id) })));
+      res.json(withItems);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/playlists", requireAdmin, async (req, res) => {
+    try {
+      const parsed = insertSignagePlaylistSchema.parse(req.body);
+      res.status(201).json(await storage.createSignagePlaylist(parsed));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/signage/playlists/:id", requireAdmin, async (req, res) => {
+    try {
+      const playlist = await storage.updateSignagePlaylist(req.params.id, req.body);
+      if (!playlist) return res.status(404).json({ message: "Playlist not found" });
+      res.json(playlist);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/signage/playlists/:id", requireAdmin, async (req, res) => {
+    try { await storage.deleteSignagePlaylist(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/signage/playlists/:id/items", requireAdmin, async (req, res) => {
+    try {
+      const existing = await storage.getSignagePlaylistItems(req.params.id);
+      const parsed = insertSignagePlaylistItemSchema.parse({ ...req.body, playlistId: req.params.id, sortOrder: req.body.sortOrder ?? existing.length });
+      res.status(201).json(await storage.createSignagePlaylistItem(parsed));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/signage/playlists/:playlistId/items/:itemId", requireAdmin, async (req, res) => {
+    try {
+      const item = await storage.updateSignagePlaylistItem(req.params.itemId, req.body);
+      if (!item) return res.status(404).json({ message: "Playlist item not found" });
+      res.json(item);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/signage/playlists/:playlistId/items/:itemId", requireAdmin, async (req, res) => {
+    try { await storage.deleteSignagePlaylistItem(req.params.itemId); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/playlists/:id/reorder", requireAdmin, async (req, res) => {
+    try {
+      const { itemIds } = req.body;
+      if (!Array.isArray(itemIds)) return res.status(400).json({ message: "itemIds array required" });
+      await storage.reorderSignagePlaylistItems(req.params.id, itemIds);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.get("/api/signage/screens", requireAdmin, async (_req, res) => {
+    try { res.json(await storage.getSignageScreens()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/screens", requireAdmin, async (req, res) => {
+    try {
+      const parsed = insertSignageScreenSchema.parse(req.body);
+      let pairingCode = generatePairingCode();
+      while (await storage.getSignageScreenByCode(pairingCode)) pairingCode = generatePairingCode();
+      res.status(201).json(await storage.createSignageScreen({ ...parsed, pairingCode }));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/signage/screens/:id", requireAdmin, async (req, res) => {
+    try {
+      const screen = await storage.updateSignageScreen(req.params.id, req.body);
+      if (!screen) return res.status(404).json({ message: "Screen not found" });
+      res.json(screen);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/signage/screens/:id", requireAdmin, async (req, res) => {
+    try { await storage.deleteSignageScreen(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Public, unauthenticated — any browser (TV/streaming box) pointed at the pairing code plays this.
+  app.get("/api/signage/play/:code", async (req, res) => {
+    try {
+      const screen = await storage.getSignageScreenByCode(req.params.code.toUpperCase());
+      if (!screen) return res.status(404).json({ message: "Unknown pairing code" });
+      const items = await resolveSignagePlaylist(screen.playlistId);
+      res.json({ screen: { id: screen.id, name: screen.name, screenType: screen.screenType }, items });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/play/:code/heartbeat", async (req, res) => {
+    try {
+      const screen = await storage.getSignageScreenByCode(req.params.code.toUpperCase());
+      if (!screen) return res.status(404).json({ message: "Unknown pairing code" });
+      await storage.markSignageScreenSeen(screen.pairingCode);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // ─── Terminal authentication middleware ──────────────────────────────────────
   // Terminal-facing sync endpoints require X-Terminal-Code header matching an active terminal in DB.
   async function requireTerminal(req: Request, res: Response, next: NextFunction) {
@@ -7674,6 +7841,17 @@ export async function registerRoutes(
     (req as any).terminal = terminal;
     next();
   }
+
+  // Customer-facing display content for this terminal's auto-provisioned signage screen (idle-time rotation).
+  app.get("/api/pos/signage/playlist", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const screen = await storage.getSignageScreenByTerminalId(terminal.id);
+      if (!screen) return res.json({ items: [] });
+      const items = await resolveSignagePlaylist(screen.playlistId);
+      res.json({ items });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
 
   // ─── Sync API (called by Tauri terminal) ────────────────────────────────────
   // Terminal registration — bootstrap call; accepts terminalCode + locationCode from body.
@@ -7694,6 +7872,13 @@ export async function registerRoutes(
         if (terminal.locationId !== loc.id) return res.status(403).json({ message: "Terminal is not assigned to that location" });
       }
       await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date() });
+      // Auto-provision a signage screen for this terminal's customer-facing display (idle-time rotation).
+      const existingScreen = await storage.getSignageScreenByTerminalId(terminal.id);
+      if (!existingScreen) {
+        let pairingCode = generatePairingCode();
+        while (await storage.getSignageScreenByCode(pairingCode)) pairingCode = generatePairingCode();
+        await storage.createSignageScreen({ name: `${terminal.name} — Customer Display`, screenType: "pos_customer_display", posTerminalId: terminal.id, playlistId: null, pairingCode });
+      }
       const [location, layoutButtons, inboxItems, allItems, cats, syncCfg, cashiers] = await Promise.all([
         storage.getPosLocation(terminal.locationId),
         terminal.layoutSetId ? storage.getPosLayoutButtons(terminal.layoutSetId) : Promise.resolve([]),

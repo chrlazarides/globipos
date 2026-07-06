@@ -42,6 +42,11 @@ import {
   type InsertPosShift, type PosShift,
   type InsertPosSyncConfig, type PosSyncConfig,
   type InsertPosInbox, type PosInbox,
+  signageMedia, signagePlaylists, signagePlaylistItems, signageScreens,
+  type InsertSignageMedia, type SignageMedia,
+  type InsertSignagePlaylist, type SignagePlaylist,
+  type InsertSignagePlaylistItem, type SignagePlaylistItem,
+  type InsertSignageScreen, type SignageScreen,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -193,6 +198,31 @@ export interface IStorage {
   createPosTerminal(data: InsertPosTerminal): Promise<PosTerminal>;
   updatePosTerminal(id: string, data: Partial<InsertPosTerminal & { lastSeenAt?: Date; lastSyncAt?: Date; outboxQueueSize?: number }>): Promise<PosTerminal | undefined>;
   deletePosTerminal(id: string): Promise<void>;
+
+  getSignageMedia(): Promise<SignageMedia[]>;
+  createSignageMedia(data: InsertSignageMedia): Promise<SignageMedia>;
+  deleteSignageMedia(id: string): Promise<void>;
+
+  getSignagePlaylists(): Promise<SignagePlaylist[]>;
+  getSignagePlaylist(id: string): Promise<SignagePlaylist | undefined>;
+  createSignagePlaylist(data: InsertSignagePlaylist): Promise<SignagePlaylist>;
+  updateSignagePlaylist(id: string, data: Partial<InsertSignagePlaylist>): Promise<SignagePlaylist | undefined>;
+  deleteSignagePlaylist(id: string): Promise<void>;
+
+  getSignagePlaylistItems(playlistId: string): Promise<SignagePlaylistItem[]>;
+  createSignagePlaylistItem(data: InsertSignagePlaylistItem): Promise<SignagePlaylistItem>;
+  updateSignagePlaylistItem(id: string, data: Partial<InsertSignagePlaylistItem>): Promise<SignagePlaylistItem | undefined>;
+  deleteSignagePlaylistItem(id: string): Promise<void>;
+  reorderSignagePlaylistItems(playlistId: string, orderedIds: string[]): Promise<void>;
+
+  getSignageScreens(): Promise<SignageScreen[]>;
+  getSignageScreen(id: string): Promise<SignageScreen | undefined>;
+  getSignageScreenByCode(code: string): Promise<SignageScreen | undefined>;
+  getSignageScreenByTerminalId(terminalId: string): Promise<SignageScreen | undefined>;
+  createSignageScreen(data: InsertSignageScreen & { pairingCode: string }): Promise<SignageScreen>;
+  updateSignageScreen(id: string, data: Partial<InsertSignageScreen> & { status?: string; lastSeenAt?: Date }): Promise<SignageScreen | undefined>;
+  deleteSignageScreen(id: string): Promise<void>;
+  markSignageScreenSeen(pairingCode: string): Promise<void>;
 
   getPosLayoutSets(locationId?: string): Promise<PosLayoutSet[]>;
   getPosLayoutSet(id: string): Promise<PosLayoutSet | undefined>;
@@ -2642,6 +2672,88 @@ export class DatabaseStorage implements IStorage {
   }
   async deletePosTerminal(id: string): Promise<void> {
     await db.delete(posTerminals).where(eq(posTerminals.id, id));
+  }
+
+  // ─── Digital Signage ──────────────────────────────────────────────────────
+  async getSignageMedia(): Promise<SignageMedia[]> {
+    return db.select().from(signageMedia).orderBy(desc(signageMedia.createdAt));
+  }
+  async createSignageMedia(data: InsertSignageMedia): Promise<SignageMedia> {
+    const [row] = await db.insert(signageMedia).values(data).returning();
+    return row;
+  }
+  async deleteSignageMedia(id: string): Promise<void> {
+    await db.delete(signageMedia).where(eq(signageMedia.id, id));
+  }
+
+  async getSignagePlaylists(): Promise<SignagePlaylist[]> {
+    return db.select().from(signagePlaylists).orderBy(signagePlaylists.name);
+  }
+  async getSignagePlaylist(id: string): Promise<SignagePlaylist | undefined> {
+    const [row] = await db.select().from(signagePlaylists).where(eq(signagePlaylists.id, id));
+    return row;
+  }
+  async createSignagePlaylist(data: InsertSignagePlaylist): Promise<SignagePlaylist> {
+    const [row] = await db.insert(signagePlaylists).values(data).returning();
+    return row;
+  }
+  async updateSignagePlaylist(id: string, data: Partial<InsertSignagePlaylist>): Promise<SignagePlaylist | undefined> {
+    const [row] = await db.update(signagePlaylists).set(data).where(eq(signagePlaylists.id, id)).returning();
+    return row;
+  }
+  async deleteSignagePlaylist(id: string): Promise<void> {
+    await db.delete(signagePlaylistItems).where(eq(signagePlaylistItems.playlistId, id));
+    await db.delete(signagePlaylists).where(eq(signagePlaylists.id, id));
+  }
+
+  async getSignagePlaylistItems(playlistId: string): Promise<SignagePlaylistItem[]> {
+    return db.select().from(signagePlaylistItems).where(eq(signagePlaylistItems.playlistId, playlistId)).orderBy(signagePlaylistItems.sortOrder);
+  }
+  async createSignagePlaylistItem(data: InsertSignagePlaylistItem): Promise<SignagePlaylistItem> {
+    const [row] = await db.insert(signagePlaylistItems).values(data).returning();
+    return row;
+  }
+  async updateSignagePlaylistItem(id: string, data: Partial<InsertSignagePlaylistItem>): Promise<SignagePlaylistItem | undefined> {
+    const [row] = await db.update(signagePlaylistItems).set(data).where(eq(signagePlaylistItems.id, id)).returning();
+    return row;
+  }
+  async deleteSignagePlaylistItem(id: string): Promise<void> {
+    await db.delete(signagePlaylistItems).where(eq(signagePlaylistItems.id, id));
+  }
+  async reorderSignagePlaylistItems(playlistId: string, orderedIds: string[]): Promise<void> {
+    for (let i = 0; i < orderedIds.length; i++) {
+      await db.update(signagePlaylistItems).set({ sortOrder: i }).where(and(eq(signagePlaylistItems.id, orderedIds[i]), eq(signagePlaylistItems.playlistId, playlistId)));
+    }
+  }
+
+  async getSignageScreens(): Promise<SignageScreen[]> {
+    return db.select().from(signageScreens).orderBy(signageScreens.name);
+  }
+  async getSignageScreen(id: string): Promise<SignageScreen | undefined> {
+    const [row] = await db.select().from(signageScreens).where(eq(signageScreens.id, id));
+    return row;
+  }
+  async getSignageScreenByCode(code: string): Promise<SignageScreen | undefined> {
+    const [row] = await db.select().from(signageScreens).where(eq(signageScreens.pairingCode, code));
+    return row;
+  }
+  async getSignageScreenByTerminalId(terminalId: string): Promise<SignageScreen | undefined> {
+    const [row] = await db.select().from(signageScreens).where(eq(signageScreens.posTerminalId, terminalId));
+    return row;
+  }
+  async createSignageScreen(data: InsertSignageScreen & { pairingCode: string }): Promise<SignageScreen> {
+    const [row] = await db.insert(signageScreens).values(data).returning();
+    return row;
+  }
+  async updateSignageScreen(id: string, data: Partial<InsertSignageScreen> & { status?: string; lastSeenAt?: Date }): Promise<SignageScreen | undefined> {
+    const [row] = await db.update(signageScreens).set(data as any).where(eq(signageScreens.id, id)).returning();
+    return row;
+  }
+  async deleteSignageScreen(id: string): Promise<void> {
+    await db.delete(signageScreens).where(eq(signageScreens.id, id));
+  }
+  async markSignageScreenSeen(pairingCode: string): Promise<void> {
+    await db.update(signageScreens).set({ status: "online", lastSeenAt: new Date() }).where(eq(signageScreens.pairingCode, pairingCode));
   }
 
   // ─── POS Layout Sets ──────────────────────────────────────────────────────

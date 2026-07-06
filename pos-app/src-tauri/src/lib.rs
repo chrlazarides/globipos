@@ -2,6 +2,7 @@ mod auth;
 mod barcode_config;
 mod db;
 mod hardware;
+mod vfd;
 mod migrations;
 mod models;
 mod orders;
@@ -1314,6 +1315,9 @@ pub fn run() {
             open_cash_drawer,
             check_printer_status,
             process_card_payment,
+            // ── VFD ──────────────────────────────────────────────────────────
+            vfd::vfd_write,
+            vfd::vfd_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

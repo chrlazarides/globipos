@@ -32,6 +32,10 @@ export interface HardwareConfig {
   drawer_pulse_ms: number;
   customer_display_enabled: boolean;
   customer_display_port: string;
+  vfd_enabled: boolean;
+  vfd_port: string;
+  vfd_baud: number;
+  vfd_protocol: string;
 }
 
 export type DeviceStatus = "online" | "offline" | "unknown" | "busy";
@@ -63,6 +67,10 @@ export interface UseHardwareReturn {
 
   // Cash drawer
   openDrawer: () => Promise<boolean>;
+
+  // VFD
+  writeVfd: (line1: string, line2: string) => Promise<boolean>;
+  clearVfd: () => Promise<boolean>;
 
   // Config
   loadConfig: () => Promise<void>;
@@ -191,6 +199,26 @@ export function useHardware(): UseHardwareReturn {
     }
   }, []);
 
+  const writeVfd = useCallback(async (line1: string, line2: string): Promise<boolean> => {
+    if (!config?.vfd_enabled) return false;
+    try {
+      await invoke("vfd_write", { line1, line2, cfg: config });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [config]);
+
+  const clearVfd = useCallback(async (): Promise<boolean> => {
+    if (!config?.vfd_enabled) return false;
+    try {
+      await invoke("vfd_clear", { cfg: config });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [config]);
+
   return {
     config,
     scaleWeight,
@@ -204,6 +232,8 @@ export function useHardware(): UseHardwareReturn {
     stopWeightPolling,
     printReceipt,
     openDrawer,
+    writeVfd,
+    clearVfd,
     loadConfig,
     saveConfig,
   };

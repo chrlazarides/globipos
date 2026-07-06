@@ -86,6 +86,7 @@ const PUBLIC_PATHS = [
   "/api/public",
   "/api/customer",
   "/api/pos/terminals/register", // bootstrap — no session cookie on first launch
+  "/api/signage/play", // screen-facing player, keyed by pairing code, no session
 ];
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
