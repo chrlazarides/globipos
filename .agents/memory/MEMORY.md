@@ -12,7 +12,7 @@
 - [useQuery default `= []` render loop](usequery-default-array-loop.md) — fresh array/object literal as destructuring default while query is loading can be an unstable useEffect dep, causing "Maximum update depth exceeded" and parts of the UI failing to render
 - [Persisted idempotency claim design](persisted-idempotency-claim.md) — a DB-backed in-flight guard must never treat "same key resubmitted" as an auto-success path, or a post-restart retry re-triggers the real side effect
 - [sqlx SqliteRow is not Clone](sqlx-sqliterow-not-clone.md) — convert to JSON/struct first, then clone that; row.clone() fails to compile
-- [pos-app cargo check unavailable](pos-app-no-cargo-in-sandbox.md) — this Replit sandbox has no cargo/rustc on PATH; verify Rust edits by careful manual review, not by running cargo check
+- [pos-app Tauri build limits](pos-app-no-cargo-in-sandbox.md) — cargo is installable and frontend build/typecheck works, but native `tauri build` hits an unresolved glib/webkit2gtk pkg-config wall
 - [Browser Playwright test auth+deps setup](playwright-browser-test-setup.md) — cookie-inject login bypass, Radix Select testid quirk, headless Chromium nix deps needed
 - [Configurable scale/weight barcode rules](configurable-barcode-rules.md) — model prefix→meaning as validated rule list in schema_meta JSON, not hardcoded flag digits
 - [New public API route checklist](public-route-public-paths.md) — any unauthenticated route (pairing codes, screen players, etc.) must be added to PUBLIC_PATHS in server/auth.ts or requireAuth 401s it even with no requireX middleware on the route itself

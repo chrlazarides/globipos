@@ -1,5 +1,12 @@
 {pkgs}: {
   deps = [
+    pkgs.libsoup
+    pkgs.libayatana-appindicator
+    pkgs.openssl
+    pkgs.librsvg
+    pkgs.webkitgtk
+    pkgs.pkg-config
+    pkgs.gcc
     pkgs.nss_wrapper
     pkgs.at-spi2-core
     pkgs.libglvnd

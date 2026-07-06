@@ -258,7 +258,7 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
           activeLines
         );
         setOrderNumber(orderNum);
-        setCardRef(result.reference ?? null);
+        setCardRef("reference" in result ? result.reference ?? null : null);
         setMode("done");
       } else {
         setMode("scanning"); // payment failed → try again
