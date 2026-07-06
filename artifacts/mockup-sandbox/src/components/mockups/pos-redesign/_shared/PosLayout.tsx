@@ -220,52 +220,7 @@ export default function PosLayout({ theme }: { theme: "light" | "dark" }) {
 
   return (
     <div className={`pos-mockup-root min-h-screen w-full flex ${pal.page} p-3 gap-3`} style={{ height: "100vh" }}>
-      {/* Left: search + categories + product grid */}
-      <div className="flex flex-col flex-1 min-w-0 gap-3">
-        <div className={`${pal.panel} rounded-2xl px-4 py-3 flex items-center gap-3`}>
-          <div className={`flex-1 flex items-center gap-2 ${pal.searchBg} rounded-xl px-3 py-2`}>
-            <span className={pal.searchText}>🔍</span>
-            <span className={`${pal.searchText} text-sm`}>Search product or scan barcode…</span>
-          </div>
-          <div className="text-right">
-            <div className={`text-xs ${pal.faintText}`}>Cashier</div>
-            <div className={`text-sm font-semibold ${pal.headerText}`}>Christoforos</div>
-          </div>
-        </div>
-
-        <div className={`${pal.panel} rounded-2xl px-3 py-2.5 flex gap-2 overflow-x-auto`}>
-          {CATEGORIES.map((c) => (
-            <button
-              key={c}
-              onClick={() => setCat(c)}
-              className={`flex-shrink-0 px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-colors ${
-                cat === c ? pal.catActive : pal.catInactive
-              }`}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-
-        <div className={`${pal.panel} rounded-2xl flex-1 p-3 overflow-hidden`}>
-          <div className="grid grid-cols-4 gap-3 h-full overflow-y-auto content-start">
-            {PRODUCTS.map((p) => (
-              <button key={p.id} className={`flex flex-col rounded-xl overflow-hidden transition-shadow active:scale-95 ${pal.cardBase}`}>
-                <div className={`h-20 w-full bg-gradient-to-br ${pal.toneMap[p.tone]} flex items-center justify-center text-3xl`}>
-                  {p.emoji}
-                </div>
-                <div className="px-2.5 py-2 text-left">
-                  <div className={`text-xs font-semibold pos-line-clamp-2 leading-tight ${pal.headerText}`}>{p.name}</div>
-                  <div className={`text-[10px] mb-1 ${pal.faintText}`}>{p.unit}</div>
-                  <div className={`text-sm font-bold ${pal.totalAccent}`}>{money(p.price)}</div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Right: journal (scrollable) + numpad/corrections, side by side */}
+      {/* Left: journal (scrollable) + numpad/corrections, side by side */}
       <div className="flex flex-shrink-0 gap-3" style={{ width: 700 }}>
         {/* Journal */}
         <div className={`${pal.panel} rounded-2xl flex flex-col overflow-hidden`} style={{ width: 360 }}>
@@ -396,6 +351,51 @@ export default function PosLayout({ theme }: { theme: "light" | "dark" }) {
           <button className={`${pal.chargeBtn} text-base font-bold rounded-xl py-3.5 active:scale-[0.98] transition-transform`}>
             Charge {money(total)}
           </button>
+        </div>
+      </div>
+
+      {/* Right: search + categories + product grid */}
+      <div className="flex flex-col flex-1 min-w-0 gap-3">
+        <div className={`${pal.panel} rounded-2xl px-4 py-3 flex items-center gap-3`}>
+          <div className={`flex-1 flex items-center gap-2 ${pal.searchBg} rounded-xl px-3 py-2`}>
+            <span className={pal.searchText}>🔍</span>
+            <span className={`${pal.searchText} text-sm`}>Search product or scan barcode…</span>
+          </div>
+          <div className="text-right">
+            <div className={`text-xs ${pal.faintText}`}>Cashier</div>
+            <div className={`text-sm font-semibold ${pal.headerText}`}>Christoforos</div>
+          </div>
+        </div>
+
+        <div className={`${pal.panel} rounded-2xl px-3 py-2.5 flex gap-2 overflow-x-auto`}>
+          {CATEGORIES.map((c) => (
+            <button
+              key={c}
+              onClick={() => setCat(c)}
+              className={`flex-shrink-0 px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-colors ${
+                cat === c ? pal.catActive : pal.catInactive
+              }`}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+
+        <div className={`${pal.panel} rounded-2xl flex-1 p-3 overflow-hidden`}>
+          <div className="grid grid-cols-4 gap-3 h-full overflow-y-auto content-start">
+            {PRODUCTS.map((p) => (
+              <button key={p.id} className={`flex flex-col rounded-xl overflow-hidden transition-shadow active:scale-95 ${pal.cardBase}`}>
+                <div className={`h-20 w-full bg-gradient-to-br ${pal.toneMap[p.tone]} flex items-center justify-center text-3xl`}>
+                  {p.emoji}
+                </div>
+                <div className="px-2.5 py-2 text-left">
+                  <div className={`text-xs font-semibold pos-line-clamp-2 leading-tight ${pal.headerText}`}>{p.name}</div>
+                  <div className={`text-[10px] mb-1 ${pal.faintText}`}>{p.unit}</div>
+                  <div className={`text-sm font-bold ${pal.totalAccent}`}>{money(p.price)}</div>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </div>
