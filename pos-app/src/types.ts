@@ -144,6 +144,21 @@ export interface SyncStatus {
   outbox_failed: number;
 }
 
+// ── Peripheral / heartbeat health ────────────────────────────────────────────
+// Mirrors the PeripheralStatus shape read by the back-office dashboard
+// (client/src/pages/pos-terminals.tsx) — keep field names/values in sync.
+export interface PeripheralHealth {
+  printer?: "online" | "offline" | "error";
+  drawer?: "ok" | "error";
+  scale?: "connected" | "disconnected" | "error";
+  card_terminal?: "connected" | "disconnected" | "error";
+  customer_display?: "ok" | "error";
+  cashier_name?: string;
+  shift_open?: boolean;
+  app_version?: string;
+  reported_at?: string;
+}
+
 export interface FallbackRule {
   rule_key: string;
   label: string;

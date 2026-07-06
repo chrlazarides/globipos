@@ -16,3 +16,4 @@
 - [Browser Playwright test auth+deps setup](playwright-browser-test-setup.md) — cookie-inject login bypass, Radix Select testid quirk, headless Chromium nix deps needed
 - [Configurable scale/weight barcode rules](configurable-barcode-rules.md) — model prefix→meaning as validated rule list in schema_meta JSON, not hardcoded flag digits
 - [New public API route checklist](public-route-public-paths.md) — any unauthenticated route (pairing codes, screen players, etc.) must be added to PUBLIC_PATHS in server/auth.ts or requireAuth 401s it even with no requireX middleware on the route itself
+- [Drizzle explicit select() column drift](drizzle-explicit-select-drift.md) — an explicit `db.select({...})` column map silently omits newly-added schema columns from API responses; tsc only catches it if the return type still lists the field

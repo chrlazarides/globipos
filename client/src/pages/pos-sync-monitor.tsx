@@ -4,12 +4,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Activity, Loader2, Wifi, WifiOff, Monitor, Clock, Package } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { PosHeartbeatIndicator, type PeripheralStatusLike } from "@/components/pos-heartbeat-indicator";
 
 type Terminal = {
   id: string; name: string; code: string; locationId: string; locationName?: string;
   hardwareType: string; active: boolean; lastSeenAt?: string | null; lastSyncAt?: string | null;
-  outboxQueueSize: number;
+  outboxQueueSize: number; peripheralStatus?: PeripheralStatusLike | null;
 };
+
+function isOnline(lastSeenAt?: string | null): boolean {
+  if (!lastSeenAt) return false;
+  return Date.now() - new Date(lastSeenAt).getTime() < 5 * 60 * 1000;
+}
 
 function OnlineChip({ lastSeenAt }: { lastSeenAt?: string | null }) {
   if (!lastSeenAt) return <Badge variant="secondary" className="gap-1"><WifiOff className="w-3 h-3" />Never seen</Badge>;
@@ -99,6 +105,7 @@ export default function PosSyncMonitor() {
                   <th className="px-4 py-3 text-left">Terminal</th>
                   <th className="px-4 py-3 text-left">Location</th>
                   <th className="px-4 py-3 text-center">Status</th>
+                  <th className="px-4 py-3 text-center">Heartbeat</th>
                   <th className="px-4 py-3 text-left">Last Seen</th>
                   <th className="px-4 py-3 text-left">Last Sync</th>
                   <th className="px-4 py-3 text-center">Outbox</th>
@@ -113,6 +120,9 @@ export default function PosSyncMonitor() {
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{t.locationName || t.locationId}</td>
                     <td className="px-4 py-3 text-center"><OnlineChip lastSeenAt={t.lastSeenAt} /></td>
+                    <td className="px-4 py-3 text-center">
+                      <PosHeartbeatIndicator online={isOnline(t.lastSeenAt)} peripheralStatus={t.peripheralStatus ?? null} />
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">
                       {t.lastSeenAt ? (
                         <span className="flex items-center gap-1">

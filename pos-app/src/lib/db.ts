@@ -15,6 +15,7 @@ import type {
   CreditNote,
   GiftVoucher,
   BarcodeConfig,
+  PeripheralHealth,
 } from "../types";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -90,8 +91,13 @@ export const flushOutbox = (): Promise<number> =>
 export const getSyncStatus = (): Promise<SyncStatus> =>
   invoke<SyncStatus>("get_sync_status");
 
-export const sendHeartbeat = (): Promise<boolean> =>
-  invoke<boolean>("send_heartbeat");
+export interface HeartbeatResult {
+  online: boolean;
+  peripheral_status: PeripheralHealth;
+}
+
+export const sendHeartbeat = (): Promise<HeartbeatResult> =>
+  invoke<HeartbeatResult>("send_heartbeat");
 
 // ── Fallback rules ────────────────────────────────────────────────────────────
 

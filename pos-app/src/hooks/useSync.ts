@@ -8,7 +8,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { SyncStatus, TerminalConfig } from "../types";
+import type { SyncStatus, TerminalConfig, PeripheralHealth } from "../types";
 import {
   syncCatalog,
   syncInbox,
@@ -21,6 +21,7 @@ import {
 
 export interface UseSyncReturn {
   status: SyncStatus;
+  peripheralHealth: PeripheralHealth | null;
   notifications: Array<{ id: string; message_type: string; payload: string }>;
   timedPriceOverrides: Map<string, number>;
   triggerCatalogSync: () => Promise<void>;
@@ -44,6 +45,7 @@ export function useSync(isConfigured: boolean, config: TerminalConfig | null = n
     Array<{ id: string; message_type: string; payload: string }>
   >([]);
   const [timedPriceOverrides, setTimedPriceOverrides] = useState<Map<string, number>>(new Map());
+  const [peripheralHealth, setPeripheralHealth] = useState<PeripheralHealth | null>(null);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -117,15 +119,22 @@ export function useSync(isConfigured: boolean, config: TerminalConfig | null = n
   useEffect(() => {
     if (!isConfigured) return;
 
+    const beat = () => {
+      sendHeartbeat()
+        .then((r) => {
+          setPeripheralHealth(r.peripheral_status);
+          return refreshStatus();
+        })
+        .catch(() => {});
+    };
+
     // Initial heartbeat + status
-    sendHeartbeat().then(refreshStatus).catch(() => {});
+    beat();
     refreshTimedPrices();
     refreshNotifications();
 
     // Heartbeat every 1 min
-    const heartbeatTimer = setInterval(() => {
-      sendHeartbeat().then(refreshStatus).catch(() => {});
-    }, HEARTBEAT_INTERVAL_MS);
+    const heartbeatTimer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
 
     // Catalog sync every 15 min
     const catalogTimer = setInterval(triggerCatalogSync, CATALOG_INTERVAL_MS);
@@ -147,6 +156,7 @@ export function useSync(isConfigured: boolean, config: TerminalConfig | null = n
 
   return {
     status,
+    peripheralHealth,
     notifications,
     timedPriceOverrides,
     triggerCatalogSync,

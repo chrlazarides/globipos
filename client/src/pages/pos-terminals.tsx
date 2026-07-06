@@ -33,6 +33,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
+import { PosHeartbeatIndicator } from "@/components/pos-heartbeat-indicator";
 import {
   Monitor, Plus, Pencil, Trash2, Loader2, Clock, LayoutGrid, MapPin, Cpu,
   Printer, CreditCard, Wifi, WifiOff, Settings2, RefreshCw, AlertTriangle,
@@ -598,6 +599,7 @@ function TerminalCard({
               </div>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
+              <PosHeartbeatIndicator online={seen.online} peripheralStatus={status} />
               <Badge
                 variant={seen.online ? "default" : "secondary"}
                 className={`text-[10px] px-1.5 py-0 ${seen.online ? "bg-green-600 hover:bg-green-600" : ""}`}

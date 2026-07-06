@@ -480,12 +480,43 @@ async fn get_outbox_counts(state: State<'_, AppState>) -> Result<Value, String> 
 }
 
 #[tauri::command]
-async fn send_heartbeat(state: State<'_, AppState>) -> Result<bool, String> {
+async fn send_heartbeat(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     let (server_url, terminal_code, terminal_id) = {
         let cfg = state.config.lock().unwrap();
         let c = cfg.as_ref().ok_or_else(cfg_err)?;
         (c.server_url.clone(), c.terminal_code.clone(), c.terminal_id.clone())
     };
+
+    // Refresh outbox counters so the reported queue size is current.
+    let _ = update_outbox_counts(&*state).await;
+    let (outbox_pending, outbox_failed) = {
+        let s = state.sync_status.lock().unwrap();
+        (s.outbox_pending, s.outbox_failed)
+    };
+
+    // Cashier / shift context.
+    let cashier_name = {
+        let s = state.session.lock().unwrap();
+        s.as_ref().map(|c| c.cashier_name.clone())
+    };
+    let shift_open: bool = sqlx::query("SELECT COUNT(*) as c FROM pos_shifts WHERE status = 'open'")
+        .fetch_one(&state.db).await
+        .ok()
+        .and_then(|r| r.try_get::<i64, _>("c").ok())
+        .map(|c| c > 0)
+        .unwrap_or(false);
+
+    // Load hardware + payment config and build the peripheral health snapshot.
+    let hw_cfg = hardware::load_hardware_config(&state.db).await;
+    let payment_cfg: PaymentConfig = sqlx::query("SELECT value FROM schema_meta WHERE key = 'payment_config'")
+        .fetch_optional(&state.db).await.ok().flatten()
+        .and_then(|r| r.try_get::<String, _>("value").ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    let peripheral_status = hardware::build_peripheral_status(
+        &app, &hw_cfg, &payment_cfg, cashier_name, shift_open,
+    ).await;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -501,7 +532,11 @@ async fn send_heartbeat(state: State<'_, AppState>) -> Result<bool, String> {
     let online = match client
         .post(&url)
         .header("X-Terminal-Code", &terminal_code)
-        .json(&serde_json::json!({ "status": "online" }))
+        .json(&serde_json::json!({
+            "status": "online",
+            "outboxQueueSize": (outbox_pending + outbox_failed),
+            "peripheralStatus": peripheral_status,
+        }))
         .send().await
     {
         Ok(resp) => resp.status().is_success(),
@@ -509,7 +544,11 @@ async fn send_heartbeat(state: State<'_, AppState>) -> Result<bool, String> {
     };
 
     state.sync_status.lock().unwrap().online = online;
-    Ok(online)
+
+    Ok(serde_json::json!({
+        "online": online,
+        "peripheral_status": peripheral_status,
+    }))
 }
 
 // ── Phase 3: Shift management ─────────────────────────────────────────────────

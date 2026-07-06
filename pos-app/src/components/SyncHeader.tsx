@@ -1,12 +1,14 @@
 import { useState, useEffect } from "react";
 import { WifiIcon, WifiOffIcon, Loader2Icon, ClockIcon, RefreshCwIcon, PackageIcon, SunIcon, MoonIcon } from "lucide-react";
-import type { SyncStatus, TerminalConfig, CashierSession } from "../types";
+import type { SyncStatus, TerminalConfig, CashierSession, PeripheralHealth } from "../types";
 import type { PosUiTheme } from "../hooks/usePosTheme";
+import { HeartbeatIndicator } from "./HeartbeatIndicator";
 
 interface SyncHeaderProps {
   config: TerminalConfig;
   session: CashierSession;
   syncStatus: SyncStatus;
+  peripheralHealth: PeripheralHealth | null;
   notifications: Array<{ id: string; message_type: string; payload: string }>;
   theme: PosUiTheme;
   onToggleTheme: () => void;
@@ -18,6 +20,7 @@ export function SyncHeader({
   config,
   session,
   syncStatus,
+  peripheralHealth,
   notifications,
   theme,
   onToggleTheme,
@@ -106,6 +109,9 @@ export function SyncHeader({
         <StatusIcon className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
         <span className="text-xs font-medium">{online ? (syncing ? "Syncing" : "Online") : "Offline"}</span>
       </div>
+
+      {/* Heartbeat / peripheral health indicator */}
+      <HeartbeatIndicator online={online} peripheralHealth={peripheralHealth} isLight={isLight} />
 
       {/* Cashier */}
       <div className={`flex items-center gap-2 border-l pl-4 ${dividerClass}`}>

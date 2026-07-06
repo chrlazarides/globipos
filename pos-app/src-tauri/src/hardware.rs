@@ -219,6 +219,83 @@ pub async fn check_printer_status(app: &tauri::AppHandle, cfg: &HardwareConfig) 
     }
 }
 
+// ── Peripheral health snapshot (for heartbeat reporting) ───────────────────────
+
+/// Per-peripheral health state reported on every heartbeat.
+///
+/// Field value sets mirror the `PeripheralStatus` interface consumed by the
+/// back-office dashboard (client/src/pages/pos-terminals.tsx) exactly:
+///   printer:           "online" | "offline" | "error"
+///   drawer:             "ok" | "error"
+///   scale:              "connected" | "disconnected" | "error"
+///   card_terminal:      "connected" | "disconnected" | "error"
+///   customer_display:   "ok" | "error"
+/// A peripheral that is disabled in config is omitted entirely — the
+/// dashboard already treats "no status field" + "disabled in config" as
+/// off, so we don't invent a value for hardware that isn't in use.
+pub async fn build_peripheral_status(
+    app:          &tauri::AppHandle,
+    hw_cfg:       &HardwareConfig,
+    payment_cfg:  &PaymentConfig,
+    cashier_name: Option<String>,
+    shift_open:   bool,
+) -> Value {
+    let mut m = serde_json::Map::new();
+
+    if hw_cfg.printer_enabled {
+        let val = if check_printer_status(app, hw_cfg).await { "online" } else { "offline" };
+        m.insert("printer".into(), Value::String(val.into()));
+    }
+
+    if hw_cfg.drawer_enabled {
+        let val = if !hw_cfg.printer_port.is_empty() && validate_port(&hw_cfg.printer_port).is_ok() {
+            "ok"
+        } else {
+            "error"
+        };
+        m.insert("drawer".into(), Value::String(val.into()));
+    }
+
+    if hw_cfg.scale_enabled {
+        let val = if hw_cfg.scale_port.is_empty() || validate_port(&hw_cfg.scale_port).is_err() {
+            "disconnected"
+        } else {
+            match scale_read(app, hw_cfg).await {
+                Ok(_)  => "connected",
+                Err(_) => "error",
+            }
+        };
+        m.insert("scale".into(), Value::String(val.into()));
+    }
+
+    if !payment_cfg.provider.is_empty() && payment_cfg.provider != "mock" {
+        let val = if !payment_cfg.merchant_id.is_empty() || !payment_cfg.endpoint.is_empty() {
+            "connected"
+        } else {
+            "disconnected"
+        };
+        m.insert("card_terminal".into(), Value::String(val.into()));
+    }
+
+    if hw_cfg.customer_display_enabled {
+        let val = if !hw_cfg.customer_display_port.is_empty() && validate_port(&hw_cfg.customer_display_port).is_ok() {
+            "ok"
+        } else {
+            "error"
+        };
+        m.insert("customer_display".into(), Value::String(val.into()));
+    }
+
+    if let Some(name) = cashier_name {
+        m.insert("cashier_name".into(), Value::String(name));
+    }
+    m.insert("shift_open".into(), Value::Bool(shift_open));
+    m.insert("app_version".into(), Value::String(env!("CARGO_PKG_VERSION").into()));
+    m.insert("reported_at".into(), Value::String(chrono::Utc::now().to_rfc3339()));
+
+    Value::Object(m)
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Write bytes to a uniquely-named temp file; returns the path.

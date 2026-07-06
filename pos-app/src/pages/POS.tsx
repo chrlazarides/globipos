@@ -1005,6 +1005,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         config={config}
         session={session}
         syncStatus={sync.status}
+        peripheralHealth={sync.peripheralHealth}
         notifications={sync.notifications}
         theme={posTheme}
         onToggleTheme={toggleTheme}

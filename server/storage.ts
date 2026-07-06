@@ -2648,6 +2648,7 @@ export class DatabaseStorage implements IStorage {
       code: posTerminals.code, description: posTerminals.description, hardwareType: posTerminals.hardwareType,
       layoutSetId: posTerminals.layoutSetId, lastSeenAt: posTerminals.lastSeenAt, lastSyncAt: posTerminals.lastSyncAt,
       outboxQueueSize: posTerminals.outboxQueueSize, active: posTerminals.active, createdAt: posTerminals.createdAt,
+      peripheralConfig: posTerminals.peripheralConfig, peripheralStatus: posTerminals.peripheralStatus,
       locationName: posLocations.name,
     }).from(posTerminals).leftJoin(posLocations, eq(posTerminals.locationId, posLocations.id))
       .orderBy(posTerminals.name);
