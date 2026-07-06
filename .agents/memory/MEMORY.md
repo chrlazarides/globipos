@@ -13,3 +13,4 @@
 - [Persisted idempotency claim design](persisted-idempotency-claim.md) — a DB-backed in-flight guard must never treat "same key resubmitted" as an auto-success path, or a post-restart retry re-triggers the real side effect
 - [sqlx SqliteRow is not Clone](sqlx-sqliterow-not-clone.md) — convert to JSON/struct first, then clone that; row.clone() fails to compile
 - [pos-app cargo check unavailable](pos-app-no-cargo-in-sandbox.md) — this Replit sandbox has no cargo/rustc on PATH; verify Rust edits by careful manual review, not by running cargo check
+- [Browser Playwright test auth+deps setup](playwright-browser-test-setup.md) — cookie-inject login bypass, Radix Select testid quirk, headless Chromium nix deps needed
