@@ -8,9 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX, Send, ExternalLink, PhoneOff } from "lucide-react";
+import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX, Send, ExternalLink, PhoneOff, Moon } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
@@ -481,6 +484,91 @@ function PushToggle() {
   );
 }
 
+function hourLabel(hour: number): string {
+  const h = hour % 24;
+  const period = h < 12 ? "AM" : "PM";
+  const display = h % 12 === 0 ? 12 : h % 12;
+  return `${display}:00 ${period}`;
+}
+
+function QuietHoursSettings() {
+  const { quietHoursEnabled, setQuietHoursEnabled, quietHoursStart, quietHoursEnd, setQuietHours, isQuietNow } = useWhatsAppAlert();
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant={quietHoursEnabled && isQuietNow ? "secondary" : "outline"}
+          size="sm"
+          data-testid="btn-quiet-hours"
+          title="Configure quiet hours"
+          className="flex items-center gap-1.5"
+        >
+          <Moon className="w-4 h-4" />
+          <span className="hidden sm:inline">{quietHoursEnabled ? (isQuietNow ? "Quiet Now" : "Quiet Hours") : "Quiet Hours"}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72" align="end">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="quiet-hours-toggle" className="text-sm font-medium">
+              Mute chime during off-hours
+            </Label>
+            <Switch
+              id="quiet-hours-toggle"
+              checked={quietHoursEnabled}
+              onCheckedChange={setQuietHoursEnabled}
+              data-testid="switch-quiet-hours"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The chime will stay silent automatically during this time window, even if it isn't manually muted.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Starts at</Label>
+              <Select
+                value={String(quietHoursStart)}
+                onValueChange={(v) => setQuietHours(parseInt(v, 10), quietHoursEnd)}
+              >
+                <SelectTrigger data-testid="select-quiet-start">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <SelectItem key={h} value={String(h)}>{hourLabel(h)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Ends at</Label>
+              <Select
+                value={String(quietHoursEnd)}
+                onValueChange={(v) => setQuietHours(quietHoursStart, parseInt(v, 10))}
+              >
+                <SelectTrigger data-testid="select-quiet-end">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <SelectItem key={h} value={String(h)}>{hourLabel(h)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          {quietHoursEnabled && (
+            <p className="text-xs text-muted-foreground" data-testid="text-quiet-hours-status">
+              {isQuietNow ? "Currently in quiet hours — chime is silenced." : "Currently outside quiet hours — chime is active."}
+            </p>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export default function WhatsAppOrders() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
@@ -526,6 +614,7 @@ export default function WhatsAppOrders() {
               {chimeMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
               <span className="hidden sm:inline">{chimeMuted ? "Chime Off" : "Chime On"}</span>
             </Button>
+            <QuietHoursSettings />
             <PushToggle />
             <Button variant="outline" size="sm" onClick={() => refetch()} data-testid="btn-refresh-orders">
               <RefreshCcw className="w-4 h-4" />

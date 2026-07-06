@@ -3,6 +3,36 @@ import { useAuth } from "@/App";
 
 const CHIME_MUTED_KEY = "whatsapp_alert_muted";
 const SEEN_IDS_KEY = "whatsapp_alert_seen_ids";
+const QUIET_HOURS_ENABLED_KEY = "whatsapp_alert_quiet_hours_enabled";
+const QUIET_HOURS_START_KEY = "whatsapp_alert_quiet_hours_start";
+const QUIET_HOURS_END_KEY = "whatsapp_alert_quiet_hours_end";
+
+const DEFAULT_QUIET_START = 22;
+const DEFAULT_QUIET_END = 8;
+
+function loadQuietHoursEnabled(): boolean {
+  try { return localStorage.getItem(QUIET_HOURS_ENABLED_KEY) === "true"; } catch { return false; }
+}
+
+function loadQuietHour(key: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw !== null) {
+      const parsed = parseInt(raw, 10);
+      if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 23) return parsed;
+    }
+  } catch {}
+  return fallback;
+}
+
+function isWithinQuietHours(startHour: number, endHour: number, now: Date = new Date()): boolean {
+  const hour = now.getHours();
+  if (startHour === endHour) return false;
+  if (startHour < endHour) {
+    return hour >= startHour && hour < endHour;
+  }
+  return hour >= startHour || hour < endHour;
+}
 
 function loadSeenIds(): Set<string> | null {
   try {
@@ -26,6 +56,12 @@ interface WhatsAppAlertContextValue {
   clearNewOrders: () => void;
   chimeMuted: boolean;
   toggleChimeMuted: () => void;
+  quietHoursEnabled: boolean;
+  setQuietHoursEnabled: (enabled: boolean) => void;
+  quietHoursStart: number;
+  quietHoursEnd: number;
+  setQuietHours: (startHour: number, endHour: number) => void;
+  isQuietNow: boolean;
 }
 
 const WhatsAppAlertContext = createContext<WhatsAppAlertContextValue>({
@@ -33,6 +69,12 @@ const WhatsAppAlertContext = createContext<WhatsAppAlertContextValue>({
   clearNewOrders: () => {},
   chimeMuted: false,
   toggleChimeMuted: () => {},
+  quietHoursEnabled: false,
+  setQuietHoursEnabled: () => {},
+  quietHoursStart: DEFAULT_QUIET_START,
+  quietHoursEnd: DEFAULT_QUIET_END,
+  setQuietHours: () => {},
+  isQuietNow: false,
 });
 
 export const useWhatsAppAlert = () => useContext(WhatsAppAlertContext);
@@ -73,12 +115,31 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
   const [chimeMuted, setChimeMuted] = useState(() => {
     try { return localStorage.getItem(CHIME_MUTED_KEY) === "true"; } catch { return false; }
   });
+  const [quietHoursEnabled, setQuietHoursEnabledState] = useState(loadQuietHoursEnabled);
+  const [quietHoursStart, setQuietHoursStart] = useState(() => loadQuietHour(QUIET_HOURS_START_KEY, DEFAULT_QUIET_START));
+  const [quietHoursEnd, setQuietHoursEnd] = useState(() => loadQuietHour(QUIET_HOURS_END_KEY, DEFAULT_QUIET_END));
+  const [isQuietNow, setIsQuietNow] = useState(() => quietHoursEnabled && isWithinQuietHours(quietHoursStart, quietHoursEnd));
+
   const seenIdsRef = useRef<Set<string> | null>(loadSeenIds());
   const chimeMutedRef = useRef(chimeMuted);
+  const quietHoursRef = useRef({ enabled: quietHoursEnabled, start: quietHoursStart, end: quietHoursEnd });
 
   useEffect(() => {
     chimeMutedRef.current = chimeMuted;
   }, [chimeMuted]);
+
+  useEffect(() => {
+    quietHoursRef.current = { enabled: quietHoursEnabled, start: quietHoursStart, end: quietHoursEnd };
+    setIsQuietNow(quietHoursEnabled && isWithinQuietHours(quietHoursStart, quietHoursEnd));
+  }, [quietHoursEnabled, quietHoursStart, quietHoursEnd]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const { enabled, start, end } = quietHoursRef.current;
+      setIsQuietNow(enabled && isWithinQuietHours(start, end));
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const fetchPendingWhatsApp = useCallback(async () => {
     if (!isAdmin) return;
@@ -105,7 +166,9 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
 
       if (brandNew > 0) {
         setNewOrderCount(prev => prev + brandNew);
-        if (!chimeMutedRef.current) {
+        const { enabled: quietEnabled, start: quietStart, end: quietEnd } = quietHoursRef.current;
+        const withinQuietHours = quietEnabled && isWithinQuietHours(quietStart, quietEnd);
+        if (!chimeMutedRef.current && !withinQuietHours) {
           playChime();
         }
       }
@@ -135,8 +198,35 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
     });
   }, []);
 
+  const setQuietHoursEnabled = useCallback((enabled: boolean) => {
+    setQuietHoursEnabledState(enabled);
+    try { localStorage.setItem(QUIET_HOURS_ENABLED_KEY, String(enabled)); } catch {}
+  }, []);
+
+  const setQuietHours = useCallback((startHour: number, endHour: number) => {
+    setQuietHoursStart(startHour);
+    setQuietHoursEnd(endHour);
+    try {
+      localStorage.setItem(QUIET_HOURS_START_KEY, String(startHour));
+      localStorage.setItem(QUIET_HOURS_END_KEY, String(endHour));
+    } catch {}
+  }, []);
+
   return (
-    <WhatsAppAlertContext.Provider value={{ newOrderCount, clearNewOrders, chimeMuted, toggleChimeMuted }}>
+    <WhatsAppAlertContext.Provider
+      value={{
+        newOrderCount,
+        clearNewOrders,
+        chimeMuted,
+        toggleChimeMuted,
+        quietHoursEnabled,
+        setQuietHoursEnabled,
+        quietHoursStart,
+        quietHoursEnd,
+        setQuietHours,
+        isQuietNow,
+      }}
+    >
       {children}
     </WhatsAppAlertContext.Provider>
   );
