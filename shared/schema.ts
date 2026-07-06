@@ -959,8 +959,11 @@ export type SignageScreen = typeof signageScreens.$inferSelect;
 // ── Handheld PDA Operations (Stock Take, Transfers) ───────────────────────────
 // Replaces the legacy Falcon DOS data collector. Stock take sessions are counted
 // on the handheld and applied to items.stockQuantity on submission. Transfers are
-// a movement log between named locations (this app does not track per-location
-// stock quantities, so transfers do not mutate items.stockQuantity).
+// a movement log between named locations. Since this app tracks a single global
+// items.stockQuantity (no per-location split), completing a transfer only mutates
+// stockQuantity when one side of the transfer is the designated "Main Warehouse"
+// (moving stock in or out of the tracked pool); store-to-store moves are logged
+// but do not change stockQuantity, since neither side is the tracked pool.
 
 export const stockTakeSessions = pgTable("stock_take_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -131,3 +131,25 @@ export function requireStaff(req: Request, res: Response, next: NextFunction) {
   }
   next();
 }
+
+/**
+ * Requires the caller's role/permissions to include the given module.
+ * Admin/superuser always pass. Staff pass if their permissions array is empty
+ * (full access) or explicitly includes the module — mirrors client hasModuleAccess().
+ * Must run after requireStaff/requireAuth so req.user is populated.
+ */
+export function requireModule(module: string) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+    if (user.role === "admin" || user.role === "superuser") {
+      return next();
+    }
+    if (!user.permissions || user.permissions.length === 0 || user.permissions.includes(module)) {
+      return next();
+    }
+    return res.status(403).json({ message: `Access to the "${module}" module is required` });
+  };
+}

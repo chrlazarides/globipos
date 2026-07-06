@@ -16,7 +16,7 @@ import path from "path";
 import webpush from "web-push";
 import { execSync } from "child_process";
 import AdmZip from "adm-zip";
-import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser, requireStaff } from "./auth";
+import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser, requireStaff, requireModule } from "./auth";
 import jwt from "jsonwebtoken";
 import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
 import QRCode from "qrcode";
@@ -406,6 +406,8 @@ export async function registerRoutes(
         if (emails.length) sendLoginAlertEmail(emails, user.username, ip, ua, timestamp);
       });
     }
+
+    return token;
   }
 
   app.post("/api/auth/login", async (req: Request, res: Response) => {
@@ -7956,30 +7958,30 @@ export async function registerRoutes(
   // ─── PDA Operations (handheld app: price look-up, stock take, agoranomia, transfers, invoice receipt) ───
 
   // Stock Take sessions
-  app.get("/api/pda/stock-take/sessions", requireStaff, async (_req, res) => {
+  app.get("/api/pda/stock-take/sessions", requireStaff, requireModule("pda_operations"), async (_req, res) => {
     try { res.json(await storage.getStockTakeSessions()); }
     catch (e: any) { res.status(500).json({ message: e.message }); }
   });
-  app.get("/api/pda/stock-take/sessions/:id", requireStaff, async (req, res) => {
+  app.get("/api/pda/stock-take/sessions/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
       const session = await storage.getStockTakeSession(req.params.id);
       if (!session) return res.status(404).json({ message: "Session not found" });
       res.json(session);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
-  app.post("/api/pda/stock-take/sessions", requireStaff, async (req, res) => {
+  app.post("/api/pda/stock-take/sessions", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
       const data = insertStockTakeSessionSchema.parse({ ...req.body, createdByUsername: req.user!.username });
       res.status(201).json(await storage.createStockTakeSession(data));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
-  app.post("/api/pda/stock-take/sessions/:id/lines", requireStaff, async (req, res) => {
+  app.post("/api/pda/stock-take/sessions/:id/lines", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
       const data = insertStockTakeLineSchema.parse({ ...req.body, sessionId: req.params.id, scannedByUsername: req.user!.username });
       res.status(201).json(await storage.upsertStockTakeLine(data));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
-  app.post("/api/pda/stock-take/sessions/:id/submit", requireStaff, async (req, res) => {
+  app.post("/api/pda/stock-take/sessions/:id/submit", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
       const session = await storage.submitStockTakeSession(req.params.id);
       if (!session) return res.status(404).json({ message: "Session not found" });
@@ -7988,18 +7990,18 @@ export async function registerRoutes(
   });
 
   // Stock Transfers (movement log)
-  app.get("/api/pda/transfers", requireStaff, async (_req, res) => {
+  app.get("/api/pda/transfers", requireStaff, requireModule("pda_operations"), async (_req, res) => {
     try { res.json(await storage.getStockTransfers()); }
     catch (e: any) { res.status(500).json({ message: e.message }); }
   });
-  app.get("/api/pda/transfers/:id", requireStaff, async (req, res) => {
+  app.get("/api/pda/transfers/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
       const transfer = await storage.getStockTransfer(req.params.id);
       if (!transfer) return res.status(404).json({ message: "Transfer not found" });
       res.json(transfer);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
-  app.post("/api/pda/transfers", requireStaff, async (req, res) => {
+  app.post("/api/pda/transfers", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
       const { items: transferItems, ...transferBody } = req.body;
       const transferNumber = await storage.getNextTransferNumber();
@@ -8008,16 +8010,16 @@ export async function registerRoutes(
       res.status(201).json(await storage.createStockTransfer(data, parsedItems));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
-  app.post("/api/pda/transfers/:id/complete", requireStaff, async (req, res) => {
+  app.post("/api/pda/transfers/:id/complete", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
       const transfer = await storage.completeStockTransfer(req.params.id);
       if (!transfer) return res.status(404).json({ message: "Transfer not found" });
       res.json(transfer);
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // Agoranomia — shelf unit-price labels & price/label compliance audit
-  app.get("/api/pda/agoranomia/audit", requireStaff, async (_req, res) => {
+  app.get("/api/pda/agoranomia/audit", requireStaff, requireModule("pda_operations"), async (_req, res) => {
     try {
       const allItems = await storage.getItems();
       const prints = await storage.getAllAgoranomiaLabelPrints();
@@ -8031,6 +8033,7 @@ export async function registerRoutes(
           itemName: item.name,
           sku: item.sku,
           barcode: item.barcode,
+          volume: item.volume || null,
           currentPrice,
           lastPrintedPrice: printed ? parseFloat(printed.printedPrice) : null,
           lastPrintedAt: printed?.printedAt || null,
@@ -8040,21 +8043,26 @@ export async function registerRoutes(
       res.json(audit);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
-  app.post("/api/pda/agoranomia/print-batch", requireStaff, async (req, res) => {
+  app.post("/api/pda/agoranomia/print-batch", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const { itemIds } = req.body;
+      const { itemIds, overrides } = req.body as { itemIds: string[]; overrides?: Record<string, { unitType: string; unitSize: number }> };
       if (!Array.isArray(itemIds) || !itemIds.length) return res.status(400).json({ message: "itemIds required" });
       const allItems = await storage.getItems();
       const records = itemIds.map((itemId: string) => {
         const item = allItems.find((i: any) => i.id === itemId);
         if (!item) return null;
-        const unitLabel = item.volume ? `€/${item.volume}` : "€/unit";
+        const currentPrice = parseFloat(item.price1 || "0");
+        const override = overrides?.[itemId];
+        const unitSize = override?.unitSize && override.unitSize > 0 ? override.unitSize : null;
+        const unitType = override?.unitType || "unit";
+        const printedUnitPrice = unitSize ? currentPrice / unitSize : currentPrice;
+        const unitLabel = unitSize ? `€/${unitType}` : "€/unit";
         return insertAgoranomiaLabelPrintSchema.parse({
           itemId: item.id,
           itemName: item.name,
           sku: item.sku,
-          printedPrice: item.price1 || "0",
-          printedUnitPrice: item.price1 || "0",
+          printedPrice: currentPrice.toFixed(2),
+          printedUnitPrice: printedUnitPrice.toFixed(2),
           unitLabel,
           printedByUsername: req.user!.username,
         });

@@ -18,3 +18,5 @@
 - [New public API route checklist](public-route-public-paths.md) — any unauthenticated route (pairing codes, screen players, etc.) must be added to PUBLIC_PATHS in server/auth.ts or requireAuth 401s it even with no requireX middleware on the route itself
 - [Drizzle explicit select() column drift](drizzle-explicit-select-drift.md) — an explicit `db.select({...})` column map silently omits newly-added schema columns from API responses; tsc only catches it if the return type still lists the field
 - [Zod insert schema for child before parent](zod-insert-schema-child-before-parent.md) — omit the parent FK too when validating nested child items created before the parent row exists
+- [Module-permission middleware test pitfall](module-permission-test-pitfall.md) — a manually minted test JWT missing a field the real signToken() includes silently satisfies "empty = full access" checks, faking a passing test
+- [Single stock pool vs multi-location moves](single-stock-pool-transfers.md) — when only one global stockQuantity exists, mutate it only on the leg touching the tracked warehouse; other legs log but don't touch it

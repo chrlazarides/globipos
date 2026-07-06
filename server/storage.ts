@@ -3073,7 +3073,41 @@ export class DatabaseStorage implements IStorage {
     return transfer;
   }
   async completeStockTransfer(id: string) {
-    const { stockTransfers } = await import("@shared/schema");
+    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
+    const [existing] = await db.select().from(stockTransfers).where(eq(stockTransfers.id, id));
+    if (!existing) return undefined;
+    if (existing.status === "completed") return existing;
+
+    const transferItems = await db.select().from(stockTransferItems).where(eq(stockTransferItems.transferId, id));
+    const isWarehouse = (label: string) => /warehouse/i.test(label);
+    const fromIsWarehouse = isWarehouse(existing.fromLocation);
+    const toIsWarehouse = isWarehouse(existing.toLocation);
+
+    // Since GlobiPOS tracks a single stockQuantity per item (no per-location split),
+    // moving OUT of the tracked warehouse decrements it, and moving IN increments it.
+    // Movements between two non-warehouse locations are logged but don't change
+    // items.stockQuantity, since neither side is the tracked pool.
+    if (fromIsWarehouse && !toIsWarehouse) {
+      for (const line of transferItems) {
+        const item = await this.getItem(line.itemId);
+        if (!item) continue;
+        if (item.stockQuantity < line.quantity) {
+          throw new Error(`Insufficient warehouse stock for ${line.itemName}: have ${item.stockQuantity}, need ${line.quantity}`);
+        }
+      }
+      for (const line of transferItems) {
+        const item = await this.getItem(line.itemId);
+        if (!item) continue;
+        await db.update(items).set({ stockQuantity: item.stockQuantity - line.quantity }).where(eq(items.id, line.itemId));
+      }
+    } else if (toIsWarehouse && !fromIsWarehouse) {
+      for (const line of transferItems) {
+        const item = await this.getItem(line.itemId);
+        if (!item) continue;
+        await db.update(items).set({ stockQuantity: item.stockQuantity + line.quantity }).where(eq(items.id, line.itemId));
+      }
+    }
+
     const [transfer] = await db.update(stockTransfers)
       .set({ status: "completed", completedAt: new Date() })
       .where(eq(stockTransfers.id, id))
