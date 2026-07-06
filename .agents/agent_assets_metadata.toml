@@ -12,3 +12,9 @@ id = "MR-4baTcfP-baC7-OaujV"
 uri = "file://suppliers-for-production.json"
 type = "unspecified"
 title = "suppliers-for-production.json"
+
+[[outputs]]
+id = "35gm2ugyn_uY_sVhZtr5V"
+uri = "file://USER_MANUAL.md"
+type = "text"
+title = "GlobiPOS User Manual"
