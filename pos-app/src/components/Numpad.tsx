@@ -21,6 +21,7 @@ const MODE_LABELS: Record<NumpadMode, string> = {
   price_check:         "Price Check",
   qty_multiplier:      "Qty × (before scan)",
   surcharge_pct:       "Surcharge / Cover %",
+  line_surcharge_pct:  "Item Surcharge % (Pagomena)",
   cash_in:             "Cash In Amount",
   cash_out:            "Cash Out Amount",
   petty_cash:          "Petty Cash Amount",
@@ -31,6 +32,7 @@ const MODE_SUFFIX: Partial<Record<NumpadMode, string>> = {
   line_discount_pct:   "%",
   order_discount_pct:  "%",
   surcharge_pct:       "%",
+  line_surcharge_pct:  "%",
 };
 
 const MODE_PREFIX: Partial<Record<NumpadMode, string>> = {

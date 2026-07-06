@@ -19,7 +19,7 @@ import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
 } from "../types";
-import { getProducts, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote } from "../lib/db";
+import { getProducts, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
 import { useOrder } from "../hooks/useOrder";
 import { useBarcode } from "../hooks/useBarcode";
@@ -310,6 +310,72 @@ function IssueCreditNoteDialog({
   );
 }
 
+// ── Issue gift voucher dialog ────────────────────────────────────────────────
+
+function IssueVoucherDialog({
+  onIssue, onClose,
+}: { onIssue: (amount: number) => Promise<{ code: string }>; onClose: () => void; }) {
+  const [amount, setAmount] = useState("");
+  const [issuedCode, setIssuedCode] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const parsed = parseFloat(amount) || 0;
+
+  async function handleIssue() {
+    if (parsed <= 0 || busy) return;
+    setBusy(true);
+    try {
+      const result = await onIssue(parsed);
+      setIssuedCode(result.code);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">Sell Gift Voucher</h2>
+        {issuedCode ? (
+          <div className="text-center py-4">
+            <p className="text-gray-400 text-sm mb-2">Gift voucher issued</p>
+            <p className="text-2xl font-mono font-bold text-burgundy-400" data-testid="text-issued-voucher-code">{issuedCode}</p>
+            <p className="text-gray-500 text-xs mt-2">Give this code to the customer for redemption</p>
+          </div>
+        ) : (
+          <>
+            <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+            <input
+              type="number"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+              autoFocus
+              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+              data-testid="input-issue-voucher-amount"
+            />
+          </>
+        )}
+        <div className="flex gap-3 mt-4">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
+            {issuedCode ? "Done" : "Cancel"}
+          </button>
+          {!issuedCode && (
+            <button
+              onClick={handleIssue}
+              disabled={parsed <= 0 || busy}
+              className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
+              data-testid="button-confirm-issue-voucher"
+            >
+              {busy ? "Issuing…" : "Issue"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Recall dialog ─────────────────────────────────────────────────────────────
 
 function RecallDialog({ onRecall, onClose }: {
@@ -364,7 +430,7 @@ function RecallDialog({ onRecall, onClose }: {
 
 // ── Main POS Screen ───────────────────────────────────────────────────────────
 
-type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | null;
+type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | "issue_voucher" | null;
 type CashDialogMode = "cash_in" | "cash_out" | "petty_cash";
 type POSMode = "sell" | "sco" | "shift" | "fallback";
 
@@ -491,6 +557,16 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [mode, setMode]                   = useState<POSMode>(config.sco_mode ? "sco" : "sell");
   const [paymentSuccess, setPaymentSuccess] = useState<PaymentSuccessState | null>(null);
   const lastReceiptPrinterCallback = useRef<(() => Promise<void>) | null>(null);
+  const [receiptLanguage, setReceiptLanguage] = useState<"en" | "el">(
+    () => (localStorage.getItem("pos_receipt_language") as "en" | "el") || "en"
+  );
+  const toggleLanguage = useCallback(() => {
+    setReceiptLanguage((prev) => {
+      const next = prev === "en" ? "el" : "en";
+      localStorage.setItem("pos_receipt_language", next);
+      return next;
+    });
+  }, []);
 
   // Responsive column config — fetch from server once on mount.
   // Uses X-Terminal-Code header (no API key needed) to get the layout
@@ -617,6 +693,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "HOLD_ORDER":          engine.holdOrder(); break;
       case "RECALL_ORDER":        setDialog("recall"); break;
       case "REPEAT_LAST":         engine.repeatLastItem(); break;
+      case "CORRECTION":          engine.correction(); break;
       case "ADD_LINE_NOTE":       setDialog("note_line"); break;
       case "ADD_NOTE":            setDialog("note_order"); break;
       case "PRICE_CHECK":         setDialog("price_check"); break;
@@ -646,13 +723,26 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "DECLARE_CASH": setMode("shift"); break;
       // ── Surcharge % ───────────────────────────────────────────────────────
       case "SURCHARGE_PCT": perms.requestAction("discount", () => { setNumpadModeState("surcharge_pct"); setDialog("numpad"); }); break;
+      case "LINE_SURCHARGE_PCT": perms.requestAction("discount", () => { setNumpadModeState("line_surcharge_pct"); setDialog("numpad"); }); break;
       // ── Department-key sale ──────────────────────────────────────────────
       case "DEPT_SALE": setDialog("dept_sale"); break;
       // ── Credit notes ──────────────────────────────────────────────────────
       case "ISSUE_CREDIT_NOTE": perms.requestAction("discount", () => { setDialog("issue_credit_note"); }); break;
       case "REDEEM_CREDIT_NOTE": setDialog("payment"); break;
+      // ── Gift vouchers ────────────────────────────────────────────────────
+      case "ISSUE_VOUCHER": perms.requestAction("discount", () => { setDialog("issue_voucher"); }); break;
+      // ── Re-print last invoice ────────────────────────────────────────────
+      case "REPRINT_LAST":
+        if (lastReceiptPrinterCallback.current) {
+          lastReceiptPrinterCallback.current();
+        } else {
+          alert("No recent receipt available to re-print.");
+        }
+        break;
+      // ── Language switch (receipt labels) ────────────────────────────────
+      case "TOGGLE_LANGUAGE": toggleLanguage(); break;
     }
-  }, [engine, perms, hw, shift]);
+  }, [engine, perms, hw, shift, toggleLanguage]);
 
   // ── Numpad confirm ────────────────────────────────────────────────────────
   function handleNumpadConfirm(value: number) {
@@ -665,6 +755,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "order_discount_fixed": engine.setOrderFixed(value); break;
       case "qty_multiplier":       engine.setPendingMultiplier(value); break;
       case "surcharge_pct":        engine.setSurchargePct(value); break;
+      case "line_surcharge_pct":   engine.setLineSurcharge(value); break;
     }
   }
 
@@ -731,11 +822,16 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         const gap = Math.max(1, colW - left.length - right.length);
         return `${left}${" ".repeat(gap)}${right}`;
       };
+      const RECEIPT_LABELS = {
+        en: { terminal: "Terminal", cashier: "Cashier", order: "Order", subtotal: "Subtotal", vat: "VAT", total: "TOTAL", payment: "Payment", tendered: "Tendered", change: "Change", cardRef: "Card Ref", thankYou: "Thank you for your purchase!" },
+        el: { terminal: "Ταμείο", cashier: "Ταμίας", order: "Παραγγελία", subtotal: "Υποσύνολο", vat: "ΦΠΑ", total: "ΣΥΝΟΛΟ", payment: "Πληρωμή", tendered: "Δόθηκε", change: "Ρέστα", cardRef: "Κωδ. Κάρτας", thankYou: "Ευχαριστούμε για την προτίμησή σας!" },
+      } as const;
+      const t = RECEIPT_LABELS[receiptLanguage];
       const receiptLines = [
         { text: config.terminal_code, align: "center" as const, bold: true, size: "big" as const },
         { divider: true },
-        { text: `Terminal: ${config.terminal_code}  Cashier: ${session.cashier_name}` },
-        { text: `Order: ${completedOrder.order_number}  ${new Date().toLocaleString()}` },
+        { text: `${t.terminal}: ${config.terminal_code}  ${t.cashier}: ${session.cashier_name}` },
+        { text: `${t.order}: ${completedOrder.order_number}  ${new Date().toLocaleString()}` },
         { divider: true },
         ...saleLines.map((l) => ({
           text: pad(
@@ -744,18 +840,18 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           ),
         })),
         { divider: true },
-        { text: pad("Subtotal", formatCurrency(saleOrder.subtotal)) },
-        { text: pad("VAT", formatCurrency(saleOrder.vat_amount)) },
-        { text: pad("TOTAL", formatCurrency(completedOrder.total)), bold: true, size: "big" as const, align: "right" as const },
+        { text: pad(t.subtotal, formatCurrency(saleOrder.subtotal)) },
+        { text: pad(t.vat, formatCurrency(saleOrder.vat_amount)) },
+        { text: pad(t.total, formatCurrency(completedOrder.total)), bold: true, size: "big" as const, align: "right" as const },
         { divider: true },
-        { text: `Payment: ${method.replace("card_", "Card ").replace("_", " ").toUpperCase()}` },
+        { text: `${t.payment}: ${method.replace("card_", "Card ").replace("_", " ").toUpperCase()}` },
         ...(result.totalTendered > 0 ? [
-          { text: pad("Tendered", formatCurrency(result.totalTendered)) },
-          { text: pad("Change", formatCurrency(result.changeDue)) },
+          { text: pad(t.tendered, formatCurrency(result.totalTendered)) },
+          { text: pad(t.change, formatCurrency(result.changeDue)) },
         ] : []),
-        ...(paymentRef ? [{ text: `Card Ref: ${paymentRef}` }] : []),
+        ...(paymentRef ? [{ text: `${t.cardRef}: ${paymentRef}` }] : []),
         { divider: true },
-        { text: "Thank you for your purchase!", align: "center" as const },
+        { text: t.thankYou, align: "center" as const },
       ];
 
       // Store for re-print from success overlay
@@ -1000,6 +1096,17 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
             });
             sync.triggerOutboxFlush();
             return { code: note.code };
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+
+      {dialog === "issue_voucher" && (
+        <IssueVoucherDialog
+          onIssue={async (amount) => {
+            const voucher = await issueGiftVoucher(amount, session.cashier_id, session.cashier_name);
+            sync.triggerOutboxFlush();
+            return { code: voucher.code };
           }}
           onClose={() => setDialog(null)}
         />

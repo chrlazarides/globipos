@@ -75,6 +75,8 @@ pub struct OrderLine {
     pub override_price: Option<f64>,
     pub line_discount_pct: f64,
     pub line_discount_fixed: f64,
+    #[serde(default)]
+    pub line_surcharge_pct: f64,
     pub vat_rate: f64,
     pub line_total: f64,
     pub vat_amount: f64,

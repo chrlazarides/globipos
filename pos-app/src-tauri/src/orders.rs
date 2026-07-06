@@ -52,9 +52,9 @@ pub async fn save_order(
         sqlx::query(
             r#"INSERT INTO pos_order_lines
                 (id, order_id, product_id, description, sku, qty, unit_price, override_price,
-                 line_discount_pct, line_discount_fixed, vat_rate, line_total, vat_amount,
+                 line_discount_pct, line_discount_fixed, line_surcharge_pct, vat_rate, line_total, vat_amount,
                  note, voided, sort_order)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"#
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"#
         )
         .bind(&line.id)
         .bind(&order.id)
@@ -66,6 +66,7 @@ pub async fn save_order(
         .bind(line.override_price)
         .bind(line.line_discount_pct)
         .bind(line.line_discount_fixed)
+        .bind(line.line_surcharge_pct)
         .bind(line.vat_rate)
         .bind(line.line_total)
         .bind(line.vat_amount)

@@ -64,6 +64,7 @@ export interface OrderLine {
   override_price?: number;
   line_discount_pct: number;    // % discount on this line
   line_discount_fixed: number;  // fixed € discount on this line
+  line_surcharge_pct: number;   // "Pagomena" — per-item surcharge/cover charge % added to this line's price
   vat_rate: number;
   line_total: number;           // after all discounts, excl VAT
   vat_amount: number;
@@ -163,6 +164,7 @@ export type NumpadMode =
   | "price_check"
   | "qty_multiplier"
   | "surcharge_pct"
+  | "line_surcharge_pct"
   | "cash_in"
   | "cash_out"
   | "petty_cash"
@@ -205,9 +207,14 @@ export type ActionCode =
   | "PETTY_CASH"
   | "DECLARE_CASH"
   | "SURCHARGE_PCT"
+  | "LINE_SURCHARGE_PCT"
   | "DEPT_SALE"
   | "ISSUE_CREDIT_NOTE"
-  | "REDEEM_CREDIT_NOTE";
+  | "REDEEM_CREDIT_NOTE"
+  | "CORRECTION"
+  | "REPRINT_LAST"
+  | "ISSUE_VOUCHER"
+  | "TOGGLE_LANGUAGE";
 
 // ── Credit notes ──────────────────────────────────────────────────────────────
 
@@ -220,6 +227,20 @@ export interface CreditNote {
   amount: number;
   remaining: number;
   reason?: string;
+  cashier_id: string;
+  cashier_name: string;
+  status: "open" | "redeemed" | "void";
+  created_at: string;
+  redeemed_at?: string;
+}
+
+// ── Gift vouchers ──────────────────────────────────────────────────────────────
+
+export interface GiftVoucher {
+  id: string;
+  code: string;
+  amount: number;
+  remaining: number;
   cashier_id: string;
   cashier_name: string;
   status: "open" | "redeemed" | "void";

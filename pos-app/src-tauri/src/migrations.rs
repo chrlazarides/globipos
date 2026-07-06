@@ -123,6 +123,7 @@ async fn run_v1(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             override_price REAL,
             line_discount_pct REAL NOT NULL DEFAULT 0,
             line_discount_fixed REAL NOT NULL DEFAULT 0,
+            line_surcharge_pct REAL NOT NULL DEFAULT 0,
             vat_rate REAL NOT NULL DEFAULT 0,
             line_total REAL NOT NULL,
             vat_amount REAL NOT NULL DEFAULT 0,
@@ -316,9 +317,24 @@ async fn run_v3(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )"#,
         "CREATE INDEX IF NOT EXISTS idx_credit_notes_code ON pos_credit_notes(code)",
         "CREATE INDEX IF NOT EXISTS idx_credit_notes_customer ON pos_credit_notes(customer_id)",
+        // Gift vouchers — sold to customers, redeemable as a tender against future orders
+        r#"CREATE TABLE IF NOT EXISTS pos_gift_vouchers (
+            id TEXT PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            amount REAL NOT NULL DEFAULT 0,
+            remaining REAL NOT NULL DEFAULT 0,
+            cashier_id TEXT NOT NULL,
+            cashier_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            redeemed_at TEXT,
+            synced_at TEXT
+        )"#,
+        "CREATE INDEX IF NOT EXISTS idx_gift_vouchers_code ON pos_gift_vouchers(code)",
         "CREATE INDEX IF NOT EXISTS idx_return_lines_return ON pos_return_order_lines(return_order_id)",
         // Additive column migrations — silently ignored on fresh DBs that already have it
         "ALTER TABLE pos_orders ADD COLUMN payment_ref TEXT",
+        "ALTER TABLE pos_order_lines ADD COLUMN line_surcharge_pct REAL NOT NULL DEFAULT 0",
     ];
 
     for sql in &statements {

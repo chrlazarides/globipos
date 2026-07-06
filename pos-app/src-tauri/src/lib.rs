@@ -996,6 +996,101 @@ async fn redeem_credit_note(
     Ok(row_to_json(updated))
 }
 
+// ── Gift vouchers ──────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn issue_gift_voucher(
+    state:        State<'_, AppState>,
+    amount:       f64,
+    cashier_id:   String,
+    cashier_name: String,
+) -> Result<Value, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    // Short human-readable redemption code, e.g. GV-A1B2C3
+    let code = format!("GV-{}", &id.to_uppercase().replace('-', "")[0..6]);
+
+    sqlx::query(
+        r#"INSERT INTO pos_gift_vouchers
+           (id, code, amount, remaining, cashier_id, cashier_name, status)
+           VALUES (?, ?, ?, ?, ?, ?, 'open')"#
+    )
+    .bind(&id)
+    .bind(&code)
+    .bind(amount)
+    .bind(amount)
+    .bind(&cashier_id)
+    .bind(&cashier_name)
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    let row = sqlx::query("SELECT * FROM pos_gift_vouchers WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+    let voucher_json = row_to_json(row);
+
+    // Queue for server sync
+    let outbox_id = uuid::Uuid::new_v4().to_string();
+    let payload = serde_json::json!({ "type": "gift_voucher_issued", "gift_voucher": voucher_json.clone() });
+    sqlx::query("INSERT INTO pos_outbox (id, order_id, payload, status) VALUES (?, ?, ?, 'pending')")
+        .bind(&outbox_id)
+        .bind(&id)
+        .bind(payload.to_string())
+        .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    Ok(voucher_json)
+}
+
+#[tauri::command]
+async fn find_gift_voucher(
+    state: State<'_, AppState>,
+    code:  String,
+) -> Result<Option<Value>, String> {
+    let row = sqlx::query("SELECT * FROM pos_gift_vouchers WHERE code = ? COLLATE NOCASE")
+        .bind(code.trim())
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(row.map(row_to_json))
+}
+
+#[tauri::command]
+async fn redeem_gift_voucher(
+    state:  State<'_, AppState>,
+    id:     String,
+    amount: f64,
+) -> Result<Value, String> {
+    let row = sqlx::query("SELECT * FROM pos_gift_vouchers WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?
+        .ok_or_else(|| "Gift voucher not found".to_string())?;
+
+    let existing = row_to_json(row);
+    let remaining = existing.get("remaining").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let status = existing.get("status").and_then(|v| v.as_str()).unwrap_or("open");
+
+    if status != "open" {
+        return Err("Gift voucher is not open for redemption".to_string());
+    }
+    if amount <= 0.0 || amount > remaining + 0.001 {
+        return Err("Redemption amount exceeds remaining balance".to_string());
+    }
+
+    let new_remaining = (remaining - amount).max(0.0);
+    let new_status = if new_remaining <= 0.001 { "redeemed" } else { "open" };
+
+    sqlx::query(
+        "UPDATE pos_gift_vouchers SET remaining = ?, status = ?, redeemed_at = CASE WHEN ? = 'redeemed' THEN datetime('now') ELSE redeemed_at END WHERE id = ?"
+    )
+    .bind(new_remaining)
+    .bind(new_status)
+    .bind(new_status)
+    .bind(&id)
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    let updated = sqlx::query("SELECT * FROM pos_gift_vouchers WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+
+    Ok(row_to_json(updated))
+}
+
 // ── Phase 3: Hardware commands ────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1187,6 +1282,10 @@ pub fn run() {
             issue_credit_note,
             find_credit_note,
             redeem_credit_note,
+            // ── Gift vouchers ────────────────────────────────────────────────
+            issue_gift_voucher,
+            find_gift_voucher,
+            redeem_gift_voucher,
             // ── Phase 3: Hardware ────────────────────────────────────────────
             get_hardware_config,
             save_hardware_config,

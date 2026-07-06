@@ -30,7 +30,13 @@ export function computeLineAmounts(line: Omit<OrderLine, "line_total" | "vat_amo
   // Apply line discount (% first, then fixed)
   const pctDiscount = round2(lineSubtotal * (line.line_discount_pct / 100));
   const lineDiscount = round2(pctDiscount + line.line_discount_fixed);
-  const lineNet = Math.max(0, round2(lineSubtotal - lineDiscount));
+  let lineNet = Math.max(0, round2(lineSubtotal - lineDiscount));
+
+  // "Pagomena" — per-item surcharge/cover charge %, applied after discount, before VAT
+  const surchargePct = line.line_surcharge_pct ?? 0;
+  if (surchargePct > 0) {
+    lineNet = round2(lineNet + lineNet * (surchargePct / 100));
+  }
 
   const vatRate = line.vat_rate / 100;
   const vatAmount = round2(lineNet * vatRate);
@@ -151,6 +157,7 @@ export function createLine(
     override_price: timedPrice ?? undefined,
     line_discount_pct: 0,
     line_discount_fixed: 0,
+    line_surcharge_pct: 0,
     vat_rate: product.vat_rate,
     voided: false,
   };
@@ -183,6 +190,13 @@ export function setLineDiscountPct(line: OrderLine, pct: number): OrderLine {
 /** Apply line fixed discount and recompute */
 export function setLineDiscountFixed(line: OrderLine, fixed: number): OrderLine {
   const updated = { ...line, line_discount_fixed: fixed };
+  const { lineTotal, vatAmount } = computeLineAmounts(updated);
+  return { ...updated, line_total: lineTotal, vat_amount: vatAmount };
+}
+
+/** Apply a per-line "Pagomena" surcharge % and recompute */
+export function setLineSurchargePct(line: OrderLine, pct: number): OrderLine {
+  const updated = { ...line, line_surcharge_pct: pct };
   const { lineTotal, vatAmount } = computeLineAmounts(updated);
   return { ...updated, line_total: lineTotal, vat_amount: vatAmount };
 }

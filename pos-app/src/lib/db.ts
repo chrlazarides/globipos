@@ -13,6 +13,7 @@ import type {
   TerminalConfig,
   SyncStatus,
   CreditNote,
+  GiftVoucher,
 } from "../types";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -189,3 +190,18 @@ export const findCreditNote = (code: string): Promise<CreditNote | null> =>
 
 export const redeemCreditNote = (id: string, amount: number): Promise<CreditNote> =>
   invoke<CreditNote>("redeem_credit_note", { id, amount });
+
+// ── Gift vouchers ─────────────────────────────────────────────────────────────
+
+export const issueGiftVoucher = (
+  amount: number,
+  cashierId: string,
+  cashierName: string
+): Promise<GiftVoucher> =>
+  invoke<GiftVoucher>("issue_gift_voucher", { amount, cashierId, cashierName });
+
+export const findGiftVoucher = (code: string): Promise<GiftVoucher | null> =>
+  invoke<GiftVoucher | null>("find_gift_voucher", { code });
+
+export const redeemGiftVoucher = (id: string, amount: number): Promise<GiftVoucher> =>
+  invoke<GiftVoucher>("redeem_gift_voucher", { id, amount });

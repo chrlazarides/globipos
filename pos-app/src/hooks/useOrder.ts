@@ -11,6 +11,7 @@ import {
   setLinePriceOverride,
   setLineDiscountPct,
   setLineDiscountFixed,
+  setLineSurchargePct,
   removeLineDiscount,
   setLineTaxOverride,
   computeOrderTotals,
@@ -36,6 +37,7 @@ export interface UseOrderReturn {
   setQty: (qty: number) => void;          // #4 set qty on selected line
   removeLine: () => void;                 // #5 remove selected line
   voidLine: () => void;                   // #6 void selected line (keep display)
+  correction: () => void;                 // "Correction" — remove the most recently added line
   clearOrder: () => void;                 // #7 wipe entire order
   holdOrder: () => Promise<void>;         // #8 save as held, start new
   recallOrder: (held: Order, heldLines: OrderLine[]) => void; // #9
@@ -62,6 +64,9 @@ export interface UseOrderReturn {
 
   // Surcharge (additional charge / cover / service charge)
   setSurchargePct: (pct: number) => void;
+
+  // "Pagomena" — per-item surcharge/cover charge applied directly to the selected line
+  setLineSurcharge: (pct: number) => void;
 
   // Department-key sale — open amount against a category, no product lookup
   addDepartmentLine: (category: Category, amount: number) => void;
@@ -212,6 +217,18 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     updateLines(newLines);
     writeAudit("void_line", "order_line", selectedLine.id, selectedLine.description, cashierId, cashierName);
   }, [lines, selectedLine, updateLines, cashierId, cashierName]);
+
+  // ── "Correction" — delete the most recently scanned/added item ──────────────
+  const correction = useCallback(() => {
+    if (!lastLineId) return;
+    const last = lines.find((l) => l.id === lastLineId);
+    if (!last) return;
+    const newLines = lines.filter((l) => l.id !== lastLineId);
+    updateLines(newLines);
+    setSelectedLineId(newLines.length > 0 ? newLines[newLines.length - 1].id : null);
+    setLastLineId(newLines.length > 0 ? newLines[newLines.length - 1].id : null);
+    writeAudit("correction", "order_line", last.id, last.description, cashierId, cashierName);
+  }, [lastLineId, lines, updateLines, cashierId, cashierName]);
 
   // ── #7 Clear order ──────────────────────────────────────────────────────────
   const clearOrder = useCallback(() => {
@@ -388,6 +405,16 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     writeAudit("surcharge_pct", "order", order.id, `Surcharge set to ${pct}%`, cashierId, cashierName);
   }, [order.id, lines, cashierId, cashierName]);
 
+  // ── "Pagomena" — per-item surcharge/cover charge on the selected line ───────
+  const setLineSurcharge = useCallback((pct: number) => {
+    if (!selectedLine) return;
+    const newLines = lines.map((l) =>
+      l.id === selectedLine.id ? setLineSurchargePct(l, pct) : l
+    );
+    updateLines(newLines);
+    writeAudit("line_surcharge_pct", "order_line", selectedLine.id, `Line surcharge set to ${pct}%`, cashierId, cashierName);
+  }, [lines, selectedLine, updateLines, cashierId, cashierName]);
+
   // ── Department-key sale — open amount against a category, no product ───────
   const addDepartmentLine = useCallback((category: Category, amount: number) => {
     if (amount <= 0) return;
@@ -399,6 +426,7 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
       unit_price: amount,
       line_discount_pct: 0,
       line_discount_fixed: 0,
+      line_surcharge_pct: 0,
       vat_rate: category.vat_rate,
       voided: false,
     };
@@ -469,6 +497,7 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     setQty,
     removeLine,
     voidLine,
+    correction,
     clearOrder,
     holdOrder,
     recallOrder,
@@ -491,6 +520,7 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     setTaxOverride,
     applyTimedPrices,
     setSurchargePct,
+    setLineSurcharge,
     addDepartmentLine,
     completeOrder,
     setNumpadMode,
