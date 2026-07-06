@@ -151,6 +151,27 @@ export interface FallbackRule {
   description?: string;
 }
 
+// ── Barcode structure configuration (weight/price/PLU scale barcodes) ─────────
+
+export type BarcodeRuleKind = "weight" | "price" | "plu";
+
+export interface BarcodeRule {
+  id: string;
+  label: string;
+  prefix: string;
+  kind: BarcodeRuleKind;
+  plu_digits: number;
+  value_digits: number;
+  value_divisor: number;
+  check_digit: boolean;
+  enabled: boolean;
+}
+
+export interface BarcodeConfig {
+  enabled: boolean;
+  rules: BarcodeRule[];
+}
+
 // ── Numpad context ────────────────────────────────────────────────────────────
 
 export type NumpadMode =
@@ -200,6 +221,7 @@ export type ActionCode =
   | "OPEN_DRAWER"
   | "END_SHIFT"
   | "FALLBACK_RULES"
+  | "BARCODE_CONFIG"
   | "NUMPAD"
   | "NO_SALE"
   | "CASH_IN"

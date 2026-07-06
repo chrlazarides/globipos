@@ -1,7 +1,7 @@
 import {
   StickyNoteIcon, RepeatIcon,
   SmartphoneIcon, ShieldIcon, RotateCcwIcon,
-  CalendarClock, MonitorSmartphone,
+  CalendarClock, MonitorSmartphone, BarcodeIcon,
 } from "lucide-react";
 import { HoldIcon, RecallIcon, VoidIcon, RefundIcon, DiscountIcon } from "./icons/PosIcons";
 import type { NumpadMode } from "../types";
@@ -18,6 +18,7 @@ interface ActionBarProps {
   onNumpad: (mode: NumpadMode) => void;
   onPromoCode: () => void;
   onFallbackRules: () => void;
+  onBarcodeConfig: () => void;
   onRemoveDiscount: () => void;
   onRefund?: () => void;
   onShift?: () => void;
@@ -36,6 +37,7 @@ export function ActionBar({
   onNumpad,
   onPromoCode,
   onFallbackRules,
+  onBarcodeConfig,
   onRemoveDiscount,
   onRefund,
   onShift,
@@ -142,6 +144,13 @@ export function ActionBar({
       onClick: onFallbackRules,
       enabled: true,
       testId: "action-fallback",
+    },
+    {
+      label: "Barcode Structure",
+      icon: BarcodeIcon,
+      onClick: onBarcodeConfig,
+      enabled: true,
+      testId: "action-barcode-config",
     },
     ...(onRefund ? [{
       label: "Refund",

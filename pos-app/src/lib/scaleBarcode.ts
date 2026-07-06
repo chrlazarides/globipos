@@ -1,42 +1,67 @@
 /**
  * Scale / weighted-item barcode parser.
  *
- * Retail scales print EAN-13 barcodes that embed either a weight or a price
- * directly inside the barcode digits so the POS can ring up a variable-weight
- * item without a live scale connection.
+ * Retail scales and manufacturer weight labels print EAN-13 barcodes that embed
+ * either a weight or a price directly inside the barcode digits so the POS can
+ * ring up a variable-weight item without a live scale connection.
  *
  * ── Format ───────────────────────────────────────────────────────────────────
- *  Digit position:  1   2  3-7     8-12    13
- *                  [2][flag][PLU:5][Value:5][Check]
+ *  Digit position:  1     2-N        ...          13
+ *                  [prefix][PLU digits][Value digits][Check]
  *
- *  flag (digit 2):
- *    0          → PLU-only  — add the product at qty 1, no embedded value
- *    1, 2, 3, 4 → Weight    — Value field = grams  (e.g. 01500 → 1.500 kg)
- *    5, 6, 7, 8, 9 → Price  — Value field = cents  (e.g. 01299 → €12.99)
+ *  The prefix → meaning mapping (weight vs price vs PLU-only, digit widths,
+ *  and the divisor used to convert the raw integer value into a real-world
+ *  unit) is fully configurable via `BarcodeConfig` (see `BARCODE_CONFIG.md`
+ *  in Settings → Barcode Structure). Different scale vendors and manufacturer
+ *  weight labels use different prefix conventions — e.g. some print weight
+ *  under a "1-4" flag digit, others (such as Pittas) embed weight under a
+ *  "28"/"29" prefix that a hardcoded "5-9 = price" rule would misclassify.
  *
- *  The EAN-13 check digit (position 13) is always validated before accepting
- *  the code as a scale barcode to avoid false positives on normal EAN-13s
- *  that happen to start with 2 (e.g. some European brand codes).
+ *  The EAN-13 check digit (position 13) is validated (when the matching rule
+ *  requires it) before accepting the code as a scale barcode, to avoid false
+ *  positives on normal EAN-13s that happen to start with the same prefix.
  *
  * ── Lookup strategy ──────────────────────────────────────────────────────────
  *  Products may be stored with:
- *    a) just the 5-digit PLU as their barcode field, OR
+ *    a) just the PLU as their barcode field, OR
  *    b) the full 13-digit scale EAN as their barcode field.
  *  The caller should try the PLU first, then fall back to the full code.
  */
+
+import type { BarcodeConfig, BarcodeRule } from "../types";
 
 export type ScaleBarcodeType = "weight" | "price" | "plu";
 
 export interface ScaleBarcode {
   type: ScaleBarcodeType;
-  plu: string;        // 5-digit PLU string (leading zeros preserved)
-  rawValue: number;   // raw 5-digit integer from the barcode
+  plu: string;        // PLU string (leading zeros preserved)
+  rawValue: number;   // raw integer value segment from the barcode
   /** For weight barcodes: weight in kg (e.g. 1.500).
    *  For price barcodes:  price in currency units (e.g. 12.99).
    *  For PLU barcodes:    0. */
   value: number;
-  flagDigit: number;  // the single flag digit (0-9)
+  ruleId: string;     // id of the BarcodeRule that matched
 }
+
+/**
+ * Default barcode structure — mirrors the backend's `BarcodeConfig::default()`.
+ * Used whenever the admin-configured rules haven't loaded yet (or on terminals
+ * running fully offline before their first config sync).
+ *
+ * Note: prefixes "28" and "29" are classified as WEIGHT (not price) by default,
+ * matching manufacturer weight-embedded PLU labels (e.g. Pittas) rather than the
+ * classic scale "5-9 = price" flag convention.
+ */
+export const DEFAULT_BARCODE_CONFIG: BarcodeConfig = {
+  enabled: true,
+  rules: [
+    { id: "plu-20", label: "PLU only (20xxx)", prefix: "20", kind: "plu", plu_digits: 5, value_digits: 5, value_divisor: 1, check_digit: true, enabled: true },
+    { id: "weight-21-24", label: "Scale weight (21-24xxx)", prefix: "21", kind: "weight", plu_digits: 5, value_digits: 5, value_divisor: 1000, check_digit: true, enabled: true },
+    { id: "price-25-27", label: "Scale price (25-27xxx)", prefix: "25", kind: "price", plu_digits: 5, value_digits: 5, value_divisor: 100, check_digit: true, enabled: true },
+    { id: "weight-28", label: "Manufacturer weight PLU (28xxx)", prefix: "28", kind: "weight", plu_digits: 5, value_digits: 5, value_divisor: 1000, check_digit: true, enabled: true },
+    { id: "weight-29", label: "Manufacturer weight PLU (29xxx)", prefix: "29", kind: "weight", plu_digits: 5, value_digits: 5, value_divisor: 1000, check_digit: true, enabled: true },
+  ],
+};
 
 /**
  * Validate the EAN-13 check digit.
@@ -51,39 +76,50 @@ function validateEan13CheckDigit(code: string): boolean {
   return expected === parseInt(code[12], 10);
 }
 
-/**
- * Try to parse a scanned barcode as an EAN-13 scale barcode.
- * Returns `null` if the code is not a recognised scale barcode format.
- */
-export function parseScaleBarcode(code: string): ScaleBarcode | null {
-  // Must be exactly 13 digits and start with '2'
-  if (!/^2\d{12}$/.test(code)) return null;
-
-  // Reject if check digit does not match — avoids false-positives on real
-  // brand EANs that happen to start with 2
-  if (!validateEan13CheckDigit(code)) return null;
-
-  const flagDigit = parseInt(code[1], 10);
-  const plu = code.slice(2, 7);
-  const rawValue = parseInt(code.slice(7, 12), 10);
-
-  let type: ScaleBarcodeType;
-  let value: number;
-
-  if (flagDigit === 0) {
-    type = "plu";
-    value = 0;
-  } else if (flagDigit <= 4) {
-    // Weight — value field is in grams
-    type = "weight";
-    value = rawValue / 1000;
-  } else {
-    // Price — value field is in minor currency units (cents / pence)
-    type = "price";
-    value = rawValue / 100;
+/** Find the enabled rule whose prefix matches the start of `code`, if any. */
+function findMatchingRule(code: string, config: BarcodeConfig): BarcodeRule | null {
+  // Prefer the longest matching prefix so more-specific rules win over shorter ones.
+  let best: BarcodeRule | null = null;
+  for (const rule of config.rules) {
+    if (!rule.enabled) continue;
+    if (code.startsWith(rule.prefix)) {
+      if (!best || rule.prefix.length > best.prefix.length) best = rule;
+    }
   }
+  return best;
+}
 
-  return { type, plu, rawValue, value, flagDigit };
+/**
+ * Try to parse a scanned barcode as an EAN-13 scale/weight barcode using the
+ * given (admin-configurable) barcode structure. Falls back to
+ * `DEFAULT_BARCODE_CONFIG` when no config is supplied.
+ *
+ * Returns `null` if the code is not 13 digits, does not match any enabled
+ * rule, or fails that rule's check-digit validation.
+ */
+export function parseScaleBarcode(code: string, config: BarcodeConfig = DEFAULT_BARCODE_CONFIG): ScaleBarcode | null {
+  if (!config.enabled) return null;
+  if (!/^\d{13}$/.test(code)) return null;
+
+  const rule = findMatchingRule(code, config);
+  if (!rule) return null;
+
+  const expectedLen = rule.prefix.length + rule.plu_digits + rule.value_digits + (rule.check_digit ? 1 : 0);
+  if (expectedLen !== 13) return null; // misconfigured rule — refuse to guess
+
+  if (rule.check_digit && !validateEan13CheckDigit(code)) return null;
+
+  const pluStart = rule.prefix.length;
+  const pluEnd = pluStart + rule.plu_digits;
+  const valueEnd = pluEnd + rule.value_digits;
+
+  const plu = code.slice(pluStart, pluEnd);
+  const rawValue = parseInt(code.slice(pluEnd, valueEnd), 10);
+
+  const divisor = rule.value_divisor > 0 ? rule.value_divisor : 1;
+  const value = rule.kind === "plu" ? 0 : rawValue / divisor;
+
+  return { type: rule.kind, plu, rawValue, value, ruleId: rule.id };
 }
 
 /**

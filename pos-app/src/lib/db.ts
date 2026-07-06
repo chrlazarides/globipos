@@ -14,6 +14,7 @@ import type {
   SyncStatus,
   CreditNote,
   GiftVoucher,
+  BarcodeConfig,
 } from "../types";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -102,6 +103,14 @@ export const updateFallbackRule = (
   offlineBehavior: string
 ): Promise<void> =>
   invoke<void>("update_fallback_rule", { ruleKey, offlineBehavior });
+
+// ── Barcode structure configuration (weight/price/PLU scale barcodes) ─────────
+
+export const getBarcodeConfig = (): Promise<BarcodeConfig> =>
+  invoke<BarcodeConfig>("get_barcode_config");
+
+export const saveBarcodeConfig = (config: BarcodeConfig): Promise<void> =>
+  invoke<void>("save_barcode_config", { config });
 
 // ── Customers ─────────────────────────────────────────────────────────────────
 

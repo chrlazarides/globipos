@@ -1,4 +1,5 @@
 mod auth;
+mod barcode_config;
 mod db;
 mod hardware;
 mod migrations;
@@ -8,6 +9,7 @@ mod sync;
 #[cfg(test)]
 mod tests;
 
+use barcode_config::BarcodeConfig;
 use db::row_to_json;
 use hardware::{HardwareConfig, PaymentConfig, ScaleWeight};
 use models::*;
@@ -1106,6 +1108,21 @@ async fn save_hardware_config(
     hardware::save_hardware_config(&state.db, &config).await
 }
 
+// ── Barcode structure configuration (weight/price/PLU scale barcodes) ─────────
+
+#[tauri::command]
+async fn get_barcode_config(state: State<'_, AppState>) -> Result<BarcodeConfig, String> {
+    Ok(barcode_config::load_barcode_config(&state.db).await)
+}
+
+#[tauri::command]
+async fn save_barcode_config(
+    state:  State<'_, AppState>,
+    config: BarcodeConfig,
+) -> Result<(), String> {
+    barcode_config::save_barcode_config(&state.db, &config).await
+}
+
 #[tauri::command]
 async fn scale_read_weight(
     app:   AppHandle,
@@ -1289,6 +1306,8 @@ pub fn run() {
             // ── Phase 3: Hardware ────────────────────────────────────────────
             get_hardware_config,
             save_hardware_config,
+            get_barcode_config,
+            save_barcode_config,
             scale_read_weight,
             scale_tare,
             print_receipt,

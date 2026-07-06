@@ -40,6 +40,8 @@ import PaymentDialog from "../components/PaymentDialog";
 import RefundDialog from "../components/RefundDialog";
 import type { PaymentResult } from "../hooks/usePayment";
 import { FallbackRules } from "./FallbackRules";
+import { BarcodeConfig } from "./BarcodeConfig";
+import type { BarcodeConfig as BarcodeConfigType } from "../types";
 import ShiftManager from "./ShiftManager";
 import SelfCheckout from "./SelfCheckout";
 import type { UseSyncReturn } from "../hooks/useSync";
@@ -432,7 +434,7 @@ function RecallDialog({ onRecall, onClose }: {
 
 type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | "issue_voucher" | null;
 type CashDialogMode = "cash_in" | "cash_out" | "petty_cash";
-type POSMode = "sell" | "sco" | "shift" | "fallback";
+type POSMode = "sell" | "sco" | "shift" | "fallback" | "barcode_config";
 
 interface PaymentSuccessState {
   total: number;
@@ -557,6 +559,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [mode, setMode]                   = useState<POSMode>(config.sco_mode ? "sco" : "sell");
   const [paymentSuccess, setPaymentSuccess] = useState<PaymentSuccessState | null>(null);
   const lastReceiptPrinterCallback = useRef<(() => Promise<void>) | null>(null);
+  const barcodeConfigRef = useRef<BarcodeConfigType | null>(null);
   const [receiptLanguage, setReceiptLanguage] = useState<"en" | "el">(
     () => (localStorage.getItem("pos_receipt_language") as "en" | "el") || "en"
   );
@@ -580,6 +583,13 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       .then(data => { if (data) setLayoutConfig(data); })
       .catch(() => {/* no-op: defaults apply */});
   }, [config.server_url, config.terminal_code]);
+
+  // Load barcode structure config once on mount (used to parse weight/price scale barcodes)
+  useEffect(() => {
+    import("../lib/db").then(({ getBarcodeConfig }) =>
+      getBarcodeConfig().then((cfg) => { barcodeConfigRef.current = cfg; }).catch(() => {})
+    );
+  }, []);
 
   // Load local data on mount
   useEffect(() => {
@@ -656,9 +666,9 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     enabled: mode === "sell" && dialog === null,
     onScan: async (barcode) => {
       const { getProductByBarcode } = await import("../lib/db");
-      const { parseScaleBarcode } = await import("../lib/scaleBarcode");
+      const { parseScaleBarcode, DEFAULT_BARCODE_CONFIG } = await import("../lib/scaleBarcode");
 
-      const scale = parseScaleBarcode(barcode);
+      const scale = parseScaleBarcode(barcode, barcodeConfigRef.current ?? DEFAULT_BARCODE_CONFIG);
 
       if (scale) {
         // Try the 5-digit PLU first; fall back to the full barcode
@@ -710,6 +720,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "PRICE_LEVEL_4": engine.switchPriceLevel(4); break;
       case "PRICE_LEVEL_5": engine.switchPriceLevel(5); break;
       case "FALLBACK_RULES": setMode("fallback"); break;
+      case "BARCODE_CONFIG": setMode("barcode_config"); break;
       case "PAY_CASH":
       case "PAY_CARD": setDialog("payment"); break;
       // ── Quantity multiplier before scan ──────────────────────────────────
@@ -925,6 +936,19 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     return <FallbackRules onClose={() => setMode("sell")} />;
   }
 
+  if (mode === "barcode_config") {
+    return (
+      <BarcodeConfig
+        onClose={() => {
+          import("../lib/db").then(({ getBarcodeConfig }) =>
+            getBarcodeConfig().then((cfg) => { barcodeConfigRef.current = cfg; }).catch(() => {})
+          );
+          setMode("sell");
+        }}
+      />
+    );
+  }
+
   const selectedLine = engine.lines.find((l) => l.id === engine.selectedLineId);
   const hasLines = engine.lines.length > 0;
 
@@ -1001,6 +1025,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         onNumpad={(m) => { setNumpadModeState(m); setDialog("numpad"); }}
         onPromoCode={() => setDialog("promo")}
         onFallbackRules={() => setMode("fallback")}
+        onBarcodeConfig={() => setMode("barcode_config")}
         onRemoveDiscount={engine.removeDiscount}
         onRefund={() => setDialog("refund")}
         onShift={() => setMode("shift")}
