@@ -1,0 +1,40 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
+@theme {
+  --color-burgundy-50: #fdf2f4;
+  --color-burgundy-100: #fce7ea;
+  --color-burgundy-200: #f8ccd3;
+  --color-burgundy-300: #f3a2b1;
+  --color-burgundy-400: #eb6e87;
+  --color-burgundy-500: #de4162;
+  --color-burgundy-600: #c82b4c;
+  --color-burgundy-700: #a8203c;
+  --color-burgundy-800: #7e1e33;
+  --color-burgundy-900: #5c1c2d;
+  --color-burgundy-950: #3d0c18;
+}
+
+.pos-mockup-root {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.pos-mockup-root * {
+  box-sizing: border-box;
+}
+
+.pos-mockup-root ::-webkit-scrollbar { width: 6px; height: 6px; }
+.pos-mockup-root ::-webkit-scrollbar-track { background: #111827; }
+.pos-mockup-root ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+
+.pos-line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pos-line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
