@@ -6,6 +6,7 @@ const SEEN_IDS_KEY = "whatsapp_alert_seen_ids";
 const QUIET_HOURS_ENABLED_KEY = "whatsapp_alert_quiet_hours_enabled";
 const QUIET_HOURS_START_KEY = "whatsapp_alert_quiet_hours_start";
 const QUIET_HOURS_END_KEY = "whatsapp_alert_quiet_hours_end";
+const QUIET_HOURS_OVERRIDE_KEY = "whatsapp_alert_quiet_hours_override";
 
 const DEFAULT_QUIET_START = 22;
 const DEFAULT_QUIET_END = 8;
@@ -62,6 +63,9 @@ interface WhatsAppAlertContextValue {
   quietHoursEnd: number;
   setQuietHours: (startHour: number, endHour: number) => void;
   isQuietNow: boolean;
+  quietHoursOverrideActive: boolean;
+  overrideQuietHours: () => void;
+  cancelQuietHoursOverride: () => void;
 }
 
 const WhatsAppAlertContext = createContext<WhatsAppAlertContextValue>({
@@ -75,6 +79,9 @@ const WhatsAppAlertContext = createContext<WhatsAppAlertContextValue>({
   quietHoursEnd: DEFAULT_QUIET_END,
   setQuietHours: () => {},
   isQuietNow: false,
+  quietHoursOverrideActive: false,
+  overrideQuietHours: () => {},
+  cancelQuietHoursOverride: () => {},
 });
 
 export const useWhatsAppAlert = () => useContext(WhatsAppAlertContext);
@@ -118,28 +125,51 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
   const [quietHoursEnabled, setQuietHoursEnabledState] = useState(loadQuietHoursEnabled);
   const [quietHoursStart, setQuietHoursStart] = useState(() => loadQuietHour(QUIET_HOURS_START_KEY, DEFAULT_QUIET_START));
   const [quietHoursEnd, setQuietHoursEnd] = useState(() => loadQuietHour(QUIET_HOURS_END_KEY, DEFAULT_QUIET_END));
-  const [isQuietNow, setIsQuietNow] = useState(() => quietHoursEnabled && isWithinQuietHours(quietHoursStart, quietHoursEnd));
+  const [quietHoursOverrideActive, setQuietHoursOverrideActive] = useState(() => {
+    try { return sessionStorage.getItem(QUIET_HOURS_OVERRIDE_KEY) === "true"; } catch { return false; }
+  });
+  const [isQuietNow, setIsQuietNow] = useState(() =>
+    quietHoursEnabled && !quietHoursOverrideActive && isWithinQuietHours(quietHoursStart, quietHoursEnd)
+  );
 
   const seenIdsRef = useRef<Set<string> | null>(loadSeenIds());
   const chimeMutedRef = useRef(chimeMuted);
-  const quietHoursRef = useRef({ enabled: quietHoursEnabled, start: quietHoursStart, end: quietHoursEnd });
+  const quietHoursRef = useRef({ enabled: quietHoursEnabled, start: quietHoursStart, end: quietHoursEnd, overrideActive: quietHoursOverrideActive });
+
+  const persistOverride = useCallback((active: boolean) => {
+    setQuietHoursOverrideActive(active);
+    try {
+      if (active) sessionStorage.setItem(QUIET_HOURS_OVERRIDE_KEY, "true");
+      else sessionStorage.removeItem(QUIET_HOURS_OVERRIDE_KEY);
+    } catch {}
+  }, []);
 
   useEffect(() => {
     chimeMutedRef.current = chimeMuted;
   }, [chimeMuted]);
 
   useEffect(() => {
-    quietHoursRef.current = { enabled: quietHoursEnabled, start: quietHoursStart, end: quietHoursEnd };
-    setIsQuietNow(quietHoursEnabled && isWithinQuietHours(quietHoursStart, quietHoursEnd));
-  }, [quietHoursEnabled, quietHoursStart, quietHoursEnd]);
+    quietHoursRef.current = { enabled: quietHoursEnabled, start: quietHoursStart, end: quietHoursEnd, overrideActive: quietHoursOverrideActive };
+    const withinWindow = isWithinQuietHours(quietHoursStart, quietHoursEnd);
+    // Once the quiet window ends, the override no longer has anything to override — clear it.
+    if (quietHoursOverrideActive && !withinWindow) {
+      persistOverride(false);
+    }
+    setIsQuietNow(quietHoursEnabled && !quietHoursOverrideActive && withinWindow);
+  }, [quietHoursEnabled, quietHoursStart, quietHoursEnd, quietHoursOverrideActive, persistOverride]);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      const { enabled, start, end } = quietHoursRef.current;
-      setIsQuietNow(enabled && isWithinQuietHours(start, end));
+      const { enabled, start, end, overrideActive } = quietHoursRef.current;
+      const withinWindow = isWithinQuietHours(start, end);
+      if (overrideActive && !withinWindow) {
+        persistOverride(false);
+        return;
+      }
+      setIsQuietNow(enabled && !overrideActive && withinWindow);
     }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [persistOverride]);
 
   const fetchPendingWhatsApp = useCallback(async () => {
     if (!isAdmin) return;
@@ -166,8 +196,8 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
 
       if (brandNew > 0) {
         setNewOrderCount(prev => prev + brandNew);
-        const { enabled: quietEnabled, start: quietStart, end: quietEnd } = quietHoursRef.current;
-        const withinQuietHours = quietEnabled && isWithinQuietHours(quietStart, quietEnd);
+        const { enabled: quietEnabled, start: quietStart, end: quietEnd, overrideActive } = quietHoursRef.current;
+        const withinQuietHours = quietEnabled && !overrideActive && isWithinQuietHours(quietStart, quietEnd);
         if (!chimeMutedRef.current && !withinQuietHours) {
           playChime();
         }
@@ -212,6 +242,14 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
     } catch {}
   }, []);
 
+  const overrideQuietHours = useCallback(() => {
+    persistOverride(true);
+  }, [persistOverride]);
+
+  const cancelQuietHoursOverride = useCallback(() => {
+    persistOverride(false);
+  }, [persistOverride]);
+
   return (
     <WhatsAppAlertContext.Provider
       value={{
@@ -225,6 +263,9 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
         quietHoursEnd,
         setQuietHours,
         isQuietNow,
+        quietHoursOverrideActive,
+        overrideQuietHours,
+        cancelQuietHoursOverride,
       }}
     >
       {children}

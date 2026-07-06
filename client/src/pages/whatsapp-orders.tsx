@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, Clock, RefreshCcw, Volume2, VolumeX, Send, ExternalLink, PhoneOff, Moon } from "lucide-react";
+import { MessageSquare, ShoppingBag, Loader2, CheckCircle, XCircle, FileText, Bell, BellOff, BellRing, Clock, RefreshCcw, Volume2, VolumeX, Send, ExternalLink, PhoneOff, Moon } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
@@ -592,7 +592,17 @@ function hourLabel(hour: number): string {
 }
 
 function QuietHoursSettings() {
-  const { quietHoursEnabled, setQuietHoursEnabled, quietHoursStart, quietHoursEnd, setQuietHours, isQuietNow } = useWhatsAppAlert();
+  const {
+    quietHoursEnabled,
+    setQuietHoursEnabled,
+    quietHoursStart,
+    quietHoursEnd,
+    setQuietHours,
+    isQuietNow,
+    quietHoursOverrideActive,
+    overrideQuietHours,
+    cancelQuietHoursOverride,
+  } = useWhatsAppAlert();
 
   return (
     <Popover>
@@ -605,7 +615,11 @@ function QuietHoursSettings() {
           className="flex items-center gap-1.5"
         >
           <Moon className="w-4 h-4" />
-          <span className="hidden sm:inline">{quietHoursEnabled ? (isQuietNow ? "Quiet Now" : "Quiet Hours") : "Quiet Hours"}</span>
+          <span className="hidden sm:inline">
+            {quietHoursEnabled
+              ? (isQuietNow ? "Quiet Now" : (quietHoursOverrideActive ? "Override Active" : "Quiet Hours"))
+              : "Quiet Hours"}
+          </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-72" align="end">
@@ -660,8 +674,42 @@ function QuietHoursSettings() {
           </div>
           {quietHoursEnabled && (
             <p className="text-xs text-muted-foreground" data-testid="text-quiet-hours-status">
-              {isQuietNow ? "Currently in quiet hours — chime is silenced." : "Currently outside quiet hours — chime is active."}
+              {isQuietNow
+                ? "Currently in quiet hours — chime is silenced."
+                : quietHoursOverrideActive
+                  ? "Override active until quiet hours end — chime is on."
+                  : "Currently outside quiet hours — chime is active."}
             </p>
+          )}
+          {quietHoursEnabled && isQuietNow && (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="w-full flex items-center gap-1.5"
+              onClick={overrideQuietHours}
+              data-testid="btn-override-quiet-hours"
+            >
+              <BellRing className="w-4 h-4" />
+              Override until quiet hours end
+            </Button>
+          )}
+          {quietHoursOverrideActive && (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 px-2 py-1.5">
+              <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="text-quiet-hours-override-active">
+                Chime override is on for urgent orders tonight.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs"
+                onClick={cancelQuietHoursOverride}
+                data-testid="btn-cancel-quiet-hours-override"
+              >
+                Cancel
+              </Button>
+            </div>
           )}
         </div>
       </PopoverContent>
