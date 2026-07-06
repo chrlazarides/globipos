@@ -149,10 +149,14 @@ function CardPaymentDialog({
         setTimeout(poll, 3000);
         return;
       }
-      if (status.status === "completed" && status.cardTerminalRef) {
-        setResult({ success: true, transactionRef: status.cardTerminalRef, provider: "unknown", message: "Payment approved." });
+      if (status.status === "completed") {
+        // The order is genuinely paid regardless of whether a reference was
+        // recorded — gating this on a truthy ref would leave a completed
+        // order stuck reporting "safe to retry" below if the ref is ever
+        // missing. Still surface the ref whenever we have one.
+        setResult({ success: true, transactionRef: status.cardTerminalRef || undefined, provider: "unknown", message: "Payment approved." });
         setPhase("approved");
-        onSuccess(status.cardTerminalRef, "unknown");
+        onSuccess(status.cardTerminalRef || "N/A", "unknown");
         return;
       }
       if (status.status === "voided") {
@@ -234,8 +238,11 @@ function CardPaymentDialog({
     let cancelled = false;
     checkChargeStatus().then(status => {
       if (cancelled || !status) return;
-      if (status.status === "completed" && status.cardTerminalRef) {
-        setResult({ success: true, transactionRef: status.cardTerminalRef, provider: "unknown", message: "Payment approved." });
+      if (status.status === "completed") {
+        // Mirror the poll() logic below: a completed order is "already paid"
+        // regardless of whether a ref was recorded, so this must not be
+        // gated on a truthy cardTerminalRef.
+        setResult({ success: true, transactionRef: status.cardTerminalRef || undefined, provider: "unknown", message: "Payment approved." });
         setPhase("approved");
       } else if (status.inProgress) {
         enterVerifying();
@@ -337,8 +344,8 @@ function CardPaymentDialog({
               <div className="text-center space-y-1">
                 <p className="font-semibold text-green-700 dark:text-green-400">Payment Approved!</p>
                 <p className="text-sm text-muted-foreground">Provider: <span className="uppercase font-medium">{result?.provider}</span></p>
-                <p className="text-xs text-muted-foreground font-mono bg-muted px-2 py-1 rounded mt-1">
-                  Ref: {result?.transactionRef}
+                <p className="text-xs text-muted-foreground font-mono bg-muted px-2 py-1 rounded mt-1" data-testid="text-approved-ref">
+                  Ref: {result?.transactionRef || "not recorded — verify with customer"}
                 </p>
               </div>
               <Button className="w-full" onClick={() => { reset(); onCancel(false); }} data-testid="btn-card-done">
