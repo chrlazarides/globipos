@@ -19,7 +19,7 @@ import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
 } from "../types";
-import { getProducts, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher } from "../lib/db";
+import { getProducts, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
 import { useOrder } from "../hooks/useOrder";
 import { useBarcode } from "../hooks/useBarcode";
@@ -797,6 +797,20 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       );
       setDialog(null);
       sync.triggerOutboxFlush();
+
+      // Settle any validated voucher / credit-note tenders against their DB balance.
+      // (Free-text/legacy voucher tenders with no settleId are skipped — nothing to redeem.)
+      for (const tender of result.tenders) {
+        if (tender.method === "voucher" && tender.settleId) {
+          await redeemGiftVoucher(tender.settleId, tender.amount).catch((err) => {
+            console.error("Failed to redeem gift voucher", tender.settleId, err);
+          });
+        } else if (tender.method === "credit_note" && tender.settleId) {
+          await redeemCreditNote(tender.settleId, tender.amount).catch((err) => {
+            console.error("Failed to redeem credit note", tender.settleId, err);
+          });
+        }
+      }
 
       // Publish "complete" mode to customer display after order finalised
       if (hw.config?.customer_display_enabled && cdStoreRef.current) {

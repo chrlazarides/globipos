@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { CashIcon, CardIcon, VoucherIcon, LoyaltyIcon, PayIcon } from "./icons/PosIcons";
 import { usePayment, type PaymentResult, type TenderMethod } from "../hooks/usePayment";
-import { findCreditNote } from "../lib/db";
+import { findCreditNote, findGiftVoucher } from "../lib/db";
 
 const CURRENCY_RATES: Record<string, number> = {
   EUR: 1,
@@ -108,6 +108,8 @@ export default function PaymentDialog({
   const [tab, setTab] = useState<PaymentTab>("cash");
   const [numpadValue, setNumpadValue] = useState("");
   const [voucherCode, setVoucherCode] = useState("");
+  const [voucherLookup, setVoucherLookup] = useState<{ id: string; code: string; remaining: number } | null>(null);
+  const [voucherError, setVoucherError] = useState<string | null>(null);
   const [loyaltyPointsToRedeem, setLoyaltyPointsToRedeem] = useState(0);
   const [chequeNumber, setChequeNumber] = useState("");
   const [creditNoteCode, setCreditNoteCode] = useState("");
@@ -122,6 +124,8 @@ export default function PaymentDialog({
       setTab("cash");
       setNumpadValue("");
       setVoucherCode("");
+      setVoucherLookup(null);
+      setVoucherError(null);
       setLoyaltyPointsToRedeem(0);
       setChequeNumber("");
       setCreditNoteCode("");
@@ -173,11 +177,31 @@ export default function PaymentDialog({
 
   // ── Voucher ─────────────────────────────────────────────────────────────────
 
-  function addVoucher() {
-    if (!voucherCode || parsedAmount <= 0) return;
-    payment.addVoucherTender(voucherCode, parsedAmount);
+  async function lookupVoucher() {
+    setVoucherError(null);
+    setVoucherLookup(null);
+    if (!voucherCode.trim()) return;
+    try {
+      const voucher = await findGiftVoucher(voucherCode.trim());
+      if (!voucher) {
+        setVoucherError("Voucher not found");
+      } else if (voucher.status !== "open" || voucher.remaining <= 0) {
+        setVoucherError("Voucher has no remaining balance");
+      } else {
+        setVoucherLookup({ id: voucher.id, code: voucher.code, remaining: voucher.remaining });
+      }
+    } catch {
+      setVoucherError("Lookup failed");
+    }
+  }
+
+  function applyVoucher() {
+    if (!voucherLookup) return;
+    const amount = Math.min(voucherLookup.remaining, payment.balance);
+    if (amount <= 0) return;
+    payment.addVoucherTender(voucherLookup.code, amount, voucherLookup.id);
     setVoucherCode("");
-    setNumpadValue("");
+    setVoucherLookup(null);
   }
 
   // ── Loyalty ─────────────────────────────────────────────────────────────────
@@ -379,20 +403,39 @@ export default function PaymentDialog({
                   <div className="flex gap-2">
                     <Input
                       data-testid="input-voucher-code"
-                      placeholder="Barcode or code"
+                      placeholder="Voucher code"
                       value={voucherCode}
-                      onChange={(e) => setVoucherCode(e.target.value)}
+                      onChange={(e) => { setVoucherCode(e.target.value); setVoucherLookup(null); setVoucherError(null); }}
                     />
                     <Button
                       size="sm"
-                      data-testid="btn-add-voucher"
+                      data-testid="btn-lookup-voucher"
                       variant="outline"
-                      onClick={addVoucher}
-                      disabled={!voucherCode || parsedAmount <= 0}
+                      onClick={lookupVoucher}
+                      disabled={!voucherCode.trim()}
                     >
-                      Add
+                      Find
                     </Button>
                   </div>
+                  {voucherError && (
+                    <p className="text-xs text-red-500" data-testid="text-voucher-error">{voucherError}</p>
+                  )}
+                  {voucherLookup && (
+                    <div className="flex items-center justify-between rounded border p-2">
+                      <div>
+                        <p className="font-medium">{voucherLookup.code}</p>
+                        <p className="text-muted-foreground text-xs">Available: {fmt(voucherLookup.remaining)}</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid="btn-apply-voucher"
+                        onClick={applyVoucher}
+                      >
+                        Apply
+                      </Button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Loyalty */}

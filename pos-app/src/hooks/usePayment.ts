@@ -30,9 +30,13 @@ export interface Tender {
   id: string;
   method: TenderMethod;
   amount: number;
-  reference?: string;   // card auth code, voucher barcode, etc.
+  reference?: string;   // card auth code, voucher/credit-note barcode, etc.
   approved?: boolean;
   label: string;
+  // For voucher/credit_note tenders: the validated pos_gift_vouchers / pos_credit_notes
+  // row id to redeem against on payment completion. Undefined => free-text/legacy tender
+  // with nothing to settle server-side.
+  settleId?: string;
 }
 
 export interface PaymentResult {
@@ -62,7 +66,7 @@ export interface UsePaymentReturn {
   addCashTender: (amount: number) => void;
   addExactCash: () => void;              // tender exact order total in cash
   requestCardPayment: (amount: number) => Promise<boolean>;
-  addVoucherTender: (barcode: string, amount: number) => void;
+  addVoucherTender: (barcode: string, amount: number, voucherId?: string) => void;
   addLoyaltyTender: (points: number, valuePerPoint: number) => void;
   addAccountCreditTender: (amount: number) => void;
   addChequeTender: (amount: number, chequeNumber: string) => void;
@@ -188,7 +192,7 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
 
   // ── Voucher ─────────────────────────────────────────────────────────────────
 
-  const addVoucherTender = useCallback((barcode: string, amount: number) => {
+  const addVoucherTender = useCallback((barcode: string, amount: number, voucherId?: string) => {
     if (amount <= 0) return;
     setTenders((prev) => [
       ...prev,
@@ -197,6 +201,7 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
         method: "voucher",
         amount,
         reference: barcode,
+        settleId: voucherId,
         label: `Voucher (${barcode})`,
       },
     ]);
@@ -256,6 +261,7 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
         method: "credit_note",
         amount,
         reference: creditNoteId,
+        settleId: creditNoteId,
         label: `Credit Note${creditNoteCode ? ` (${creditNoteCode})` : ""}`,
       },
     ]);
