@@ -141,6 +141,92 @@ function MessageThread({ phone, latestSentAt }: { phone: string; latestSentAt?: 
   );
 }
 
+type ChatConvEntry = {
+  id: string;
+  channel: string;
+  status: string;
+  waPhoneNumber: string | null;
+  lastMessageAt: string;
+  createdAt: string;
+};
+
+function PortalMessageThread({ customerId }: { customerId: string }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const { data: conversations = [], isLoading: convLoading } = useQuery<ChatConvEntry[]>({
+    queryKey: ["/api/customers", customerId, "chat-history"],
+    queryFn: () =>
+      fetch(`/api/customers/${customerId}/chat-history`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!customerId,
+  });
+
+  const portalConv = conversations.find(c => c.channel === "portal");
+
+  const { data: messages = [], isLoading: msgLoading } = useQuery<ChatMessage[]>({
+    queryKey: ["/api/chat/conversations", portalConv?.id, "messages"],
+    queryFn: () =>
+      fetch(`/api/chat/conversations/${portalConv!.id}/messages`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!portalConv?.id,
+    refetchInterval: 12000,
+    refetchIntervalInBackground: false,
+  });
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  if (convLoading || msgLoading) {
+    return (
+      <div className="space-y-2 py-2">
+        <Skeleton className="h-8 w-3/4" />
+        <Skeleton className="h-8 w-2/3 ml-auto" />
+        <Skeleton className="h-8 w-1/2" />
+      </div>
+    );
+  }
+
+  if (!portalConv || messages.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground text-center py-3 italic">
+        No messages yet for this customer.
+      </p>
+    );
+  }
+
+  return (
+    <div
+      ref={scrollRef}
+      className="flex flex-col gap-2 max-h-56 overflow-y-auto px-1 py-2"
+      data-testid="portal-message-thread"
+    >
+      {messages.map(msg => {
+        const isStaff = msg.role === "staff";
+        const isBot = msg.role === "bot";
+        const bubbleAlign = isStaff ? "items-end" : "items-start";
+        const bubbleBg = isStaff
+          ? "bg-blue-600 text-white"
+          : isBot
+          ? "bg-muted/80 text-foreground border border-border"
+          : "bg-white dark:bg-muted text-foreground border border-border";
+        const label = isStaff ? "Staff" : isBot ? "Bot" : "Customer";
+
+        return (
+          <div key={msg.id} className={`flex flex-col ${bubbleAlign} gap-0.5`} data-testid={`msg-bubble-${msg.id}`}>
+            <div className={`rounded-2xl px-3 py-1.5 text-sm max-w-[80%] leading-snug ${bubbleBg}`}>
+              {msg.content}
+            </div>
+            <span className="text-[10px] text-muted-foreground px-1">
+              {label} · {format(new Date(msg.createdAt), "dd MMM HH:mm")}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: () => void }) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
@@ -309,6 +395,18 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
                   Send Message
                 </Button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {order.source === "portal" && (
+          <div className="border rounded-lg bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900 overflow-hidden">
+            <div className="px-3 pt-3 pb-3">
+              <p className="text-xs font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1.5 mb-2">
+                <MessageSquare className="w-3.5 h-3.5" />
+                Chat History
+              </p>
+              <PortalMessageThread customerId={order.customerId} />
             </div>
           </div>
         )}
