@@ -37,8 +37,8 @@ export function OrderTicket({
   const isLight = theme === "light";
 
   const rootClass = isLight
-    ? "flex flex-col h-full bg-white border-l border-slate-200 w-[360px] min-w-[320px] flex-shrink-0"
-    : "flex flex-col h-full bg-gray-900 border-l border-gray-800 w-[360px] min-w-[320px] flex-shrink-0";
+    ? "flex flex-col h-full bg-white border-r border-slate-200 w-[360px] min-w-[320px] flex-shrink-0"
+    : "flex flex-col h-full bg-gray-900 border-r border-gray-800 w-[360px] min-w-[320px] flex-shrink-0";
   const headerClass = isLight
     ? "px-4 py-3 border-b border-slate-100 flex items-center justify-between"
     : "px-3 py-2.5 border-b border-gray-800 flex items-center justify-between";

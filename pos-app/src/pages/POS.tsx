@@ -1029,22 +1029,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         />
       )}
 
-      {/* Main content: grid + ticket + corrections/numpad panel */}
+      {/* Main content: journal + corrections/numpad panel + grid (journal → keypad → items) */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-          <LayoutGrid
-            buttons={layoutButtons}
-            products={products}
-            columns={activeColumns}
-            rows={activeRows}
-            priceLevel={engine.order.price_level}
-            colorTheme={isLightTheme ? "light" : "standard"}
-            onItemButton={engine.addProduct}
-            onCategoryButton={setSelectedCategory}
-            onActionButton={handleAction}
-          />
-        </div>
-
         <OrderTicket
           order={engine.order}
           lines={engine.lines}
@@ -1078,6 +1064,20 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onDeptSale={() => setDialog("dept_sale")}
           onPriceCheck={() => setDialog("price_check")}
         />
+
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          <LayoutGrid
+            buttons={layoutButtons}
+            products={products}
+            columns={activeColumns}
+            rows={activeRows}
+            priceLevel={engine.order.price_level}
+            colorTheme={isLightTheme ? "light" : "standard"}
+            onItemButton={engine.addProduct}
+            onCategoryButton={setSelectedCategory}
+            onActionButton={handleAction}
+          />
+        </div>
       </div>
 
       {/* Action bar — with Phase 3 buttons */}

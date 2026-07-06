@@ -7,7 +7,8 @@ const STORAGE_KEY = "pos_ui_theme";
 export function usePosTheme(): { theme: PosUiTheme; toggleTheme: () => void } {
   const [theme, setTheme] = useState<PosUiTheme>(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
-    return stored === "dark" ? "dark" : "light";
+    if (stored === "light" || stored === "dark") return stored;
+    return "dark";
   });
 
   const toggleTheme = useCallback(() => {
