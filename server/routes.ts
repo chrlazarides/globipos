@@ -4980,7 +4980,7 @@ export async function registerRoutes(
           total: String(order.total),
           notes: order.notes || `Converted from ${order.source === "whatsapp" ? "WhatsApp" : "portal"} order`,
           status: "draft",
-          currency: settings.find((s: any) => s.key === "currency_symbol")?.value || "€",
+          invoiceNumber: "TEMP",
           portalOrderId: order.id,
         },
         lineItems
