@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, RotateCcw, Clock } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock } from "lucide-react";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { LogoImg } from "@/components/logo-img";
@@ -93,7 +93,7 @@ const chatNav = [
   { title: "Customer Notifications", url: "/customer-push", icon: Bell, module: "_admin" },
 ];
 
-type NavItem = { title: string; url: string; icon: any; module: string; badge?: number };
+type NavItem = { title: string; url: string; icon: any; module: string; badge?: number; muted?: boolean };
 
 function NavSection({ label, items }: { label: string; items: NavItem[] }) {
   const [location] = useLocation();
@@ -122,6 +122,13 @@ function NavSection({ label, items }: { label: string; items: NavItem[] }) {
                 >
                   <item.icon className="w-4 h-4" />
                   <span className="flex-1">{item.title}</span>
+                  {item.muted && (
+                    <BellOff
+                      className="w-3.5 h-3.5 text-muted-foreground/70 flex-shrink-0"
+                      data-testid={`icon-muted-${item.title.toLowerCase().replace(/\s+/g, "-")}`}
+                      aria-label="Chime muted"
+                    />
+                  )}
                   {item.badge != null && item.badge > 0 && (
                     <span
                       className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-[#25D366] px-1.5 text-[10px] font-bold leading-none text-white"
@@ -147,7 +154,7 @@ export function AppSidebar() {
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
   const companyName = settings.find(s => s.key === "company_name")?.value || "GlobiPOS";
   const { user, logout } = useAuth();
-  const { newOrderCount } = useWhatsAppAlert();
+  const { newOrderCount, chimeMuted } = useWhatsAppAlert();
 
   useEffect(() => {
     const goOnline = () => setIsOnline(true);
@@ -172,7 +179,7 @@ export function AppSidebar() {
 
   const chatNavWithBadge: NavItem[] = chatNav.map(item =>
     item.url === "/whatsapp-orders"
-      ? { ...item, badge: newOrderCount }
+      ? { ...item, badge: newOrderCount, muted: chimeMuted }
       : item
   );
 
