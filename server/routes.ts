@@ -1,8 +1,8 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema } from "@shared/schema";
-import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema } from "@shared/schema";
+import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -8068,6 +8068,109 @@ export async function registerRoutes(
         });
       }).filter(Boolean);
       res.json(await storage.recordAgoranomiaLabelPrints(records as any));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── Goods Received Vouchers (OCR invoice import + receiving verification) ──
+  const grvImageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+
+  app.post("/api/pda/invoice-ocr", requireStaff, requireModule("pda_operations"), grvImageUpload.single("image"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "image file required" });
+    try {
+      const ocr = await extractInvoiceFromImage(req.file.buffer.toString("base64"), req.file.mimetype || "image/jpeg");
+
+      const [allItems, allSuppliers] = await Promise.all([storage.getItems(), storage.getSuppliers()]);
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      let matchedSupplierId: string | null = null;
+      if (ocr.supplierName) {
+        const target = normalize(ocr.supplierName);
+        const supplier = allSuppliers.find((s: any) => normalize(s.name) === target)
+          || allSuppliers.find((s: any) => normalize(s.name).includes(target) || target.includes(normalize(s.name)));
+        matchedSupplierId = supplier?.id || null;
+      }
+
+      const lineItems = ocr.lineItems.map(li => {
+        const targetDesc = normalize(li.description);
+        let item = allItems.find((it: any) => normalize(it.name) === targetDesc || normalize(it.sku || "") === targetDesc);
+        if (!item) {
+          item = allItems.find((it: any) => targetDesc.includes(normalize(it.name)) || normalize(it.name).includes(targetDesc));
+        }
+        return {
+          descriptionRaw: li.description,
+          itemId: item?.id || null,
+          itemName: item?.name || null,
+          sku: item?.sku || null,
+          barcode: item?.barcode || null,
+          expectedQuantity: li.quantity,
+          receivedQuantity: 0,
+          unitCost: li.unitCost.toFixed(2),
+          vatRate: (li.vatRate ?? 19).toFixed(2),
+        };
+      });
+
+      res.json({
+        supplierName: ocr.supplierName,
+        supplierId: matchedSupplierId,
+        invoiceNumber: ocr.invoiceNumber,
+        invoiceDate: ocr.invoiceDate,
+        rawText: ocr.rawText,
+        lineItems,
+      });
+    } catch (e: any) {
+      res.status(503).json({ message: e.message || "OCR extraction failed" });
+    }
+  });
+
+  app.get("/api/pda/grv", requireStaff, requireModule("pda_operations"), async (_req, res) => {
+    try { res.json(await storage.getGoodsReceivedVouchers()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pda/grv/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const grv = await storage.getGoodsReceivedVoucher(req.params.id);
+      if (!grv) return res.status(404).json({ message: "GRV not found" });
+      res.json(grv);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pda/grv", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const { items: grvLineItems, ...grvBody } = req.body;
+      const grvNumber = await storage.getNextGrvNumber();
+      const data = insertGoodsReceivedVoucherSchema.parse({ ...grvBody, grvNumber, createdByUsername: req.user!.username });
+      const parsedItems = (grvLineItems || []).map((i: any) => insertGoodsReceivedVoucherItemSchema.parse(i));
+      res.status(201).json(await storage.createGoodsReceivedVoucher(data, parsedItems));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/pda/grv/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const { supplierId, invoiceNumberRaw, invoiceDateRaw } = req.body as { supplierId?: string; invoiceNumberRaw?: string; invoiceDateRaw?: string };
+      const updated = await storage.updateGoodsReceivedVoucher(req.params.id, { supplierId, invoiceNumberRaw, invoiceDateRaw });
+      if (!updated) return res.status(404).json({ message: "GRV not found" });
+      res.json(updated);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/pda/grv/items/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const updated = await storage.updateGoodsReceivedVoucherItem(req.params.id, req.body);
+      if (!updated) return res.status(404).json({ message: "Line not found" });
+      res.json(updated);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/grv/:id/scan", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const { code, incrementBy } = req.body as { code: string; incrementBy?: number };
+      if (!code) return res.status(400).json({ message: "code required" });
+      const result = await storage.scanGoodsReceivedVoucherLine(req.params.id, code, incrementBy ?? 1);
+      if (!result) return res.status(404).json({ message: "No matching line item found for this code" });
+      res.json(result);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/grv/:id/finalize", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const grv = await storage.finalizeGoodsReceivedVoucher(req.params.id);
+      if (!grv) return res.status(404).json({ message: "GRV not found" });
+      res.json(grv);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 

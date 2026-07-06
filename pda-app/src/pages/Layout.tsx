@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { ScanBarcode, ClipboardList, Tags, ArrowLeftRight, FileText, LogOut } from "lucide-react";
+import { ScanBarcode, ClipboardList, Tags, ArrowLeftRight, FileText, LogOut, ScanLine } from "lucide-react";
 import { type StaffSession, hasModuleAccess, clearToken } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import PriceLookup from "./PriceLookup";
@@ -7,6 +7,7 @@ import StockTake from "./StockTake";
 import Agoranomia from "./Agoranomia";
 import Transfers from "./Transfers";
 import InvoiceReceipt from "./InvoiceReceipt";
+import InvoiceImport from "./InvoiceImport";
 
 const NAV = [
   { path: "/lookup", label: "Look-Up", icon: ScanBarcode },
@@ -14,6 +15,7 @@ const NAV = [
   { path: "/agoranomia", label: "Labels", icon: Tags },
   { path: "/transfers", label: "Transfers", icon: ArrowLeftRight },
   { path: "/receipt", label: "Receipts", icon: FileText },
+  { path: "/invoice-import", label: "Receive", icon: ScanLine },
 ];
 
 interface LayoutProps {
@@ -55,6 +57,7 @@ export default function Layout({ staff, onLogout }: LayoutProps) {
         {location === "/agoranomia" && <Agoranomia />}
         {location === "/transfers" && <Transfers />}
         {location === "/receipt" && <InvoiceReceipt />}
+        {location === "/invoice-import" && <InvoiceImport />}
       </main>
 
       <nav className="bottom-nav fixed bottom-0 left-0 right-0 bg-card border-t border-border flex justify-around">

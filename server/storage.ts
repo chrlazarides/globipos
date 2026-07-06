@@ -277,6 +277,16 @@ export interface IStorage {
   getAgoranomiaLabelPrint(itemId: string): Promise<import("@shared/schema").AgoranomiaLabelPrint | undefined>;
   getAllAgoranomiaLabelPrints(): Promise<import("@shared/schema").AgoranomiaLabelPrint[]>;
   recordAgoranomiaLabelPrints(records: import("@shared/schema").InsertAgoranomiaLabelPrint[]): Promise<import("@shared/schema").AgoranomiaLabelPrint[]>;
+
+  // PDA: Goods Received Vouchers (OCR invoice import + receiving verification)
+  getGoodsReceivedVouchers(): Promise<(import("@shared/schema").GoodsReceivedVoucher & { items: import("@shared/schema").GoodsReceivedVoucherItem[] })[]>;
+  getGoodsReceivedVoucher(id: string): Promise<(import("@shared/schema").GoodsReceivedVoucher & { items: import("@shared/schema").GoodsReceivedVoucherItem[] }) | undefined>;
+  getNextGrvNumber(): Promise<string>;
+  createGoodsReceivedVoucher(data: import("@shared/schema").InsertGoodsReceivedVoucher, items: import("@shared/schema").InsertGoodsReceivedVoucherItem[]): Promise<import("@shared/schema").GoodsReceivedVoucher>;
+  updateGoodsReceivedVoucher(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucher>): Promise<import("@shared/schema").GoodsReceivedVoucher | undefined>;
+  updateGoodsReceivedVoucherItem(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucherItem>): Promise<import("@shared/schema").GoodsReceivedVoucherItem | undefined>;
+  scanGoodsReceivedVoucherLine(grvId: string, code: string, incrementBy?: number): Promise<{ line: import("@shared/schema").GoodsReceivedVoucherItem; matchedBy: "barcode" | "sku" | "none" } | undefined>;
+  finalizeGoodsReceivedVoucher(id: string): Promise<import("@shared/schema").GoodsReceivedVoucher | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3142,6 +3152,133 @@ export class DatabaseStorage implements IStorage {
       }
     }
     return results;
+  }
+
+  // ─── PDA: Goods Received Vouchers (OCR invoice import + receiving verification) ─
+  async getGoodsReceivedVouchers() {
+    const { goodsReceivedVouchers, goodsReceivedVoucherItems } = await import("@shared/schema");
+    const grvs = await db.select().from(goodsReceivedVouchers).orderBy(desc(goodsReceivedVouchers.createdAt));
+    const allItems = await db.select().from(goodsReceivedVoucherItems);
+    return grvs.map(g => ({ ...g, items: allItems.filter(i => i.grvId === g.id) }));
+  }
+  async getGoodsReceivedVoucher(id: string) {
+    const { goodsReceivedVouchers, goodsReceivedVoucherItems } = await import("@shared/schema");
+    const [grv] = await db.select().from(goodsReceivedVouchers).where(eq(goodsReceivedVouchers.id, id));
+    if (!grv) return undefined;
+    const lineItems = await db.select().from(goodsReceivedVoucherItems).where(eq(goodsReceivedVoucherItems.grvId, id));
+    return { ...grv, items: lineItems };
+  }
+  async getNextGrvNumber() {
+    const { goodsReceivedVouchers } = await import("@shared/schema");
+    const [result] = await db
+      .select({ maxNum: sql<string>`MAX(CAST(NULLIF(REGEXP_REPLACE(grv_number, '[^0-9]', '', 'g'), '') AS INTEGER))` })
+      .from(goodsReceivedVouchers);
+    const num = (parseInt(result?.maxNum || "0") || 0) + 1;
+    return `GRV${String(num).padStart(5, "0")}`;
+  }
+  async createGoodsReceivedVoucher(data: import("@shared/schema").InsertGoodsReceivedVoucher, lineItems: import("@shared/schema").InsertGoodsReceivedVoucherItem[]) {
+    const { goodsReceivedVouchers, goodsReceivedVoucherItems } = await import("@shared/schema");
+    const [grv] = await db.insert(goodsReceivedVouchers).values(data).returning();
+    if (lineItems.length) {
+      await db.insert(goodsReceivedVoucherItems).values(lineItems.map(i => ({ ...i, grvId: grv.id })));
+    }
+    return grv;
+  }
+  async updateGoodsReceivedVoucher(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucher>) {
+    const { goodsReceivedVouchers } = await import("@shared/schema");
+    const [updated] = await db.update(goodsReceivedVouchers).set(data).where(eq(goodsReceivedVouchers.id, id)).returning();
+    return updated;
+  }
+  async updateGoodsReceivedVoucherItem(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucherItem>) {
+    const { goodsReceivedVoucherItems } = await import("@shared/schema");
+    const [updated] = await db.update(goodsReceivedVoucherItems).set(data).where(eq(goodsReceivedVoucherItems.id, id)).returning();
+    return updated;
+  }
+  async scanGoodsReceivedVoucherLine(grvId: string, code: string, incrementBy: number = 1) {
+    const { goodsReceivedVoucherItems } = await import("@shared/schema");
+    const lineItems = await db.select().from(goodsReceivedVoucherItems).where(eq(goodsReceivedVoucherItems.grvId, grvId));
+    let line = lineItems.find(i => i.barcode && i.barcode === code);
+    let matchedBy: "barcode" | "sku" | "none" = line ? "barcode" : "none";
+    if (!line) {
+      line = lineItems.find(i => i.sku && i.sku === code);
+      if (line) matchedBy = "sku";
+    }
+    if (!line) return undefined;
+    const [updated] = await db.update(goodsReceivedVoucherItems)
+      .set({ receivedQuantity: line.receivedQuantity + incrementBy })
+      .where(eq(goodsReceivedVoucherItems.id, line.id))
+      .returning();
+    return { line: updated, matchedBy };
+  }
+  async finalizeGoodsReceivedVoucher(id: string) {
+    const { goodsReceivedVouchers, goodsReceivedVoucherItems } = await import("@shared/schema");
+    const [existing] = await db.select().from(goodsReceivedVouchers).where(eq(goodsReceivedVouchers.id, id));
+    if (!existing) return undefined;
+    if (existing.status === "completed") return existing;
+    if (!existing.supplierId) {
+      throw new Error("A supplier must be selected before finalizing this GRV");
+    }
+
+    const lineItems = await db.select().from(goodsReceivedVoucherItems).where(eq(goodsReceivedVoucherItems.grvId, id));
+    const unmatched = lineItems.filter(i => !i.itemId);
+    if (unmatched.length) {
+      throw new Error(`${unmatched.length} line(s) are not matched to a catalog item yet`);
+    }
+
+    const hasDiscrepancies = lineItems.some(i => i.receivedQuantity !== i.expectedQuantity);
+
+    const invoiceLineItems: import("@shared/schema").InsertPurchaseInvoiceItem[] = lineItems.map(li => {
+      const qty = li.receivedQuantity;
+      const unitCost = parseFloat(li.unitCost || "0");
+      const vatRate = parseFloat(li.vatRate || "19");
+      const lineTotal = qty * unitCost;
+      return {
+        itemId: li.itemId!,
+        description: li.descriptionRaw,
+        quantity: qty,
+        purchaseUnit: "pc",
+        unitCost: unitCost.toFixed(2),
+        discountPercent: "0",
+        discount: "0",
+        vatRate: vatRate.toFixed(2),
+        total: lineTotal.toFixed(2),
+      };
+    });
+    const subtotal = invoiceLineItems.reduce((sum, li) => sum + parseFloat(li.total), 0);
+    const vatAmount = invoiceLineItems.reduce((sum, li) => sum + parseFloat(li.total) * (parseFloat(li.vatRate) / 100), 0);
+    const total = subtotal + vatAmount;
+    const discrepancyNote = hasDiscrepancies
+      ? `GRV ${existing.grvNumber}: received quantities differ from the invoice — ${lineItems.filter(i => i.receivedQuantity !== i.expectedQuantity).map(i => `${i.descriptionRaw} (expected ${i.expectedQuantity}, received ${i.receivedQuantity})`).join("; ")}`
+      : `Created from GRV ${existing.grvNumber}`;
+
+    const invoice = await this.createPurchaseInvoice({
+      supplierId: existing.supplierId,
+      supplierInvoiceRef: existing.invoiceNumberRaw || undefined,
+      date: existing.invoiceDateRaw || new Date().toISOString().slice(0, 10),
+      dueDate: undefined,
+      subtotal: subtotal.toFixed(2),
+      vatAmount: vatAmount.toFixed(2),
+      total: total.toFixed(2),
+      status: "draft",
+      notes: discrepancyNote,
+    } as any, invoiceLineItems);
+
+    const supplier = await this.getSupplier(existing.supplierId);
+    if (supplier) {
+      await db.update(suppliers).set({ currentBalance: (parseFloat(supplier.currentBalance) + total).toFixed(2) }).where(eq(suppliers.id, supplier.id));
+    }
+    for (const li of invoiceLineItems) {
+      const item = await this.getItem(li.itemId);
+      if (item) {
+        await db.update(items).set({ stockQuantity: item.stockQuantity + li.quantity }).where(eq(items.id, li.itemId));
+      }
+    }
+
+    const [grv] = await db.update(goodsReceivedVouchers)
+      .set({ status: "completed", purchaseInvoiceId: invoice.id, hasDiscrepancies, completedAt: new Date() })
+      .where(eq(goodsReceivedVouchers.id, id))
+      .returning();
+    return grv;
   }
 }
 

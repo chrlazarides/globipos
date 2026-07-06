@@ -472,6 +472,75 @@ export function matchFaq(
   return null;
 }
 
+// ─── Invoice OCR via Replit AI OpenAI integration (vision) ────────────────────
+export interface OcrInvoiceLineItem {
+  description: string;
+  quantity: number;
+  unitCost: number;
+  vatRate: number | null;
+}
+export interface OcrInvoiceResult {
+  supplierName: string | null;
+  invoiceNumber: string | null;
+  invoiceDate: string | null;
+  lineItems: OcrInvoiceLineItem[];
+  rawText: string;
+}
+
+export async function extractInvoiceFromImage(imageBase64: string, mimeType: string): Promise<OcrInvoiceResult> {
+  const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+
+  if (!baseURL || !apiKey) {
+    throw new Error("AI integration not configured — set AI_INTEGRATIONS_OPENAI_BASE_URL and AI_INTEGRATIONS_OPENAI_API_KEY");
+  }
+
+  const client = new OpenAI({ apiKey, baseURL });
+  const completion = await client.chat.completions.create({
+    model: "gpt-5-mini",
+    messages: [
+      {
+        role: "system",
+        content: `You extract structured data from photographs of supplier invoices for a wholesale wine & spirits business. Read the image carefully and return ONLY valid JSON matching this exact shape, no markdown, no commentary:
+{
+  "supplierName": string | null,
+  "invoiceNumber": string | null,
+  "invoiceDate": string | null (ISO format YYYY-MM-DD if you can determine it, else null),
+  "lineItems": [ { "description": string, "quantity": number, "unitCost": number, "vatRate": number | null } ],
+  "rawText": string (best-effort full plain-text transcription of the invoice)
+}
+If a field cannot be determined, use null. Quantity and unitCost must be numbers (not strings). If you cannot read the image at all, return lineItems: [] and rawText describing the issue.`,
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Extract the supplier invoice data from this photo." },
+          { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+        ] as any,
+      },
+    ],
+  });
+
+  const raw = completion.choices[0]?.message?.content || "{}";
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
+
+  return {
+    supplierName: parsed.supplierName ?? null,
+    invoiceNumber: parsed.invoiceNumber ?? null,
+    invoiceDate: parsed.invoiceDate ?? null,
+    lineItems: Array.isArray(parsed.lineItems)
+      ? parsed.lineItems.map((li: any) => ({
+          description: String(li.description ?? "").trim(),
+          quantity: Number(li.quantity) || 0,
+          unitCost: Number(li.unitCost) || 0,
+          vatRate: li.vatRate != null ? Number(li.vatRate) : null,
+        })).filter((li: OcrInvoiceLineItem) => li.description)
+      : [],
+    rawText: String(parsed.rawText ?? ""),
+  };
+}
+
 // ─── Audio transcription via Replit AI OpenAI integration ────────────────────
 export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
   const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;

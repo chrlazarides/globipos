@@ -1049,3 +1049,51 @@ export const agoranomiaLabelPrints = pgTable("agoranomia_label_prints", {
 export const insertAgoranomiaLabelPrintSchema = createInsertSchema(agoranomiaLabelPrints).omit({ id: true, printedAt: true });
 export type InsertAgoranomiaLabelPrint = z.infer<typeof insertAgoranomiaLabelPrintSchema>;
 export type AgoranomiaLabelPrint = typeof agoranomiaLabelPrints.$inferSelect;
+
+// ── PDA: Goods Received Voucher (GRV) ─────────────────────────────────────────
+// A GRV starts as an OCR draft from a photographed supplier invoice (header +
+// line items extracted by a vision model), then staff physically scan received
+// goods to reconcile receivedQuantity against expectedQuantity per line before
+// finalizing. Finalizing creates a real purchase_invoices/purchase_invoice_items
+// pair via the existing createPurchaseInvoice storage method, so stock, supplier
+// balance and journal-entry side effects are identical to a manually entered
+// purchase invoice — this table only tracks the OCR + verification workflow.
+export const goodsReceivedVouchers = pgTable("goods_received_vouchers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  grvNumber: text("grv_number").notNull().unique(),
+  supplierId: varchar("supplier_id"),
+  supplierNameRaw: text("supplier_name_raw"),
+  invoiceNumberRaw: text("invoice_number_raw"),
+  invoiceDateRaw: text("invoice_date_raw"),
+  ocrRawText: text("ocr_raw_text"),
+  status: text("status").notNull().default("draft"), // draft | verifying | completed | cancelled
+  purchaseInvoiceId: varchar("purchase_invoice_id"),
+  hasDiscrepancies: boolean("has_discrepancies").notNull().default(false),
+  notes: text("notes"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdByUsername: text("created_by_username"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const goodsReceivedVoucherItems = pgTable("goods_received_voucher_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  grvId: varchar("grv_id").notNull(),
+  itemId: varchar("item_id"),
+  descriptionRaw: text("description_raw").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  expectedQuantity: integer("expected_quantity").notNull().default(0),
+  receivedQuantity: integer("received_quantity").notNull().default(0),
+  unitCost: numeric("unit_cost", { precision: 10, scale: 2 }).notNull().default("0"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("19"),
+  matched: boolean("matched").notNull().default(false),
+});
+
+export const insertGoodsReceivedVoucherSchema = createInsertSchema(goodsReceivedVouchers).omit({ id: true, createdAt: true, completedAt: true });
+export type InsertGoodsReceivedVoucher = z.infer<typeof insertGoodsReceivedVoucherSchema>;
+export type GoodsReceivedVoucher = typeof goodsReceivedVouchers.$inferSelect;
+
+export const insertGoodsReceivedVoucherItemSchema = createInsertSchema(goodsReceivedVoucherItems).omit({ id: true, grvId: true });
+export type InsertGoodsReceivedVoucherItem = z.infer<typeof insertGoodsReceivedVoucherItemSchema>;
+export type GoodsReceivedVoucherItem = typeof goodsReceivedVoucherItems.$inferSelect;
