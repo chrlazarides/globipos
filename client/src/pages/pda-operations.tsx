@@ -92,6 +92,7 @@ function GrvRow({ grv, suppliers, catalogItems }: { grv: Grv; suppliers: Supplie
   const [expanded, setExpanded] = useState(false);
   const unmatchedLines = grv.items.filter((i) => !i.itemId);
   const unmatchedCount = unmatchedLines.length;
+  const discrepantCount = grv.items.filter((i) => i.receivedQuantity !== i.expectedQuantity).length;
 
   const assignSupplier = useMutation({
     mutationFn: async (id: string) => {
@@ -150,13 +151,33 @@ function GrvRow({ grv, suppliers, catalogItems }: { grv: Grv; suppliers: Supplie
           <span className="text-xs text-muted-foreground">All matched</span>
         )}
       </TableCell>
+      <TableCell>
+        {discrepantCount > 0 ? (
+          <Badge variant="destructive" data-testid={`badge-discrepancy-count-${grv.id}`}>{discrepantCount} line(s)</Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">None</span>
+        )}
+      </TableCell>
+      <TableCell>
+        {grv.purchaseInvoiceId ? (
+          <a
+            href={`/invoices/${grv.purchaseInvoiceId}`}
+            className="text-xs text-primary underline"
+            data-testid={`link-purchase-invoice-${grv.id}`}
+          >
+            View invoice
+          </a>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </TableCell>
       <TableCell>{grv.createdByUsername}</TableCell>
       <TableCell>{new Date(grv.createdAt).toLocaleString()}</TableCell>
       <TableCell>{grvStatusBadge(grv)}</TableCell>
     </TableRow>
     {expanded && unmatchedCount > 0 && (
       <TableRow data-testid={`row-grv-${grv.id}-matching`}>
-        <TableCell colSpan={7} className="bg-muted/40">
+        <TableCell colSpan={9} className="bg-muted/40">
           <div className="space-y-2 py-2">
             {unmatchedLines.map((line) => (
               <div key={line.id} className="flex items-center justify-between gap-3 text-sm" data-testid={`row-unmatched-${line.id}`}>
@@ -370,6 +391,8 @@ export default function PdaOperations() {
                       <TableHead>Invoice #</TableHead>
                       <TableHead>Supplier</TableHead>
                       <TableHead>Matching</TableHead>
+                      <TableHead>Discrepancies</TableHead>
+                      <TableHead>Purchase Invoice</TableHead>
                       <TableHead>Created By</TableHead>
                       <TableHead>Created</TableHead>
                       <TableHead>Status</TableHead>
@@ -381,7 +404,7 @@ export default function PdaOperations() {
                     ))}
                     {(grvQuery.data || []).length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                           No goods received vouchers yet. Staff can photograph a supplier invoice from the PDA app.
                         </TableCell>
                       </TableRow>

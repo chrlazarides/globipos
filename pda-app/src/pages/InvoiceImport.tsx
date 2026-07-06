@@ -1,9 +1,30 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/queryClient";
 import { getToken } from "@/lib/auth";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
-import { Camera, ScanLine, CheckCircle2, AlertTriangle, X, Loader2, PackageCheck } from "lucide-react";
+import { Camera, ScanLine, CheckCircle2, AlertTriangle, X, Loader2, PackageCheck, WifiOff } from "lucide-react";
+
+function draftKey(grvId: string) {
+  return `pda_grv_scan_draft_${grvId}`;
+}
+
+function loadScanDraft(grvId: string): string[] {
+  try {
+    const raw = localStorage.getItem(draftKey(grvId));
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveScanDraft(grvId: string, codes: string[]) {
+  localStorage.setItem(draftKey(grvId), JSON.stringify(codes));
+}
+
+function clearScanDraft(grvId: string) {
+  localStorage.removeItem(draftKey(grvId));
+}
 
 interface SupplierLite { id: string; name: string; }
 
@@ -75,6 +96,24 @@ export default function InvoiceImport() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [ocrResult, setOcrResult] = useState<OcrResult | null>(null);
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingScans, setPendingScans] = useState<string[]>([]);
+
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeId) setPendingScans(loadScanDraft(activeId));
+    else setPendingScans([]);
+  }, [activeId]);
 
   const suppliersQuery = useQuery<SupplierLite[]>({ queryKey: ["/api/suppliers"] });
   const grvsQuery = useQuery<Grv[]>({ queryKey: ["/api/pda/grv"] });
@@ -115,20 +154,58 @@ export default function InvoiceImport() {
     onError: (e: any) => alert(e.message || "Could not create GRV"),
   });
 
+  // Pushes a scanned code to the backend; if the request fails (e.g. offline),
+  // the code stays buffered in localStorage (keyed by GRV) and is retried
+  // automatically once connectivity returns, so an in-progress receipt is never lost.
   const scanLine = useMutation({
     mutationFn: async (code: string) => apiFetch(`/api/pda/grv/${activeId}/scan`, {
       method: "POST",
       body: JSON.stringify({ code, incrementBy: 1 }),
     }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: [`/api/pda/grv/${activeId}`] }),
-    onError: (e: any) => alert(e.message || "No matching item found for that code"),
+    onSuccess: (_data, code) => {
+      qc.invalidateQueries({ queryKey: [`/api/pda/grv/${activeId}`] });
+      if (!activeId) return;
+      setPendingScans((prev) => {
+        const idx = prev.indexOf(code);
+        if (idx === -1) return prev;
+        const next = [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+        saveScanDraft(activeId, next);
+        return next;
+      });
+    },
+    onError: (e: any, code) => {
+      if (!isOnline && activeId) return;
+      alert(e.message || "No matching item found for that code");
+    },
   });
+
+  function handleScan(code: string) {
+    if (!activeId) return;
+    if (!isOnline) {
+      setPendingScans((prev) => {
+        const next = [...prev, code];
+        saveScanDraft(activeId, next);
+        return next;
+      });
+      return;
+    }
+    scanLine.mutate(code);
+  }
+
+  // Retry any buffered scans once we're back online.
+  useEffect(() => {
+    if (isOnline && activeId && pendingScans.length > 0) {
+      pendingScans.forEach((code) => scanLine.mutate(code));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, activeId]);
 
   const finalizeGrv = useMutation({
     mutationFn: async () => apiFetch(`/api/pda/grv/${activeId}/finalize`, { method: "POST" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/pda/grv"] });
       qc.invalidateQueries({ queryKey: [`/api/pda/grv/${activeId}`] });
+      if (activeId) clearScanDraft(activeId);
     },
     onError: (e: any) => alert(e.message || "Could not finalize GRV"),
   });
@@ -157,6 +234,19 @@ export default function InvoiceImport() {
           </button>
         </div>
 
+        {!isOnline && (
+          <div className="flex items-center gap-2 text-xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-lg p-2.5" data-testid="text-offline-banner">
+            <WifiOff className="w-4 h-4 shrink-0" />
+            You're offline — scans are being saved and will sync automatically once you're back online.
+          </div>
+        )}
+        {isOnline && pendingScans.length > 0 && (
+          <div className="flex items-center gap-2 text-xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-lg p-2.5" data-testid="text-pending-sync-banner">
+            <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+            Syncing {pendingScans.length} offline scan(s)…
+          </div>
+        )}
+
         {grv?.status === "completed" ? (
           <div className={`flex items-center gap-2 rounded-lg p-3 text-sm ${grv.hasDiscrepancies ? "bg-warning/10 text-warning" : "bg-success/10 text-success"}`} data-testid="banner-grv-status">
             {grv.hasDiscrepancies ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
@@ -167,7 +257,7 @@ export default function InvoiceImport() {
             <div className="bg-card border border-border rounded-lg p-3 space-y-1 text-sm">
               <p className="text-muted-foreground">Scan each item as it's physically received to verify against the invoice.</p>
             </div>
-            <BarcodeScanner onScan={(code) => scanLine.mutate(code)} />
+            <BarcodeScanner onScan={handleScan} />
             {!allMatched && (
               <div className="flex items-center gap-2 text-warning bg-warning/10 rounded-lg p-3 text-sm">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -176,7 +266,7 @@ export default function InvoiceImport() {
             )}
             <button
               onClick={() => finalizeGrv.mutate()}
-              disabled={finalizeGrv.isPending || !allMatched || !grv?.supplierId}
+              disabled={finalizeGrv.isPending || !allMatched || !grv?.supplierId || pendingScans.length > 0}
               className="w-full bg-success text-success-foreground rounded-lg py-3 font-medium flex items-center justify-center gap-2 disabled:opacity-40"
               data-testid="button-finalize-grv"
             >
@@ -184,6 +274,7 @@ export default function InvoiceImport() {
               Finalize & Create Purchase Invoice
             </button>
             {!grv?.supplierId && <p className="text-xs text-destructive text-center">Select a supplier before finalizing (back office).</p>}
+            {pendingScans.length > 0 && <p className="text-xs text-destructive text-center">Finish syncing offline scans before finalizing.</p>}
             {!allReceived && <p className="text-xs text-muted-foreground text-center">Tip: you can finalize with partial receipts — discrepancies will be noted.</p>}
           </>
         )}

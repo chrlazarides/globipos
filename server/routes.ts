@@ -8168,8 +8168,37 @@ export async function registerRoutes(
   });
   app.post("/api/pda/grv/:id/finalize", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
+      const before = await storage.getGoodsReceivedVoucher(req.params.id);
+      if (!before) return res.status(404).json({ message: "GRV not found" });
+      const alreadyCompleted = before.status === "completed";
       const grv = await storage.finalizeGoodsReceivedVoucher(req.params.id);
       if (!grv) return res.status(404).json({ message: "GRV not found" });
+
+      // Mirror the manual /api/purchase-invoices journal-entry side effect exactly —
+      // only on the transition into "completed", never on an idempotent re-call.
+      if (!alreadyCompleted && grv.purchaseInvoiceId) {
+        const inv = await storage.getPurchaseInvoice(grv.purchaseInvoiceId);
+        if (inv) {
+          const piTotal = parseFloat(String(inv.total || 0));
+          const piVat = parseFloat(String(inv.vatAmount || 0));
+          const piNet = piTotal - piVat;
+          const piDate = typeof inv.date === "string" ? inv.date : new Date().toISOString().split("T")[0];
+          if (piTotal > 0) {
+            await autoCreateJournalEntry({
+              sourceType: "purchase",
+              sourceId: inv.id,
+              date: piDate,
+              description: `Purchase Invoice ${inv.invoiceNumber}`,
+              reference: inv.invoiceNumber,
+              lines: [
+                { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
+                { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
+                { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
+              ],
+            });
+          }
+        }
+      }
       res.json(grv);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
