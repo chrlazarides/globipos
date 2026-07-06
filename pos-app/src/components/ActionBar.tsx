@@ -5,10 +5,12 @@ import {
 } from "lucide-react";
 import { HoldIcon, RecallIcon, VoidIcon, RefundIcon, DiscountIcon } from "./icons/PosIcons";
 import type { NumpadMode } from "../types";
+import type { PosUiTheme } from "../hooks/usePosTheme";
 
 interface ActionBarProps {
   hasLines: boolean;
   hasSelectedLine: boolean;
+  theme?: PosUiTheme;
   onHold: () => void;
   onRecall: () => void;
   onVoidOrder: () => void;
@@ -28,6 +30,7 @@ interface ActionBarProps {
 export function ActionBar({
   hasLines,
   hasSelectedLine,
+  theme = "light",
   onHold,
   onRecall,
   onVoidOrder,
@@ -43,6 +46,7 @@ export function ActionBar({
   onShift,
   onSco,
 }: ActionBarProps) {
+  const isLight = theme === "light";
   type Btn = {
     label: string;
     icon: React.ComponentType<{ className?: string }>;
@@ -72,7 +76,7 @@ export function ActionBar({
       icon: VoidIcon,
       onClick: onVoidOrder,
       enabled: hasLines,
-      className: "text-red-400 hover:bg-red-950",
+      className: isLight ? "text-red-500 hover:bg-red-50" : "text-red-400 hover:bg-red-950",
       testId: "action-void-order",
     },
     {
@@ -157,7 +161,7 @@ export function ActionBar({
       icon: RefundIcon,
       onClick: onRefund,
       enabled: true,
-      className: "text-amber-400 hover:bg-amber-950",
+      className: isLight ? "text-amber-600 hover:bg-amber-50" : "text-amber-400 hover:bg-amber-950",
       testId: "action-refund",
     }] : []),
     ...(onShift ? [{
@@ -176,8 +180,15 @@ export function ActionBar({
     }] : []),
   ];
 
+  const barClass = isLight
+    ? "border-t border-slate-200 bg-white px-3 py-2 flex items-center gap-1.5 overflow-x-auto flex-shrink-0"
+    : "border-t border-gray-800 bg-gray-900 px-3 py-2 flex items-center gap-1.5 overflow-x-auto flex-shrink-0";
+  const defaultBtnClass = isLight
+    ? "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+    : "text-gray-400 hover:bg-gray-800 hover:text-gray-200";
+
   return (
-    <div className="border-t border-gray-800 bg-gray-900 px-3 py-2 flex items-center gap-1.5 overflow-x-auto flex-shrink-0">
+    <div className={barClass}>
       {buttons.map((btn) => {
         const Icon = btn.icon;
         return (
@@ -186,7 +197,7 @@ export function ActionBar({
             onClick={btn.onClick}
             disabled={!btn.enabled}
             className={`flex-shrink-0 flex flex-col items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed
-              ${btn.className ?? "text-gray-400 hover:bg-gray-800 hover:text-gray-200"}`}
+              ${btn.className ?? defaultBtnClass}`}
             data-testid={btn.testId}
           >
             <Icon className="w-4 h-4" />

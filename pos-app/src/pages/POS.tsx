@@ -19,18 +19,21 @@ import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
 } from "../types";
-import { getProducts, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher } from "../lib/db";
+import { getProducts, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
 import { useOrder } from "../hooks/useOrder";
 import { useBarcode } from "../hooks/useBarcode";
 import { usePermissions } from "../hooks/usePermissions";
 import { useHardware } from "../hooks/useHardware";
 import { useShift } from "../hooks/useShift";
+import { usePosTheme } from "../hooks/usePosTheme";
 import { useResponsiveColumns, type LayoutColumnConfig } from "../hooks/useWindowSize";
 import { SyncHeader } from "../components/SyncHeader";
 import { CategoryNav } from "../components/CategoryNav";
 import { LayoutGrid } from "../components/LayoutGrid";
 import { OrderTicket } from "../components/OrderTicket";
+import { CorrectionsPanel } from "../components/CorrectionsPanel";
+import { PriceCheckDialog } from "../components/PriceCheckDialog";
 import { Numpad } from "../components/Numpad";
 import { ActionBar } from "../components/ActionBar";
 import { PinPrompt } from "../components/PinPrompt";
@@ -541,6 +544,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const perms   = usePermissions(session);
   const hw      = useHardware();
   const shift   = useShift();
+  const { theme: posTheme, toggleTheme } = usePosTheme();
 
   const [products, setProducts]           = useState<Product[]>([]);
   const [categories, setCategories]       = useState<Category[]>([]);
@@ -992,16 +996,18 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const selectedLine = engine.lines.find((l) => l.id === engine.selectedLineId);
   const hasLines = engine.lines.length > 0;
 
-  const posTheme = layoutConfig?.colorTheme ?? "standard";
+  const isLightTheme = posTheme === "light";
 
   return (
-    <div className={`flex flex-col h-screen overflow-hidden ${posTheme === "light" ? "bg-gray-100" : "bg-gray-950"}`}>
+    <div className={`flex flex-col h-screen overflow-hidden ${isLightTheme ? "bg-slate-100" : "bg-gray-950"}`}>
       {/* Sync header */}
       <SyncHeader
         config={config}
         session={session}
         syncStatus={sync.status}
         notifications={sync.notifications}
+        theme={posTheme}
+        onToggleTheme={toggleTheme}
         onSyncCatalog={sync.triggerCatalogSync}
         onLogout={onLogout}
       />
@@ -1011,6 +1017,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         categories={categories}
         selectedId={selectedCategory}
         onSelect={setSelectedCategory}
+        theme={posTheme}
       />
 
       {/* Scale bar — shown when scale is connected */}
@@ -1022,7 +1029,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         />
       )}
 
-      {/* Main content: grid + ticket */}
+      {/* Main content: grid + ticket + corrections/numpad panel */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <LayoutGrid
@@ -1031,7 +1038,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
             columns={activeColumns}
             rows={activeRows}
             priceLevel={engine.order.price_level}
-            colorTheme={layoutConfig?.colorTheme ?? "standard"}
+            colorTheme={isLightTheme ? "light" : "standard"}
             onItemButton={engine.addProduct}
             onCategoryButton={setSelectedCategory}
             onActionButton={handleAction}
@@ -1049,6 +1056,27 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onVoidLine={() => perms.requestAction("void_line", engine.voidLine)}
           onPay={() => setDialog("payment")}
           onClear={engine.clearOrder}
+          theme={posTheme}
+        />
+
+        <CorrectionsPanel
+          selectedLine={selectedLine ?? null}
+          hasLines={hasLines}
+          theme={posTheme}
+          onSetQty={(qty) => engine.setQty(qty)}
+          onSetPriceOverride={(price) => perms.requestAction("price_override", () => engine.setPriceOverride(price))}
+          onSetLineDiscountPct={(pct) => perms.requestAction("discount", () => engine.setLinePct(pct))}
+          onRemoveLine={engine.removeLine}
+          onVoidLine={() => perms.requestAction("void_line", engine.voidLine)}
+          onHold={engine.holdOrder}
+          onRecall={() => setDialog("recall")}
+          onRepeatLast={engine.repeatLastItem}
+          onVoidOrder={() => perms.requestAction("void_order", () => engine.voidOrder())}
+          onLineNote={() => setDialog("note_line")}
+          onPromoCode={() => setDialog("promo")}
+          onRemoveDiscount={engine.removeDiscount}
+          onDeptSale={() => setDialog("dept_sale")}
+          onPriceCheck={() => setDialog("price_check")}
         />
       </div>
 
@@ -1056,6 +1084,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       <ActionBar
         hasLines={hasLines}
         hasSelectedLine={!!selectedLine && !selectedLine.voided}
+        theme={posTheme}
         onHold={engine.holdOrder}
         onRecall={() => setDialog("recall")}
         onVoidOrder={() => perms.requestAction("void_order", () => engine.voidOrder())}
@@ -1110,6 +1139,17 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           mode={numpadMode}
           currentValue={numpadMode === "qty" ? selectedLine?.qty : undefined}
           onConfirm={handleNumpadConfirm}
+          onClose={() => setDialog(null)}
+          theme={posTheme}
+        />
+      )}
+
+      {dialog === "price_check" && (
+        <PriceCheckDialog
+          priceLevel={engine.order.price_level}
+          theme={posTheme}
+          onSearch={(query) => getProducts(undefined, query)}
+          onLookupBarcode={(barcode) => getProductByBarcode(barcode)}
           onClose={() => setDialog(null)}
         />
       )}

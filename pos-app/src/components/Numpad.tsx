@@ -2,12 +2,14 @@ import { useState, useEffect } from "react";
 import { DeleteIcon, XIcon } from "lucide-react";
 import type { NumpadMode } from "../types";
 import { formatCurrency } from "../lib/pricing";
+import type { PosUiTheme } from "../hooks/usePosTheme";
 
 interface NumpadProps {
   mode: NumpadMode;
   onConfirm: (value: number) => void;
   onClose: () => void;
   currentValue?: number;
+  theme?: PosUiTheme;
 }
 
 const MODE_LABELS: Record<NumpadMode, string> = {
@@ -46,7 +48,8 @@ const MODE_PREFIX: Partial<Record<NumpadMode, string>> = {
   dept_sale:           "€",
 };
 
-export function Numpad({ mode, onConfirm, onClose, currentValue }: NumpadProps) {
+export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light" }: NumpadProps) {
+  const isLight = theme === "light";
   const [display, setDisplay] = useState(
     currentValue != null && currentValue > 0 ? String(currentValue) : ""
   );
@@ -93,20 +96,29 @@ export function Numpad({ mode, onConfirm, onClose, currentValue }: NumpadProps) 
   const keys = ["7","8","9","4","5","6","1","2","3",".",  "0","⌫"];
   const parsedVal = parseFloat(display || "0");
 
+  const panelClass = isLight ? "bg-white border border-slate-200" : "bg-gray-900 border border-gray-700";
+  const labelClass = isLight ? "text-slate-600" : "text-gray-300";
+  const closeClass = isLight ? "text-slate-400 hover:text-slate-700" : "text-gray-600 hover:text-gray-300";
+  const displayClass = isLight ? "bg-slate-100" : "bg-gray-800";
+  const displayTextClass = isLight ? "text-slate-800" : "text-white";
+  const keyClass = isLight
+    ? "bg-slate-100 hover:bg-slate-200 text-slate-800"
+    : "bg-gray-800 hover:bg-burgundy-800 text-white";
+
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-xs shadow-2xl p-4">
+      <div className={`rounded-t-2xl sm:rounded-2xl w-full max-w-xs shadow-2xl p-4 ${panelClass}`}>
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
-          <span className="text-gray-300 font-semibold text-sm">{label}</span>
-          <button onClick={onClose} className="text-gray-600 hover:text-gray-300 transition-colors">
+          <span className={`font-semibold text-sm ${labelClass}`}>{label}</span>
+          <button onClick={onClose} className={`transition-colors ${closeClass}`}>
             <XIcon className="w-4 h-4" />
           </button>
         </div>
 
         {/* Display */}
-        <div className="bg-gray-800 rounded-xl px-4 py-3 mb-4 text-right min-h-[52px] flex items-center justify-end">
-          <span className="text-white text-2xl font-mono font-bold tracking-tight">
+        <div className={`rounded-xl px-4 py-3 mb-4 text-right min-h-[52px] flex items-center justify-end ${displayClass}`}>
+          <span className={`text-2xl font-mono font-bold tracking-tight ${displayTextClass}`}>
             {prefix}{display || "0"}{suffix}
           </span>
         </div>
@@ -122,7 +134,7 @@ export function Numpad({ mode, onConfirm, onClose, currentValue }: NumpadProps) 
                 <button
                   key={i}
                   onClick={handleDelete}
-                  className="h-12 flex items-center justify-center rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold text-lg transition-colors"
+                  className={`h-12 flex items-center justify-center rounded-xl font-semibold text-lg transition-colors ${keyClass}`}
                   data-testid="numpad-delete"
                 >
                   <DeleteIcon className="w-5 h-5" />
@@ -133,7 +145,7 @@ export function Numpad({ mode, onConfirm, onClose, currentValue }: NumpadProps) 
               <button
                 key={i}
                 onClick={() => handleDigit(k)}
-                className="h-12 flex items-center justify-center rounded-xl bg-gray-800 hover:bg-burgundy-800 text-white font-semibold text-lg transition-colors active:scale-95"
+                className={`h-12 flex items-center justify-center rounded-xl font-semibold text-lg transition-colors active:scale-95 ${keyClass}`}
                 data-testid={`numpad-${k}`}
               >
                 {k}
@@ -146,7 +158,7 @@ export function Numpad({ mode, onConfirm, onClose, currentValue }: NumpadProps) 
         <button
           onClick={handleConfirm}
           disabled={!display || isNaN(parsedVal)}
-          className="mt-3 w-full bg-burgundy-700 hover:bg-burgundy-600 text-white font-bold py-3 rounded-xl transition-colors disabled:opacity-40"
+          className="mt-3 w-full bg-burgundy-600 hover:bg-burgundy-500 text-white font-bold py-3 rounded-xl transition-colors disabled:opacity-40"
           data-testid="numpad-confirm"
         >
           Confirm
