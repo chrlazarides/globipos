@@ -59,6 +59,8 @@ export default function Customers() {
   const { toast } = useToast();
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+  const { data: whatsappOrderIdsData } = useQuery<{ customerIds: string[] }>({ queryKey: ["/api/customers/whatsapp-order-ids"] });
+  const whatsappCustomerIds = new Set(whatsappOrderIdsData?.customerIds || []);
   const { data: currentUser } = useQuery<{ id: string; username: string; role: string }>({ queryKey: ["/api/auth/me"] });
   const isAdmin = currentUser?.role === "admin" || currentUser?.role === "superuser";
   const priceLevelNames = usePriceLevels();
@@ -111,14 +113,20 @@ export default function Customers() {
   };
 
   const [missingPhoneOnly, setMissingPhoneOnly] = useState(false);
+  const [whatsappMissingPhoneOnly, setWhatsappMissingPhoneOnly] = useState(false);
 
-  const missingPhoneCount = customers.filter((c) => !c.phone || !c.phone.trim()).length;
+  const isMissingPhone = (c: Customer) => !c.phone || !c.phone.trim();
+  const isWhatsappMissingPhone = (c: Customer) => isMissingPhone(c) && whatsappCustomerIds.has(c.id);
+
+  const missingPhoneCount = customers.filter(isMissingPhone).length;
+  const whatsappMissingPhoneCount = customers.filter(isWhatsappMissingPhone).length;
 
   const filtered = customers
     .filter((c) =>
       c.name.toLowerCase().includes(search.toLowerCase()) || c.code.toLowerCase().includes(search.toLowerCase())
     )
-    .filter((c) => (missingPhoneOnly ? !c.phone || !c.phone.trim() : true));
+    .filter((c) => (missingPhoneOnly ? isMissingPhone(c) : true))
+    .filter((c) => (whatsappMissingPhoneOnly ? isWhatsappMissingPhone(c) : true));
 
   const paymentTermsLabel: Record<string, string> = {
     cash: "Cash", credit_7: "7 Days", credit_14: "14 Days", credit_30: "30 Days", credit_60: "60 Days", credit_90: "90 Days",
@@ -199,6 +207,10 @@ export default function Customers() {
       cell: (row) =>
         row.phone && row.phone.trim() ? (
           <span className="text-sm text-muted-foreground">{row.phone}</span>
+        ) : whatsappCustomerIds.has(row.id) ? (
+          <Badge variant="destructive" className="flex items-center gap-1 w-fit text-xs" data-testid={`badge-whatsapp-no-phone-${row.id}`}>
+            <MessageCircle className="w-3 h-3" /> WhatsApp — No Phone
+          </Badge>
         ) : (
           <Badge variant="destructive" className="flex items-center gap-1 w-fit text-xs" data-testid={`badge-no-phone-${row.id}`}>
             <Phone className="w-3 h-3" /> No Phone
@@ -319,6 +331,21 @@ export default function Customers() {
                 </Badge>
               )}
             </Button>
+            {whatsappMissingPhoneCount > 0 && (
+              <Button
+                variant={whatsappMissingPhoneOnly ? "default" : "outline"}
+                size="sm"
+                onClick={() => setWhatsappMissingPhoneOnly((v) => !v)}
+                data-testid="button-filter-whatsapp-missing-phone"
+                className="flex items-center gap-1.5"
+              >
+                <MessageCircle className="w-4 h-4" />
+                WhatsApp — Missing Phone
+                <Badge variant={whatsappMissingPhoneOnly ? "secondary" : "destructive"} className="ml-1 text-xs">
+                  {whatsappMissingPhoneCount}
+                </Badge>
+              </Button>
+            )}
           </div>
           <DataTable columns={columns} data={filtered} isLoading={isLoading} emptyMessage="No customers found" onRowClick={handleRowClick} />
         </CardContent>

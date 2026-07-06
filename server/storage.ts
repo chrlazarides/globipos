@@ -123,6 +123,7 @@ export interface IStorage {
   getCustomerByCode(code: string): Promise<Customer | undefined>;
   getCustomerInvoices(customerId: string): Promise<(Invoice & { items: InvoiceItem[] })[]>;
   getPortalOrders(customerId: string): Promise<(PortalOrder & { items: PortalOrderItem[] })[]>;
+  getCustomerIdsWithWhatsappOrders(): Promise<string[]>;
   getAllPortalOrders(filters?: { source?: string; status?: string }): Promise<(PortalOrder & { items: PortalOrderItem[]; customerName: string; customerCode: string })[]>;
   updatePortalOrderStatus(id: string, status: string): Promise<PortalOrder | undefined>;
   setPortalOrderInvoiceId(id: string, invoiceId: string): Promise<PortalOrder | undefined>;
@@ -1828,6 +1829,13 @@ export class DatabaseStorage implements IStorage {
       result.push({ ...order, items });
     }
     return result;
+  }
+
+  async getCustomerIdsWithWhatsappOrders() {
+    const rows = await db.selectDistinct({ customerId: portalOrders.customerId })
+      .from(portalOrders)
+      .where(eq(portalOrders.source, "whatsapp"));
+    return rows.map((r) => r.customerId);
   }
 
   async getAllPortalOrders(filters?: { source?: string; status?: string }) {

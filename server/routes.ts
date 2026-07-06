@@ -1176,6 +1176,15 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/customers/whatsapp-order-ids", async (_req, res) => {
+    try {
+      const customerIds = await storage.getCustomerIdsWithWhatsappOrders();
+      res.json({ customerIds });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   app.get("/api/customers/:id", async (req, res) => {
     const cust = await storage.getCustomer(req.params.id);
     if (!cust) return res.status(404).json({ message: "Customer not found" });
