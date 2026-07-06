@@ -1,6 +1,13 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/App";
 
+// Chime mute + quiet hours are intentionally stored in localStorage (per-device/per-browser),
+// not synced server-side per user account. This is a deliberate design choice: the chime is a
+// physical sound played by whatever computer is open, so muting/quiet-hours should follow the
+// device (e.g. the shared front-desk PC) rather than the logged-in staff member. A staff member
+// muting the shared PC at night should NOT silence the chime on another staff member's laptop,
+// and vice versa. If product requirements change to want this to follow the person across
+// devices instead, move these settings to a server-side per-user preference.
 const CHIME_MUTED_KEY = "whatsapp_alert_muted";
 const SEEN_IDS_KEY = "whatsapp_alert_seen_ids";
 const QUIET_HOURS_ENABLED_KEY = "whatsapp_alert_quiet_hours_enabled";

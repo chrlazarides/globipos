@@ -638,6 +638,9 @@ function QuietHoursSettings() {
           <p className="text-xs text-muted-foreground">
             The chime will stay silent automatically during this time window, even if it isn't manually muted.
           </p>
+          <p className="text-xs text-muted-foreground italic" data-testid="text-quiet-hours-device-scope">
+            This only applies to this computer/browser — it won't change settings on other devices or for other staff.
+          </p>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Starts at</Label>

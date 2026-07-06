@@ -20,3 +20,4 @@
 - [Zod insert schema for child before parent](zod-insert-schema-child-before-parent.md) — omit the parent FK too when validating nested child items created before the parent row exists
 - [Module-permission middleware test pitfall](module-permission-test-pitfall.md) — a manually minted test JWT missing a field the real signToken() includes silently satisfies "empty = full access" checks, faking a passing test
 - [Single stock pool vs multi-location moves](single-stock-pool-transfers.md) — when only one global stockQuantity exists, mutate it only on the leg touching the tracked warehouse; other legs log but don't touch it
+- [Chime/quiet-hours device scope decision](chime-quiet-hours-device-scope.md) — kept deliberately per-device (localStorage), not per-user, as the default when stakeholders had no preference
