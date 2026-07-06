@@ -43,6 +43,7 @@ export const ALL_MODULES = [
   { key: "reports",    label: "Analytics / Reports" },
   { key: "email_logs", label: "Email Log" },
   { key: "import",     label: "Import Data" },
+  { key: "pda_operations", label: "PDA Operations (Handheld Scanner App)" },
 ];
 
 interface UserFormData {

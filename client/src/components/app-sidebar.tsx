@@ -70,6 +70,7 @@ const systemNav = [
 const adminNav = [
   { title: "Activity Log", url: "/activity-logs", icon: Activity, module: "_admin" },
   { title: "Version Control", url: "/version-control", icon: GitBranch, module: "_admin" },
+  { title: "PDA Operations", url: "/pda-operations", icon: Smartphone, module: "_admin" },
 ];
 
 const posNav = [

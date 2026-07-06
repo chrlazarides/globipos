@@ -955,3 +955,94 @@ export type InsertSignagePlaylistItem = z.infer<typeof insertSignagePlaylistItem
 export type SignagePlaylistItem = typeof signagePlaylistItems.$inferSelect;
 export type InsertSignageScreen = z.infer<typeof insertSignageScreenSchema>;
 export type SignageScreen = typeof signageScreens.$inferSelect;
+
+// ── Handheld PDA Operations (Stock Take, Transfers) ───────────────────────────
+// Replaces the legacy Falcon DOS data collector. Stock take sessions are counted
+// on the handheld and applied to items.stockQuantity on submission. Transfers are
+// a movement log between named locations (this app does not track per-location
+// stock quantities, so transfers do not mutate items.stockQuantity).
+
+export const stockTakeSessions = pgTable("stock_take_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reference: text("reference").notNull(),
+  locationLabel: text("location_label"),
+  status: text("status").notNull().default("open"), // open | submitted | cancelled
+  notes: text("notes"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdByUsername: text("created_by_username"),
+  submittedAt: timestamp("submitted_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const stockTakeLines = pgTable("stock_take_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  systemQuantity: integer("system_quantity").notNull().default(0),
+  countedQuantity: integer("counted_quantity").notNull().default(0),
+  notes: text("notes"),
+  scannedAt: timestamp("scanned_at").defaultNow().notNull(),
+});
+
+export const stockTransfers = pgTable("stock_transfers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  transferNumber: text("transfer_number").notNull().unique(),
+  fromLocation: text("from_location").notNull(),
+  toLocation: text("to_location").notNull(),
+  status: text("status").notNull().default("draft"), // draft | completed | cancelled
+  notes: text("notes"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdByUsername: text("created_by_username"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const stockTransferItems = pgTable("stock_transfer_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  transferId: varchar("transfer_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  quantity: integer("quantity").notNull().default(1),
+});
+
+export const insertStockTakeSessionSchema = createInsertSchema(stockTakeSessions).omit({ id: true, createdAt: true, submittedAt: true });
+export type InsertStockTakeSession = z.infer<typeof insertStockTakeSessionSchema>;
+export type StockTakeSession = typeof stockTakeSessions.$inferSelect;
+
+export const insertStockTakeLineSchema = createInsertSchema(stockTakeLines).omit({ id: true, scannedAt: true });
+export type InsertStockTakeLine = z.infer<typeof insertStockTakeLineSchema>;
+export type StockTakeLine = typeof stockTakeLines.$inferSelect;
+
+export const insertStockTransferSchema = createInsertSchema(stockTransfers).omit({ id: true, createdAt: true, completedAt: true });
+export type InsertStockTransfer = z.infer<typeof insertStockTransferSchema>;
+export type StockTransfer = typeof stockTransfers.$inferSelect;
+
+export const insertStockTransferItemSchema = createInsertSchema(stockTransferItems).omit({ id: true, transferId: true });
+export type InsertStockTransferItem = z.infer<typeof insertStockTransferItemSchema>;
+export type StockTransferItem = typeof stockTransferItems.$inferSelect;
+
+// ── Agoranomia: shelf unit-price label compliance ─────────────────────────────
+// Tracks the price that was last printed on an item's shelf label. Scanning an
+// item on the handheld compares the current system price to this record so
+// staff can build a "needs reprint" batch when prices have changed since the
+// label was last printed (Cyprus consumer-protection unit pricing compliance).
+export const agoranomiaLabelPrints = pgTable("agoranomia_label_prints", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().unique(),
+  itemName: text("item_name").notNull(),
+  sku: text("sku"),
+  printedPrice: numeric("printed_price", { precision: 10, scale: 2 }).notNull(),
+  printedUnitPrice: numeric("printed_unit_price", { precision: 10, scale: 2 }),
+  unitLabel: text("unit_label"), // e.g. "per L", "per kg", "per pc"
+  printedAt: timestamp("printed_at").defaultNow().notNull(),
+  printedByUsername: text("printed_by_username"),
+});
+
+export const insertAgoranomiaLabelPrintSchema = createInsertSchema(agoranomiaLabelPrints).omit({ id: true, printedAt: true });
+export type InsertAgoranomiaLabelPrint = z.infer<typeof insertAgoranomiaLabelPrintSchema>;
+export type AgoranomiaLabelPrint = typeof agoranomiaLabelPrints.$inferSelect;

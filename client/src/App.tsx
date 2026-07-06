@@ -33,6 +33,7 @@ import Expenses from "@/pages/expenses";
 import AccountingReports from "@/pages/accounting-reports";
 import GeneralLedger from "@/pages/general-ledger";
 import AccountingAudit from "@/pages/accounting-audit";
+import PdaOperations from "@/pages/pda-operations";
 import PortalLogin from "@/pages/portal-login";
 import PortalLayout from "@/pages/portal-layout";
 import LoginPage from "@/pages/login";
@@ -147,6 +148,7 @@ function AdminRouter() {
       <Route path="/accounting/reports" component={AccountingReports} />
       <Route path="/accounting/general-ledger/:accountId" component={GeneralLedger} />
       <Route path="/accounting/audit" component={AccountingAudit} />
+      <Route path="/pda-operations" component={PdaOperations} />
       <Route path="/import" component={ImportData} />
       <Route path="/settings" component={SettingsPage} />
       <Route path="/deploy-guide" component={DeployGuide} />

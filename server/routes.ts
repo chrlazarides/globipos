@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema } from "@shared/schema";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -383,7 +383,7 @@ export async function registerRoutes(
   activityMiddleware(app);
 
   // ─── AUTH ───────────────────────────────────────────────────────────────────
-  async function completeLogin(res: Response, user: any, ip: string, ua: string, timestamp: string) {
+  async function completeLogin(res: Response, user: any, ip: string, ua: string, timestamp: string): Promise<string> {
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
     const permissions: string[] = JSON.parse(user.permissions || "[]");
     const token = signToken({ id: user.id, username: user.username, email: user.email, role: user.role, permissions });
@@ -484,8 +484,8 @@ export async function registerRoutes(
       const ua = req.headers["user-agent"] || "unknown";
       const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
 
-      await completeLogin(res, user, ip, ua, timestamp);
-      res.json({ id: user.id, username: user.username, email: user.email, role: user.role });
+      const token = await completeLogin(res, user, ip, ua, timestamp);
+      res.json({ id: user.id, username: user.username, email: user.email, role: user.role, token });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -583,8 +583,8 @@ export async function registerRoutes(
       const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
       const ua = req.headers["user-agent"] || "unknown";
       const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
-      await completeLogin(res, user, ip, ua, timestamp);
-      res.json({ id: user.id, username: user.username, email: user.email, role: user.role });
+      const token = await completeLogin(res, user, ip, ua, timestamp);
+      res.json({ id: user.id, username: user.username, email: user.email, role: user.role, token });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -7951,6 +7951,116 @@ export async function registerRoutes(
       await storage.deletePosCashier(req.params.id);
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── PDA Operations (handheld app: price look-up, stock take, agoranomia, transfers, invoice receipt) ───
+
+  // Stock Take sessions
+  app.get("/api/pda/stock-take/sessions", requireStaff, async (_req, res) => {
+    try { res.json(await storage.getStockTakeSessions()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pda/stock-take/sessions/:id", requireStaff, async (req, res) => {
+    try {
+      const session = await storage.getStockTakeSession(req.params.id);
+      if (!session) return res.status(404).json({ message: "Session not found" });
+      res.json(session);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pda/stock-take/sessions", requireStaff, async (req, res) => {
+    try {
+      const data = insertStockTakeSessionSchema.parse({ ...req.body, createdByUsername: req.user!.username });
+      res.status(201).json(await storage.createStockTakeSession(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/stock-take/sessions/:id/lines", requireStaff, async (req, res) => {
+    try {
+      const data = insertStockTakeLineSchema.parse({ ...req.body, sessionId: req.params.id, scannedByUsername: req.user!.username });
+      res.status(201).json(await storage.upsertStockTakeLine(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/stock-take/sessions/:id/submit", requireStaff, async (req, res) => {
+    try {
+      const session = await storage.submitStockTakeSession(req.params.id);
+      if (!session) return res.status(404).json({ message: "Session not found" });
+      res.json(session);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Stock Transfers (movement log)
+  app.get("/api/pda/transfers", requireStaff, async (_req, res) => {
+    try { res.json(await storage.getStockTransfers()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pda/transfers/:id", requireStaff, async (req, res) => {
+    try {
+      const transfer = await storage.getStockTransfer(req.params.id);
+      if (!transfer) return res.status(404).json({ message: "Transfer not found" });
+      res.json(transfer);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pda/transfers", requireStaff, async (req, res) => {
+    try {
+      const { items: transferItems, ...transferBody } = req.body;
+      const transferNumber = await storage.getNextTransferNumber();
+      const data = insertStockTransferSchema.parse({ ...transferBody, transferNumber, createdByUsername: req.user!.username });
+      const parsedItems = (transferItems || []).map((i: any) => insertStockTransferItemSchema.parse(i));
+      res.status(201).json(await storage.createStockTransfer(data, parsedItems));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/transfers/:id/complete", requireStaff, async (req, res) => {
+    try {
+      const transfer = await storage.completeStockTransfer(req.params.id);
+      if (!transfer) return res.status(404).json({ message: "Transfer not found" });
+      res.json(transfer);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Agoranomia — shelf unit-price labels & price/label compliance audit
+  app.get("/api/pda/agoranomia/audit", requireStaff, async (_req, res) => {
+    try {
+      const allItems = await storage.getItems();
+      const prints = await storage.getAllAgoranomiaLabelPrints();
+      const printMap = new Map(prints.map(p => [p.itemId, p]));
+      const audit = allItems.map((item: any) => {
+        const printed = printMap.get(item.id);
+        const currentPrice = parseFloat(item.price1 || "0");
+        const needsReprint = !printed || parseFloat(printed.printedPrice) !== currentPrice;
+        return {
+          itemId: item.id,
+          itemName: item.name,
+          sku: item.sku,
+          barcode: item.barcode,
+          currentPrice,
+          lastPrintedPrice: printed ? parseFloat(printed.printedPrice) : null,
+          lastPrintedAt: printed?.printedAt || null,
+          needsReprint,
+        };
+      });
+      res.json(audit);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pda/agoranomia/print-batch", requireStaff, async (req, res) => {
+    try {
+      const { itemIds } = req.body;
+      if (!Array.isArray(itemIds) || !itemIds.length) return res.status(400).json({ message: "itemIds required" });
+      const allItems = await storage.getItems();
+      const records = itemIds.map((itemId: string) => {
+        const item = allItems.find((i: any) => i.id === itemId);
+        if (!item) return null;
+        const unitLabel = item.volume ? `€/${item.volume}` : "€/unit";
+        return insertAgoranomiaLabelPrintSchema.parse({
+          itemId: item.id,
+          itemName: item.name,
+          sku: item.sku,
+          printedPrice: item.price1 || "0",
+          printedUnitPrice: item.price1 || "0",
+          unitLabel,
+          printedByUsername: req.user!.username,
+        });
+      }).filter(Boolean);
+      res.json(await storage.recordAgoranomiaLabelPrints(records as any));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // Catalog delta sync — filters items/categories by updatedAt > since, active seasonal offers by date window.

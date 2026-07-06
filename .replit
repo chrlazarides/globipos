@@ -20,6 +20,10 @@ localPort = 5904
 externalPort = 3000
 
 [[ports]]
+localPort = 6000
+externalPort = 6000
+
+[[ports]]
 localPort = 23636
 externalPort = 3002
 
@@ -47,6 +51,10 @@ args = "Start application"
 task = "workflow.run"
 args = "Customer App"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "PDA App"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -64,6 +72,18 @@ author = "agent"
 task = "shell.exec"
 args = "cd customer-app && npx vite --port 5173"
 waitForPort = 5173
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "PDA App"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd pda-app && npx vite --port 6000"
+waitForPort = 6000
 
 [workflows.workflow.metadata]
 outputType = "console"

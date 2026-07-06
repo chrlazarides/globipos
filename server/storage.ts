@@ -258,6 +258,25 @@ export interface IStorage {
   createPosCashier(data: import("@shared/schema").InsertPosCashier): Promise<import("@shared/schema").PosCashier>;
   updatePosCashier(id: string, data: Partial<import("@shared/schema").InsertPosCashier>): Promise<import("@shared/schema").PosCashier | undefined>;
   deletePosCashier(id: string): Promise<void>;
+
+  // PDA: Stock Take
+  getStockTakeSessions(): Promise<import("@shared/schema").StockTakeSession[]>;
+  getStockTakeSession(id: string): Promise<(import("@shared/schema").StockTakeSession & { lines: import("@shared/schema").StockTakeLine[] }) | undefined>;
+  createStockTakeSession(data: import("@shared/schema").InsertStockTakeSession): Promise<import("@shared/schema").StockTakeSession>;
+  upsertStockTakeLine(data: import("@shared/schema").InsertStockTakeLine): Promise<import("@shared/schema").StockTakeLine>;
+  submitStockTakeSession(id: string): Promise<import("@shared/schema").StockTakeSession | undefined>;
+
+  // PDA: Stock Transfers
+  getStockTransfers(): Promise<(import("@shared/schema").StockTransfer & { items: import("@shared/schema").StockTransferItem[] })[]>;
+  getStockTransfer(id: string): Promise<(import("@shared/schema").StockTransfer & { items: import("@shared/schema").StockTransferItem[] }) | undefined>;
+  getNextTransferNumber(): Promise<string>;
+  createStockTransfer(data: import("@shared/schema").InsertStockTransfer, items: import("@shared/schema").InsertStockTransferItem[]): Promise<import("@shared/schema").StockTransfer>;
+  completeStockTransfer(id: string): Promise<import("@shared/schema").StockTransfer | undefined>;
+
+  // PDA: Agoranomia label compliance
+  getAgoranomiaLabelPrint(itemId: string): Promise<import("@shared/schema").AgoranomiaLabelPrint | undefined>;
+  getAllAgoranomiaLabelPrints(): Promise<import("@shared/schema").AgoranomiaLabelPrint[]>;
+  recordAgoranomiaLabelPrints(records: import("@shared/schema").InsertAgoranomiaLabelPrint[]): Promise<import("@shared/schema").AgoranomiaLabelPrint[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2977,6 +2996,118 @@ export class DatabaseStorage implements IStorage {
   async deletePosCashier(id: string): Promise<void> {
     const { posCashiers } = await import("@shared/schema");
     await db.delete(posCashiers).where(eq(posCashiers.id, id));
+  }
+
+  // ─── PDA: Stock Take ─────────────────────────────────────────────────────────
+  async getStockTakeSessions() {
+    const { stockTakeSessions } = await import("@shared/schema");
+    return db.select().from(stockTakeSessions).orderBy(desc(stockTakeSessions.createdAt));
+  }
+  async getStockTakeSession(id: string) {
+    const { stockTakeSessions, stockTakeLines } = await import("@shared/schema");
+    const [session] = await db.select().from(stockTakeSessions).where(eq(stockTakeSessions.id, id));
+    if (!session) return undefined;
+    const lines = await db.select().from(stockTakeLines).where(eq(stockTakeLines.sessionId, id)).orderBy(desc(stockTakeLines.scannedAt));
+    return { ...session, lines };
+  }
+  async createStockTakeSession(data: import("@shared/schema").InsertStockTakeSession) {
+    const { stockTakeSessions } = await import("@shared/schema");
+    const [session] = await db.insert(stockTakeSessions).values(data).returning();
+    return session;
+  }
+  async upsertStockTakeLine(data: import("@shared/schema").InsertStockTakeLine) {
+    const { stockTakeLines } = await import("@shared/schema");
+    const [existing] = await db.select().from(stockTakeLines)
+      .where(and(eq(stockTakeLines.sessionId, data.sessionId), eq(stockTakeLines.itemId, data.itemId)));
+    if (existing) {
+      const [updated] = await db.update(stockTakeLines)
+        .set({ countedQuantity: data.countedQuantity, notes: data.notes, scannedAt: new Date() })
+        .where(eq(stockTakeLines.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [line] = await db.insert(stockTakeLines).values(data).returning();
+    return line;
+  }
+  async submitStockTakeSession(id: string) {
+    const { stockTakeSessions, stockTakeLines } = await import("@shared/schema");
+    const lines = await db.select().from(stockTakeLines).where(eq(stockTakeLines.sessionId, id));
+    for (const line of lines) {
+      await db.update(items).set({ stockQuantity: line.countedQuantity }).where(eq(items.id, line.itemId));
+    }
+    const [session] = await db.update(stockTakeSessions)
+      .set({ status: "submitted", submittedAt: new Date() })
+      .where(eq(stockTakeSessions.id, id))
+      .returning();
+    return session;
+  }
+
+  // ─── PDA: Stock Transfers ────────────────────────────────────────────────────
+  async getStockTransfers() {
+    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
+    const transfers = await db.select().from(stockTransfers).orderBy(desc(stockTransfers.createdAt));
+    const allItems = await db.select().from(stockTransferItems);
+    return transfers.map(t => ({ ...t, items: allItems.filter(i => i.transferId === t.id) }));
+  }
+  async getStockTransfer(id: string) {
+    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
+    const [transfer] = await db.select().from(stockTransfers).where(eq(stockTransfers.id, id));
+    if (!transfer) return undefined;
+    const transferItems = await db.select().from(stockTransferItems).where(eq(stockTransferItems.transferId, id));
+    return { ...transfer, items: transferItems };
+  }
+  async getNextTransferNumber() {
+    const { stockTransfers } = await import("@shared/schema");
+    const [result] = await db
+      .select({ maxNum: sql<string>`MAX(CAST(NULLIF(REGEXP_REPLACE(transfer_number, '[^0-9]', '', 'g'), '') AS INTEGER))` })
+      .from(stockTransfers);
+    const num = (parseInt(result?.maxNum || "0") || 0) + 1;
+    return `TRF${String(num).padStart(5, "0")}`;
+  }
+  async createStockTransfer(data: import("@shared/schema").InsertStockTransfer, transferItems: import("@shared/schema").InsertStockTransferItem[]) {
+    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
+    const [transfer] = await db.insert(stockTransfers).values(data).returning();
+    if (transferItems.length) {
+      await db.insert(stockTransferItems).values(transferItems.map(i => ({ ...i, transferId: transfer.id })));
+    }
+    return transfer;
+  }
+  async completeStockTransfer(id: string) {
+    const { stockTransfers } = await import("@shared/schema");
+    const [transfer] = await db.update(stockTransfers)
+      .set({ status: "completed", completedAt: new Date() })
+      .where(eq(stockTransfers.id, id))
+      .returning();
+    return transfer;
+  }
+
+  // ─── PDA: Agoranomia label compliance ────────────────────────────────────────
+  async getAgoranomiaLabelPrint(itemId: string) {
+    const { agoranomiaLabelPrints } = await import("@shared/schema");
+    const [row] = await db.select().from(agoranomiaLabelPrints).where(eq(agoranomiaLabelPrints.itemId, itemId));
+    return row;
+  }
+  async getAllAgoranomiaLabelPrints() {
+    const { agoranomiaLabelPrints } = await import("@shared/schema");
+    return db.select().from(agoranomiaLabelPrints);
+  }
+  async recordAgoranomiaLabelPrints(records: import("@shared/schema").InsertAgoranomiaLabelPrint[]) {
+    const { agoranomiaLabelPrints } = await import("@shared/schema");
+    const results: import("@shared/schema").AgoranomiaLabelPrint[] = [];
+    for (const rec of records) {
+      const [existing] = await db.select().from(agoranomiaLabelPrints).where(eq(agoranomiaLabelPrints.itemId, rec.itemId));
+      if (existing) {
+        const [updated] = await db.update(agoranomiaLabelPrints)
+          .set({ ...rec, printedAt: new Date() })
+          .where(eq(agoranomiaLabelPrints.id, existing.id))
+          .returning();
+        results.push(updated);
+      } else {
+        const [created] = await db.insert(agoranomiaLabelPrints).values(rec).returning();
+        results.push(created);
+      }
+    }
+    return results;
   }
 }
 
