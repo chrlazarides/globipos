@@ -39,6 +39,10 @@ export async function clearWaCart(convId: string) {
   // an admin action or cart expiry), the stale product list must go with it so a
   // customer can never reply with a number from an old list and add the wrong item.
   await clearBrowseResults(convId);
+  // Any item still awaiting "yes"/"no" confirmation is now stale too — without
+  // this, a customer who clears their cart and then replies "yes" would have
+  // the old pending item silently added back into the freshly-emptied cart.
+  await clearPendingItem(convId);
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 

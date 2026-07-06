@@ -8741,6 +8741,16 @@ export async function registerRoutes(
         return;
       }
 
+      // No pending item at all (e.g. it was cancelled by a cart clear, or the
+      // customer just says "yes" out of the blue) — say so explicitly instead of
+      // letting a bare "yes" fall through to intent parsing and silently do nothing.
+      if (!pendingItem && isYes) {
+        const nothingReply = "There's nothing pending to confirm right now. What would you like to order?";
+        await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: nothingReply, channel: "whatsapp", intent: "unknown" });
+        await sendWhatsAppMessage(from, nothingReply);
+        return;
+      }
+
       if (pendingItem) {
         const isNo  = /^(no|nope|nah|cancel|wrong|incorrect|n)$/i.test(lowerText);
         if (isYes) {
