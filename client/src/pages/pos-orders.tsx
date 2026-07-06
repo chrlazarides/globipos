@@ -130,6 +130,8 @@ export default function PosOrders() {
   const [methodFilter, setMethodFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [amountMin, setAmountMin] = useState("");
+  const [amountMax, setAmountMax] = useState("");
   const [selectedOrder, setSelectedOrder] = useState<OrderWithMeta | null>(null);
 
   const { data: orders = [], isLoading } = useQuery<OrderWithMeta[]>({ queryKey: ["/api/pos/orders"] });
@@ -157,6 +159,11 @@ export default function PosOrders() {
       const matchesCashier = (o.cashierName || "").toLowerCase().includes(q);
       const matchesCardRef = (o.cardTerminalRef || "").toLowerCase().includes(q);
       if (!matchesOrder && !matchesCashier && !matchesCardRef) return false;
+    }
+    if (amountMin || amountMax) {
+      const total = parseFloat(o.total || "0");
+      if (amountMin && total < parseFloat(amountMin)) return false;
+      if (amountMax && total > parseFloat(amountMax)) return false;
     }
     return true;
   });
@@ -223,6 +230,43 @@ export default function PosOrders() {
               size="sm"
               onClick={() => { setDateFrom(""); setDateTo(""); }}
               data-testid="button-clear-date-filter"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            inputMode="decimal"
+            step="0.01"
+            min="0"
+            value={amountMin}
+            onChange={e => setAmountMin(e.target.value)}
+            placeholder="Min €"
+            className="w-28"
+            aria-label="Minimum amount"
+            data-testid="input-amount-min"
+          />
+          <span className="text-muted-foreground text-sm">to</span>
+          <Input
+            type="number"
+            inputMode="decimal"
+            step="0.01"
+            min="0"
+            value={amountMax}
+            onChange={e => setAmountMax(e.target.value)}
+            placeholder="Max €"
+            className="w-28"
+            aria-label="Maximum amount"
+            data-testid="input-amount-max"
+          />
+          {(amountMin || amountMax) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setAmountMin(""); setAmountMax(""); }}
+              data-testid="button-clear-amount-filter"
             >
               Clear
             </Button>
