@@ -502,6 +502,32 @@ export default function SettingsPage() {
     }
   };
 
+  const [synologyExporting, setSynologyExporting] = useState(false);
+  const handleSynologyPackage = async () => {
+    setSynologyExporting(true);
+    try {
+      const res = await fetch("/api/backup/synology-package", { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Export failed" }));
+        throw new Error(err.message || "Export failed");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const cd = res.headers.get("Content-Disposition") || "";
+      const match = cd.match(/filename="([^"]+)"/);
+      a.download = match ? match[1] : "synology-package.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Synology package ready", description: "ZIP downloaded — see README-SYNOLOGY.md inside for setup steps" });
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setSynologyExporting(false);
+    }
+  };
+
   const handleEmailBackup = async () => {
     setEmailingBackup(true);
     try {
@@ -1161,28 +1187,50 @@ export default function SettingsPage() {
                 Use this when migrating to a different host. Superuser only.
               </p>
 
-              {/* Compiled Full Package — highlighted primary option */}
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
-                <div className="flex items-center gap-2">
-                  <PackageOpen className="w-4 h-4 text-primary shrink-0" />
-                  <span className="text-sm font-semibold text-primary">Compiled Full Package</span>
-                  <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium">Recommended</span>
+              {/* Compiled & Synology packages — highlighted primary options */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* VPS / cPanel compiled */}
+                <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <PackageOpen className="w-4 h-4 text-primary shrink-0" />
+                    <span className="text-sm font-semibold text-primary">VPS / cPanel</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Pre-built app + full database dump. Node.js 20+ and PostgreSQL on the target — no build tools needed. Run <code>start.sh</code>.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={handleCompiledPackage}
+                    disabled={compiledExporting}
+                    data-testid="button-compiled-package"
+                    title="ZIP with pre-compiled dist/, SQL dump, PM2 config and startup script"
+                  >
+                    <PackageOpen className={`w-4 h-4 mr-2 ${compiledExporting ? "animate-pulse" : ""}`} />
+                    {compiledExporting ? "Building…" : "Download Compiled Package"}
+                  </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  A single ZIP containing the <strong>pre-built application</strong> + <strong>full database dump</strong>.
-                  Extract on any server with Node.js 20+ and PostgreSQL — no build tools or source code required.
-                  Just set <code>.env</code> and run <code>start.sh</code>.
-                </p>
-                <Button
-                  size="sm"
-                  onClick={handleCompiledPackage}
-                  disabled={compiledExporting}
-                  data-testid="button-compiled-package"
-                  title="Downloads a ZIP with the pre-compiled app (dist/), full SQL database dump, PM2 config and startup script — no build step needed on the target server"
-                >
-                  <PackageOpen className={`w-4 h-4 mr-2 ${compiledExporting ? "animate-pulse" : ""}`} />
-                  {compiledExporting ? "Building package…" : "Download Compiled Package"}
-                </Button>
+
+                {/* Synology Docker */}
+                <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Server className="w-4 h-4 text-primary shrink-0" />
+                    <span className="text-sm font-semibold text-primary">Synology NAS</span>
+                    <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium">Docker</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Docker Compose package for Synology Container Manager. App + PostgreSQL containers. Database imported automatically on first start.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={handleSynologyPackage}
+                    disabled={synologyExporting}
+                    data-testid="button-synology-package"
+                    title="ZIP with Dockerfile, docker-compose.yml, pre-compiled dist/ and SQL dump — ready for Synology Container Manager"
+                  >
+                    <Server className={`w-4 h-4 mr-2 ${synologyExporting ? "animate-pulse" : ""}`} />
+                    {synologyExporting ? "Building…" : "Download Synology Package"}
+                  </Button>
+                </div>
               </div>
 
               <div className="flex flex-wrap gap-2 items-center pt-1">

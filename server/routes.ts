@@ -4243,6 +4243,315 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/backup/synology-package", requireSuperuser, async (_req, res) => {
+    try {
+      const companySetting = await storage.getSetting("company_name");
+      const companyName = companySetting?.value || "GlobiPOS LTD";
+      const slug = fileSlug(companyName);
+      const date = new Date().toISOString().split("T")[0];
+      const dbUrl = process.env.DATABASE_URL;
+      if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
+
+      const distPath = path.join(process.cwd(), "dist");
+      if (!fs.existsSync(distPath)) {
+        throw new Error("Compiled build not found. Run 'npm run build' first.");
+      }
+
+      // SQL dump
+      const sqlDump = execSync(
+        `pg_dump "${dbUrl}" --no-password --format=plain --no-owner --no-acl --quote-all-identifiers`,
+        { maxBuffer: 200 * 1024 * 1024 }
+      );
+
+      // Dockerfile — minimal Node.js image, copies pre-built dist/
+      const dockerfile = [
+        "FROM node:20-alpine",
+        "WORKDIR /app",
+        "COPY dist/ ./dist/",
+        "EXPOSE 3000",
+        'CMD ["node", "dist/index.cjs"]',
+      ].join("\n");
+
+      // docker-compose.yml — app + postgres, DB auto-imported on first start
+      const dockerCompose = [
+        "version: '3.8'",
+        "",
+        "services:",
+        "  app:",
+        "    build: .",
+        "    container_name: " + slug + "-app",
+        "    ports:",
+        '      - "${APP_PORT:-3000}:3000"',
+        "    environment:",
+        "      - NODE_ENV=production",
+        "      - DATABASE_URL=postgresql://globipos:${DB_PASSWORD:-globipos}@db:5432/globipos",
+        "      - SESSION_SECRET=${SESSION_SECRET}",
+        "    depends_on:",
+        "      db:",
+        "        condition: service_healthy",
+        "    restart: unless-stopped",
+        "    networks:",
+        "      - globipos-net",
+        "",
+        "  db:",
+        "    image: postgres:16-alpine",
+        "    container_name: " + slug + "-db",
+        "    environment:",
+        "      - POSTGRES_DB=globipos",
+        "      - POSTGRES_USER=globipos",
+        "      - POSTGRES_PASSWORD=${DB_PASSWORD:-globipos}",
+        "    volumes:",
+        "      - postgres_data:/var/lib/postgresql/data",
+        "      - ./database.sql:/docker-entrypoint-initdb.d/01-init.sql",
+        "    healthcheck:",
+        '      test: ["CMD-SHELL", "pg_isready -U globipos"]',
+        "      interval: 5s",
+        "      timeout: 5s",
+        "      retries: 10",
+        "    restart: unless-stopped",
+        "    networks:",
+        "      - globipos-net",
+        "",
+        "volumes:",
+        "  postgres_data:",
+        "",
+        "networks:",
+        "  globipos-net:",
+      ].join("\n");
+
+      // .env for docker-compose
+      const envFile = [
+        "# ── GlobiPOS Synology / Docker deployment ──────────────────────────────",
+        "# Generated: " + date,
+        "",
+        "# Port the app will be accessible on (on your Synology)",
+        "APP_PORT=3000",
+        "",
+        "# PostgreSQL password (change before first start)",
+        "DB_PASSWORD=globipos_CHANGE_ME",
+        "",
+        "# Session secret — generate with:",
+        "# node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\"",
+        "SESSION_SECRET=REPLACE_WITH_64_CHAR_RANDOM_HEX",
+      ].join("\n");
+
+      // setup.sh for SSH deployment on Synology
+      const setupSh = [
+        "#!/bin/bash",
+        "# " + companyName + " — Synology NAS Docker Setup",
+        "# Generated: " + date,
+        "# Run this via SSH on your Synology (or manually follow the README steps).",
+        "set -e",
+        "",
+        "echo \"\"",
+        "echo \"========================================================\"",
+        "echo \" " + companyName + " — Synology Docker Setup\"",
+        "echo \"========================================================\"",
+        "echo \"\"",
+        "",
+        "command -v docker >/dev/null 2>&1 || { echo \"ERROR: Docker not found. Install Container Manager from Synology Package Center.\"; exit 1; }",
+        "command -v docker-compose >/dev/null 2>&1 || docker compose version >/dev/null 2>&1 || { echo \"ERROR: docker compose not available.\"; exit 1; }",
+        "echo \"✓ Docker available\"",
+        "",
+        "if [ ! -f .env ]; then",
+        "  cp .env.template .env",
+        "  echo \"\"",
+        "  echo \">>> .env file created from .env.template\"",
+        "  echo \">>> IMPORTANT: Edit .env and set DB_PASSWORD and SESSION_SECRET\"",
+        "  echo \">>> Then re-run this script.\"",
+        "  exit 0",
+        "fi",
+        "echo \"✓ .env file found\"",
+        "",
+        "# Prefer docker compose (v2) over docker-compose (v1)",
+        "DC=\"docker compose\"",
+        "if ! docker compose version >/dev/null 2>&1; then",
+        "  DC=\"docker-compose\"",
+        "fi",
+        "",
+        "echo \"Building Docker image...\"",
+        "$DC build",
+        "echo \"✓ Image built\"",
+        "",
+        "echo \"Starting services...\"",
+        "$DC up -d",
+        "echo \"✓ Services started\"",
+        "",
+        "echo \"\"",
+        "echo \"========================================================\"",
+        "echo \" Done!\"",
+        "echo \" App is available at http://YOUR-SYNOLOGY-IP:$(grep APP_PORT .env | cut -d= -f2 || echo 3000)\"",
+        "echo \" Note: First start imports the database automatically.\"",
+        "echo \" This takes ~30 seconds — wait before opening the app.\"",
+        "echo \"========================================================\"",
+      ].join("\n");
+
+      // README-SYNOLOGY.md
+      const readme = [
+        "# " + companyName + " — Synology NAS Deployment Guide",
+        "",
+        "Generated: " + new Date().toISOString(),
+        "",
+        "> **Deploy on your Synology NAS using Docker / Container Manager.**",
+        "> No build tools needed — the app is pre-compiled.",
+        "> The database is imported automatically on first start.",
+        "",
+        "---",
+        "",
+        "## Contents",
+        "",
+        "| File | Purpose |",
+        "|------|---------|",
+        "| `dist/` | Pre-compiled application |",
+        "| `database.sql` | Full database dump (auto-imported on first start) |",
+        "| `Dockerfile` | Builds the app container from `dist/` |",
+        "| `docker-compose.yml` | Orchestrates app + PostgreSQL containers |",
+        "| `.env.template` | Environment variable template |",
+        "| `setup.sh` | SSH-based quick-start script |",
+        "| `README-SYNOLOGY.md` | This guide |",
+        "",
+        "---",
+        "",
+        "## Method 1 — Container Manager UI (recommended for most users)",
+        "",
+        "### Step 1 — Install Docker / Container Manager",
+        "",
+        "Open **Package Center** on your Synology → search for **Container Manager** → Install.",
+        "",
+        "### Step 2 — Upload files",
+        "",
+        "Using **File Station**, create a folder (e.g. `docker/globipos`) and upload",
+        "the **entire contents** of this ZIP into it.",
+        "",
+        "### Step 3 — Edit the environment file",
+        "",
+        "In File Station, open `.env.template`, rename it to `.env`, and change:",
+        "",
+        "```",
+        "DB_PASSWORD=globipos_CHANGE_ME        ← set a strong password",
+        "SESSION_SECRET=REPLACE_WITH_64_CHAR_RANDOM_HEX  ← random 64-char string",
+        "APP_PORT=3000                          ← port to access the app on",
+        "```",
+        "",
+        "To generate a SESSION_SECRET, open **Container Manager → Terminal** on any",
+        "running container and run:",
+        "```bash",
+        "node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\"",
+        "```",
+        "Or generate one at https://generate-secret.vercel.app/64",
+        "",
+        "### Step 4 — Create the project in Container Manager",
+        "",
+        "1. Open **Container Manager → Project → Create**",
+        "2. Set **Project Name** to `" + slug + "`",
+        "3. Set **Path** to the folder you uploaded the files to",
+        "4. Click **Next** — Container Manager reads `docker-compose.yml` automatically",
+        "5. Click **Next** → **Done**",
+        "",
+        "### Step 5 — Wait for first-start database import",
+        "",
+        "On first start the PostgreSQL container automatically imports `database.sql`.",
+        "This takes about 30–60 seconds. Watch the container logs in Container Manager.",
+        "Once both containers show **Running**, open:",
+        "",
+        "```",
+        "http://YOUR-SYNOLOGY-IP:3000",
+        "```",
+        "",
+        "---",
+        "",
+        "## Method 2 — SSH quick-start",
+        "",
+        "```bash",
+        "# 1. SSH into your Synology",
+        "ssh admin@YOUR-SYNOLOGY-IP",
+        "",
+        "# 2. Go to the folder you uploaded the files to",
+        "cd /volume1/docker/globipos",
+        "",
+        "# 3. Make the script executable and run it",
+        "chmod +x setup.sh",
+        "./setup.sh",
+        "",
+        "# 4. Edit .env (it is created automatically on first run)",
+        "nano .env",
+        "",
+        "# 5. Run again to start",
+        "./setup.sh",
+        "```",
+        "",
+        "---",
+        "",
+        "## Updating the app",
+        "",
+        "1. Download a new Synology package from Settings → Full System Export",
+        "2. Replace the `dist/` folder and `Dockerfile` in your Synology folder",
+        "3. In Container Manager → Project → `" + slug + "` → **Build**",
+        "4. The database is NOT re-imported on updates (data is safe in the volume)",
+        "",
+        "---",
+        "",
+        "## Useful commands (SSH)",
+        "",
+        "```bash",
+        "# View logs",
+        "docker compose logs -f app",
+        "",
+        "# Stop",
+        "docker compose down",
+        "",
+        "# Start",
+        "docker compose up -d",
+        "",
+        "# Rebuild after update",
+        "docker compose build && docker compose up -d",
+        "",
+        "# Open a shell inside the app container",
+        "docker exec -it " + slug + "-app sh",
+        "",
+        "# Manual DB backup from container",
+        "docker exec " + slug + "-db pg_dump -U globipos globipos > backup-$(date +%F).sql",
+        "```",
+        "",
+        "---",
+        "",
+        "## Reverse proxy (optional — for a custom domain or HTTPS)",
+        "",
+        "In **Control Panel → Login Portal → Advanced → Reverse Proxy**, add:",
+        "",
+        "| Field | Value |",
+        "|-------|-------|",
+        "| Source Protocol | HTTPS |",
+        "| Source Hostname | your-domain.com |",
+        "| Destination Protocol | HTTP |",
+        "| Destination Hostname | localhost |",
+        "| Destination Port | 3000 |",
+        "",
+        "Synology's built-in Let's Encrypt integration handles the TLS certificate.",
+        "",
+        "---",
+        "",
+        "*Generated by " + companyName + " GlobiPOS ERP — " + date + "*",
+      ].join("\n");
+
+      const zip = new AdmZip();
+      zip.addLocalFolder(distPath, "dist");
+      zip.addFile("database.sql", sqlDump);
+      zip.addFile("Dockerfile", Buffer.from(dockerfile, "utf8"));
+      zip.addFile("docker-compose.yml", Buffer.from(dockerCompose, "utf8"));
+      zip.addFile(".env.template", Buffer.from(envFile, "utf8"));
+      zip.addFile("setup.sh", Buffer.from(setupSh, "utf8"));
+      zip.addFile("README-SYNOLOGY.md", Buffer.from(readme, "utf8"));
+
+      const zipBuffer = zip.toBuffer();
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-synology-${date}.zip"`);
+      res.send(zipBuffer);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/backup/send-email", async (req, res) => {
     try {
       const emailSetting = await storage.getSetting("backup_email");
