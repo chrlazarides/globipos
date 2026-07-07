@@ -14,7 +14,7 @@ import {
   Save, RefreshCw, Building2, Receipt, Package, Globe, Settings2, Tags,
   Database, Lock, Unlock, Shield, Download, Upload,
   Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff, Users,
-  RotateCcw, GitCommit, FileCheck, Info, Trash2, Server, Archive, BookOpen,
+  RotateCcw, GitCommit, FileCheck, Info, Trash2, Server, Archive, BookOpen, PackageOpen,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Badge } from "@/components/ui/badge";
@@ -473,6 +473,32 @@ export default function SettingsPage() {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
     } finally {
       setCpanelExporting(false);
+    }
+  };
+
+  const [compiledExporting, setCompiledExporting] = useState(false);
+  const handleCompiledPackage = async () => {
+    setCompiledExporting(true);
+    try {
+      const res = await fetch("/api/backup/compiled-package", { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Export failed" }));
+        throw new Error(err.message || "Export failed");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const cd = res.headers.get("Content-Disposition") || "";
+      const match = cd.match(/filename="([^"]+)"/);
+      a.download = match ? match[1] : "compiled-package.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Compiled package ready", description: "ZIP downloaded — extract on your server and run start.sh" });
+    } catch (err: any) {
+      toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setCompiledExporting(false);
     }
   };
 
@@ -1134,10 +1160,35 @@ export default function SettingsPage() {
                 Downloads a complete snapshot — all data <strong>plus user accounts</strong> — ready to restore on a new server.
                 Use this when migrating to a different host. Superuser only.
               </p>
-              <div className="flex flex-wrap gap-2 items-center">
+
+              {/* Compiled Full Package — highlighted primary option */}
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <PackageOpen className="w-4 h-4 text-primary shrink-0" />
+                  <span className="text-sm font-semibold text-primary">Compiled Full Package</span>
+                  <span className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium">Recommended</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  A single ZIP containing the <strong>pre-built application</strong> + <strong>full database dump</strong>.
+                  Extract on any server with Node.js 20+ and PostgreSQL — no build tools or source code required.
+                  Just set <code>.env</code> and run <code>start.sh</code>.
+                </p>
+                <Button
+                  size="sm"
+                  onClick={handleCompiledPackage}
+                  disabled={compiledExporting}
+                  data-testid="button-compiled-package"
+                  title="Downloads a ZIP with the pre-compiled app (dist/), full SQL database dump, PM2 config and startup script — no build step needed on the target server"
+                >
+                  <PackageOpen className={`w-4 h-4 mr-2 ${compiledExporting ? "animate-pulse" : ""}`} />
+                  {compiledExporting ? "Building package…" : "Download Compiled Package"}
+                </Button>
+              </div>
+
+              <div className="flex flex-wrap gap-2 items-center pt-1">
                 <Button variant="outline" size="sm" onClick={handleSystemExport} data-testid="button-system-export">
                   <Server className="w-4 h-4 mr-2" />
-                  Download System Export
+                  System Export (JSON)
                 </Button>
                 <Button
                   variant="outline"
@@ -1145,15 +1196,15 @@ export default function SettingsPage() {
                   onClick={handleCpanelPackage}
                   disabled={cpanelExporting}
                   data-testid="button-cpanel-package"
-                  title="Downloads a ZIP with SQL dump, setup script, PM2 config and deployment guide — ready to deploy on any cPanel or VPS host"
+                  title="Downloads a ZIP with SQL dump, setup script, PM2 config and deployment guide — target server must run npm install + npm run build"
                 >
                   <Archive className={`w-4 h-4 mr-2 ${cpanelExporting ? "animate-pulse" : ""}`} />
-                  {cpanelExporting ? "Building package…" : "cPanel Deployment Package"}
+                  {cpanelExporting ? "Building package…" : "cPanel Source Package"}
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                <strong>System Export</strong> — JSON snapshot for full system restore.{" "}
-                <strong>cPanel Package</strong> — ZIP with SQL dump, <code>.env</code> template, PM2 config and full deployment guide for self-hosting on any cPanel or VPS server.
+                <strong>System Export</strong> — JSON snapshot for full in-app restore.{" "}
+                <strong>cPanel Source Package</strong> — ZIP with SQL dump + source files (requires build step on the target server).
               </p>
               <div className="flex items-center gap-2">
                 <Link href="/deploy-guide">
@@ -1164,7 +1215,7 @@ export default function SettingsPage() {
                 </Link>
               </div>
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                ⚠ Both files contain hashed passwords and sensitive data. Store securely and do not share.
+                ⚠ All export files contain hashed passwords and sensitive data. Store securely and do not share.
               </p>
             </div>
           )}

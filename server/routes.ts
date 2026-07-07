@@ -3998,6 +3998,251 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/backup/compiled-package", requireSuperuser, async (_req, res) => {
+    try {
+      const companySetting = await storage.getSetting("company_name");
+      const companyName = companySetting?.value || "GlobiPOS LTD";
+      const slug = fileSlug(companyName);
+      const date = new Date().toISOString().split("T")[0];
+      const dbUrl = process.env.DATABASE_URL;
+      if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
+
+      // Check dist/ exists
+      const distPath = path.join(process.cwd(), "dist");
+      if (!fs.existsSync(distPath)) {
+        throw new Error("Compiled build not found. Run 'npm run build' first.");
+      }
+
+      // SQL dump
+      const sqlDump = execSync(
+        `pg_dump "${dbUrl}" --no-password --format=plain --no-owner --no-acl --quote-all-identifiers`,
+        { maxBuffer: 200 * 1024 * 1024 }
+      );
+
+      // .env.example
+      const envExample = [
+        "# ── Database ────────────────────────────────────────────────────────────",
+        "DATABASE_URL=postgresql://DB_USER:DB_PASSWORD@localhost:5432/DB_NAME",
+        "",
+        "# ── Session ─────────────────────────────────────────────────────────────",
+        "# Generate with: node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\"",
+        "SESSION_SECRET=REPLACE_WITH_64_CHAR_RANDOM_HEX",
+        "",
+        "# ── App ─────────────────────────────────────────────────────────────────",
+        "NODE_ENV=production",
+        "PORT=3000",
+        "",
+        "# ── Email (Resend) ───────────────────────────────────────────────────────",
+        "# Optional — can also be configured from Settings > Email inside the app",
+        "# RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx",
+      ].join("\n");
+
+      // ecosystem.config.js (PM2)
+      const ecosystem = [
+        "module.exports = {",
+        "  apps: [{",
+        `    name: "${slug}",`,
+        "    script: \"dist/index.cjs\",",
+        "    interpreter: \"node\",",
+        "    env: {",
+        "      NODE_ENV: \"production\",",
+        "      PORT: 3000",
+        "    },",
+        "    instances: 1,",
+        "    autorestart: true,",
+        "    watch: false,",
+        "    max_memory_restart: \"512M\",",
+        "    error_file: \"logs/err.log\",",
+        "    out_file: \"logs/out.log\",",
+        "    log_date_format: \"YYYY-MM-DD HH:mm:ss\"",
+        "  }]",
+        "};",
+      ].join("\n");
+
+      // start.sh — no build step needed (app is pre-compiled)
+      const startSh = [
+        "#!/bin/bash",
+        "# " + companyName + " — Pre-compiled VPS/cPanel Startup Script",
+        "# Generated: " + date,
+        "# This package contains the pre-compiled application.",
+        "# No npm install or build step required.",
+        "set -e",
+        "",
+        "echo \"\"",
+        "echo \"========================================================\"",
+        "echo \" " + companyName + " — Startup\"",
+        "echo \"========================================================\"",
+        "echo \"\"",
+        "",
+        "# ── 1. Prerequisites ──────────────────────────────────────",
+        "command -v node >/dev/null 2>&1 || { echo \"ERROR: Node.js 20+ required.\"; exit 1; }",
+        "command -v psql >/dev/null 2>&1 || { echo \"ERROR: psql required (PostgreSQL client).\"; exit 1; }",
+        "",
+        "# ── 2. Create .env if missing ─────────────────────────────",
+        "if [ ! -f .env ]; then",
+        "  cp .env.example .env",
+        "  echo \">>> .env created. EDIT IT NOW — set DATABASE_URL and SESSION_SECRET.\"",
+        "  echo \">>> Then re-run this script.\"",
+        "  exit 0",
+        "fi",
+        "set -a; source .env; set +a",
+        "if [ -z \"$DATABASE_URL\" ]; then",
+        "  echo \"ERROR: DATABASE_URL not set in .env\"; exit 1",
+        "fi",
+        "echo \"✓ .env loaded\"",
+        "",
+        "# ── 3. Import database ────────────────────────────────────",
+        "read -rp \"Import database from database.sql? (y/N) \" ans",
+        "if [[ \"$ans\" =~ ^[Yy]$ ]]; then",
+        "  echo \"Importing database...\"",
+        "  psql \"$DATABASE_URL\" < database.sql",
+        "  echo \"✓ Database imported\"",
+        "fi",
+        "",
+        "# ── 4. Create log directory ───────────────────────────────",
+        "mkdir -p logs",
+        "",
+        "# ── 5. Start with PM2 ────────────────────────────────────",
+        "if command -v pm2 >/dev/null 2>&1; then",
+        "  pm2 delete " + slug + " 2>/dev/null || true",
+        "  pm2 start ecosystem.config.js",
+        "  pm2 save",
+        "  pm2 startup 2>/dev/null || true",
+        "  echo \"✓ App started with PM2\"",
+        "else",
+        "  echo \"PM2 not found — install: npm install -g pm2\"",
+        "  echo \"Then run: pm2 start ecosystem.config.js && pm2 save\"",
+        "  echo \"\"",
+        "  echo \"Or start directly: node dist/index.cjs\"",
+        "fi",
+        "",
+        "echo \"\"",
+        "echo \"========================================================\"",
+        "echo \" Done! Visit your domain to access the app.\"",
+        "echo \"========================================================\"",
+      ].join("\n");
+
+      // Caddyfile
+      const caddyfile = [
+        "# Caddyfile — replace yourdomain.com with your domain",
+        "# Caddy auto-provisions TLS. Install: https://caddyserver.com",
+        "",
+        "yourdomain.com {",
+        "  reverse_proxy localhost:3000",
+        "}",
+      ].join("\n");
+
+      // README
+      const readme = [
+        "# " + companyName + " — Pre-Compiled Deployment Package",
+        "",
+        "Generated: " + new Date().toISOString(),
+        "",
+        "> **This package contains the pre-compiled application.**",
+        "> No `npm install` or `npm run build` step is required on the target server.",
+        "",
+        "## Contents",
+        "",
+        "| File / Folder | Purpose |",
+        "|---------------|---------|",
+        "| `dist/` | Pre-compiled application (server + frontend assets) |",
+        "| `database.sql` | Full PostgreSQL dump — schema + all live data |",
+        "| `.env.example` | Environment variable template |",
+        "| `ecosystem.config.js` | PM2 process manager config |",
+        "| `start.sh` | Interactive startup script |",
+        "| `Caddyfile` | Optional Caddy reverse proxy config |",
+        "| `README-DEPLOY.md` | This guide |",
+        "",
+        "---",
+        "",
+        "## Requirements",
+        "",
+        "| Requirement | Version | Notes |",
+        "|-------------|---------|-------|",
+        "| Node.js | 20+ | Runtime only — no build tools needed |",
+        "| PostgreSQL | 14+ | Local or remote |",
+        "| PM2 | latest | `npm install -g pm2` (optional but recommended) |",
+        "",
+        "---",
+        "",
+        "## Quick Start",
+        "",
+        "```bash",
+        "# 1. Upload and extract this ZIP on your server",
+        "unzip " + slug + "-compiled-" + date + ".zip -d app && cd app",
+        "",
+        "# 2. Make start script executable",
+        "chmod +x start.sh",
+        "",
+        "# 3. Run — creates .env on first run",
+        "./start.sh",
+        "",
+        "# 4. Edit .env (set DATABASE_URL + SESSION_SECRET)",
+        "nano .env",
+        "",
+        "# 5. Run again — imports DB and starts the app",
+        "./start.sh",
+        "```",
+        "",
+        "---",
+        "",
+        "## Manual Steps",
+        "",
+        "### 1. Set up the database",
+        "",
+        "```bash",
+        "cp .env.example .env",
+        "nano .env   # fill in DATABASE_URL and SESSION_SECRET",
+        "```",
+        "",
+        "### 2. Import the database",
+        "",
+        "```bash",
+        "psql \"$DATABASE_URL\" < database.sql",
+        "```",
+        "",
+        "### 3. Start the application",
+        "",
+        "```bash",
+        "# With PM2 (recommended)",
+        "npm install -g pm2",
+        "pm2 start ecosystem.config.js",
+        "pm2 save && pm2 startup",
+        "",
+        "# Or directly",
+        "node dist/index.cjs",
+        "```",
+        "",
+        "### 4. Reverse proxy (optional)",
+        "",
+        "Use the included `Caddyfile` (Caddy auto-TLS) or an Nginx/Apache config",
+        "pointing to `http://localhost:3000`.",
+        "",
+        "---",
+        "",
+        "*Generated by " + companyName + " GlobiPOS ERP — " + date + "*",
+      ].join("\n");
+
+      const zip = new AdmZip();
+      // Add the pre-compiled dist/ folder
+      zip.addLocalFolder(distPath, "dist");
+      // Add support files
+      zip.addFile("database.sql", sqlDump);
+      zip.addFile(".env.example", Buffer.from(envExample, "utf8"));
+      zip.addFile("ecosystem.config.js", Buffer.from(ecosystem, "utf8"));
+      zip.addFile("start.sh", Buffer.from(startSh, "utf8"));
+      zip.addFile("Caddyfile", Buffer.from(caddyfile, "utf8"));
+      zip.addFile("README-DEPLOY.md", Buffer.from(readme, "utf8"));
+
+      const zipBuffer = zip.toBuffer();
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-compiled-${date}.zip"`);
+      res.send(zipBuffer);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/backup/send-email", async (req, res) => {
     try {
       const emailSetting = await storage.getSetting("backup_email");
