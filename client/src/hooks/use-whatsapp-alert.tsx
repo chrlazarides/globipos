@@ -98,7 +98,7 @@ function playChime() {
     const ctx = new AudioContext();
     const now = ctx.currentTime;
 
-    function note(freq: number, startOffset: number, duration: number) {
+    const note = (freq: number, startOffset: number, duration: number) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
@@ -110,7 +110,7 @@ function playChime() {
       gain.gain.exponentialRampToValueAtTime(0.001, now + startOffset + duration);
       osc.start(now + startOffset);
       osc.stop(now + startOffset + duration);
-    }
+    };
 
     note(880, 0, 0.4);
     note(1108.73, 0.18, 0.45);
@@ -195,7 +195,7 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
       }
 
       let brandNew = 0;
-      for (const id of currentIds) {
+      for (const id of Array.from(currentIds)) {
         if (!seenIdsRef.current.has(id)) {
           brandNew++;
         }

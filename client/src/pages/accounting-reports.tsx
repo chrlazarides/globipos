@@ -57,6 +57,7 @@ interface BalanceSheetData {
 }
 
 interface VatInvoiceItem {
+  id?: string;
   invoiceNumber?: string;
   customerName?: string;
   supplierName?: string;

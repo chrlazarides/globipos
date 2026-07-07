@@ -15,6 +15,7 @@ import fs from "fs";
 import path from "path";
 import webpush from "web-push";
 import { execSync } from "child_process";
+// @ts-ignore — no bundled types for adm-zip; runtime types are sufficient
 import AdmZip from "adm-zip";
 import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser, requireStaff, requireModule } from "./auth";
 import jwt from "jsonwebtoken";
@@ -478,7 +479,8 @@ export async function registerRoutes(
       if (!user || !user.active || !user.totpSecret) return res.status(401).json({ message: "Invalid session" });
 
       const cleanToken2fa = code.replace(/\s/g, "");
-      const result = totpVerify({ token: cleanToken2fa, secret: user.totpSecret, window: 1 });
+      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+      const result = (totpVerify as any)({ token: cleanToken2fa, secret: user.totpSecret, window: 1 });
       // [2FA login] result logged without exposing token
       if (!result.valid) return res.status(401).json({ message: "Invalid authentication code" });
 
@@ -510,7 +512,8 @@ export async function registerRoutes(
       if (!secret || !code) return res.status(400).json({ message: "Secret and code required" });
 
       const cleanToken = code.replace(/\s/g, "");
-      const result = totpVerify({ token: cleanToken, secret, window: 1 });
+      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+      const result = (totpVerify as any)({ token: cleanToken, secret, window: 1 });
       // [2FA enable] result logged without exposing secret or token
       if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
 
@@ -528,7 +531,8 @@ export async function registerRoutes(
       const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
       if (!user || !user.totpSecret || !user.totpEnabled) return res.status(400).json({ message: "2FA is not enabled" });
 
-      const result = totpVerify({ token: (code || "").replace(/\s/g, ""), secret: user.totpSecret, window: 1 });
+      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+      const result = (totpVerify as any)({ token: (code || "").replace(/\s/g, ""), secret: user.totpSecret, window: 1 });
       if (!result.valid) return res.status(400).json({ message: "Invalid authentication code" });
 
       await db.update(users).set({ totpSecret: null, totpEnabled: false }).where(eq(users.id, req.user.id));
@@ -578,7 +582,8 @@ export async function registerRoutes(
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user || !user.active) return res.status(401).json({ message: "Invalid session" });
       if (!user.totpSecret || user.totpEnabled) return res.status(400).json({ message: "No pending 2FA setup. Please log in again." });
-      const result = totpVerify({ token: code.replace(/\s/g, ""), secret: user.totpSecret, window: 1 });
+      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+      const result = (totpVerify as any)({ token: code.replace(/\s/g, ""), secret: user.totpSecret, window: 1 });
       if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
       await db.update(users).set({ totpEnabled: true }).where(eq(users.id, userId));
       logActivity(userId, user.username, "update", "user", userId, "Two-factor authentication enabled (forced setup)", null, null);
@@ -593,7 +598,7 @@ export async function registerRoutes(
   // ─── Admin: Reset another user's 2FA ────────────────────────────────────────
   app.post("/api/users/:id/reset-2fa", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = req.params.id as string;
       if (id === req.user!.id) return res.status(400).json({ message: "Use the 2FA settings to manage your own 2FA" });
       const [target] = await db.select({ id: users.id, username: users.username }).from(users).where(eq(users.id, id));
       if (!target) return res.status(404).json({ message: "User not found" });
@@ -664,7 +669,7 @@ export async function registerRoutes(
       if (active !== undefined) updates.active = active;
       if (password) updates.password = hashPassword(password);
       if (permissions !== undefined) updates.permissions = JSON.stringify(Array.isArray(permissions) ? permissions : []);
-      const [updated] = await db.update(users).set(updates).where(eq(users.id, req.params.id)).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, permissions: users.permissions });
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, (req.params.id as string))).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, permissions: users.permissions });
       if (!updated) return res.status(404).json({ message: "User not found" });
       res.json({ ...updated, permissions: JSON.parse(updated.permissions || "[]") });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -672,8 +677,8 @@ export async function registerRoutes(
 
   app.delete("/api/users/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      if (req.user?.id === req.params.id) return res.status(400).json({ message: "Cannot delete your own account" });
-      await db.delete(users).where(eq(users.id, req.params.id));
+      if (req.user?.id === (req.params.id as string)) return res.status(400).json({ message: "Cannot delete your own account" });
+      await db.delete(users).where(eq(users.id, (req.params.id as string)));
       res.json({ message: "User deleted" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -863,7 +868,7 @@ export async function registerRoutes(
       if (parentId !== undefined) update.parentId = (parentId === "none" || parentId === "") ? null : parentId;
       if (vatRate !== undefined) update.vatRate = vatRate === "" ? null : vatRate;
       if (active !== undefined) update.active = active;
-      const [updated] = await db.update(categories).set(update).where(eq(categories.id, req.params.id)).returning();
+      const [updated] = await db.update(categories).set(update).where(eq(categories.id, (req.params.id as string))).returning();
       if (!updated) return res.status(404).json({ message: "Category not found" });
       res.json(updated);
     } catch (e: any) {
@@ -891,13 +896,13 @@ export async function registerRoutes(
   });
 
   app.get("/api/items/barcode/:barcode", async (req, res) => {
-    const item = await storage.getItemByBarcode(req.params.barcode);
+    const item = await storage.getItemByBarcode((req.params.barcode as string));
     if (!item) return res.status(404).json({ message: "Item not found" });
     res.json(item);
   });
 
   app.get("/api/items/:id", async (req, res) => {
-    const item = await storage.getItem(req.params.id);
+    const item = await storage.getItem((req.params.id as string));
     if (!item) return res.status(404).json({ message: "Item not found" });
     res.json(item);
   });
@@ -906,7 +911,7 @@ export async function registerRoutes(
     try {
       const allItems = await storage.getItems();
       const categories = await storage.getCategories();
-      const category = categories.find(c => c.id === req.params.categoryId);
+      const category = categories.find(c => c.id === (req.params.categoryId as string));
       const prefix = category
         ? category.name.split(/\s+/).map(w => w[0]?.toUpperCase()).join("").substring(0, 3)
         : "ITM";
@@ -988,7 +993,7 @@ export async function registerRoutes(
   app.patch("/api/items/:id", async (req, res) => {
     try {
       sanitizeItemNumericFields(req.body);
-      const item = await storage.updateItem(req.params.id, req.body);
+      const item = await storage.updateItem((req.params.id as string), req.body);
       if (!item) return res.status(404).json({ message: "Item not found" });
       res.json(item);
     } catch (e: any) {
@@ -1001,7 +1006,7 @@ export async function registerRoutes(
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
       const from = req.query.from as string | undefined;
       const to = req.query.to as string | undefined;
-      const history = await storage.getItemPriceHistory(req.params.id, limit, from, to);
+      const history = await storage.getItemPriceHistory((req.params.id as string), limit, from, to);
       res.json(history);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -1186,14 +1191,14 @@ export async function registerRoutes(
   });
 
   app.get("/api/customers/:id", async (req, res) => {
-    const cust = await storage.getCustomer(req.params.id);
+    const cust = await storage.getCustomer((req.params.id as string));
     if (!cust) return res.status(404).json({ message: "Customer not found" });
     res.json(cust);
   });
 
   app.get("/api/customers/:id/has-whatsapp-orders", async (req, res) => {
     try {
-      const orders = await storage.getPortalOrders(req.params.id);
+      const orders = await storage.getPortalOrders((req.params.id as string));
       const hasWhatsappOrder = orders.some((o) => o.source === "whatsapp");
       res.json({ hasWhatsappOrder });
     } catch (e: any) {
@@ -1203,7 +1208,7 @@ export async function registerRoutes(
 
   app.get("/api/customers/:id/analytics", async (req, res) => {
     try {
-      const customerId = req.params.id;
+      const customerId = (req.params.id as string);
       const cust = await storage.getCustomer(customerId);
       if (!cust) return res.status(404).json({ message: "Customer not found" });
 
@@ -1224,7 +1229,8 @@ export async function registerRoutes(
           if (li.itemId) {
             const itm = await db.select({ costPrice: items.costPrice, packSize: items.packSize }).from(items).where(eq(items.id, li.itemId)).limit(1);
             if (itm.length > 0) {
-              const units = li.saleUnit === "pack" ? li.quantity * (itm[0].packSize || 1) : li.quantity;
+              const liQtyU = parseFloat(String((li as any).quantity || "0"));
+              const units = li.saleUnit === "pack" ? liQtyU * (itm[0].packSize || 1) : liQtyU;
               totalCost += (parseFloat(itm[0].costPrice) / (itm[0].packSize || 1)) * units;
             }
           }
@@ -1303,7 +1309,7 @@ export async function registerRoutes(
       return res.status(403).json({ message: "Admin access required" });
     }
     try {
-      const cust = await storage.updateCustomer(req.params.id, req.body);
+      const cust = await storage.updateCustomer((req.params.id as string), req.body);
       if (!cust) return res.status(404).json({ message: "Customer not found" });
       res.json(cust);
     } catch (e: any) {
@@ -1316,13 +1322,13 @@ export async function registerRoutes(
       return res.status(403).json({ message: "Admin access required" });
     }
     try {
-      const cust = await db.select({ id: customers.id, name: customers.name }).from(customers).where(eq(customers.id, req.params.id)).limit(1);
+      const cust = await db.select({ id: customers.id, name: customers.name }).from(customers).where(eq(customers.id, (req.params.id as string))).limit(1);
       if (!cust.length) return res.status(404).json({ message: "Customer not found" });
-      const linked = await db.select({ id: invoices.id }).from(invoices).where(eq(invoices.customerId, req.params.id)).limit(1);
+      const linked = await db.select({ id: invoices.id }).from(invoices).where(eq(invoices.customerId, (req.params.id as string))).limit(1);
       if (linked.length > 0) {
         return res.status(400).json({ message: "Cannot delete: customer has invoices. Remove them first or mark the customer inactive." });
       }
-      await storage.deleteCustomer(req.params.id);
+      await storage.deleteCustomer((req.params.id as string));
       res.json({ ok: true });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -1331,7 +1337,7 @@ export async function registerRoutes(
 
   app.get("/api/customers/:id/delivery-locations", async (req, res) => {
     try {
-      const locs = await storage.getCustomerDeliveryLocations(req.params.id);
+      const locs = await storage.getCustomerDeliveryLocations((req.params.id as string));
       res.json(locs);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -1340,7 +1346,7 @@ export async function registerRoutes(
 
   app.post("/api/customers/:id/delivery-locations", async (req, res) => {
     try {
-      const loc = await storage.createCustomerDeliveryLocation({ ...req.body, customerId: req.params.id });
+      const loc = await storage.createCustomerDeliveryLocation({ ...req.body, customerId: (req.params.id as string) });
       res.json(loc);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -1349,7 +1355,7 @@ export async function registerRoutes(
 
   app.patch("/api/customers/:customerId/delivery-locations/:locId", async (req, res) => {
     try {
-      const loc = await storage.updateCustomerDeliveryLocation(req.params.locId, { ...req.body, customerId: req.params.customerId });
+      const loc = await storage.updateCustomerDeliveryLocation((req.params.locId as string), { ...req.body, customerId: (req.params.customerId as string) });
       if (!loc) return res.status(404).json({ message: "Location not found" });
       res.json(loc);
     } catch (e: any) {
@@ -1359,7 +1365,7 @@ export async function registerRoutes(
 
   app.delete("/api/customers/:customerId/delivery-locations/:locId", async (req, res) => {
     try {
-      await storage.deleteCustomerDeliveryLocation(req.params.locId);
+      await storage.deleteCustomerDeliveryLocation((req.params.locId as string));
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -1471,10 +1477,10 @@ export async function registerRoutes(
   app.patch("/api/price-contracts/:id", async (req, res) => {
     try {
       const { rules, ...contractData } = req.body;
-      const contract = await storage.updatePriceContract(req.params.id, contractData);
+      const contract = await storage.updatePriceContract((req.params.id as string), contractData);
       if (!contract) return res.status(404).json({ message: "Contract not found" });
       if (rules && Array.isArray(rules)) {
-        await storage.setContractRules(req.params.id, rules);
+        await storage.setContractRules((req.params.id as string), rules);
       }
       res.json(contract);
     } catch (e: any) {
@@ -1483,13 +1489,13 @@ export async function registerRoutes(
   });
 
   app.get("/api/price-contracts/:id/rules", async (req, res) => {
-    const rules = await storage.getContractRules(req.params.id);
+    const rules = await storage.getContractRules((req.params.id as string));
     res.json(rules);
   });
 
   app.put("/api/price-contracts/:id/rules", async (req, res) => {
     try {
-      const rules = await storage.setContractRules(req.params.id, req.body.rules || []);
+      const rules = await storage.setContractRules((req.params.id as string), req.body.rules || []);
       res.json(rules);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -1498,12 +1504,12 @@ export async function registerRoutes(
 
   app.delete("/api/price-contracts/:id", async (req, res) => {
     try {
-      const contract = await storage.getPriceContract(req.params.id);
+      const contract = await storage.getPriceContract((req.params.id as string));
       if (!contract) return res.status(404).json({ message: "Contract not found" });
       if (contract.source !== "invoice-discount") {
         return res.status(403).json({ message: "Only auto-saved contracts can be deleted via this endpoint" });
       }
-      await storage.deleteContract(req.params.id);
+      await storage.deleteContract((req.params.id as string));
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -1519,13 +1525,13 @@ export async function registerRoutes(
       }
       const rows = await db.select({ id: priceContractItems.id, contractId: priceContractItems.contractId })
         .from(priceContractItems)
-        .where(eq(priceContractItems.id, req.params.itemId));
+        .where(eq(priceContractItems.id, (req.params.itemId as string)));
       if (rows.length === 0) return res.status(404).json({ message: "Contract item not found" });
       const contract = await storage.getPriceContract(rows[0].contractId);
       if (!contract || contract.source !== "invoice-discount") {
         return res.status(403).json({ message: "Only items in auto-saved contracts can be edited via this endpoint" });
       }
-      const updated = await storage.updateContractItem(req.params.itemId, parsedPrice);
+      const updated = await storage.updateContractItem((req.params.itemId as string), parsedPrice);
       if (!updated) return res.status(404).json({ message: "Contract item not found or could not be updated" });
       res.json(updated);
     } catch (e: any) {
@@ -1537,13 +1543,13 @@ export async function registerRoutes(
     try {
       const items = await db.select({ id: priceContractItems.id, contractId: priceContractItems.contractId })
         .from(priceContractItems)
-        .where(eq(priceContractItems.id, req.params.itemId));
+        .where(eq(priceContractItems.id, (req.params.itemId as string)));
       if (items.length === 0) return res.status(404).json({ message: "Contract item not found" });
       const contract = await storage.getPriceContract(items[0].contractId);
       if (!contract || contract.source !== "invoice-discount") {
         return res.status(403).json({ message: "Only items in auto-saved contracts can be deleted via this endpoint" });
       }
-      await storage.deleteContractItem(req.params.itemId);
+      await storage.deleteContractItem((req.params.itemId as string));
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -1593,7 +1599,7 @@ export async function registerRoutes(
 
   // Specific invoice type route for TanStack query key format
   app.get("/api/invoices/type/:type", async (req, res) => {
-    const invs = await storage.getInvoices(req.params.type);
+    const invs = await storage.getInvoices((req.params.type as string));
     res.json(invs);
   });
 
@@ -1605,8 +1611,8 @@ export async function registerRoutes(
 
   app.get("/api/invoices/:id", async (req, res) => {
     // Skip non-UUID ids
-    if (req.params.id === "new" || req.params.id === "type" || req.params.id === "next-number") return res.status(404).json({ message: "Not found" });
-    const inv = await storage.getInvoice(req.params.id);
+    if ((req.params.id as string) === "new" || (req.params.id as string) === "type" || (req.params.id as string) === "next-number") return res.status(404).json({ message: "Not found" });
+    const inv = await storage.getInvoice((req.params.id as string));
     if (!inv) return res.status(404).json({ message: "Invoice not found" });
     res.json(inv);
   });
@@ -1616,7 +1622,7 @@ export async function registerRoutes(
       return res.status(403).json({ message: "Admin access required" });
     }
     try {
-      const inv = await storage.getInvoice(req.params.id);
+      const inv = await storage.getInvoice((req.params.id as string));
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
 
       // Reverse stock for non-draft sales invoices
@@ -1625,9 +1631,10 @@ export async function registerRoutes(
           if (li.itemId) {
             const item = await storage.getItem(li.itemId);
             if (item) {
+              const liQtyB = parseFloat(String((li as any).quantity || "0"));
               const bottlesToAdd = ((li as any).saleUnit === "pack" && item.packSize > 1)
-                ? li.quantity * item.packSize
-                : li.quantity;
+                ? liQtyB * item.packSize
+                : liQtyB;
               await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
             }
           }
@@ -1635,7 +1642,7 @@ export async function registerRoutes(
       }
 
       // Delete linked payments and their journal entries
-      const linkedPayments = await db.select().from(payments).where(eq(payments.invoiceId, req.params.id));
+      const linkedPayments = await db.select().from(payments).where(eq(payments.invoiceId, (req.params.id as string)));
       for (const pmt of linkedPayments) {
         const pmtJEs = await db.select({ id: journalEntries.id }).from(journalEntries)
           .where(and(eq(journalEntries.sourceType, "payment"), eq(journalEntries.sourceId, pmt.id)));
@@ -1644,17 +1651,17 @@ export async function registerRoutes(
           await db.delete(journalEntries).where(eq(journalEntries.id, je.id));
         }
       }
-      await db.delete(payments).where(eq(payments.invoiceId, req.params.id));
+      await db.delete(payments).where(eq(payments.invoiceId, (req.params.id as string)));
 
       // Delete invoice journal entries
       const relatedJEs = await db.select({ id: journalEntries.id }).from(journalEntries)
-        .where(and(eq(journalEntries.sourceType, "invoice"), eq(journalEntries.sourceId, req.params.id)));
+        .where(and(eq(journalEntries.sourceType, "invoice"), eq(journalEntries.sourceId, (req.params.id as string))));
       for (const je of relatedJEs) {
         await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, je.id));
         await db.delete(journalEntries).where(eq(journalEntries.id, je.id));
       }
 
-      await storage.deleteInvoice(req.params.id);
+      await storage.deleteInvoice((req.params.id as string));
       res.json({ ok: true });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -1720,7 +1727,8 @@ export async function registerRoutes(
               if (li.itemId) {
                 const item = itemMap.get(li.itemId) as any;
                 if (item) {
-                  const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+                  const liQtyC = parseFloat(String((li as any).quantity || "0"));
+                  const qty = (li.saleUnit === "pack" && item.packSize > 1) ? liQtyC * item.packSize : liQtyC;
                   totalCost += (parseFloat(item.costPrice) / (item.packSize || 1)) * qty;
                 }
               }
@@ -1911,8 +1919,8 @@ export async function registerRoutes(
   app.patch("/api/invoices/:id", async (req, res) => {
     try {
       const { items: lineItems, ...invoiceData } = req.body;
-      const parsedItems = lineItems ? (lineItems as any[]).map((li: any) => insertInvoiceItemSchema.parse({ ...li, invoiceId: req.params.id })) : undefined;
-      const inv = await storage.updateInvoice(req.params.id, invoiceData, parsedItems);
+      const parsedItems = lineItems ? (lineItems as any[]).map((li: any) => insertInvoiceItemSchema.parse({ ...li, invoiceId: (req.params.id as string) })) : undefined;
+      const inv = await storage.updateInvoice((req.params.id as string), invoiceData, parsedItems);
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
       res.json(inv);
     } catch (e: any) {
@@ -1923,7 +1931,7 @@ export async function registerRoutes(
   // Document view/print/download
   app.get("/api/invoices/:id/pdf", async (req, res) => {
     try {
-      const inv = await storage.getInvoice(req.params.id);
+      const inv = await storage.getInvoice((req.params.id as string));
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
 
       const customer = await storage.getCustomer(inv.customerId);
@@ -1976,7 +1984,7 @@ export async function registerRoutes(
     const auth = await requireCustomerAuth(req, res);
     if (!auth) return;
     try {
-      const inv = await storage.getInvoice(req.params.id);
+      const inv = await storage.getInvoice((req.params.id as string));
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
       if (inv.customerId !== auth.customerId) return res.status(403).json({ message: "Forbidden" });
 
@@ -2003,7 +2011,7 @@ export async function registerRoutes(
   app.post("/api/invoices/:id/send-email", async (req, res) => {
     try {
       const body = sendEmailBodySchema.parse(req.body);
-      const inv = await storage.getInvoice(req.params.id);
+      const inv = await storage.getInvoice((req.params.id as string));
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
 
       const customer = await storage.getCustomer(inv.customerId);
@@ -2084,7 +2092,7 @@ export async function registerRoutes(
       if (!allowed.includes(newStatus)) {
         return res.status(400).json({ message: "Invalid status value" });
       }
-      const inv = await storage.getInvoice(req.params.id);
+      const inv = await storage.getInvoice((req.params.id as string));
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
 
       // Enforce valid transitions
@@ -2119,7 +2127,7 @@ export async function registerRoutes(
 
   app.get("/api/email-logs/customer/:customerId", async (req, res) => {
     try {
-      const logs = await storage.getEmailLogsByCustomer(req.params.customerId);
+      const logs = await storage.getEmailLogsByCustomer((req.params.customerId as string));
       res.json(logs);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -2866,7 +2874,7 @@ export async function registerRoutes(
   app.delete("/api/payments/:id", async (req, res) => {
     if (!req.user) return res.status(401).json({ message: "Not authenticated" });
     try {
-      await storage.deletePayment(req.params.id);
+      await storage.deletePayment((req.params.id as string));
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -2932,7 +2940,7 @@ export async function registerRoutes(
   // Handle TanStack query key format for sales report
   app.get("/api/reports/sales/:from/:to/:customerId", async (req, res) => {
     try {
-      const report = await storage.getSalesReport(req.params.from, req.params.to, req.params.customerId);
+      const report = await storage.getSalesReport((req.params.from as string), (req.params.to as string), (req.params.customerId as string));
       res.json(report);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -2942,8 +2950,8 @@ export async function registerRoutes(
   app.get("/api/reports/items/:from/:to/:customerId/:categoryId", async (req, res) => {
     try {
       const report = await storage.getItemSalesReport(
-        req.params.from, req.params.to,
-        req.params.customerId, req.params.categoryId
+        (req.params.from as string), (req.params.to as string),
+        (req.params.customerId as string), (req.params.categoryId as string)
       );
       res.json(report);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -2952,27 +2960,27 @@ export async function registerRoutes(
   app.get("/api/invoices/last-prices/:customerId", async (req, res) => {
     try {
       const excludeId = typeof req.query.exclude === "string" ? req.query.exclude : undefined;
-      const prices = await storage.getCustomerLastPrices(req.params.customerId, excludeId);
+      const prices = await storage.getCustomerLastPrices((req.params.customerId as string), excludeId);
       res.json(prices);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   app.get("/api/reports/savings/:customerId/:from/:to", async (req, res) => {
     try {
-      const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
+      const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
       res.json(report);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   app.get("/api/reports/savings/:customerId/:from/:to/html", async (req, res) => {
     try {
-      const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
+      const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
       const companyName = settingsMap["company_name"] || "GlobiPOS LTD";
 
-      const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-      const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const fromLabel = new Date((req.params.from as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const toLabel = new Date((req.params.to as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 
       type SavingsLine = { itemName: string; qty: number; unitPrice: number; discountPercent: number; savings: number };
       type SavingsInv = { invoiceNumber: string; invoiceDate: string; invoiceTotal: number; totalSavings: number; lines: SavingsLine[] };
@@ -3076,7 +3084,7 @@ export async function registerRoutes(
 
   app.post("/api/reports/savings/:customerId/:from/:to/email", async (req, res) => {
     try {
-      const customer = await storage.getCustomer(req.params.customerId);
+      const customer = await storage.getCustomer((req.params.customerId as string));
       if (!customer) return res.status(404).json({ message: "Customer not found" });
       const rawEmail = (req.body && req.body.email) ? String(req.body.email).trim() : customer.email;
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -3084,13 +3092,13 @@ export async function registerRoutes(
       if (!emailRegex.test(rawEmail)) return res.status(400).json({ message: "Invalid email address" });
       const toEmail = rawEmail;
 
-      const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
+      const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
       const companyName = settingsMap["company_name"] || "GlobiPOS LTD";
 
-      const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-      const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const fromLabel = new Date((req.params.from as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const toLabel = new Date((req.params.to as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 
       type SavingsLine = { itemName: string; qty: number; unitPrice: number; discountPercent: number; savings: number };
       type SavingsInv = { invoiceNumber: string; invoiceDate: string; invoiceTotal: number; totalSavings: number; lines: SavingsLine[] };
@@ -3191,7 +3199,7 @@ export async function registerRoutes(
       const result = await sendSavingsReportEmail(toEmail, subject, html, report.customerName);
       if (!result.success) {
         await storage.createEmailLog({
-          customerId: req.params.customerId,
+          customerId: (req.params.customerId as string),
           customerName: report.customerName,
           toEmail,
           subject,
@@ -3201,7 +3209,7 @@ export async function registerRoutes(
         return res.status(500).json({ message: result.error || "Failed to send email" });
       }
       await storage.createEmailLog({
-        customerId: req.params.customerId,
+        customerId: (req.params.customerId as string),
         customerName: report.customerName,
         toEmail,
         subject,
@@ -3213,13 +3221,13 @@ export async function registerRoutes(
 
   app.get("/api/reports/savings/:customerId/:from/:to/excel", async (req, res) => {
     try {
-      const report = await storage.getCustomerSavingsReport(req.params.customerId, req.params.from, req.params.to);
+      const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
       const companyName = settingsMap["company_name"] || "GlobiPOS";
 
-      const fromLabel = new Date(req.params.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-      const toLabel = new Date(req.params.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const fromLabel = new Date((req.params.from as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const toLabel = new Date((req.params.to as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
 
       const workbook = new ExcelJS.Workbook();
       workbook.creator = companyName;
@@ -3369,7 +3377,7 @@ export async function registerRoutes(
       ];
 
       const safeCustomer = report.customerName.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
-      const filename = `savings_${safeCustomer}_${req.params.from}_${req.params.to}.xlsx`;
+      const filename = `savings_${safeCustomer}_${(req.params.from as string)}_${(req.params.to as string)}.xlsx`;
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       const buf = await workbook.xlsx.writeBuffer();
@@ -3388,10 +3396,10 @@ export async function registerRoutes(
 
   app.get("/api/reports/statement/:customerId/pdf", async (req, res) => {
     try {
-      const customer = await storage.getCustomer(req.params.customerId);
+      const customer = await storage.getCustomer((req.params.customerId as string));
       if (!customer) return res.status(404).json({ message: "Customer not found" });
       const statements = await storage.getCustomerStatements();
-      const st = statements.find(s => s.customerId === req.params.customerId);
+      const st = statements.find(s => s.customerId === (req.params.customerId as string));
       const autoPrint = req.query.print === "1";
 
       const allSettings = await storage.getSettings();
@@ -3413,14 +3421,14 @@ export async function registerRoutes(
 
   app.post("/api/reports/statement/:customerId/send-email", async (req, res) => {
     try {
-      const customer = await storage.getCustomer(req.params.customerId);
+      const customer = await storage.getCustomer((req.params.customerId as string));
       if (!customer) return res.status(404).json({ message: "Customer not found" });
 
       const toEmail = req.body?.email || customer.email;
       if (!toEmail) return res.status(400).json({ message: "Customer has no email address" });
 
       const statements = await storage.getCustomerStatements();
-      const st = statements.find(s => s.customerId === req.params.customerId);
+      const st = statements.find(s => s.customerId === (req.params.customerId as string));
       if (!st) return res.status(404).json({ message: "No statement data found for this customer" });
 
       const allSettings = await storage.getSettings();
@@ -4190,7 +4198,7 @@ export async function registerRoutes(
 
   app.get("/api/version-control/:id/download", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const snap = await storage.getVersionSnapshot(req.params.id);
+      const snap = await storage.getVersionSnapshot((req.params.id as string));
       if (!snap) return res.status(404).json({ message: "Snapshot not found" });
       const safeName = snap.name.replace(/[^a-z0-9_\-]/gi, "_").toLowerCase();
       res.setHeader("Content-Type", "application/json");
@@ -4203,7 +4211,7 @@ export async function registerRoutes(
 
   app.post("/api/version-control/:id/rollback", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const snap = await storage.getVersionSnapshot(req.params.id);
+      const snap = await storage.getVersionSnapshot((req.params.id as string));
       if (!snap || !snap.dataSnapshot) return res.status(404).json({ message: "Snapshot not found or has no data" });
       const payload = JSON.parse(snap.dataSnapshot);
       if (!payload?.data) return res.status(400).json({ message: "Snapshot data is invalid" });
@@ -4266,9 +4274,9 @@ export async function registerRoutes(
 
   app.delete("/api/version-control/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const snap = await storage.getVersionSnapshot(req.params.id);
+      const snap = await storage.getVersionSnapshot((req.params.id as string));
       if (!snap) return res.status(404).json({ message: "Snapshot not found" });
-      await storage.deleteVersionSnapshot(req.params.id);
+      await storage.deleteVersionSnapshot((req.params.id as string));
       res.json({ message: "Snapshot deleted" });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -4282,7 +4290,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/suppliers/:id", async (req, res) => {
-    const sup = await storage.getSupplier(req.params.id);
+    const sup = await storage.getSupplier((req.params.id as string));
     if (!sup) return res.status(404).json({ message: "Supplier not found" });
     res.json(sup);
   });
@@ -4299,7 +4307,7 @@ export async function registerRoutes(
 
   app.patch("/api/suppliers/:id", async (req, res) => {
     try {
-      const sup = await storage.updateSupplier(req.params.id, req.body);
+      const sup = await storage.updateSupplier((req.params.id as string), req.body);
       if (!sup) return res.status(404).json({ message: "Supplier not found" });
       res.json(sup);
     } catch (e: any) {
@@ -4312,13 +4320,13 @@ export async function registerRoutes(
       return res.status(403).json({ message: "Admin access required" });
     }
     try {
-      const sup = await storage.getSupplier(req.params.id);
+      const sup = await storage.getSupplier((req.params.id as string));
       if (!sup) return res.status(404).json({ message: "Supplier not found" });
-      const linked = await db.select({ id: purchaseInvoices.id }).from(purchaseInvoices).where(eq(purchaseInvoices.supplierId, req.params.id)).limit(1);
+      const linked = await db.select({ id: purchaseInvoices.id }).from(purchaseInvoices).where(eq(purchaseInvoices.supplierId, (req.params.id as string))).limit(1);
       if (linked.length > 0) {
         return res.status(400).json({ message: "Cannot delete: supplier has purchase invoices. Remove them first or mark the supplier inactive." });
       }
-      await storage.deleteSupplier(req.params.id);
+      await storage.deleteSupplier((req.params.id as string));
       res.json({ ok: true });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -4505,7 +4513,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/purchase-invoices/:id", async (req, res) => {
-    const inv = await storage.getPurchaseInvoice(req.params.id);
+    const inv = await storage.getPurchaseInvoice((req.params.id as string));
     if (!inv) return res.status(404).json({ message: "Purchase invoice not found" });
     res.json(inv);
   });
@@ -4605,7 +4613,7 @@ export async function registerRoutes(
       return res.status(403).json({ message: "Admin access required" });
     }
     try {
-      const existing = await storage.getPurchaseInvoice(req.params.id);
+      const existing = await storage.getPurchaseInvoice((req.params.id as string));
       if (!existing) return res.status(404).json({ message: "Purchase invoice not found" });
 
       // Reverse stock impact
@@ -4626,13 +4634,13 @@ export async function registerRoutes(
 
       // Delete journal entries for this purchase
       const relatedJEs = await db.select({ id: journalEntries.id }).from(journalEntries)
-        .where(and(eq(journalEntries.sourceType, "purchase"), eq(journalEntries.sourceId, req.params.id)));
+        .where(and(eq(journalEntries.sourceType, "purchase"), eq(journalEntries.sourceId, (req.params.id as string))));
       for (const je of relatedJEs) {
         await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, je.id));
         await db.delete(journalEntries).where(eq(journalEntries.id, je.id));
       }
 
-      await storage.deletePurchaseInvoice(req.params.id);
+      await storage.deletePurchaseInvoice((req.params.id as string));
       res.json({ ok: true });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -4710,14 +4718,14 @@ export async function registerRoutes(
   });
 
   app.get("/api/portal/customer/:id", async (req, res) => {
-    const customer = await storage.getCustomer(req.params.id);
+    const customer = await storage.getCustomer((req.params.id as string));
     if (!customer) return res.status(404).json({ message: "Not found" });
     res.json(customer);
   });
 
   app.get("/api/portal/customer/:id/invoices", async (req, res) => {
     try {
-      const invoices = await storage.getCustomerInvoices(req.params.id);
+      const invoices = await storage.getCustomerInvoices((req.params.id as string));
       res.json(invoices);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -4726,7 +4734,7 @@ export async function registerRoutes(
 
   app.get("/api/portal/customer/:id/orders", async (req, res) => {
     try {
-      const orders = await storage.getPortalOrders(req.params.id);
+      const orders = await storage.getPortalOrders((req.params.id as string));
       res.json(orders);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -4736,8 +4744,8 @@ export async function registerRoutes(
   app.get("/api/portal/customer/:id/statement", async (req, res) => {
     try {
       const statements = await storage.getCustomerStatements();
-      const st = statements.find(s => s.customerId === req.params.id);
-      res.json(st || { customerId: req.params.id, customerName: "", totalInvoiced: "0.00", totalPaid: "0.00", balance: "0.00", invoiceCount: 0 });
+      const st = statements.find(s => s.customerId === (req.params.id as string));
+      res.json(st || { customerId: (req.params.id as string), customerName: "", totalInvoiced: "0.00", totalPaid: "0.00", balance: "0.00", invoiceCount: 0 });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
@@ -4845,20 +4853,20 @@ export async function registerRoutes(
 
   // Portal push subscription — requires portal JWT
   app.post("/api/portal/customer/:id/push/subscribe", async (req, res) => {
-    if (!requirePortalAuth(req, res, req.params.id)) return;
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
     try {
       const { endpoint, keys } = req.body;
       if (!endpoint) return res.status(400).json({ message: "endpoint required" });
       const userAgent = (req.headers["user-agent"] as string | undefined) || null;
       await db.insert(customerPushSubscriptions)
-        .values({ customerId: req.params.id, endpoint, p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent })
-        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: req.params.id, p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent } });
+        .values({ customerId: (req.params.id as string), endpoint, p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent })
+        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: (req.params.id as string), p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent } });
       // Prune older subscriptions for this customer on the same device (same userAgent, different
       // endpoint) — happens when a browser reinstall / re-subscribe issues a new push endpoint.
       if (userAgent) {
         await db.delete(customerPushSubscriptions).where(
           and(
-            eq(customerPushSubscriptions.customerId, req.params.id),
+            eq(customerPushSubscriptions.customerId, (req.params.id as string)),
             eq(customerPushSubscriptions.userAgent, userAgent),
             sql`${customerPushSubscriptions.endpoint} != ${endpoint}`
           )
@@ -4869,11 +4877,11 @@ export async function registerRoutes(
   });
 
   app.delete("/api/portal/customer/:id/push/subscribe", async (req, res) => {
-    if (!requirePortalAuth(req, res, req.params.id)) return;
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
     try {
       const { endpoint } = req.body;
       if (endpoint) await db.delete(customerPushSubscriptions).where(
-        and(eq(customerPushSubscriptions.endpoint, endpoint), eq(customerPushSubscriptions.customerId, req.params.id))
+        and(eq(customerPushSubscriptions.endpoint, endpoint), eq(customerPushSubscriptions.customerId, (req.params.id as string)))
       );
       res.json({ message: "Unsubscribed" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -4881,16 +4889,16 @@ export async function registerRoutes(
 
   // Portal loyalty endpoint — requires portal JWT
   app.get("/api/portal/customer/:id/loyalty", async (req, res) => {
-    if (!requirePortalAuth(req, res, req.params.id)) return;
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
     try {
       const history = await db.select().from(customerLoyaltyPoints)
-        .where(eq(customerLoyaltyPoints.customerId, req.params.id))
+        .where(eq(customerLoyaltyPoints.customerId, (req.params.id as string)))
         .orderBy(desc(customerLoyaltyPoints.createdAt)).limit(50);
       const [totals] = await db.select({
         earned: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='earn' then ${customerLoyaltyPoints.points} else 0 end),0)`,
         redeemed: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='redeem' then ${customerLoyaltyPoints.points} else 0 end),0)`,
         balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
-      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, req.params.id));
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, (req.params.id as string)));
       const balance = totals?.balance || 0;
       const tier = balance >= 5000 ? "Gold" : balance >= 1000 ? "Silver" : "Bronze";
       const nextTier = tier === "Bronze" ? { name: "Silver", threshold: 1000 } : tier === "Silver" ? { name: "Gold", threshold: 5000 } : null;
@@ -4905,7 +4913,7 @@ export async function registerRoutes(
     if (!requirePortalAuth(req, res, customerId)) return;
     try {
       const orders = await storage.getPortalOrders(customerId);
-      const original = orders.find((o: any) => o.id === req.params.id);
+      const original = orders.find((o: any) => o.id === (req.params.id as string));
       if (!original) return res.status(404).json({ message: "Order not found" });
       const customer = await storage.getCustomer(customerId);
       if (!customer) return res.status(404).json({ message: "Customer not found" });
@@ -4926,7 +4934,7 @@ export async function registerRoutes(
       const vatAmount = subtotal * VAT_RATE;
       const total = subtotal + vatAmount;
       const newOrder = await storage.createPortalOrder(
-        { customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: `Reorder of ${req.params.id.slice(0, 8)}`, status: "pending" },
+        { customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: `Reorder of ${(req.params.id as string).slice(0, 8)}`, status: "pending" },
         processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
       );
       res.json(newOrder);
@@ -4954,7 +4962,7 @@ export async function registerRoutes(
       if (!["pending", "confirmed", "rejected", "completed"].includes(status)) {
         return res.status(400).json({ message: "Invalid status" });
       }
-      const updated = await storage.updatePortalOrderStatus(req.params.id, status);
+      const updated = await storage.updatePortalOrderStatus((req.params.id as string), status);
       if (!updated) return res.status(404).json({ message: "Order not found" });
       res.json(updated);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -4964,7 +4972,7 @@ export async function registerRoutes(
   app.post("/api/admin/portal-orders/:id/convert-to-invoice", requireAdmin, async (req, res) => {
     try {
       const allOrders = await storage.getAllPortalOrders();
-      const order = allOrders.find((o: any) => o.id === req.params.id);
+      const order = allOrders.find((o: any) => o.id === (req.params.id as string));
       if (!order) return res.status(404).json({ message: "Order not found" });
       if (order.invoiceId) return res.status(409).json({ message: "Order has already been converted to an invoice" });
       const customer = await storage.getCustomer(order.customerId);
@@ -5009,8 +5017,8 @@ export async function registerRoutes(
         lineItems
       );
 
-      await storage.updatePortalOrderStatus(req.params.id, "confirmed");
-      await storage.setPortalOrderInvoiceId(req.params.id, invoice.id);
+      await storage.updatePortalOrderStatus((req.params.id as string), "confirmed");
+      await storage.setPortalOrderInvoiceId((req.params.id as string), invoice.id);
 
       res.json({ invoice, message: "Invoice created successfully" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -5172,7 +5180,7 @@ export async function registerRoutes(
         const settings = await storage.getSettings();
         const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
         try {
-          await sendTestEmail(email, `Your ${companyName} login code`, `<p>Your one-time login code is: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>This code expires in 10 minutes.</p>`);
+          await (sendTestEmail as any)(email, `Your ${companyName} login code`, `<p>Your one-time login code is: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>This code expires in 10 minutes.</p>`);
         } catch { /* email failure non-fatal */ }
       }
       // Always return 200 with the same message — do not reveal whether email exists
@@ -5266,7 +5274,7 @@ export async function registerRoutes(
     if (!auth) return;
     try {
       const customer = await storage.getCustomer(auth.customerId);
-      const item = await storage.getItem(req.params.id);
+      const item = await storage.getItem((req.params.id as string));
       if (!item) return res.status(404).json({ message: "Not found" });
       const pl = customer?.priceLevel || 1;
       res.json({ ...item, customerPrice: parseFloat(String((item as any)[`price${pl}`] || item.price1)) });
@@ -5279,7 +5287,7 @@ export async function registerRoutes(
     try {
       const customer = await storage.getCustomer(auth.customerId);
       const allItems = await storage.getAvailableItems();
-      const item = allItems.find((i: any) => i.barcode === req.params.barcode);
+      const item = allItems.find((i: any) => i.barcode === (req.params.barcode as string));
       if (!item) return res.status(404).json({ message: "Item not found for this barcode" });
       const pl = customer?.priceLevel || 1;
       res.json({ ...(item as any), customerPrice: parseFloat(String((item as any)[`price${pl}`] || (item as any).price1)) });
@@ -5381,7 +5389,7 @@ export async function registerRoutes(
       let proforma: any = null;
       try {
         const proformaItems = processedItems.map((pi) => ({
-          itemId: pi.itemId, itemName: pi.itemName, quantity: pi.quantity,
+          itemId: pi.itemId, description: pi.itemName || "", quantity: String(pi.quantity),
           unitPrice: pi.unitPrice, vatRate: "19.00", discount: "0.00",
           total: pi.total, invoiceId: "TEMP", saleUnit: "bottle",
         }));
@@ -5404,7 +5412,7 @@ export async function registerRoutes(
             const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
             const subject = `Order Confirmation — ${proforma.invoiceNumber}`;
             const html = `<p>Dear ${customer.name},</p><p>Thank you for your order. Your proforma reference is <strong>${proforma.invoiceNumber}</strong> for <strong>€${total.toFixed(2)}</strong>.</p><p>We will process your order shortly.</p><p>${companyName}</p>`;
-            await sendTestEmail(customer.email, subject, html);
+            await (sendTestEmail as any)(customer.email, subject, html);
           }
         } catch { /* email non-fatal */ }
       } catch { /* proforma creation non-fatal */ }
@@ -5444,7 +5452,7 @@ export async function registerRoutes(
     if (!auth) return;
     try {
       const orders = await storage.getPortalOrders(auth.customerId);
-      const original = orders.find((o: any) => o.id === req.params.id);
+      const original = orders.find((o: any) => o.id === (req.params.id as string));
       if (!original) return res.status(404).json({ message: "Order not found" });
 
       const orderItems = (original.items || []).map((i: any) => ({ itemId: i.itemId, quantity: i.quantity }));
@@ -5468,7 +5476,7 @@ export async function registerRoutes(
       const vatAmount = subtotal * VAT_RATE;
       const total = subtotal + vatAmount;
       const newOrder = await storage.createPortalOrder(
-        { customerId: auth.customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: `Reorder of ${req.params.id.slice(0, 8)}`, status: "pending" },
+        { customerId: auth.customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: `Reorder of ${(req.params.id as string).slice(0, 8)}`, status: "pending" },
         processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
       );
       res.json(newOrder);
@@ -5636,10 +5644,10 @@ export async function registerRoutes(
       if (!title?.trim() || !body?.trim()) return res.status(400).json({ message: "Title and body required" });
 
       const subs = await db.select().from(customerPushSubscriptions)
-        .where(eq(customerPushSubscriptions.customerId, req.params.id));
+        .where(eq(customerPushSubscriptions.customerId, (req.params.id as string)));
       if (!subs.length) return res.status(404).json({ message: "No push subscriptions found for this customer" });
 
-      await sendPushToCustomer(req.params.id, { title: title.trim(), body: body.trim(), url: url || "/" });
+      await sendPushToCustomer((req.params.id as string), { title: title.trim(), body: body.trim(), url: url || "/" });
       res.json({ message: "Push notification sent" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -6020,7 +6028,7 @@ export async function registerRoutes(
   // allowing a duplicate charge or spinning forever.
   app.get("/api/pos/card-terminal/charge-status/:orderId", requireStaff, async (req, res) => {
     try {
-      const order = await storage.getPosOrder(req.params.orderId);
+      const order = await storage.getPosOrder((req.params.orderId as string));
       if (!order) {
         return res.status(404).json({ success: false, message: "Order not found" });
       }
@@ -6138,8 +6146,8 @@ export async function registerRoutes(
       const addDays = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
 
       const inv1Items = [
-        { description: "Château Margaux 2018", quantity: 6, unitPrice: "189.99", discount: "0", discountPercent: "0", total: "1139.94", itemId: createdItems[0].id },
-        { description: "Cloudy Bay Sauvignon Blanc 12-pack", quantity: 2, unitPrice: "288.00", discount: "0", discountPercent: "0", total: "576.00", itemId: createdItems[5].id },
+        { description: "Château Margaux 2018", quantity: "6", unitPrice: "189.99", discount: "0", discountPercent: "0", total: "1139.94", itemId: createdItems[0].id },
+        { description: "Cloudy Bay Sauvignon Blanc 12-pack", quantity: "2", unitPrice: "288.00", discount: "0", discountPercent: "0", total: "576.00", itemId: createdItems[5].id },
       ];
       const inv1Sub = 1715.94;
       const inv1Tax = +(inv1Sub * 0.19).toFixed(2);
@@ -6152,8 +6160,8 @@ export async function registerRoutes(
       await db.insert(invoiceItems).values(inv1Items.map(li => ({ ...li, invoiceId: inv1.id })));
 
       const inv2Items = [
-        { description: "Dom Pérignon 2013", quantity: 12, unitPrice: "239.99", discount: "50.00", discountPercent: "0", total: "2829.88", itemId: createdItems[9].id },
-        { description: "Macallan 18 Year", quantity: 6, unitPrice: "319.99", discount: "0", discountPercent: "0", total: "1919.94", itemId: createdItems[12].id },
+        { description: "Dom Pérignon 2013", quantity: "12", unitPrice: "239.99", discount: "50.00", discountPercent: "0", total: "2829.88", itemId: createdItems[9].id },
+        { description: "Macallan 18 Year", quantity: "6", unitPrice: "319.99", discount: "0", discountPercent: "0", total: "1919.94", itemId: createdItems[12].id },
       ];
       const inv2Sub = 4749.82;
       const inv2Tax = +(inv2Sub * 0.19).toFixed(2);
@@ -6171,7 +6179,7 @@ export async function registerRoutes(
       });
 
       const inv3Items = [
-        { description: "Veuve Clicquot Yellow Label 6-pack", quantity: 4, unitPrice: "342.00", discount: "0", discountPercent: "0", total: "1368.00", itemId: createdItems[10].id },
+        { description: "Veuve Clicquot Yellow Label 6-pack", quantity: "4", unitPrice: "342.00", discount: "0", discountPercent: "0", total: "1368.00", itemId: createdItems[10].id },
       ];
       const [inv3] = await db.insert(invoices).values({
         invoiceNumber: "INV-00003", type: "invoice", customerId: createdCustomers[1].id,
@@ -6182,9 +6190,9 @@ export async function registerRoutes(
       await db.insert(invoiceItems).values(inv3Items.map(li => ({ ...li, invoiceId: inv3.id })));
 
       const inv4Items = [
-        { description: "Grey Goose Vodka", quantity: 24, unitPrice: "39.00", discount: "0", discountPercent: "5", total: "889.20", itemId: createdItems[14].id },
-        { description: "Hendrick's Gin", quantity: 12, unitPrice: "35.00", discount: "0", discountPercent: "0", total: "420.00", itemId: createdItems[15].id },
-        { description: "Prosecco Superiore DOCG 12-pack", quantity: 3, unitPrice: "168.00", discount: "0", discountPercent: "0", total: "504.00", itemId: createdItems[11].id },
+        { description: "Grey Goose Vodka", quantity: "24", unitPrice: "39.00", discount: "0", discountPercent: "5", total: "889.20", itemId: createdItems[14].id },
+        { description: "Hendrick's Gin", quantity: "12", unitPrice: "35.00", discount: "0", discountPercent: "0", total: "420.00", itemId: createdItems[15].id },
+        { description: "Prosecco Superiore DOCG 12-pack", quantity: "3", unitPrice: "168.00", discount: "0", discountPercent: "0", total: "504.00", itemId: createdItems[11].id },
       ];
       const inv4Sub = 1813.20;
       const inv4Tax = +(inv4Sub * 0.19).toFixed(2);
@@ -6197,8 +6205,8 @@ export async function registerRoutes(
       await db.insert(invoiceItems).values(inv4Items.map(li => ({ ...li, invoiceId: inv4.id })));
 
       const inv5Items = [
-        { description: "Barolo Riserva 2016", quantity: 12, unitPrice: "79.00", discount: "0", discountPercent: "0", total: "948.00", itemId: createdItems[3].id },
-        { description: "Whispering Angel Rosé 2023 12-pack", quantity: 2, unitPrice: "228.00", discount: "0", discountPercent: "0", total: "456.00", itemId: createdItems[17].id },
+        { description: "Barolo Riserva 2016", quantity: "12", unitPrice: "79.00", discount: "0", discountPercent: "0", total: "948.00", itemId: createdItems[3].id },
+        { description: "Whispering Angel Rosé 2023 12-pack", quantity: "2", unitPrice: "228.00", discount: "0", discountPercent: "0", total: "456.00", itemId: createdItems[17].id },
       ];
       const inv5Sub = 1404.00;
       const inv5Tax = +(inv5Sub * 0.19).toFixed(2);
@@ -6211,7 +6219,7 @@ export async function registerRoutes(
       await db.insert(invoiceItems).values(inv5Items.map(li => ({ ...li, invoiceId: inv5.id })));
 
       const cn1Items = [
-        { description: "Château Margaux 2018 (returned damaged)", quantity: 2, unitPrice: "189.99", discount: "0", discountPercent: "0", total: "379.98", itemId: createdItems[0].id },
+        { description: "Château Margaux 2018 (returned damaged)", quantity: "2", unitPrice: "189.99", discount: "0", discountPercent: "0", total: "379.98", itemId: createdItems[0].id },
       ];
       const cn1Sub = 379.98;
       const cn1Tax = +(cn1Sub * 0.19).toFixed(2);
@@ -6224,8 +6232,8 @@ export async function registerRoutes(
       await db.insert(invoiceItems).values(cn1Items.map(li => ({ ...li, invoiceId: cn1.id })));
 
       const pf1Items = [
-        { description: "Penfolds Grange 2017 6-pack", quantity: 2, unitPrice: "1999.00", discount: "0", discountPercent: "0", total: "3998.00", itemId: createdItems[2].id },
-        { description: "Riesling Spätlese 2022", quantity: 24, unitPrice: "26.00", discount: "0", discountPercent: "0", total: "624.00", itemId: createdItems[8].id },
+        { description: "Penfolds Grange 2017 6-pack", quantity: "2", unitPrice: "1999.00", discount: "0", discountPercent: "0", total: "3998.00", itemId: createdItems[2].id },
+        { description: "Riesling Spätlese 2022", quantity: "24", unitPrice: "26.00", discount: "0", discountPercent: "0", total: "624.00", itemId: createdItems[8].id },
       ];
       const pf1Sub = 4622.00;
       const pf1Tax = +(pf1Sub * 0.19).toFixed(2);
@@ -6238,8 +6246,8 @@ export async function registerRoutes(
       await db.insert(invoiceItems).values(pf1Items.map(li => ({ ...li, invoiceId: pf1.id })));
 
       const qt1Items = [
-        { description: "Rioja Gran Reserva 2015 12-pack", quantity: 5, unitPrice: "504.00", discount: "0", discountPercent: "10", total: "2268.00", itemId: createdItems[4].id },
-        { description: "Miraval Rosé 2023 6-pack", quantity: 4, unitPrice: "132.00", discount: "0", discountPercent: "0", total: "528.00", itemId: createdItems[18].id },
+        { description: "Rioja Gran Reserva 2015 12-pack", quantity: "5", unitPrice: "504.00", discount: "0", discountPercent: "10", total: "2268.00", itemId: createdItems[4].id },
+        { description: "Miraval Rosé 2023 6-pack", quantity: "4", unitPrice: "132.00", discount: "0", discountPercent: "0", total: "528.00", itemId: createdItems[18].id },
       ];
       const qt1Sub = 2796.00;
       const qt1Tax = +(qt1Sub * 0.19).toFixed(2);
@@ -6376,7 +6384,7 @@ export async function registerRoutes(
   });
 
   app.put("/api/accounts/:id", async (req, res) => {
-    const account = await storage.updateAccount(req.params.id, req.body);
+    const account = await storage.updateAccount((req.params.id as string), req.body);
     if (!account) return res.status(404).json({ message: "Account not found" });
     res.json(account);
   });
@@ -6451,7 +6459,8 @@ export async function registerRoutes(
             if (item) {
               const packSize = Number(item.packSize) > 1 ? Number(item.packSize) : 1;
               const costPerBottle = parseFloat(item.costPrice) / packSize;
-              const qty = (li.saleUnit === "pack" && packSize > 1) ? li.quantity * packSize : li.quantity;
+              const liQty = parseFloat(String((li as any).quantity || "0"));
+              const qty = (li.saleUnit === "pack" && packSize > 1) ? liQty * packSize : liQty;
               totalCost += costPerBottle * qty;
             }
           }
@@ -6680,10 +6689,10 @@ export async function registerRoutes(
   app.delete("/api/accounting/snapshots/:id", async (req, res) => {
     if (!req.user) return res.status(401).json({ message: "Not authenticated" });
     try {
-      const [snap] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, req.params.id));
-      const snapName = snap?.name ?? req.params.id;
-      await db.delete(accountingSnapshots).where(eq(accountingSnapshots.id, req.params.id));
-      await logActivity(req.user.id, req.user.username, "delete", "accounting_snapshot", req.params.id, `Deleted snapshot "${snapName}"`, null, null);
+      const [snap] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, (req.params.id as string)));
+      const snapName = snap?.name ?? (req.params.id as string);
+      await db.delete(accountingSnapshots).where(eq(accountingSnapshots.id, (req.params.id as string)));
+      await logActivity(req.user.id, req.user.username, "delete", "accounting_snapshot", (req.params.id as string), `Deleted snapshot "${snapName}"`, null, null);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -6742,7 +6751,7 @@ export async function registerRoutes(
   app.post("/api/accounting/snapshots/:id/rollback", async (req, res) => {
     if (!req.user) return res.status(401).json({ message: "Not authenticated" });
     try {
-      const [snap] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, req.params.id));
+      const [snap] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, (req.params.id as string)));
       if (!snap) return res.status(404).json({ message: "Snapshot not found" });
 
       const savedBalances: any[] = JSON.parse(snap.accountBalances);
@@ -7118,7 +7127,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/journal-entries/:id", async (req, res) => {
-    const entry = await storage.getJournalEntry(req.params.id);
+    const entry = await storage.getJournalEntry((req.params.id as string));
     if (!entry) return res.status(404).json({ message: "Journal entry not found" });
     res.json(entry);
   });
@@ -7156,7 +7165,7 @@ export async function registerRoutes(
       if (Math.abs(totalDebit - totalCredit) > 0.01) {
         return res.status(400).json({ message: `Debits (${totalDebit.toFixed(2)}) must equal Credits (${totalCredit.toFixed(2)})` });
       }
-      const updated = await storage.updateJournalEntry(req.params.id, { ...data, totalAmount: totalDebit.toFixed(2) }, lines);
+      const updated = await storage.updateJournalEntry((req.params.id as string), { ...data, totalAmount: totalDebit.toFixed(2) }, lines);
       if (!updated) return res.status(404).json({ message: "Journal entry not found" });
       res.json(updated);
     } catch (e: any) {
@@ -7166,7 +7175,7 @@ export async function registerRoutes(
 
   app.delete("/api/journal-entries/:id", async (req, res) => {
     try {
-      await storage.deleteJournalEntry(req.params.id);
+      await storage.deleteJournalEntry((req.params.id as string));
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -7231,7 +7240,8 @@ export async function registerRoutes(
             if (item) {
               const packSize = Number(item.packSize) > 1 ? Number(item.packSize) : 1;
               const costPerBottle = parseFloat(item.costPrice) / packSize;
-              const qty = (li.saleUnit === "pack" && packSize > 1) ? li.quantity * packSize : li.quantity;
+              const liQty2 = parseFloat(String((li as any).quantity || "0"));
+              const qty = (li.saleUnit === "pack" && packSize > 1) ? liQty2 * packSize : liQty2;
               totalCost += costPerBottle * qty;
             }
           }
@@ -7383,9 +7393,9 @@ export async function registerRoutes(
 
   app.patch("/api/expenses/:id", async (req, res) => {
     try {
-      const existing = await db.select().from(expenses).where(sql`id = ${req.params.id}`);
+      const existing = await db.select().from(expenses).where(sql`id = ${(req.params.id as string)}`);
       if (!existing.length) return res.status(404).json({ message: "Expense not found" });
-      const expense = await storage.updateExpense(req.params.id, req.body);
+      const expense = await storage.updateExpense((req.params.id as string), req.body);
       if (!expense) return res.status(404).json({ message: "Expense not found" });
 
       // Regenerate journal entry for this expense
@@ -7413,12 +7423,12 @@ export async function registerRoutes(
 
   app.delete("/api/expenses/:id", async (req, res) => {
     try {
-      const [exp] = await db.select().from(expenses).where(sql`id = ${req.params.id}`);
+      const [exp] = await db.select().from(expenses).where(sql`id = ${(req.params.id as string)}`);
       if (!exp) return res.status(404).json({ message: "Expense not found" });
       if ((exp as any).journalEntryId) {
         await storage.deleteJournalEntry((exp as any).journalEntryId);
       }
-      await db.delete(expenses).where(sql`id = ${req.params.id}`);
+      await db.delete(expenses).where(sql`id = ${(req.params.id as string)}`);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
@@ -7431,12 +7441,12 @@ export async function registerRoutes(
   });
 
   app.get("/api/reports/profit-loss/:from/:to", async (req, res) => {
-    const pl = await storage.getProfitAndLoss(req.params.from, req.params.to);
+    const pl = await storage.getProfitAndLoss((req.params.from as string), (req.params.to as string));
     res.json(pl);
   });
 
   app.get("/api/reports/balance-sheet/:asOf", async (req, res) => {
-    const bs = await storage.getBalanceSheet(req.params.asOf);
+    const bs = await storage.getBalanceSheet((req.params.asOf as string));
     res.json(bs);
   });
 
@@ -7543,7 +7553,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/reports/general-ledger/:accountId/:from/:to", async (req, res) => {
-    const gl = await storage.getGeneralLedger(req.params.accountId, req.params.from, req.params.to);
+    const gl = await storage.getGeneralLedger((req.params.accountId as string), (req.params.from as string), (req.params.to as string));
     res.json(gl);
   });
 
@@ -7555,7 +7565,7 @@ export async function registerRoutes(
   });
   app.get("/api/pos/locations/:id", requireAdmin, async (req, res) => {
     try {
-      const loc = await storage.getPosLocation(req.params.id);
+      const loc = await storage.getPosLocation((req.params.id as string));
       if (!loc) return res.status(404).json({ message: "Not found" });
       res.json(loc);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -7568,12 +7578,12 @@ export async function registerRoutes(
   });
   app.put("/api/pos/locations/:id", requireAdmin, async (req, res) => {
     try {
-      const loc = await storage.updatePosLocation(req.params.id, req.body);
+      const loc = await storage.updatePosLocation((req.params.id as string), req.body);
       res.json(loc);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/pos/locations/:id", requireAdmin, async (req, res) => {
-    try { await storage.deletePosLocation(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deletePosLocation((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // POS Terminals
@@ -7582,7 +7592,7 @@ export async function registerRoutes(
   });
   app.get("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
     try {
-      const t = await storage.getPosTerminal(req.params.id);
+      const t = await storage.getPosTerminal((req.params.id as string));
       if (!t) return res.status(404).json({ message: "Not found" });
       res.json(t);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -7595,12 +7605,12 @@ export async function registerRoutes(
   });
   app.put("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
     try {
-      const t = await storage.updatePosTerminal(req.params.id, req.body);
+      const t = await storage.updatePosTerminal((req.params.id as string), req.body);
       res.json(t);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
-    try { await storage.deletePosTerminal(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deletePosTerminal((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // POS Layout Sets
@@ -7615,25 +7625,25 @@ export async function registerRoutes(
   });
   app.get("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
     try {
-      const layout = await storage.getPosLayoutSet(req.params.id);
+      const layout = await storage.getPosLayoutSet((req.params.id as string));
       if (!layout) return res.status(404).json({ message: "Layout not found" });
       res.json(layout);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.put("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
-    try { res.json(await storage.updatePosLayoutSet(req.params.id, req.body)); } catch (e: any) { res.status(400).json({ message: e.message }); }
+    try { res.json(await storage.updatePosLayoutSet((req.params.id as string), req.body)); } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
-    try { await storage.deletePosLayoutSet(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deletePosLayoutSet((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.get("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
-    try { res.json(await storage.getPosLayoutButtons(req.params.id)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { res.json(await storage.getPosLayoutButtons((req.params.id as string))); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.put("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
     try {
       const { buttons } = req.body;
       if (!Array.isArray(buttons)) return res.status(400).json({ message: "buttons array required" });
-      const rows = await storage.setPosLayoutButtons(req.params.id, buttons.map((b: any) => ({ ...b, layoutSetId: req.params.id })));
+      const rows = await storage.setPosLayoutButtons((req.params.id as string), buttons.map((b: any) => ({ ...b, layoutSetId: (req.params.id as string) })));
       res.json(rows);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -7658,15 +7668,15 @@ export async function registerRoutes(
   });
   app.patch("/api/pos/orders/:id/void", requireAdmin, async (req, res) => {
     try {
-      const o = await storage.getPosOrder(req.params.id);
+      const o = await storage.getPosOrder((req.params.id as string));
       if (!o) return res.status(404).json({ message: "Not found" });
-      await storage.voidPosOrder(req.params.id);
+      await storage.voidPosOrder((req.params.id as string));
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.get("/api/pos/orders/:id", requireAdmin, async (req, res) => {
     try {
-      const o = await storage.getPosOrder(req.params.id);
+      const o = await storage.getPosOrder((req.params.id as string));
       if (!o) return res.status(404).json({ message: "Not found" });
       res.json(o);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -7679,7 +7689,7 @@ export async function registerRoutes(
   app.put("/api/pos/sync-config/:ruleKey", requireAdmin, async (req, res) => {
     try {
       const { label, offlineBehavior, description } = req.body;
-      res.json(await storage.upsertPosSyncConfig(req.params.ruleKey, label, offlineBehavior, description));
+      res.json(await storage.upsertPosSyncConfig((req.params.ruleKey as string), label, offlineBehavior, description));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
@@ -7694,7 +7704,7 @@ export async function registerRoutes(
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/pos/inbox-item/:id", requireAdmin, async (req, res) => {
-    try { await storage.deletePosInboxItem(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deletePosInboxItem((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // ─── Digital Signage ──────────────────────────────────────────────────────
@@ -7771,7 +7781,7 @@ export async function registerRoutes(
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/signage/media/:id", requireAdmin, async (req, res) => {
-    try { await storage.deleteSignageMedia(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deleteSignageMedia((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   app.get("/api/signage/playlists", requireAdmin, async (_req, res) => {
@@ -7789,37 +7799,37 @@ export async function registerRoutes(
   });
   app.patch("/api/signage/playlists/:id", requireAdmin, async (req, res) => {
     try {
-      const playlist = await storage.updateSignagePlaylist(req.params.id, req.body);
+      const playlist = await storage.updateSignagePlaylist((req.params.id as string), req.body);
       if (!playlist) return res.status(404).json({ message: "Playlist not found" });
       res.json(playlist);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/signage/playlists/:id", requireAdmin, async (req, res) => {
-    try { await storage.deleteSignagePlaylist(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deleteSignagePlaylist((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   app.post("/api/signage/playlists/:id/items", requireAdmin, async (req, res) => {
     try {
-      const existing = await storage.getSignagePlaylistItems(req.params.id);
-      const parsed = insertSignagePlaylistItemSchema.parse({ ...req.body, playlistId: req.params.id, sortOrder: req.body.sortOrder ?? existing.length });
+      const existing = await storage.getSignagePlaylistItems((req.params.id as string));
+      const parsed = insertSignagePlaylistItemSchema.parse({ ...req.body, playlistId: (req.params.id as string), sortOrder: req.body.sortOrder ?? existing.length });
       res.status(201).json(await storage.createSignagePlaylistItem(parsed));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.patch("/api/signage/playlists/:playlistId/items/:itemId", requireAdmin, async (req, res) => {
     try {
-      const item = await storage.updateSignagePlaylistItem(req.params.itemId, req.body);
+      const item = await storage.updateSignagePlaylistItem((req.params.itemId as string), req.body);
       if (!item) return res.status(404).json({ message: "Playlist item not found" });
       res.json(item);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/signage/playlists/:playlistId/items/:itemId", requireAdmin, async (req, res) => {
-    try { await storage.deleteSignagePlaylistItem(req.params.itemId); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deleteSignagePlaylistItem((req.params.itemId as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.post("/api/signage/playlists/:id/reorder", requireAdmin, async (req, res) => {
     try {
       const { itemIds } = req.body;
       if (!Array.isArray(itemIds)) return res.status(400).json({ message: "itemIds array required" });
-      await storage.reorderSignagePlaylistItems(req.params.id, itemIds);
+      await storage.reorderSignagePlaylistItems((req.params.id as string), itemIds);
       res.json({ ok: true });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
@@ -7837,19 +7847,19 @@ export async function registerRoutes(
   });
   app.patch("/api/signage/screens/:id", requireAdmin, async (req, res) => {
     try {
-      const screen = await storage.updateSignageScreen(req.params.id, req.body);
+      const screen = await storage.updateSignageScreen((req.params.id as string), req.body);
       if (!screen) return res.status(404).json({ message: "Screen not found" });
       res.json(screen);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/signage/screens/:id", requireAdmin, async (req, res) => {
-    try { await storage.deleteSignageScreen(req.params.id); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try { await storage.deleteSignageScreen((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // Public, unauthenticated — any browser (TV/streaming box) pointed at the pairing code plays this.
   app.get("/api/signage/play/:code", async (req, res) => {
     try {
-      const screen = await storage.getSignageScreenByCode(req.params.code.toUpperCase());
+      const screen = await storage.getSignageScreenByCode((req.params.code as string).toUpperCase());
       if (!screen) return res.status(404).json({ message: "Unknown pairing code" });
       const items = await resolveSignagePlaylist(screen.playlistId);
       res.json({ screen: { id: screen.id, name: screen.name, screenType: screen.screenType }, items });
@@ -7857,7 +7867,7 @@ export async function registerRoutes(
   });
   app.post("/api/signage/play/:code/heartbeat", async (req, res) => {
     try {
-      const screen = await storage.getSignageScreenByCode(req.params.code.toUpperCase());
+      const screen = await storage.getSignageScreenByCode((req.params.code as string).toUpperCase());
       if (!screen) return res.status(404).json({ message: "Unknown pairing code" });
       await storage.markSignageScreenSeen(screen.pairingCode);
       res.json({ ok: true });
@@ -7964,14 +7974,14 @@ export async function registerRoutes(
         const { createHash } = await import("crypto");
         updates.pin = createHash("sha256").update(String(updates.pin)).digest("hex");
       }
-      const cashier = await storage.updatePosCashier(req.params.id, updates);
+      const cashier = await storage.updatePosCashier((req.params.id as string), updates);
       if (!cashier) return res.status(404).json({ message: "Cashier not found" });
       res.json({ ...cashier, pin: "••••" });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.delete("/api/pos/cashiers/:id", requireAdmin, async (req, res) => {
     try {
-      await storage.deletePosCashier(req.params.id);
+      await storage.deletePosCashier((req.params.id as string));
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -7985,7 +7995,7 @@ export async function registerRoutes(
   });
   app.get("/api/pda/stock-take/sessions/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const session = await storage.getStockTakeSession(req.params.id);
+      const session = await storage.getStockTakeSession((req.params.id as string));
       if (!session) return res.status(404).json({ message: "Session not found" });
       res.json(session);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -7998,13 +8008,13 @@ export async function registerRoutes(
   });
   app.post("/api/pda/stock-take/sessions/:id/lines", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const data = insertStockTakeLineSchema.parse({ ...req.body, sessionId: req.params.id, scannedByUsername: req.user!.username });
+      const data = insertStockTakeLineSchema.parse({ ...req.body, sessionId: (req.params.id as string), scannedByUsername: req.user!.username });
       res.status(201).json(await storage.upsertStockTakeLine(data));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.post("/api/pda/stock-take/sessions/:id/submit", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const session = await storage.submitStockTakeSession(req.params.id);
+      const session = await storage.submitStockTakeSession((req.params.id as string));
       if (!session) return res.status(404).json({ message: "Session not found" });
       res.json(session);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -8017,7 +8027,7 @@ export async function registerRoutes(
   });
   app.get("/api/pda/transfers/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const transfer = await storage.getStockTransfer(req.params.id);
+      const transfer = await storage.getStockTransfer((req.params.id as string));
       if (!transfer) return res.status(404).json({ message: "Transfer not found" });
       res.json(transfer);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -8033,7 +8043,7 @@ export async function registerRoutes(
   });
   app.post("/api/pda/transfers/:id/complete", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const transfer = await storage.completeStockTransfer(req.params.id);
+      const transfer = await storage.completeStockTransfer((req.params.id as string));
       if (!transfer) return res.status(404).json({ message: "Transfer not found" });
       res.json(transfer);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
@@ -8149,7 +8159,7 @@ export async function registerRoutes(
   });
   app.get("/api/pda/grv/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const grv = await storage.getGoodsReceivedVoucher(req.params.id);
+      const grv = await storage.getGoodsReceivedVoucher((req.params.id as string));
       if (!grv) return res.status(404).json({ message: "GRV not found" });
       res.json(grv);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -8166,14 +8176,14 @@ export async function registerRoutes(
   app.patch("/api/pda/grv/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
       const { supplierId, invoiceNumberRaw, invoiceDateRaw } = req.body as { supplierId?: string; invoiceNumberRaw?: string; invoiceDateRaw?: string };
-      const updated = await storage.updateGoodsReceivedVoucher(req.params.id, { supplierId, invoiceNumberRaw, invoiceDateRaw });
+      const updated = await storage.updateGoodsReceivedVoucher((req.params.id as string), { supplierId, invoiceNumberRaw, invoiceDateRaw });
       if (!updated) return res.status(404).json({ message: "GRV not found" });
       res.json(updated);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.patch("/api/pda/grv/items/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const updated = await storage.updateGoodsReceivedVoucherItem(req.params.id, req.body);
+      const updated = await storage.updateGoodsReceivedVoucherItem((req.params.id as string), req.body);
       if (!updated) return res.status(404).json({ message: "Line not found" });
       res.json(updated);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
@@ -8182,7 +8192,7 @@ export async function registerRoutes(
     try {
       const { code, incrementBy } = req.body as { code: string; incrementBy?: number };
       if (!code) return res.status(400).json({ message: "code required" });
-      const result = await storage.scanGoodsReceivedVoucherLine(req.params.id, code, incrementBy ?? 1);
+      const result = await storage.scanGoodsReceivedVoucherLine((req.params.id as string), code, incrementBy ?? 1);
       if (!result) return res.status(404).json({ message: "No matching line item found for this code" });
       res.json(result);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
@@ -8192,7 +8202,7 @@ export async function registerRoutes(
   // supplier-balance updates, and journal-entry creation are identical and never duplicated.
   app.post("/api/pda/grv/:id/finalize", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const prep = await storage.prepareGrvFinalization(req.params.id);
+      const prep = await storage.prepareGrvFinalization((req.params.id as string));
       if (!prep) return res.status(404).json({ message: "GRV not found" });
       if (prep.alreadyCompleted) return res.json(prep.existing);
 
@@ -8200,7 +8210,7 @@ export async function registerRoutes(
       const parsedItems = prep.invoiceLineItems.map((li: any) => insertPurchaseInvoiceItemSchema.parse(li));
       const inv = await postPurchaseInvoice(data, parsedItems);
 
-      const grv = await storage.completeGrvFinalization(req.params.id, inv.id, prep.hasDiscrepancies);
+      const grv = await storage.completeGrvFinalization((req.params.id as string), inv.id, prep.hasDiscrepancies);
       res.json(grv);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
@@ -8275,7 +8285,7 @@ export async function registerRoutes(
     try {
       const terminal = (req as any).terminal;
       const data = insertPosShiftSchema.parse({ ...req.body, terminalId: terminal.id });
-      const shift = await storage.createPosShift({ ...data, syncedAt: new Date() });
+      const shift = await storage.createPosShift(data);
       res.json({ status: "ok", id: shift.id });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
@@ -8300,11 +8310,11 @@ export async function registerRoutes(
   });
 
   // Outbox queue size update (heartbeat from terminal)
-  // Terminal can only update its own record — req.params.id must match authenticated terminal.
+  // Terminal can only update its own record — (req.params.id as string) must match authenticated terminal.
   app.post("/api/pos/terminals/:id/heartbeat", requireTerminal, async (req, res) => {
     try {
       const terminal = (req as any).terminal;
-      if (req.params.id !== terminal.id) return res.status(403).json({ message: "Forbidden: terminal mismatch" });
+      if ((req.params.id as string) !== terminal.id) return res.status(403).json({ message: "Forbidden: terminal mismatch" });
       const { outboxQueueSize = 0, peripheralStatus } = req.body;
       const update: any = { lastSeenAt: new Date(), outboxQueueSize };
       if (peripheralStatus && typeof peripheralStatus === "object") {
@@ -8320,9 +8330,9 @@ export async function registerRoutes(
   // Peripheral config — back office writes, terminal reads via heartbeat response
   app.put("/api/pos/terminals/:id/peripheral-config", requireAdmin, async (req, res) => {
     try {
-      const t = await storage.getPosTerminal(req.params.id);
+      const t = await storage.getPosTerminal((req.params.id as string));
       if (!t) return res.status(404).json({ message: "Terminal not found" });
-      const updated = await storage.updatePosTerminal(req.params.id, { peripheralConfig: req.body } as any);
+      const updated = await storage.updatePosTerminal((req.params.id as string), { peripheralConfig: req.body } as any);
       res.json(updated);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -8340,7 +8350,7 @@ export async function registerRoutes(
   app.get("/api/pos/promotions/:id", requireAdmin, async (req, res) => {
     try {
       const rows = await db.select().from(posPromotions)
-        .where(eq(posPromotions.id, req.params.id));
+        .where(eq(posPromotions.id, (req.params.id as string)));
       if (rows.length === 0) return res.status(404).json({ message: "Not found" });
       res.json(rows[0]);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -8395,7 +8405,7 @@ export async function registerRoutes(
           active: body.active,
           updatedAt: new Date(),
         })
-        .where(eq(posPromotions.id, req.params.id))
+        .where(eq(posPromotions.id, (req.params.id as string)))
         .returning();
       if (!row) return res.status(404).json({ message: "Not found" });
       res.json(row);
@@ -8404,7 +8414,7 @@ export async function registerRoutes(
 
   app.delete("/api/pos/promotions/:id", requireAdmin, async (req, res) => {
     try {
-      await db.delete(posPromotions).where(eq(posPromotions.id, req.params.id));
+      await db.delete(posPromotions).where(eq(posPromotions.id, (req.params.id as string)));
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -8490,7 +8500,7 @@ export async function registerRoutes(
           depositSku: body.depositSku,
           active: body.active,
         })
-        .where(eq(posContainerDeposits.id, req.params.id))
+        .where(eq(posContainerDeposits.id, (req.params.id as string)))
         .returning();
       if (!row) return res.status(404).json({ message: "Not found" });
       res.json(row);
@@ -8499,7 +8509,7 @@ export async function registerRoutes(
 
   app.delete("/api/pos/container-deposits/:id", requireAdmin, async (req, res) => {
     try {
-      await db.delete(posContainerDeposits).where(eq(posContainerDeposits.id, req.params.id));
+      await db.delete(posContainerDeposits).where(eq(posContainerDeposits.id, (req.params.id as string)));
       res.json({ ok: true });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -8548,10 +8558,10 @@ export async function registerRoutes(
   app.get("/api/pos/returns/:id", requireAdmin, async (req, res) => {
     try {
       const rows = await db.select().from(posReturnOrders)
-        .where(eq(posReturnOrders.id, req.params.id));
+        .where(eq(posReturnOrders.id, (req.params.id as string)));
       if (rows.length === 0) return res.status(404).json({ message: "Not found" });
       const lines = await db.select().from(posReturnOrderLines)
-        .where(eq(posReturnOrderLines.returnOrderId, req.params.id));
+        .where(eq(posReturnOrderLines.returnOrderId, (req.params.id as string)));
       res.json({ ...rows[0], lines });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -8606,7 +8616,7 @@ export async function registerRoutes(
   app.get("/api/pos/shifts/:id", requireAdmin, async (req, res) => {
     try {
       const rows = await db.select().from(posShifts)
-        .where(eq(posShifts.id, req.params.id));
+        .where(eq(posShifts.id, (req.params.id as string)));
       if (rows.length === 0) return res.status(404).json({ message: "Not found" });
       res.json(rows[0]);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
@@ -8711,13 +8721,13 @@ export async function registerRoutes(
     if (keywords !== undefined) updates.keywords = Array.isArray(keywords) ? keywords : [];
     if (sortOrder !== undefined) updates.sortOrder = sortOrder;
     if (active !== undefined) updates.active = active;
-    const [entry] = await db.update(faqEntries).set(updates).where(eq(faqEntries.id, req.params.id)).returning();
+    const [entry] = await db.update(faqEntries).set(updates).where(eq(faqEntries.id, (req.params.id as string))).returning();
     if (!entry) return res.status(404).json({ error: "Not found" });
     res.json(entry);
   });
 
   app.delete("/api/faq/:id", requireAdmin, async (req, res) => {
-    await db.delete(faqEntries).where(eq(faqEntries.id, req.params.id));
+    await db.delete(faqEntries).where(eq(faqEntries.id, (req.params.id as string)));
     res.json({ ok: true });
   });
 
@@ -8745,7 +8755,7 @@ export async function registerRoutes(
     const msgs = await db
       .select()
       .from(chatMessages)
-      .where(eq(chatMessages.conversationId, req.params.id))
+      .where(eq(chatMessages.conversationId, (req.params.id as string)))
       .orderBy(chatMessages.createdAt);
     res.json(msgs);
   });
@@ -8755,16 +8765,16 @@ export async function registerRoutes(
     if (!message?.trim()) return res.status(400).json({ error: "message required" });
     const userId = (req as any).user?.id || null;
     const [msg] = await db.insert(chatMessages).values({
-      conversationId: req.params.id,
+      conversationId: (req.params.id as string),
       role: "staff",
       content: message.trim(),
       channel: "portal",
     }).returning();
     await db.update(chatConversations)
       .set({ lastMessageAt: new Date(), handoffStaffId: userId })
-      .where(eq(chatConversations.id, req.params.id));
+      .where(eq(chatConversations.id, (req.params.id as string)));
     // If WhatsApp, relay message
-    const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, req.params.id));
+    const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, (req.params.id as string)));
     if (conv?.channel === "whatsapp" && conv.waPhoneNumber) {
       await sendWhatsAppMessage(conv.waPhoneNumber, message.trim());
     }
@@ -8773,7 +8783,7 @@ export async function registerRoutes(
 
   // GET messages for a WhatsApp phone number (across all conversations, sorted by time)
   app.get("/api/whatsapp/messages-by-phone/:phone", requireAdmin, async (req, res) => {
-    const phone = decodeURIComponent(req.params.phone);
+    const phone = decodeURIComponent((req.params.phone as string));
     const convs = await db
       .select({ id: chatConversations.id })
       .from(chatConversations)
@@ -8835,7 +8845,7 @@ export async function registerRoutes(
     const userId = (req as any).user?.id || null;
     const [conv] = await db.update(chatConversations)
       .set({ status: "handoff", handoffStaffId: userId, handoffAt: new Date() })
-      .where(eq(chatConversations.id, req.params.id))
+      .where(eq(chatConversations.id, (req.params.id as string)))
       .returning();
     res.json(conv);
   });
@@ -8843,7 +8853,7 @@ export async function registerRoutes(
   app.post("/api/chat/conversations/:id/release", requireAdmin, async (req, res) => {
     const [conv] = await db.update(chatConversations)
       .set({ status: "active", handoffStaffId: null })
-      .where(eq(chatConversations.id, req.params.id))
+      .where(eq(chatConversations.id, (req.params.id as string)))
       .returning();
     res.json(conv);
   });
@@ -8853,7 +8863,7 @@ export async function registerRoutes(
     const convs = await db
       .select()
       .from(chatConversations)
-      .where(eq(chatConversations.customerId, req.params.id))
+      .where(eq(chatConversations.customerId, (req.params.id as string)))
       .orderBy(desc(chatConversations.lastMessageAt));
     res.json(convs);
   });
@@ -8883,7 +8893,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/portal/chat/conversation/:id/status", async (req, res) => {
-    const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, req.params.id));
+    const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, (req.params.id as string)));
     if (!conv) return res.status(404).json({ error: "Not found" });
     res.json({ status: conv.status, handoffStaffId: conv.handoffStaffId });
   });
@@ -8891,7 +8901,7 @@ export async function registerRoutes(
   app.post("/api/portal/chat/conversation/:id/request-handoff", async (req, res) => {
     const [conv] = await db.update(chatConversations)
       .set({ status: "handoff", handoffAt: new Date() })
-      .where(eq(chatConversations.id, req.params.id))
+      .where(eq(chatConversations.id, (req.params.id as string)))
       .returning();
     res.json(conv);
   });

@@ -12,10 +12,10 @@ import type { EmailLog } from "@shared/schema";
 
 export default function EmailLogs() {
   const [search, setSearch] = useState("");
-  const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const { toast } = useToast();
 
-  function copyReplyTo(id: number, address: string) {
+  function copyReplyTo(id: string, address: string) {
     navigator.clipboard.writeText(address).then(() => {
       setCopiedId(id);
       toast({ title: "Copied", description: address });

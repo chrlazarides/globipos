@@ -63,7 +63,7 @@ function LayoutForm({ initial, onClose }: { initial?: PosLayoutSet; onClose: () 
           <FormItem><FormLabel>Name</FormLabel><FormControl><Input {...field} placeholder="e.g. Bar Layout" data-testid="input-layout-name" /></FormControl><FormMessage /></FormItem>
         )} />
         <FormField control={form.control} name="description" render={({ field }) => (
-          <FormItem><FormLabel>Description</FormLabel><FormControl><Input {...field} placeholder="Optional description" /></FormControl><FormMessage /></FormItem>
+          <FormItem><FormLabel>Description</FormLabel><FormControl><Input {...field} value={field.value ?? ""} placeholder="Optional description" /></FormControl><FormMessage /></FormItem>
         )} />
         <FormField control={form.control} name="locationId" render={({ field }) => (
           <FormItem>

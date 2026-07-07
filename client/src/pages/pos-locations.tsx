@@ -66,11 +66,11 @@ function LocationForm({ initial, onClose }: { initial?: PosLocation; onClose: ()
           )} />
         </div>
         <FormField control={form.control} name="address" render={({ field }) => (
-          <FormItem><FormLabel>Address</FormLabel><FormControl><Input {...field} placeholder="123 Main St, Nicosia" /></FormControl><FormMessage /></FormItem>
+          <FormItem><FormLabel>Address</FormLabel><FormControl><Input {...field} value={field.value ?? ""} placeholder="123 Main St, Nicosia" /></FormControl><FormMessage /></FormItem>
         )} />
         <div className="grid grid-cols-2 gap-4">
           <FormField control={form.control} name="phone" render={({ field }) => (
-            <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} placeholder="+357 22 000000" /></FormControl><FormMessage /></FormItem>
+            <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} value={field.value ?? ""} placeholder="+357 22 000000" /></FormControl><FormMessage /></FormItem>
           )} />
           <FormField control={form.control} name="currencyCode" render={({ field }) => (
             <FormItem><FormLabel>Currency</FormLabel><FormControl><Input {...field} placeholder="EUR" /></FormControl><FormMessage /></FormItem>

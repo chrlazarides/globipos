@@ -257,7 +257,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   if (!user) {
     return (
       <AuthContext.Provider value={{ user, setUser, logout }}>
-        <LoginPage onLogin={u => setUser(u)} />
+        <LoginPage onLogin={u => setUser({ email: null, permissions: [], ...u })} />
       </AuthContext.Provider>
     );
   }

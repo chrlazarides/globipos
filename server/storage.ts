@@ -109,7 +109,7 @@ export interface IStorage {
   getCustomerStatements(): Promise<any[]>;
   getCustomerLastPrices(customerId: string, excludeInvoiceId?: string): Promise<Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]>>;
   getCustomerSavingsReport(customerId: string, from: string, to: string): Promise<any>;
-  getItemPriceHistory(itemId: string, limit?: number, from?: string, to?: string): Promise<{ invoiceId: string; invoiceNumber: string; date: string; customerId: string; customerName: string; quantity: number; unitPrice: string; discountPercent: string; discountAmount: string }[]>;
+  getItemPriceHistory(itemId: string, limit?: number, from?: string, to?: string): Promise<{ invoiceId: string; invoiceNumber: string; date: string; customerId: string; customerName: string; quantity: string; unitPrice: string; discountPercent: string; discountAmount: string }[]>;
   quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number): Promise<{ contractId: string }>;
   getContractItems(contractId: string): Promise<PriceContractItem[]>;
   deleteContractItem(itemId: string): Promise<void>;
@@ -361,6 +361,7 @@ export class DatabaseStorage implements IStorage {
 
     const paymentsByInvoice = new Map<string, number>();
     for (const p of allPayments) {
+      if (!p.invoiceId) continue;
       paymentsByInvoice.set(p.invoiceId, (paymentsByInvoice.get(p.invoiceId) || 0) + parseFloat(p.amount));
     }
 
@@ -1067,7 +1068,8 @@ export class DatabaseStorage implements IStorage {
           const item = await db.select({ costPrice: items.costPrice, packSize: items.packSize }).from(items).where(eq(items.id, li.itemId)).limit(1);
           if (item.length > 0) {
             const costPerUnit = parseFloat(item[0].costPrice) / (item[0].packSize || 1);
-            const saleInPacks = li.saleUnit === "pack" ? li.quantity * (item[0].packSize || 1) : li.quantity;
+            const liQty = parseFloat(String(li.quantity || "0"));
+            const saleInPacks = li.saleUnit === "pack" ? liQty * (item[0].packSize || 1) : liQty;
             totalCost += costPerUnit * saleInPacks;
           }
         }
@@ -1197,7 +1199,8 @@ export class DatabaseStorage implements IStorage {
         };
       }
       const e = itemMap[li.itemId];
-      const qty = li.saleUnit === "pack" ? li.quantity * d.packSize : li.quantity;
+      const liQtyN = parseFloat(String(li.quantity || "0"));
+      const qty = li.saleUnit === "pack" ? liQtyN * d.packSize : liQtyN;
       const rev = parseFloat(li.total);
       const cos = (d.costPrice / (d.packSize || 1)) * qty;
       e.qtySold += qty;
@@ -1254,6 +1257,7 @@ export class DatabaseStorage implements IStorage {
     const allPayments = await db.select().from(payments);
     const paymentsByInvoice = new Map<string, number>();
     for (const pmt of allPayments) {
+      if (!pmt.invoiceId) continue;
       const prev = paymentsByInvoice.get(pmt.invoiceId) || 0;
       paymentsByInvoice.set(pmt.invoiceId, prev + parseFloat(String(pmt.amount)));
     }
@@ -1653,7 +1657,7 @@ export class DatabaseStorage implements IStorage {
       const discountedLines = [];
 
       for (const li of invLines) {
-        const qty = li.quantity;
+        const qty = parseFloat(String(li.quantity || "0"));
         const unitPrice = parseFloat(li.unitPrice);
         const discountAmt = parseFloat(li.discount || "0");
         const lineTotal = parseFloat(li.total);
@@ -2146,7 +2150,14 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(accounts, eq(journalEntryLines.accountId, accounts.id))
       .where(eq(journalEntryLines.journalEntryId, id));
 
-    return { ...entry, lines };
+    return {
+      ...entry,
+      lines: lines.map(l => ({
+        ...l,
+        accountName: l.accountName ?? undefined,
+        accountCode: l.accountCode ?? undefined,
+      })),
+    };
   }
 
   async createJournalEntry(data: InsertJournalEntry, lines: InsertJournalEntryLine[]) {
@@ -2690,8 +2701,9 @@ export class DatabaseStorage implements IStorage {
       locationName: posLocations.name,
     }).from(posTerminals).leftJoin(posLocations, eq(posTerminals.locationId, posLocations.id))
       .orderBy(posTerminals.name);
-    if (locationId) return rows.filter(r => r.locationId === locationId);
-    return rows;
+    const mapped = rows.map(r => ({ ...r, locationName: r.locationName ?? undefined }));
+    if (locationId) return mapped.filter(r => r.locationId === locationId);
+    return mapped;
   }
   async getPosTerminal(id: string): Promise<PosTerminal | undefined> {
     const [row] = await db.select().from(posTerminals).where(eq(posTerminals.id, id));
@@ -2854,9 +2866,10 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(posTerminals, eq(posOrders.terminalId, posTerminals.id))
       .orderBy(desc(posOrders.createdAt))
       .limit(limit);
-    if (locationId) return rows.filter(r => r.locationId === locationId);
-    if (terminalId) return rows.filter(r => r.terminalId === terminalId);
-    return rows;
+    const mapped = rows.map(r => ({ ...r, locationName: r.locationName ?? undefined, terminalName: r.terminalName ?? undefined }));
+    if (locationId) return mapped.filter(r => r.locationId === locationId);
+    if (terminalId) return mapped.filter(r => r.terminalId === terminalId);
+    return mapped;
   }
   async getPosOrder(id: string): Promise<(PosOrder & { lines: PosOrderLine[] }) | undefined> {
     const [order] = await db.select().from(posOrders).where(eq(posOrders.id, id));
@@ -3262,7 +3275,7 @@ export class DatabaseStorage implements IStorage {
       };
     });
     const subtotal = invoiceLineItems.reduce((sum, li) => sum + parseFloat(li.total), 0);
-    const vatAmount = invoiceLineItems.reduce((sum, li) => sum + parseFloat(li.total) * (parseFloat(li.vatRate) / 100), 0);
+    const vatAmount = invoiceLineItems.reduce((sum, li) => sum + parseFloat(li.total) * (parseFloat(li.vatRate || "0") / 100), 0);
     const total = subtotal + vatAmount;
     const discrepancyNote = hasDiscrepancies
       ? `GRV ${existing.grvNumber}: received quantities differ from the invoice — ${lineItems.filter(i => i.receivedQuantity !== i.expectedQuantity).map(i => `${i.descriptionRaw} (expected ${i.expectedQuantity}, received ${i.receivedQuantity})`).join("; ")}`

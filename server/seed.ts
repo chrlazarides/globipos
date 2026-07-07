@@ -138,8 +138,8 @@ export async function seedDatabase() {
 
   // Create some invoices
   const inv1Items = [
-    { description: "Château Margaux 2018", quantity: 6, unitPrice: "189.99", discount: "0", total: "1139.94", itemId: createdItems[0].id },
-    { description: "Cloudy Bay Sauvignon Blanc 12-pack", quantity: 2, unitPrice: "288.00", discount: "0", total: "576.00", itemId: createdItems[3].id },
+    { description: "Château Margaux 2018", quantity: "6", unitPrice: "189.99", discount: "0", total: "1139.94", itemId: createdItems[0].id },
+    { description: "Cloudy Bay Sauvignon Blanc 12-pack", quantity: "2", unitPrice: "288.00", discount: "0", total: "576.00", itemId: createdItems[3].id },
   ];
   const inv1Subtotal = 1715.94;
   const inv1Tax = inv1Subtotal * 0.19;
@@ -151,8 +151,8 @@ export async function seedDatabase() {
   await db.insert(invoiceItems).values(inv1Items.map(li => ({ ...li, invoiceId: inv1.id })));
 
   const inv2Items = [
-    { description: "Dom Pérignon 2013", quantity: 12, unitPrice: "239.99", discount: "50.00", total: "2829.88", itemId: createdItems[5].id },
-    { description: "Macallan 18 Year", quantity: 6, unitPrice: "319.99", discount: "0", total: "1919.94", itemId: createdItems[7].id },
+    { description: "Dom Pérignon 2013", quantity: "12", unitPrice: "239.99", discount: "50.00", total: "2829.88", itemId: createdItems[5].id },
+    { description: "Macallan 18 Year", quantity: "6", unitPrice: "319.99", discount: "0", total: "1919.94", itemId: createdItems[7].id },
   ];
   const inv2Subtotal = 4749.82;
   const inv2Tax = inv2Subtotal * 0.19;
@@ -164,7 +164,7 @@ export async function seedDatabase() {
   await db.insert(invoiceItems).values(inv2Items.map(li => ({ ...li, invoiceId: inv2.id })));
 
   const inv3Items = [
-    { description: "Veuve Clicquot Yellow Label 6-pack", quantity: 4, unitPrice: "342.00", discount: "0", total: "1368.00", itemId: createdItems[6].id },
+    { description: "Veuve Clicquot Yellow Label 6-pack", quantity: "4", unitPrice: "342.00", discount: "0", total: "1368.00", itemId: createdItems[6].id },
   ];
   const [inv3] = await db.insert(invoices).values({
     invoiceNumber: "INV-00003", type: "invoice", customerId: createdCustomers[1].id,

@@ -309,7 +309,7 @@ function OrderDetailDialog({ order, onClose }: { order: PortalOrder; onClose: ()
               <FileText className="w-4 h-4 text-blue-600 flex-shrink-0" />
               <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">Invoice created from this order.</span>
               <Button
-                variant="link"
+                variant="ghost"
                 size="sm"
                 className="ml-auto text-blue-600 dark:text-blue-400 h-auto p-0 font-medium flex items-center gap-1"
                 onClick={() => { onClose(); navigate(`/invoices/${order.invoiceId}`); }}
