@@ -56,6 +56,7 @@ import PosShifts from "@/pages/pos-shifts";
 import PosCardTerminal from "@/pages/pos-card-terminal";
 import PosDownload from "@/pages/pos-download";
 import PosLayoutEditor from "@/pages/pos-layout-editor";
+import PosSimulate from "@/pages/pos-simulate";
 import WhatsAppOrders from "@/pages/whatsapp-orders";
 import DigitalSignage from "@/pages/signage";
 import SignagePlayer from "@/pages/signage-player";
@@ -172,6 +173,7 @@ function AdminRouter() {
       {isPosAdmin(user) && <Route path="/pos/sync-monitor" component={PosSyncMonitor} />}
       {isPosAdmin(user) && <Route path="/pos/download" component={PosDownload} />}
       {isPosAdmin(user) && <Route path="/pos/layouts/:id/edit" component={PosLayoutEditor} />}
+      {isPosAdmin(user) && <Route path="/pos/simulate/:id" component={PosSimulate} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/chat-panel" component={ChatPanel} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/faq-editor" component={FaqEditor} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/customer-push" component={CustomerPushPage} />}

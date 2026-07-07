@@ -16,7 +16,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useLocation } from "wouter";
-import { LayoutGrid, Plus, Pencil, Trash2, Loader2, Wand2, MapPin, Monitor } from "lucide-react";
+import { LayoutGrid, Plus, Pencil, Trash2, Loader2, Wand2, MapPin, Monitor, Play } from "lucide-react";
 
 const formSchema = insertPosLayoutSetSchema.extend({
   name: z.string().min(1, "Name required"),
@@ -173,7 +173,7 @@ export default function PosLayouts() {
                     <Monitor className="w-3.5 h-3.5" />
                     {assignedTerminals === 0 ? "No terminals assigned" : `${assignedTerminals} terminal${assignedTerminals > 1 ? "s" : ""} assigned`}
                   </p>
-                  <div className="flex gap-2 pt-2">
+                  <div className="flex flex-wrap gap-2 pt-2">
                     <Button size="sm" variant="outline" onClick={() => { setEditing(layout); setOpen(true); }} data-testid={`button-edit-layout-${layout.id}`}>
                       <Pencil className="w-3.5 h-3.5 mr-1" />Edit
                     </Button>
@@ -184,6 +184,15 @@ export default function PosLayouts() {
                       data-testid={`button-designer-layout-${layout.id}`}
                     >
                       <Wand2 className="w-3.5 h-3.5 mr-1" />Edit Buttons
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-green-700 border-green-300 hover:bg-green-50 dark:text-green-400 dark:border-green-800 dark:hover:bg-green-900/20"
+                      onClick={() => navigate(`/pos/simulate/${layout.id}`)}
+                      data-testid={`button-simulate-layout-${layout.id}`}
+                    >
+                      <Play className="w-3.5 h-3.5 mr-1" />Simulate
                     </Button>
                     <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => deleteMutation.mutate(layout.id)} data-testid={`button-delete-layout-${layout.id}`}>
                       <Trash2 className="w-3.5 h-3.5" />
