@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -15,7 +15,7 @@ import {
   TrendingDown, DoorOpen, X, ChevronLeft, Zap, Tag, Package,
   Layers, Calculator, Loader2, Receipt, Clock,
 } from "lucide-react";
-import type { PosLayoutSet, PosLayoutButton, Item, Customer } from "@shared/schema";
+import type { PosLayoutSet, PosLayoutButton, Item, Customer, PosPromotion } from "@shared/schema";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -43,6 +43,7 @@ const EMPTY_BUTTONS: PosLayoutButton[] = [];
 const EMPTY_ITEMS: Item[] = [];
 const EMPTY_CUSTOMERS: Customer[] = [];
 const EMPTY_CATEGORIES: { id: string; name: string }[] = [];
+const EMPTY_PROMOS: PosPromotion[] = [];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -63,6 +64,75 @@ function cartVat(cart: SimCartLine[]) {
     const gross = lineTotal(l);
     return s + gross - gross / (1 + l.vatRate / 100);
   }, 0);
+}
+
+interface AppliedSimPromo { id: string; name: string; discount: number; description: string; }
+
+/** Auto-apply mix & match / meal deal / buy-N-get-M / qty-threshold promotions to the cart. */
+function evaluatePromotions(cart: SimCartLine[], promos: PosPromotion[], items: Item[]): AppliedSimPromo[] {
+  if (!cart.length || !promos.length) return [];
+  const now = new Date();
+  const itemCategory = new Map(items.map(it => [it.id, (it as any).categoryId as string | undefined]));
+
+  const active = promos
+    .filter(p => p.active && p.type !== "coupon")
+    .filter(p => !p.validFrom || new Date(p.validFrom) <= now)
+    .filter(p => !p.validUntil || new Date(p.validUntil) >= now)
+    .sort((a, b) => b.priority - a.priority);
+
+  const matches = (line: SimCartLine, p: PosPromotion) => {
+    if (!line.itemId) return false;
+    if ((p.productIds?.length ?? 0) > 0) return p.productIds!.includes(line.itemId);
+    if ((p.categoryIds?.length ?? 0) > 0) return p.categoryIds!.includes(itemCategory.get(line.itemId) ?? "");
+    return false;
+  };
+
+  const applied: AppliedSimPromo[] = [];
+  const used = new Set<string>();
+
+  for (const p of active) {
+    const pool = p.stackable ? cart : cart.filter(l => !used.has(l.id));
+    const eligible = pool.filter(l => matches(l, p));
+    if (!eligible.length) continue;
+
+    const totalQty = eligible.reduce((s, l) => s + l.qty, 0);
+    const eligibleTotal = eligible.reduce((s, l) => s + lineTotal(l), 0);
+    let discount = 0;
+    let description = "";
+
+    if (p.type === "buy_n_get_m") {
+      const setSize = p.thresholdQty + p.getQty;
+      const sets = setSize > 0 ? Math.floor(totalQty / setSize) : 0;
+      if (sets === 0) continue;
+      let remaining = sets * p.getQty;
+      const sorted = [...eligible].sort((a, b) => a.unitPrice - b.unitPrice);
+      for (const line of sorted) {
+        if (remaining <= 0) break;
+        const take = Math.min(remaining, line.qty);
+        discount += take * line.unitPrice * (1 - line.discountPct / 100);
+        remaining -= take;
+      }
+      description = `${p.name}: ${sets * p.getQty} free`;
+    } else if (p.type === "qty_threshold") {
+      if (totalQty < p.thresholdQty) continue;
+      const newTotal = totalQty * parseFloat(String(p.thresholdPrice));
+      discount = Math.max(0, eligibleTotal - newTotal);
+      description = `${p.name}: €${p.thresholdPrice} each`;
+    } else if (p.type === "mix_match" || p.type === "meal_deal") {
+      const sets = p.thresholdQty > 0 ? Math.floor(totalQty / p.thresholdQty) : 0;
+      if (sets === 0) continue;
+      const targetTotal = sets * parseFloat(String(p.bundlePrice));
+      discount = Math.max(0, eligibleTotal - targetTotal);
+      description = `${p.name}: ${sets * p.thresholdQty} for €${targetTotal.toFixed(2)}`;
+    }
+
+    discount = Math.round(discount * 100) / 100;
+    if (discount < 0.01) continue;
+    applied.push({ id: p.id, name: p.name, discount, description });
+    if (!p.stackable) eligible.forEach(l => used.add(l.id));
+  }
+
+  return applied;
 }
 
 /** Resolve columns for current device view */
@@ -245,6 +315,7 @@ export default function PosSimulate() {
     queryKey: ["/api/categories"],
   });
   const { data: customers = EMPTY_CUSTOMERS } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+  const { data: promotions = EMPTY_PROMOS } = useQuery<PosPromotion[]>({ queryKey: ["/api/pos/promotions"] });
 
   // ── UI State ───────────────────────────────────────────────────────────────
   const [deviceView, setDeviceView] = useState<DeviceView>("desktop");
@@ -314,11 +385,19 @@ export default function PosSimulate() {
   }, []);
 
   // ── Button action handler ──────────────────────────────────────────────────
+  const netCartTotal = useCallback(
+    (cartArg: SimCartLine[]) => {
+      const discount = evaluatePromotions(cartArg, promotions, items).reduce((s, p) => s + p.discount, 0);
+      return Math.max(0, cartSubtotal(cartArg) - discount);
+    },
+    [promotions, items]
+  );
+
   const handleAction = useCallback((code: string, lineIdx?: number) => {
     switch (code) {
       case "PAY_CASH":
         if (!cart.length) { showFeedback("Cart is empty", false); return; }
-        setNumpadVal(fmt(cartSubtotal(cart)));
+        setNumpadVal(fmt(netCartTotal(cart)));
         setDialog("cash");
         break;
       case "PAY_CARD":
@@ -333,7 +412,7 @@ export default function PosSimulate() {
       case "PAY_ACCOUNT":
         if (!cart.length) { showFeedback("Cart is empty", false); return; }
         if (!customer) { showFeedback("Attach a customer first (Customer Lookup)", false); return; }
-        { const total = cartSubtotal(cart);
+        { const total = netCartTotal(cart);
           setSaleHistory(p => [...p, { items: [...cart], total, time: new Date() }]);
           clearCart(); showFeedback(`€${fmt(total)} charged to ${customer.name}'s account`, true); }
         break;
@@ -343,7 +422,7 @@ export default function PosSimulate() {
         break;
       case "VOID_SALE":
         if (!cart.length) { showFeedback("Nothing to void", false); return; }
-        if (!confirm(`Void entire sale (€${fmt(cartSubtotal(cart))})?`)) return;
+        if (!confirm(`Void entire sale (€${fmt(netCartTotal(cart))})?`)) return;
         clearCart(); showFeedback("Sale voided", true);
         break;
       case "VOID_LINE": {
@@ -443,7 +522,7 @@ export default function PosSimulate() {
       default:
         showFeedback(`${code} — executed (simulation)`, true);
     }
-  }, [cart, selectedLine, customer, heldCart, showFeedback, clearCart, voidLine, addGenericItem]);
+  }, [cart, selectedLine, customer, heldCart, showFeedback, clearCart, voidLine, addGenericItem, netCartTotal]);
 
   // ── Button click dispatcher ────────────────────────────────────────────────
   const handleButtonClick = useCallback((btn: PosLayoutButton) => {
@@ -485,7 +564,7 @@ export default function PosSimulate() {
   // ── Dialog confirm handlers ────────────────────────────────────────────────
   const confirmCash = () => {
     const tendered = parseFloat(numpadVal || "0");
-    const total = cartSubtotal(cart);
+    const total = netCartTotal(cart);
     const change = tendered - total;
     if (tendered < total) { showFeedback(`Not enough — short by €${fmt(total - tendered)}`, false); return; }
     setSaleHistory(p => [...p, { items: [...cart], total, time: new Date() }]);
@@ -499,7 +578,7 @@ export default function PosSimulate() {
     setTimeout(() => {
       // 90% success, 10% decline in simulation
       if (Math.random() > 0.1) {
-        const total = cartSubtotal(cart);
+        const total = netCartTotal(cart);
         setSaleHistory(p => [...p, { items: [...cart], total, time: new Date() }]);
         clearCart();
         setCardPhase("approved");
@@ -558,7 +637,10 @@ export default function PosSimulate() {
     setDialog(null);
   };
 
-  const total   = cartSubtotal(cart);
+  const appliedPromos = useMemo(() => evaluatePromotions(cart, promotions, items), [cart, promotions, items]);
+  const promoDiscount = useMemo(() => appliedPromos.reduce((s, p) => s + p.discount, 0), [appliedPromos]);
+  const subtotalBeforePromos = cartSubtotal(cart);
+  const total   = Math.max(0, subtotalBeforePromos - promoDiscount);
   const vatAmt  = cartVat(cart);
 
   // Category items
@@ -733,12 +815,33 @@ export default function PosSimulate() {
             )}
           </ScrollArea>
 
+          {/* Promotions applied */}
+          {appliedPromos.length > 0 && (
+            <div className="border-t border-emerald-900/50 bg-emerald-950/40 px-3 py-1.5 space-y-0.5 flex-shrink-0" data-testid="promo-applied-panel">
+              {appliedPromos.map(p => (
+                <div key={p.id} className="flex justify-between items-center text-[11px] text-emerald-300" data-testid={`promo-applied-${p.id}`}>
+                  <span className="flex items-center gap-1 truncate">
+                    <Tag className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{p.description}</span>
+                  </span>
+                  <span className="font-semibold shrink-0">−€{fmt(p.discount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Totals */}
           <div className="border-t border-slate-800 px-3 py-2 space-y-1 flex-shrink-0">
             <div className="flex justify-between text-[11px] text-slate-400">
               <span>Subtotal (excl. VAT)</span>
-              <span>€{fmt(total - vatAmt)}</span>
+              <span>€{fmt(subtotalBeforePromos - vatAmt)}</span>
             </div>
+            {promoDiscount > 0 && (
+              <div className="flex justify-between text-[11px] text-emerald-400 font-medium">
+                <span>Promotions</span>
+                <span data-testid="text-promo-total-discount">−€{fmt(promoDiscount)}</span>
+              </div>
+            )}
             <div className="flex justify-between text-[11px] text-slate-400">
               <span>VAT</span>
               <span>€{fmt(vatAmt)}</span>

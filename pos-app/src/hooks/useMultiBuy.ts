@@ -149,17 +149,20 @@ function evalMixMatch(promo: Promotion, lines: OrderLine[]): AppliedPromo | null
 
 function evalMealDeal(promo: Promotion, lines: OrderLine[]): AppliedPromo | null {
   const eligible = lines.filter((l) => lineMatchesPromo(l, promo) && !l.voided);
-  if (eligible.length < promo.threshold_qty) return null;
+  const totalQty = eligible.reduce((s, l) => s + l.qty, 0);
+  const sets = Math.floor(totalQty / promo.threshold_qty);
+  if (sets === 0) return null;
 
   const eligibleTotal = eligible.reduce((s, l) => s + l.line_total, 0);
-  const discount = Math.max(0, eligibleTotal - promo.bundle_price);
+  const targetTotal = sets * promo.bundle_price;
+  const discount = Math.max(0, eligibleTotal - targetTotal);
   if (discount < 0.01) return null;
 
   return {
     promo_id: promo.id,
     promo_name: promo.name,
     discount_amount: Math.round(discount * 100) / 100,
-    description: `${promo.name} deal: €${promo.bundle_price.toFixed(2)}`,
+    description: `${promo.name} deal: ${sets * promo.threshold_qty} items for €${targetTotal.toFixed(2)}`,
     affected_line_ids: eligible.map((l) => l.id),
   };
 }
