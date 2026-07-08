@@ -8,37 +8,37 @@ import "../_group.css";
 
 const CATEGORIES = ["All", "Red Wine", "White Wine", "Spirits", "Beer", "Soft Drinks"];
 
-type Product = { id: string; name: string; unit: string; price: number; emoji: string; tone: Tone };
+type Product = { id: string; name: string; unit: string; price: number; emoji: string; tone: Tone; vat: number };
 type Tone = "red" | "white" | "spirit" | "spirit2" | "beer" | "soft" | "water";
 
 const PRODUCTS: Product[] = [
-  { id: "p1", name: "Château Margaux", unit: "750ml", price: 89.9, emoji: "🍷", tone: "red" },
-  { id: "p2", name: "Malbec Reserve", unit: "750ml", price: 14.5, emoji: "🍷", tone: "red" },
-  { id: "p3", name: "Chianti Classico", unit: "750ml", price: 18.2, emoji: "🍷", tone: "red" },
-  { id: "p4", name: "Sauvignon Blanc", unit: "750ml", price: 12.9, emoji: "🥂", tone: "white" },
-  { id: "p5", name: "Chardonnay Reserve", unit: "750ml", price: 16.4, emoji: "🥂", tone: "white" },
-  { id: "p6", name: "Grey Goose Vodka", unit: "1L", price: 32.0, emoji: "🍸", tone: "spirit" },
-  { id: "p7", name: "Hendrick's Gin", unit: "700ml", price: 28.5, emoji: "🍸", tone: "spirit" },
-  { id: "p8", name: "Jameson Whiskey", unit: "700ml", price: 24.0, emoji: "🥃", tone: "spirit2" },
-  { id: "p9", name: "Keo Lager", unit: "330ml", price: 1.8, emoji: "🍺", tone: "beer" },
-  { id: "p10", name: "Heineken 6-Pack", unit: "6x330ml", price: 7.9, emoji: "🍺", tone: "beer" },
-  { id: "p11", name: "Coca-Cola", unit: "1.5L", price: 2.2, emoji: "🥤", tone: "soft" },
-  { id: "p12", name: "Sparkling Water", unit: "500ml", price: 1.1, emoji: "💧", tone: "water" },
+  { id: "p1", name: "Château Margaux", unit: "750ml", price: 89.9, emoji: "🍷", tone: "red", vat: 19 },
+  { id: "p2", name: "Malbec Reserve", unit: "750ml", price: 14.5, emoji: "🍷", tone: "red", vat: 19 },
+  { id: "p3", name: "Chianti Classico", unit: "750ml", price: 18.2, emoji: "🍷", tone: "red", vat: 19 },
+  { id: "p4", name: "Sauvignon Blanc", unit: "750ml", price: 12.9, emoji: "🥂", tone: "white", vat: 19 },
+  { id: "p5", name: "Chardonnay Reserve", unit: "750ml", price: 16.4, emoji: "🥂", tone: "white", vat: 19 },
+  { id: "p6", name: "Grey Goose Vodka", unit: "1L", price: 32.0, emoji: "🍸", tone: "spirit", vat: 19 },
+  { id: "p7", name: "Hendrick's Gin", unit: "700ml", price: 28.5, emoji: "🍸", tone: "spirit", vat: 19 },
+  { id: "p8", name: "Jameson Whiskey", unit: "700ml", price: 24.0, emoji: "🥃", tone: "spirit2", vat: 19 },
+  { id: "p9", name: "Keo Lager", unit: "330ml", price: 1.8, emoji: "🍺", tone: "beer", vat: 19 },
+  { id: "p10", name: "Heineken 6-Pack", unit: "6x330ml", price: 7.9, emoji: "🍺", tone: "beer", vat: 19 },
+  { id: "p11", name: "Coca-Cola", unit: "1.5L", price: 2.2, emoji: "🥤", tone: "soft", vat: 9 },
+  { id: "p12", name: "Sparkling Water", unit: "500ml", price: 1.1, emoji: "💧", tone: "water", vat: 9 },
 ];
 
-type CartLine = { id: string; name: string; unit: string; qty: number; price: number; discountPct?: number; note?: string };
+type CartLine = { id: string; name: string; unit: string; qty: number; price: number; discountPct?: number; note?: string; vat: number };
 
 const INITIAL: CartLine[] = [
-  { id: "l1", name: "Château Margaux", unit: "750ml", qty: 1, price: 89.9 },
-  { id: "l2", name: "Grey Goose Vodka", unit: "1L", qty: 2, price: 32.0 },
-  { id: "l3", name: "Sparkling Water", unit: "500ml", qty: 6, price: 1.1, discountPct: 10 },
-  { id: "l4", name: "Hendrick's Gin", unit: "700ml", qty: 1, price: 28.5 },
-  { id: "l5", name: "Jameson Whiskey", unit: "700ml", qty: 2, price: 24.0, discountPct: 5 },
-  { id: "l6", name: "Keo Lager", unit: "330ml", qty: 12, price: 1.8 },
-  { id: "l7", name: "Malbec Reserve", unit: "750ml", qty: 3, price: 14.5 },
-  { id: "l8", name: "Chardonnay Reserve", unit: "750ml", qty: 2, price: 16.4 },
-  { id: "l9", name: "Coca-Cola", unit: "1.5L", qty: 4, price: 2.2 },
-  { id: "l10", name: "Heineken 6-Pack", unit: "6x330ml", qty: 1, price: 7.9 },
+  { id: "l1", name: "Château Margaux", unit: "750ml", qty: 1, price: 89.9, vat: 19 },
+  { id: "l2", name: "Grey Goose Vodka", unit: "1L", qty: 2, price: 32.0, vat: 19 },
+  { id: "l3", name: "Sparkling Water", unit: "500ml", qty: 6, price: 1.1, discountPct: 10, vat: 9 },
+  { id: "l4", name: "Hendrick's Gin", unit: "700ml", qty: 1, price: 28.5, vat: 19 },
+  { id: "l5", name: "Jameson Whiskey", unit: "700ml", qty: 2, price: 24.0, discountPct: 5, vat: 19 },
+  { id: "l6", name: "Keo Lager", unit: "330ml", qty: 12, price: 1.8, vat: 19 },
+  { id: "l7", name: "Malbec Reserve", unit: "750ml", qty: 3, price: 14.5, vat: 19 },
+  { id: "l8", name: "Chardonnay Reserve", unit: "750ml", qty: 2, price: 16.4, vat: 19 },
+  { id: "l9", name: "Coca-Cola", unit: "1.5L", qty: 4, price: 2.2, vat: 9 },
+  { id: "l10", name: "Heineken 6-Pack", unit: "6x330ml", qty: 1, price: 7.9, vat: 19 },
 ];
 
 const money = (n: number) => `€${n.toFixed(2)}`;
@@ -255,8 +255,14 @@ export default function PosLayout({ theme, journalWide }: { theme: "light" | "da
                 >
                   <div>
                     <div className={`text-sm font-semibold ${pal.headerText}`}>{l.name}</div>
-                    <div className={`text-[11px] ${pal.faintText} flex items-center gap-1`}>
+                    <div className={`text-[11px] ${pal.faintText} flex items-center gap-1 flex-wrap`}>
                       {l.unit}
+                      <span
+                        className={`px-1 rounded text-[9px] font-semibold ${pal.numKey} ${pal.numKeyText}`}
+                        title="VAT rate applied to this line"
+                      >
+                        VAT {l.vat}%
+                      </span>
                       {l.discountPct ? (
                         <button
                           onClick={(e) => { e.stopPropagation(); setSelectedId(l.id); setNumMode("discount"); setDisplay(""); }}

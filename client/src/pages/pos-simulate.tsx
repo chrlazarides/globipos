@@ -683,7 +683,14 @@ export default function PosSimulate() {
                   >
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate leading-tight">{line.label}</p>
-                      <p className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <p className="text-[10px] text-slate-400 flex items-center gap-1 flex-wrap">
+                        <span
+                          className="px-1 rounded bg-slate-800 text-slate-300 text-[9px] font-semibold shrink-0"
+                          title="VAT rate applied to this line"
+                          data-testid={`text-vat-rate-${idx}`}
+                        >
+                          VAT {fmt(line.vatRate)}%
+                        </span>
                         <button
                           className="underline decoration-dotted hover:text-white"
                           title="Tap to correct price"
