@@ -976,7 +976,7 @@ export default function PosLayoutEditor() {
   return (
     <div className="flex flex-col" style={{ height: "100%" }}>
       {/* ── Top bar ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-background gap-3 flex-shrink-0">
+      <div className="flex flex-wrap items-center justify-between px-4 py-3 border-b bg-background gap-3 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <Button variant="ghost" size="icon" onClick={() => navigate("/pos/layouts")} data-testid="btn-back">
             <ArrowLeft className="w-4 h-4" />
@@ -989,7 +989,7 @@ export default function PosLayoutEditor() {
         </div>
 
         {/* Device size selector */}
-        <div className="flex items-center border rounded-lg overflow-hidden">
+        <div className="flex items-center border rounded-lg overflow-x-auto max-w-full">
           {([
             { id: "phone",   icon: Smartphone, label: `${colsMobile} col`, title: "Phone (<640px)" },
             { id: "tablet",  icon: Tablet,     label: `${colsTablet} col`, title: "Tablet (640-1023px)" },
@@ -1005,7 +1005,7 @@ export default function PosLayoutEditor() {
                 onClick={() => setDeviceView(d.id)}
                 title={d.title}
                 data-testid={`device-view-${d.id}`}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${active ? "bg-primary text-primary-foreground" : "bg-background hover:bg-muted text-muted-foreground"}`}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap flex-shrink-0 ${active ? "bg-primary text-primary-foreground" : "bg-background hover:bg-muted text-muted-foreground"}`}
               >
                 <Icon className="w-3.5 h-3.5" />{d.label}
               </button>
@@ -1019,9 +1019,9 @@ export default function PosLayoutEditor() {
         </Button>
       </div>
 
-      <div className="flex flex-1 overflow-hidden min-h-0">
+      <div className="flex flex-col md:flex-row flex-1 overflow-hidden min-h-0">
         {/* ── Left settings panel ─────────────────────────────────────────── */}
-        <div className="w-64 border-r overflow-y-auto bg-muted/10 flex-shrink-0 min-h-0">
+        <div className="w-full md:w-64 max-h-64 md:max-h-none border-b md:border-b-0 md:border-r overflow-y-auto bg-muted/10 flex-shrink-0 min-h-0">
           <div className="p-4 space-y-5">
             <div className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Layout Info</p>

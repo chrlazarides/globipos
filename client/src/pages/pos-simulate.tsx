@@ -576,7 +576,7 @@ export default function PosSimulate() {
     <div className="flex flex-col h-full" data-testid="pos-simulator">
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b bg-background flex-shrink-0">
+      <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 border-b bg-background flex-shrink-0">
         <Button variant="ghost" size="icon" onClick={() => navigate("/pos/layouts")} data-testid="btn-back-simulate">
           <ArrowLeft className="w-4 h-4" />
         </Button>
@@ -626,10 +626,10 @@ export default function PosSimulate() {
       </div>
 
       {/* ── Main area ─────────────────────────────────────────────────────── */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div className="flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden">
 
         {/* ── Left panel: Cart / Receipt ─────────────────────────────────── */}
-        <div className="w-80 flex-shrink-0 flex flex-col border-r bg-slate-950 text-white">
+        <div className="w-full md:w-80 h-64 md:h-auto min-h-0 flex-shrink-0 flex flex-col border-b md:border-b-0 md:border-r bg-slate-950 text-white">
 
           {/* Customer */}
           <div
@@ -751,7 +751,7 @@ export default function PosSimulate() {
         </div>
 
         {/* ── Right panel: Button grid ───────────────────────────────────── */}
-        <div className="flex-1 flex flex-col bg-slate-800 overflow-hidden">
+        <div className="flex-1 flex flex-col bg-slate-800 overflow-hidden min-h-0">
           {loadingButtons ? (
             <div className="flex items-center justify-center h-full">
               <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
