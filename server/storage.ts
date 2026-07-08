@@ -230,6 +230,7 @@ export interface IStorage {
   createPosLayoutSet(data: InsertPosLayoutSet): Promise<PosLayoutSet>;
   updatePosLayoutSet(id: string, data: Partial<InsertPosLayoutSet>): Promise<PosLayoutSet | undefined>;
   deletePosLayoutSet(id: string): Promise<void>;
+  clonePosLayoutSet(id: string, newName?: string): Promise<PosLayoutSet>;
   getPosLayoutButtons(layoutSetId: string): Promise<PosLayoutButton[]>;
   upsertPosLayoutButton(data: InsertPosLayoutButton): Promise<PosLayoutButton>;
   deletePosLayoutButton(id: string): Promise<void>;
@@ -2826,6 +2827,23 @@ export class DatabaseStorage implements IStorage {
   async deletePosLayoutSet(id: string): Promise<void> {
     await db.delete(posLayoutButtons).where(eq(posLayoutButtons.layoutSetId, id));
     await db.delete(posLayoutSets).where(eq(posLayoutSets.id, id));
+  }
+  async clonePosLayoutSet(id: string, newName?: string): Promise<PosLayoutSet> {
+    const source = await this.getPosLayoutSet(id);
+    if (!source) throw new Error("Layout not found");
+    const { id: _id, ...rest } = source as any;
+    const clonedName = newName?.trim() || `${source.name} (Copy)`;
+    const [cloned] = await db.insert(posLayoutSets).values({ ...rest, name: clonedName, active: false }).returning();
+    const buttons = await this.getPosLayoutButtons(id);
+    if (buttons.length) {
+      await db.insert(posLayoutButtons).values(
+        buttons.map(b => {
+          const { id: _bid, layoutSetId: _lsid, ...bRest } = b as any;
+          return { ...bRest, layoutSetId: cloned.id };
+        })
+      );
+    }
+    return cloned;
   }
   async getPosLayoutButtons(layoutSetId: string): Promise<PosLayoutButton[]> {
     return db.select().from(posLayoutButtons).where(eq(posLayoutButtons.layoutSetId, layoutSetId)).orderBy(posLayoutButtons.position);

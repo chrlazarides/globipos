@@ -8190,6 +8190,12 @@ export async function registerRoutes(
   app.delete("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
     try { await storage.deletePosLayoutSet((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
+  app.post("/api/pos/layouts/:id/clone", requireAdmin, async (req, res) => {
+    try {
+      const cloned = await storage.clonePosLayoutSet((req.params.id as string), req.body?.name);
+      res.json(cloned);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
   app.get("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
     try { res.json(await storage.getPosLayoutButtons((req.params.id as string))); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

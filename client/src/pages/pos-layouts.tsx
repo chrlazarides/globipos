@@ -16,7 +16,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useLocation } from "wouter";
-import { LayoutGrid, Plus, Pencil, Trash2, Loader2, Wand2, MapPin, Monitor, Play } from "lucide-react";
+import { LayoutGrid, Plus, Pencil, Trash2, Loader2, Wand2, MapPin, Monitor, Play, Copy } from "lucide-react";
 
 const formSchema = insertPosLayoutSetSchema.extend({
   name: z.string().min(1, "Name required"),
@@ -125,6 +125,18 @@ export default function PosLayouts() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const cloneMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/pos/layouts/${id}/clone`, {});
+      return res.json();
+    },
+    onSuccess: (cloned: PosLayoutSet) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pos/layouts"] });
+      toast({ title: "Layout cloned", description: `Created "${cloned.name}"` });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
@@ -193,6 +205,18 @@ export default function PosLayouts() {
                       data-testid={`button-simulate-layout-${layout.id}`}
                     >
                       <Play className="w-3.5 h-3.5 mr-1" />Simulate
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={cloneMutation.isPending}
+                      onClick={() => cloneMutation.mutate(layout.id)}
+                      data-testid={`button-clone-layout-${layout.id}`}
+                    >
+                      {cloneMutation.isPending && cloneMutation.variables === layout.id
+                        ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                        : <Copy className="w-3.5 h-3.5 mr-1" />}
+                      Clone
                     </Button>
                     <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => deleteMutation.mutate(layout.id)} data-testid={`button-delete-layout-${layout.id}`}>
                       <Trash2 className="w-3.5 h-3.5" />
