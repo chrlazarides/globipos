@@ -1,5 +1,5 @@
 import PosLayout from "./_shared/PosLayout";
 
 export default function VariantDark() {
-  return <PosLayout theme="dark" />;
+  return <PosLayout theme="dark" journalWide />;
 }

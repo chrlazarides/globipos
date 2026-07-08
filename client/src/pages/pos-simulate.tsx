@@ -314,7 +314,7 @@ export default function PosSimulate() {
   }, []);
 
   // ── Button action handler ──────────────────────────────────────────────────
-  const handleAction = useCallback((code: string) => {
+  const handleAction = useCallback((code: string, lineIdx?: number) => {
     switch (code) {
       case "PAY_CASH":
         if (!cart.length) { showFeedback("Cart is empty", false); return; }
@@ -362,6 +362,7 @@ export default function PosSimulate() {
         break;
       case "DISCOUNT_PCT":
         if (!cart.length) { showFeedback("Add items first", false); return; }
+        if (lineIdx !== undefined) setSelectedLine(lineIdx);
         setNumpadVal("0"); setDialog("discount_pct"); break;
       case "DISCOUNT_FIXED":
         if (!cart.length) { showFeedback("Add items first", false); return; }
@@ -370,16 +371,18 @@ export default function PosSimulate() {
         if (!cart.length) { showFeedback("Add items first", false); return; }
         setNumpadVal("0"); setDialog("order_discount"); break;
       case "PRICE_OVERRIDE": {
-        const idx2 = selectedLine ?? (cart.length ? cart.length - 1 : null);
-        if (idx2 === null) { showFeedback("No line selected", false); return; }
+        const idx2 = lineIdx ?? selectedLine ?? (cart.length ? cart.length - 1 : null);
+        if (idx2 === null || !cart[idx2]) { showFeedback("No line selected", false); return; }
+        if (lineIdx !== undefined) setSelectedLine(lineIdx);
         setNumpadVal(fmt(cart[idx2].unitPrice)); setDialog("price_override"); break;
       }
       case "PRICE_CHECK":
         showFeedback("Scan or enter barcode to check price", true); break;
       case "QTY": {
-        const idx3 = selectedLine ?? (cart.length ? cart.length - 1 : null);
-        if (idx3 === null) { showFeedback("No line selected", false); return; }
-        setNumpadVal("1"); setDialog("qty"); break;
+        const idx3 = lineIdx ?? selectedLine ?? (cart.length ? cart.length - 1 : null);
+        if (idx3 === null || !cart[idx3]) { showFeedback("No line selected", false); return; }
+        if (lineIdx !== undefined) setSelectedLine(lineIdx);
+        setNumpadVal(fmt(cart[idx3].qty)); setDialog("qty"); break;
       }
       case "CUSTOMER_LOOKUP":
         setCustomerSearch(""); setDialog("customer"); break;
@@ -629,7 +632,7 @@ export default function PosSimulate() {
       <div className="flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden">
 
         {/* ── Left panel: Cart / Receipt ─────────────────────────────────── */}
-        <div className="w-full md:w-80 h-64 md:h-auto min-h-0 flex-shrink-0 flex flex-col border-b md:border-b-0 md:border-r bg-slate-950 text-white">
+        <div className="w-full md:w-[480px] h-64 md:h-auto min-h-0 flex-shrink-0 flex flex-col border-b md:border-b-0 md:border-r bg-slate-950 text-white">
 
           {/* Customer */}
           <div
@@ -680,9 +683,23 @@ export default function PosSimulate() {
                   >
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate leading-tight">{line.label}</p>
-                      <p className="text-[10px] text-slate-400">
-                        €{fmt(line.unitPrice)}
-                        {line.discountPct > 0 && <span className="ml-1 text-green-400">−{fmt(line.discountPct)}%</span>}
+                      <p className="text-[10px] text-slate-400 flex items-center gap-1">
+                        <button
+                          className="underline decoration-dotted hover:text-white"
+                          title="Tap to correct price"
+                          onClick={e => { e.stopPropagation(); handleAction("PRICE_OVERRIDE", idx); }}
+                          data-testid={`btn-correct-price-${idx}`}
+                        >
+                          €{fmt(line.unitPrice)}
+                        </button>
+                        <button
+                          className={`underline decoration-dotted ${line.discountPct > 0 ? "text-green-400 hover:text-green-300" : "text-slate-500 hover:text-white"}`}
+                          title="Tap to correct discount"
+                          onClick={e => { e.stopPropagation(); handleAction("DISCOUNT_PCT", idx); }}
+                          data-testid={`btn-correct-discount-${idx}`}
+                        >
+                          {line.discountPct > 0 ? `−${fmt(line.discountPct)}%` : "+ disc"}
+                        </button>
                       </p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">

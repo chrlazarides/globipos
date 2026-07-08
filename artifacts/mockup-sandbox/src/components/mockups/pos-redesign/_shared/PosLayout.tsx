@@ -32,6 +32,13 @@ const INITIAL: CartLine[] = [
   { id: "l1", name: "Château Margaux", unit: "750ml", qty: 1, price: 89.9 },
   { id: "l2", name: "Grey Goose Vodka", unit: "1L", qty: 2, price: 32.0 },
   { id: "l3", name: "Sparkling Water", unit: "500ml", qty: 6, price: 1.1, discountPct: 10 },
+  { id: "l4", name: "Hendrick's Gin", unit: "700ml", qty: 1, price: 28.5 },
+  { id: "l5", name: "Jameson Whiskey", unit: "700ml", qty: 2, price: 24.0, discountPct: 5 },
+  { id: "l6", name: "Keo Lager", unit: "330ml", qty: 12, price: 1.8 },
+  { id: "l7", name: "Malbec Reserve", unit: "750ml", qty: 3, price: 14.5 },
+  { id: "l8", name: "Chardonnay Reserve", unit: "750ml", qty: 2, price: 16.4 },
+  { id: "l9", name: "Coca-Cola", unit: "1.5L", qty: 4, price: 2.2 },
+  { id: "l10", name: "Heineken 6-Pack", unit: "6x330ml", qty: 1, price: 7.9 },
 ];
 
 const money = (n: number) => `€${n.toFixed(2)}`;
@@ -166,8 +173,12 @@ const DARK: Palette = {
   scrollHint: "text-slate-700",
 };
 
-export default function PosLayout({ theme }: { theme: "light" | "dark" }) {
+export default function PosLayout({ theme, journalWide }: { theme: "light" | "dark"; journalWide?: boolean }) {
   const pal = theme === "dark" ? DARK : LIGHT;
+  const journalWidth = journalWide ? 540 : 360; // +50% when journalWide
+  const numpadWidth = 324;
+  const panelGap = 12;
+  const leftColWidth = journalWidth + numpadWidth + panelGap;
   const [cat, setCat] = useState("All");
   const [lines, setLines] = useState(INITIAL);
   const [selectedId, setSelectedId] = useState<string | null>(lines[0]?.id ?? null);
@@ -221,9 +232,9 @@ export default function PosLayout({ theme }: { theme: "light" | "dark" }) {
   return (
     <div className={`pos-mockup-root min-h-screen w-full flex ${pal.page} p-3 gap-3`} style={{ height: "100vh" }}>
       {/* Left: journal (scrollable) + numpad/corrections, side by side */}
-      <div className="flex flex-shrink-0 gap-3" style={{ width: 700 }}>
+      <div className="flex flex-shrink-0 gap-3" style={{ width: leftColWidth }}>
         {/* Journal */}
-        <div className={`${pal.panel} rounded-2xl flex flex-col overflow-hidden`} style={{ width: 360 }}>
+        <div className={`${pal.panel} rounded-2xl flex flex-col overflow-hidden min-h-0`} style={{ width: journalWidth }}>
           <div className={`grid grid-cols-[1fr_60px_36px_60px] gap-2 px-4 py-3 text-[11px] font-bold uppercase tracking-wide border-b ${pal.border} ${pal.panelHead}`}>
             <span>Item</span>
             <span className="text-right">Price</span>
@@ -246,16 +257,50 @@ export default function PosLayout({ theme }: { theme: "light" | "dark" }) {
                     <div className={`text-sm font-semibold ${pal.headerText}`}>{l.name}</div>
                     <div className={`text-[11px] ${pal.faintText} flex items-center gap-1`}>
                       {l.unit}
-                      {l.discountPct ? <span className="text-emerald-500 font-semibold">-{l.discountPct}%</span> : null}
+                      {l.discountPct ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setSelectedId(l.id); setNumMode("discount"); setDisplay(""); }}
+                          className="text-emerald-500 font-semibold underline decoration-dotted hover:text-emerald-400"
+                          title="Tap to correct discount"
+                        >
+                          -{l.discountPct}%
+                        </button>
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setSelectedId(l.id); setNumMode("discount"); setDisplay(""); }}
+                          className={`text-[10px] underline decoration-dotted ${pal.faintText} hover:text-emerald-500`}
+                          title="Tap to add discount"
+                        >
+                          + disc
+                        </button>
+                      )}
                     </div>
                   </div>
-                  <span className={`text-right text-sm ${pal.mutedText}`}>{money(l.price)}</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setSelectedId(l.id); setNumMode("price"); setDisplay(""); }}
+                    className={`text-right text-sm ${pal.mutedText} hover:text-sky-500 underline decoration-dotted`}
+                    title="Tap to correct price"
+                  >
+                    {money(l.price)}
+                  </button>
                   <div className="flex items-center justify-center gap-1">
                     <button onClick={(e) => { e.stopPropagation(); addQty(l.id, -1); }} className={`w-5 h-5 rounded-full ${pal.numKey} ${pal.numKeyText} text-xs`}>−</button>
-                    <span className={`text-sm font-semibold w-4 text-center ${pal.headerText}`}>{l.qty}</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setSelectedId(l.id); setNumMode("qty"); setDisplay(""); }}
+                      className={`text-sm font-semibold w-4 text-center ${pal.headerText}`}
+                      title="Tap to correct quantity"
+                    >
+                      {l.qty}
+                    </button>
                     <button onClick={(e) => { e.stopPropagation(); addQty(l.id, 1); }} className="w-5 h-5 rounded-full bg-emerald-500 text-white text-xs">+</button>
                   </div>
-                  <span className={`text-right text-sm font-bold ${pal.headerText}`}>{money(lineTotal)}</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removeLine(l.id); }}
+                    className={`text-right text-sm font-bold ${pal.headerText} hover:text-red-400`}
+                    title="Tap to remove line"
+                  >
+                    {money(lineTotal)}
+                  </button>
                 </div>
               );
             })}
