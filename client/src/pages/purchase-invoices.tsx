@@ -30,6 +30,7 @@ interface PurchaseInvoiceDetail extends PurchaseInvoice {
 
 interface LineItem {
   itemId: string;
+  variantId?: string | null;
   description: string;
   quantity: number;
   purchaseUnit: string;
@@ -388,7 +389,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
       const item = await res.json();
 
       setLineItems(prev => {
-        const existingIndex = prev.findIndex(l => l.itemId === item.id);
+        const existingIndex = prev.findIndex(l => l.itemId === item.id && (l.variantId || null) === (item.variantId || null));
         if (existingIndex >= 0) {
           const existing = prev[existingIndex];
           const newQty = existing.quantity + 1;
@@ -407,7 +408,8 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
         const cost = parseFloat(unitCost) || 0;
         return [...prev, {
           itemId: item.id,
-          description: item.name,
+          variantId: item.variantId || null,
+          description: item.variantLabel ? `${item.name} (${item.variantLabel})` : item.name,
           quantity: 1,
           purchaseUnit,
           unitCost,
@@ -518,6 +520,7 @@ function PurchaseInvoiceForm({ editingId, onSuccess }: { editingId: string | nul
         invoiceNumber: editingId ? existingInvoice?.invoiceNumber || "TEMP" : "TEMP",
         items: lineItems.map(li => ({
           itemId: li.itemId,
+          variantId: li.variantId || null,
           description: li.description,
           quantity: li.quantity,
           purchaseUnit: li.purchaseUnit,

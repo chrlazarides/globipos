@@ -74,6 +74,33 @@ export const items = pgTable("items", {
   vintage: text("vintage"),
   imageUrl: text("image_url"),
   active: boolean("active").default(true).notNull(),
+  hasVariants: boolean("has_variants").default(false).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+// Product variants (color/size/textile/quality/etc.) for items with hasVariants=true.
+// Each variant has its own SKU/barcode/stock, and may override price/cost from the parent item.
+export const itemVariants = pgTable("item_variants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  sku: text("sku").notNull().unique(),
+  barcode: text("barcode"),
+  option1Name: text("option1_name"), // e.g. "Color"
+  option1Value: text("option1_value"), // e.g. "Red"
+  option2Name: text("option2_name"), // e.g. "Size"
+  option2Value: text("option2_value"), // e.g. "Large"
+  option3Name: text("option3_name"), // e.g. "Textile"
+  option3Value: text("option3_value"), // e.g. "Cotton"
+  price1: numeric("price_1", { precision: 10, scale: 2 }), // null = inherit item.price1
+  price2: numeric("price_2", { precision: 10, scale: 2 }),
+  price3: numeric("price_3", { precision: 10, scale: 2 }),
+  price4: numeric("price_4", { precision: 10, scale: 2 }),
+  price5: numeric("price_5", { precision: 10, scale: 2 }),
+  costPrice: numeric("cost_price", { precision: 10, scale: 2 }),
+  stockQuantity: integer("stock_quantity").notNull().default(0),
+  reorderLevel: integer("reorder_level"),
+  imageUrl: text("image_url"),
+  active: boolean("active").default(true).notNull(),
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
 
@@ -204,6 +231,7 @@ export const invoiceItems = pgTable("invoice_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   invoiceId: varchar("invoice_id").notNull(),
   itemId: varchar("item_id"),
+  variantId: varchar("variant_id"),
   description: text("description").notNull(),
   quantity: numeric("quantity", { precision: 12, scale: 4 }).notNull(),
   saleUnit: text("sale_unit").notNull().default("pc"),
@@ -264,6 +292,7 @@ export const purchaseInvoiceItems = pgTable("purchase_invoice_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   purchaseInvoiceId: varchar("purchase_invoice_id").notNull(),
   itemId: varchar("item_id").notNull(),
+  variantId: varchar("variant_id"),
   description: text("description").notNull(),
   quantity: integer("quantity").notNull(),
   purchaseUnit: text("purchase_unit").notNull().default("pc"),
@@ -373,6 +402,9 @@ export const insertUserSchema = createInsertSchema(users).omit({ id: true, creat
 export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
 export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });
+export const insertItemVariantSchema = createInsertSchema(itemVariants).omit({ id: true, updatedAt: true });
+export type InsertItemVariant = z.infer<typeof insertItemVariantSchema>;
+export type ItemVariant = typeof itemVariants.$inferSelect;
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true }).extend({
   code: z.string().optional().default(""),
 });
@@ -582,6 +614,7 @@ export const posOrderLines = pgTable("pos_order_lines", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   orderId: varchar("order_id").notNull(),
   itemId: varchar("item_id"),
+  variantId: varchar("variant_id"),
   description: text("description").notNull(),
   sku: text("sku"),
   barcode: text("barcode"),

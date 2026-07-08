@@ -26,6 +26,7 @@ import type { Customer, Item, Invoice, InvoiceItem, PriceContract, PriceContract
 
 interface LineItem {
   itemId: string;
+  variantId?: string | null;
   description: string;
   quantity: number;
   saleUnit: string;
@@ -653,7 +654,7 @@ export default function InvoiceForm() {
 
       setLines((prev) => {
         const filtered = prev.filter(l => l.description);
-        const existingIndex = filtered.findIndex(l => l.itemId === item.id);
+        const existingIndex = filtered.findIndex(l => l.itemId === item.id && (l.variantId || null) === (item.variantId || null));
         if (existingIndex >= 0) {
           const existing = filtered[existingIndex];
           const newQty2 = existing.quantity + 1;
@@ -667,7 +668,8 @@ export default function InvoiceForm() {
         }
         const newLine: LineItem = {
           itemId: item.id,
-          description: item.name,
+          variantId: item.variantId || null,
+          description: item.variantLabel ? `${item.name} (${item.variantLabel})` : item.name,
           quantity: 1,
           saleUnit: itemToSaleUnit(item),
           unitPrice,
@@ -762,6 +764,7 @@ export default function InvoiceForm() {
         linkedInvoiceId: fromId || null,
         items: lines.filter((l) => l.description).map((l) => ({
           itemId: l.itemId || null,
+          variantId: l.variantId || null,
           description: l.description,
           quantity: String(l.quantity),
           saleUnit: l.saleUnit,

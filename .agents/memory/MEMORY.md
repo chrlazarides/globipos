@@ -23,3 +23,4 @@
 - [Radix Select empty-value crash](radix-select-empty-value-crash.md) — `<SelectItem value="">` throws and can crash a whole page render, masquerading as an unrelated feature bug
 - [Chime/quiet-hours device scope decision](chime-quiet-hours-device-scope.md) — kept deliberately per-device (localStorage), not per-user, as the default when stakeholders had no preference
 - [POS canvas mockup vs Layouts mismatch](pos-layout-mockup-graduation.md) — pos_layout_sets is button-grid only; journal/cart UX changes must be ported to the Simulator page separately
+- [Product variants stock adjustment](product-variants-stock-adjustment.md) — centralize a per-document stock helper that branches on variantId vs parent item; apply at every create/update/delete mutation site

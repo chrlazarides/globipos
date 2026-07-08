@@ -14,10 +14,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Package, Upload, History, Download, RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Search, Package, Upload, History, Download, RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Pencil, Trash2, Layers } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { insertItemSchema, insertCategorySchema, type Item, type Category } from "@shared/schema";
+import { insertItemSchema, insertItemVariantSchema, insertCategorySchema, type Item, type ItemVariant, type Category } from "@shared/schema";
 import { ImportDialog } from "@/components/import-dialog";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { z } from "zod";
@@ -666,6 +666,247 @@ function PriceHistoryTab({ itemId }: { itemId: string }) {
   );
 }
 
+const variantFormSchema = insertItemVariantSchema.omit({ itemId: true }).extend({
+  sku: z.string().min(1, "SKU is required"),
+});
+
+function VariantForm({ onSubmit, isPending, priceLevelNames, defaultValues }: { onSubmit: (d: any) => void; isPending: boolean; priceLevelNames: string[]; defaultValues?: any }) {
+  const form = useForm({
+    resolver: zodResolver(variantFormSchema),
+    defaultValues: defaultValues || {
+      sku: "", barcode: "", option1Name: "", option1Value: "", option2Name: "", option2Value: "", option3Name: "", option3Value: "",
+      price1: null, price2: null, price3: null, price4: null, price5: null, costPrice: null,
+      stockQuantity: 0, reorderLevel: null, active: true,
+    },
+  });
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <FormField control={form.control} name="sku" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Variant SKU</FormLabel>
+              <FormControl><Input {...field} data-testid="input-variant-sku" /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )} />
+          <FormField control={form.control} name="barcode" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Variant Barcode</FormLabel>
+              <FormControl><Input {...field} value={field.value || ""} data-testid="input-variant-barcode" /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )} />
+        </div>
+        <p className="text-sm text-muted-foreground">Options (e.g. Color / Size / Textile)</p>
+        <div className="grid grid-cols-3 gap-3">
+          {[1, 2, 3].map((n) => (
+            <div key={n} className="space-y-2">
+              <FormField control={form.control} name={`option${n}Name` as any} render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-xs">Option {n} Name</FormLabel>
+                  <FormControl><Input {...field} value={field.value || ""} placeholder={n === 1 ? "Color" : n === 2 ? "Size" : "Textile"} data-testid={`input-variant-option${n}-name`} /></FormControl>
+                </FormItem>
+              )} />
+              <FormField control={form.control} name={`option${n}Value` as any} render={({ field }) => (
+                <FormItem>
+                  <FormControl><Input {...field} value={field.value || ""} placeholder="Value" data-testid={`input-variant-option${n}-value`} /></FormControl>
+                </FormItem>
+              )} />
+            </div>
+          ))}
+        </div>
+        <p className="text-sm text-muted-foreground">Price overrides (leave blank to inherit from base item)</p>
+        <div className="grid grid-cols-3 gap-3">
+          {[1, 2, 3, 4, 5].map((level) => (
+            <FormField key={level} control={form.control} name={`price${level}` as any} render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-xs">{priceLevelNames[level - 1] || `Price ${level}`}</FormLabel>
+                <FormControl>
+                  <Input type="number" step="0.01" placeholder="inherit" {...field} value={field.value ?? ""} onChange={(e) => field.onChange(e.target.value === "" ? null : e.target.value)} data-testid={`input-variant-price-${level}`} />
+                </FormControl>
+              </FormItem>
+            )} />
+          ))}
+          <FormField control={form.control} name="costPrice" render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-xs">Cost Price</FormLabel>
+              <FormControl>
+                <Input type="number" step="0.01" placeholder="inherit" {...field} value={field.value ?? ""} onChange={(e) => field.onChange(e.target.value === "" ? null : e.target.value)} data-testid="input-variant-cost-price" />
+              </FormControl>
+            </FormItem>
+          )} />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <FormField control={form.control} name="stockQuantity" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Stock Quantity</FormLabel>
+              <FormControl><Input type="number" {...field} onChange={(e) => field.onChange(parseInt(e.target.value) || 0)} data-testid="input-variant-stock" /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )} />
+          <FormField control={form.control} name="reorderLevel" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Reorder Level</FormLabel>
+              <FormControl>
+                <Input type="number" placeholder="inherit" {...field} value={field.value ?? ""} onChange={(e) => field.onChange(e.target.value === "" ? null : parseInt(e.target.value) || 0)} data-testid="input-variant-reorder" />
+              </FormControl>
+            </FormItem>
+          )} />
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="submit" disabled={isPending} data-testid="button-save-variant">
+            {isPending ? "Saving..." : "Save Variant"}
+          </Button>
+        </div>
+      </form>
+    </Form>
+  );
+}
+
+function VariantsTab({ itemId, priceLevelNames }: { itemId: string; priceLevelNames: string[] }) {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingVariant, setEditingVariant] = useState<ItemVariant | null>(null);
+
+  const { data: variants = [], isLoading } = useQuery<ItemVariant[]>({ queryKey: ["/api/items", itemId, "variants"] });
+
+  const createVariant = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", `/api/items/${itemId}/variants`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items", itemId, "variants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      setDialogOpen(false);
+      toast({ title: "Variant created" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updateVariant = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("PATCH", `/api/item-variants/${editingVariant!.id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items", itemId, "variants"] });
+      setDialogOpen(false);
+      setEditingVariant(null);
+      toast({ title: "Variant updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteVariant = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/item-variants/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items", itemId, "variants"] });
+      toast({ title: "Variant deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const describeOptions = (v: ItemVariant) => {
+    const parts = [];
+    if (v.option1Value) parts.push(`${v.option1Name || "Opt1"}: ${v.option1Value}`);
+    if (v.option2Value) parts.push(`${v.option2Name || "Opt2"}: ${v.option2Value}`);
+    if (v.option3Value) parts.push(`${v.option3Name || "Opt3"}: ${v.option3Value}`);
+    return parts.join(" · ") || "—";
+  };
+
+  return (
+    <div className="space-y-3 mt-4" data-testid="variants-tab">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">Track separate SKU, barcode, price and stock per variant (color, size, textile, quality...)</p>
+        <Button type="button" size="sm" onClick={() => { setEditingVariant(null); setDialogOpen(true); }} data-testid="button-add-variant">
+          <Plus className="w-3.5 h-3.5 mr-1" />Add Variant
+        </Button>
+      </div>
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground py-4 text-center">Loading variants...</p>
+      ) : variants.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground" data-testid="variants-empty">
+          <Layers className="w-8 h-8 opacity-40" />
+          <p className="text-sm">No variants yet. Add one to start tracking per-variant stock and pricing.</p>
+        </div>
+      ) : (
+        <div className="border rounded-md overflow-auto max-h-72">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-xs">SKU</TableHead>
+                <TableHead className="text-xs">Barcode</TableHead>
+                <TableHead className="text-xs">Options</TableHead>
+                <TableHead className="text-xs text-right">Stock</TableHead>
+                <TableHead className="text-xs text-right">Price 1</TableHead>
+                <TableHead className="text-xs"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {variants.map((v) => (
+                <TableRow key={v.id} data-testid={`variant-row-${v.id}`}>
+                  <TableCell className="text-xs font-medium">{v.sku}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{v.barcode || "—"}</TableCell>
+                  <TableCell className="text-xs">{describeOptions(v)}</TableCell>
+                  <TableCell className="text-xs text-right tabular-nums">{v.stockQuantity}</TableCell>
+                  <TableCell className="text-xs text-right tabular-nums">{v.price1 != null ? parseFloat(v.price1 as any).toFixed(2) : "inherit"}</TableCell>
+                  <TableCell className="text-xs">
+                    <div className="flex justify-end gap-1">
+                      <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditingVariant(v); setDialogOpen(true); }} data-testid={`button-edit-variant-${v.id}`}>
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => { if (confirm("Delete this variant?")) deleteVariant.mutate(v.id); }} data-testid={`button-delete-variant-${v.id}`}>
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+      <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditingVariant(null); }}>
+        <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingVariant ? "Edit Variant" : "Add Variant"}</DialogTitle>
+          </DialogHeader>
+          <VariantForm
+            key={editingVariant?.id || "new"}
+            onSubmit={(d) => editingVariant ? updateVariant.mutate(d) : createVariant.mutate(d)}
+            isPending={createVariant.isPending || updateVariant.isPending}
+            priceLevelNames={priceLevelNames}
+            defaultValues={editingVariant ? {
+              sku: editingVariant.sku,
+              barcode: editingVariant.barcode || "",
+              option1Name: editingVariant.option1Name || "",
+              option1Value: editingVariant.option1Value || "",
+              option2Name: editingVariant.option2Name || "",
+              option2Value: editingVariant.option2Value || "",
+              option3Name: editingVariant.option3Name || "",
+              option3Value: editingVariant.option3Value || "",
+              price1: editingVariant.price1,
+              price2: editingVariant.price2,
+              price3: editingVariant.price3,
+              price4: editingVariant.price4,
+              price5: editingVariant.price5,
+              costPrice: editingVariant.costPrice,
+              stockQuantity: editingVariant.stockQuantity,
+              reorderLevel: editingVariant.reorderLevel,
+              active: editingVariant.active,
+            } : undefined}
+          />
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNames, itemId }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any; priceLevelNames: string[]; itemId?: string }) {
   const isEditing = !!defaultValues;
   const form = useForm({
@@ -722,6 +963,11 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
             <TabsTrigger value="basic" className="flex-1" data-testid="tab-basic">Basic</TabsTrigger>
             <TabsTrigger value="pricing" className="flex-1" data-testid="tab-pricing">Pricing</TabsTrigger>
             <TabsTrigger value="details" className="flex-1" data-testid="tab-details">Details</TabsTrigger>
+            {itemId && (
+              <TabsTrigger value="variants" className="flex-1" data-testid="tab-variants">
+                <Layers className="w-3.5 h-3.5 mr-1" />Variants
+              </TabsTrigger>
+            )}
             {itemId && (
               <TabsTrigger value="price-history" className="flex-1" data-testid="tab-price-history">
                 <History className="w-3.5 h-3.5 mr-1" />History
@@ -928,6 +1174,11 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
               )} />
             </div>
           </TabsContent>
+          {itemId && (
+            <TabsContent value="variants">
+              <VariantsTab itemId={itemId} priceLevelNames={priceLevelNames} />
+            </TabsContent>
+          )}
           {itemId && (
             <TabsContent value="price-history">
               <PriceHistoryTab itemId={itemId} />

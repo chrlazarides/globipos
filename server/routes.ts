@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema } from "@shared/schema";
+import { insertCategorySchema, insertItemSchema, insertItemVariantSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema } from "@shared/schema";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -895,8 +895,32 @@ export async function registerRoutes(
     res.json(suggestions);
   });
 
+  function mergeVariantIntoItem(item: any, variant: any) {
+    const optionParts = [variant.option1Value, variant.option2Value, variant.option3Value].filter(Boolean);
+    return {
+      ...item,
+      variantId: variant.id,
+      variantSku: variant.sku,
+      variantLabel: optionParts.join(" / "),
+      barcode: variant.barcode || item.barcode,
+      stockQuantity: variant.stockQuantity,
+      price1: variant.price1 ?? item.price1,
+      price2: variant.price2 ?? item.price2,
+      price3: variant.price3 ?? item.price3,
+      price4: variant.price4 ?? item.price4,
+      price5: variant.price5 ?? item.price5,
+      costPrice: variant.costPrice ?? item.costPrice,
+    };
+  }
+
   app.get("/api/items/barcode/:barcode", async (req, res) => {
-    const item = await storage.getItemByBarcode((req.params.barcode as string));
+    const barcode = req.params.barcode as string;
+    const variant = await storage.getItemVariantByBarcode(barcode);
+    if (variant) {
+      const item = await storage.getItem(variant.itemId);
+      if (item) return res.json(mergeVariantIntoItem(item, variant));
+    }
+    const item = await storage.getItemByBarcode(barcode);
     if (!item) return res.status(404).json({ message: "Item not found" });
     res.json(item);
   });
@@ -996,6 +1020,60 @@ export async function registerRoutes(
       const item = await storage.updateItem((req.params.id as string), req.body);
       if (!item) return res.status(404).json({ message: "Item not found" });
       res.json(item);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // --- Item Variants (color/size/textile/quality etc.) ---
+  app.get("/api/items/:id/variants", async (req, res) => {
+    try {
+      const variants = await storage.getItemVariants((req.params.id as string));
+      res.json(variants);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/item-variants/barcode/:barcode", async (req, res) => {
+    const variant = await storage.getItemVariantByBarcode((req.params.barcode as string));
+    if (!variant) return res.status(404).json({ message: "Variant not found" });
+    res.json(variant);
+  });
+
+  app.get("/api/item-variants/:id", async (req, res) => {
+    const variant = await storage.getItemVariant((req.params.id as string));
+    if (!variant) return res.status(404).json({ message: "Variant not found" });
+    res.json(variant);
+  });
+
+  app.post("/api/items/:id/variants", async (req, res) => {
+    try {
+      const body = { ...req.body, itemId: (req.params.id as string) };
+      sanitizeNumericFields(body, ["price1", "price2", "price3", "price4", "price5", "costPrice"], null as any);
+      const data = insertItemVariantSchema.parse(body);
+      const variant = await storage.createItemVariant(data);
+      res.json(variant);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/item-variants/:id", async (req, res) => {
+    try {
+      sanitizeNumericFields(req.body, ["price1", "price2", "price3", "price4", "price5", "costPrice"], null as any);
+      const variant = await storage.updateItemVariant((req.params.id as string), req.body);
+      if (!variant) return res.status(404).json({ message: "Variant not found" });
+      res.json(variant);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/item-variants/:id", async (req, res) => {
+    try {
+      await storage.deleteItemVariant((req.params.id as string));
+      res.status(204).end();
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }
@@ -1628,16 +1706,7 @@ export async function registerRoutes(
       // Reverse stock for non-draft sales invoices
       if (inv.type === "invoice" && inv.status !== "draft") {
         for (const li of inv.items || []) {
-          if (li.itemId) {
-            const item = await storage.getItem(li.itemId);
-            if (item) {
-              const liQtyB = parseFloat(String((li as any).quantity || "0"));
-              const bottlesToAdd = ((li as any).saleUnit === "pack" && item.packSize > 1)
-                ? liQtyB * item.packSize
-                : liQtyB;
-              await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
-            }
-          }
+          if (li.itemId) await adjustSaleLineStock(li as any, 1);
         }
       }
 
@@ -1798,8 +1867,10 @@ export async function registerRoutes(
             const item = await storage.getItem(li.itemId);
             if (item) {
               const bottlesToSubtract = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
-              if (item.stockQuantity < bottlesToSubtract) {
-                return res.status(400).json({ message: `Not enough stock for ${item.name || 'item'}. Available: ${item.stockQuantity} bottles, needed: ${bottlesToSubtract}` });
+              const variant = (li as any).variantId ? await storage.getItemVariant((li as any).variantId) : null;
+              const available = variant ? variant.stockQuantity : item.stockQuantity;
+              if (available < bottlesToSubtract) {
+                return res.status(400).json({ message: `Not enough stock for ${item.name || 'item'}. Available: ${available} bottles, needed: ${bottlesToSubtract}` });
               }
             }
           }
@@ -1810,23 +1881,11 @@ export async function registerRoutes(
 
       if (data.type === "invoice" && data.status !== "draft") {
         for (const li of parsedItems) {
-          if (li.itemId) {
-            const item = await storage.getItem(li.itemId);
-            if (item) {
-              const bottlesToSubtract = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
-              await storage.updateItem(item.id, { stockQuantity: item.stockQuantity - bottlesToSubtract });
-            }
-          }
+          if (li.itemId) await adjustSaleLineStock(li as any, -1);
         }
       } else if (data.type === "credit_note") {
         for (const li of parsedItems) {
-          if (li.itemId) {
-            const item = await storage.getItem(li.itemId);
-            if (item) {
-              const bottlesToAdd = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
-              await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
-            }
-          }
+          if (li.itemId) await adjustSaleLineStock(li as any, 1);
         }
       }
 
@@ -4992,6 +5051,41 @@ export async function registerRoutes(
     }
   });
 
+  // Adjusts stock for a sales invoice / credit note line, crediting or debiting the variant's own
+  // stock pool when the line is tied to a specific item variant, otherwise the parent item's stock.
+  async function adjustSaleLineStock(li: { itemId: string; variantId?: string | null; saleUnit?: string | null; quantity: number | string }, sign: 1 | -1) {
+    const item = await storage.getItem(li.itemId);
+    if (!item) return;
+    const qty = typeof li.quantity === "string" ? parseFloat(li.quantity) || 0 : li.quantity;
+    const bottles = (li.saleUnit === "pack" && item.packSize > 1) ? qty * item.packSize : qty;
+    const delta = sign * bottles;
+    if (li.variantId) {
+      const variant = await storage.getItemVariant(li.variantId);
+      if (variant) {
+        await storage.updateItemVariant(variant.id, { stockQuantity: Math.max(0, variant.stockQuantity + delta) });
+        return;
+      }
+    }
+    await storage.updateItem(item.id, { stockQuantity: Math.max(0, item.stockQuantity + delta) });
+  }
+
+  // Adjusts stock for a purchase-invoice line, crediting the variant's own stock pool when the
+  // line is tied to a specific item variant, otherwise falling back to the parent item's stock.
+  async function adjustPurchaseLineStock(li: { itemId: string; variantId?: string | null; purchaseUnit: string; quantity: number }, sign: 1 | -1) {
+    const item = await storage.getItem(li.itemId);
+    if (!item) return;
+    const bottles = li.purchaseUnit === "pack" ? li.quantity * item.packSize : li.quantity;
+    const delta = sign * bottles;
+    if (li.variantId) {
+      const variant = await storage.getItemVariant(li.variantId);
+      if (variant) {
+        await storage.updateItemVariant(variant.id, { stockQuantity: Math.max(0, variant.stockQuantity + delta) });
+        return;
+      }
+    }
+    await storage.updateItem(item.id, { stockQuantity: Math.max(0, item.stockQuantity + delta) });
+  }
+
   // Shared purchase-invoice posting logic — used by both the manual /api/purchase-invoices route
   // and the PDA GRV finalize route, so due-date derivation, stock updates (with pack-size
   // conversion), supplier-balance updates, and journal-entry creation are never duplicated.
@@ -5014,11 +5108,7 @@ export async function registerRoutes(
     const inv = await storage.createPurchaseInvoice(data, parsedItems);
 
     for (const li of parsedItems) {
-      const item = await storage.getItem(li.itemId);
-      if (item) {
-        const bottlesToAdd = li.purchaseUnit === "pack" ? li.quantity * item.packSize : li.quantity;
-        await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
-      }
+      await adjustPurchaseLineStock(li as any, 1);
     }
 
     const supplier = await storage.getSupplier(data.supplierId);
@@ -5114,11 +5204,7 @@ export async function registerRoutes(
 
       // Reverse old stock impact
       for (const oldItem of existing.items) {
-        const item = await storage.getItem(oldItem.itemId);
-        if (item) {
-          const bottlesToRemove = oldItem.purchaseUnit === "pack" ? oldItem.quantity * item.packSize : oldItem.quantity;
-          await storage.updateItem(item.id, { stockQuantity: Math.max(0, item.stockQuantity - bottlesToRemove) });
-        }
+        await adjustPurchaseLineStock(oldItem as any, -1);
       }
 
       // Reverse old supplier balance impact
@@ -5140,11 +5226,7 @@ export async function registerRoutes(
 
         // Apply new stock impact
         for (const li of parsedItems) {
-          const item = await storage.getItem(li.itemId);
-          if (item) {
-            const bottlesToAdd = li.purchaseUnit === "pack" ? li.quantity * item.packSize : li.quantity;
-            await storage.updateItem(item.id, { stockQuantity: item.stockQuantity + bottlesToAdd });
-          }
+          await adjustPurchaseLineStock(li as any, 1);
         }
       }
 
@@ -5172,11 +5254,7 @@ export async function registerRoutes(
 
       // Reverse stock impact
       for (const item of existing.items) {
-        const stockItem = await storage.getItem(item.itemId);
-        if (stockItem) {
-          const bottlesToRemove = item.purchaseUnit === "pack" ? item.quantity * stockItem.packSize : item.quantity;
-          await storage.updateItem(stockItem.id, { stockQuantity: Math.max(0, stockItem.stockQuantity - bottlesToRemove) });
-        }
+        await adjustPurchaseLineStock(item as any, -1);
       }
 
       // Reverse supplier balance

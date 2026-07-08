@@ -83,6 +83,12 @@ interface PeripheralConfig {
   customer_display_port: string;
   customer_display_baud_rate: number;
 
+  // Customer secondary screen (full graphical display facing the customer)
+  customer_screen_enabled: boolean;
+  customer_screen_size: "10" | "13" | "15" | "21" | "24" | "custom";
+  customer_screen_orientation: "landscape" | "portrait";
+  customer_screen_resolution: string; // e.g. "1920x1080", used when size = custom or to override preset default
+
   // Card terminal
   card_terminal_provider: string;   // none | jcc | viva | worldpay
   card_terminal_connection: "network" | "usb" | "bluetooth";
@@ -115,6 +121,7 @@ interface PeripheralStatus {
   scale?: "connected" | "disconnected" | "error" | "unknown";
   card_terminal?: "connected" | "disconnected" | "error" | "unknown";
   customer_display?: "ok" | "error" | "unknown";
+  customer_screen?: "ok" | "error" | "unknown";
   cashier_name?: string;
   shift_open?: boolean;
   app_version?: string;
@@ -161,6 +168,11 @@ const DEFAULT_CONFIG: PeripheralConfig = {
   customer_display_connection: "usb",
   customer_display_port: "",
   customer_display_baud_rate: 9600,
+
+  customer_screen_enabled: false,
+  customer_screen_size: "13",
+  customer_screen_orientation: "landscape",
+  customer_screen_resolution: "1920x1080",
 
   card_terminal_provider: "none",
   card_terminal_connection: "network",
@@ -258,6 +270,11 @@ function buildPeripheralPills(cfg: PeripheralConfig | null, status: PeripheralSt
     if (!s.customer_display || s.customer_display === "unknown") return "unknown";
     return s.customer_display === "ok" ? "ok" : "error";
   }
+  function screenLevel(): StatusLevel {
+    if (!c.customer_screen_enabled) return "off";
+    if (!s.customer_screen || s.customer_screen === "unknown") return "unknown";
+    return s.customer_screen === "ok" ? "ok" : "error";
+  }
 
   function connDetail(
     conn: ConnectionType | "printer" | "usb_hid" | "usb_serial",
@@ -279,6 +296,7 @@ function buildPeripheralPills(cfg: PeripheralConfig | null, status: PeripheralSt
     { icon: Scale, label: "Scale", level: scaleLevel(), tooltip: c.scale_enabled ? `${connDetail(c.scale_connection, { port: c.scale_port, ip: c.scale_ip, tcpPort: c.scale_tcp_port, baud: c.scale_baud_rate, parity: c.scale_parity, dataBits: c.scale_data_bits, stopBits: c.scale_stop_bits, protocol: c.scale_protocol })} · ${s.scale ?? "no report"}` : "Scale disabled" },
     { icon: CreditCard, label: c.card_terminal_provider !== "none" && c.card_terminal_provider ? c.card_terminal_provider.toUpperCase() : "Card", level: cardLevel(), tooltip: c.card_terminal_provider !== "none" ? `${c.card_terminal_provider} · ${connDetail(c.card_terminal_connection, { ip: c.card_terminal_ip, tcpPort: c.card_terminal_tcp_port })} · ${s.card_terminal ?? "no report"}` : "No card terminal" },
     { icon: MonitorSmartphone, label: "Display", level: displayLevel(), tooltip: c.customer_display_enabled ? `${connDetail(c.customer_display_connection, { port: c.customer_display_port, baud: c.customer_display_baud_rate })} · ${s.customer_display ?? "no report"}` : "Customer display disabled" },
+    { icon: MonitorSmartphone, label: "2nd Screen", level: screenLevel(), tooltip: c.customer_screen_enabled ? `${c.customer_screen_size === "custom" ? c.customer_screen_resolution : `${c.customer_screen_size}" ${c.customer_screen_resolution}`} · ${c.customer_screen_orientation} · ${s.customer_screen ?? "no report"}` : "Customer secondary screen disabled" },
     { icon: ScanLine, label: "Scanner", level: c.barcode_scanner_enabled ? "ok" as StatusLevel : "off" as StatusLevel, tooltip: c.barcode_scanner_enabled ? connDetail(c.scanner_connection, { port: c.scanner_port, baud: c.scanner_baud_rate }) : "Barcode scanner disabled" },
     { icon: Layers, label: "SCO", level: c.sco_mode ? "ok" as StatusLevel : "off" as StatusLevel, tooltip: c.sco_mode ? "Self-checkout mode enabled" : "SCO mode off" },
   ];
@@ -629,6 +647,56 @@ function PeripheralConfigSheet({
                     </Select>
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+
+          <Separator />
+
+          {/* Customer Secondary Screen */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MonitorSmartphone className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <span className="font-medium text-sm">Customer Secondary Screen</span>
+                  <p className="text-xs text-muted-foreground">Full graphical facing-customer display (cart, promos, ads)</p>
+                </div>
+              </div>
+              <Switch checked={form.customer_screen_enabled} onCheckedChange={v => toggle("customer_screen_enabled", v)} data-testid="toggle-customer-screen" />
+            </div>
+            {form.customer_screen_enabled && (
+              <div className="ml-6 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Screen Size</label>
+                    <Select value={form.customer_screen_size} onValueChange={v => field("customer_screen_size", v)}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="select-screen-size"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="10">10"</SelectItem>
+                        <SelectItem value="13">13"</SelectItem>
+                        <SelectItem value="15">15"</SelectItem>
+                        <SelectItem value="21">21"</SelectItem>
+                        <SelectItem value="24">24"</SelectItem>
+                        <SelectItem value="custom">Custom</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Orientation</label>
+                    <Select value={form.customer_screen_orientation} onValueChange={v => field("customer_screen_orientation", v)}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="select-screen-orientation"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="landscape">Landscape</SelectItem>
+                        <SelectItem value="portrait">Portrait</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-1 w-1/2">
+                  <label className="text-xs text-muted-foreground">Resolution</label>
+                  <Input value={form.customer_screen_resolution} onChange={e => field("customer_screen_resolution", e.target.value)} placeholder="1920x1080" className="h-8 text-xs" data-testid="input-screen-resolution" />
+                </div>
               </div>
             )}
           </div>

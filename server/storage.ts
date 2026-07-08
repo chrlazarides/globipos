@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import {
-  users, categories, items, customers, priceContracts, priceContractItems, priceContractRules,
+  users, categories, items, itemVariants, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
@@ -9,7 +9,7 @@ import {
   posLocations, posTerminals, posLayoutSets, posLayoutButtons,
   posOrders, posOrderLines, posShifts, posSyncConfig, posInbox,
   type InsertUser, type User, type InsertCategory, type Category,
-  type InsertItem, type Item, type InsertCustomer, type Customer,
+  type InsertItem, type Item, type InsertItemVariant, type ItemVariant, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
   type InsertPriceContractRule, type PriceContractRule,
   type InsertPriceContractItem, type PriceContractItem,
@@ -64,6 +64,14 @@ export interface IStorage {
   getItemByBarcode(barcode: string): Promise<Item | undefined>;
   createItem(data: InsertItem): Promise<Item>;
   updateItem(id: string, data: Partial<InsertItem>): Promise<Item | undefined>;
+
+  getItemVariants(itemId: string): Promise<ItemVariant[]>;
+  getItemVariant(id: string): Promise<ItemVariant | undefined>;
+  getItemVariantByBarcode(barcode: string): Promise<ItemVariant | undefined>;
+  getItemVariantBySku(sku: string): Promise<ItemVariant | undefined>;
+  createItemVariant(data: InsertItemVariant): Promise<ItemVariant>;
+  updateItemVariant(id: string, data: Partial<InsertItemVariant>): Promise<ItemVariant | undefined>;
+  deleteItemVariant(id: string): Promise<void>;
 
   getCustomers(): Promise<Customer[]>;
   deleteCustomer(id: string): Promise<void>;
@@ -340,6 +348,34 @@ export class DatabaseStorage implements IStorage {
   async updateItem(id: string, data: Partial<InsertItem>) {
     const [item] = await db.update(items).set(data).where(eq(items.id, id)).returning();
     return item;
+  }
+
+  async getItemVariants(itemId: string) {
+    return db.select().from(itemVariants).where(eq(itemVariants.itemId, itemId)).orderBy(itemVariants.sku);
+  }
+  async getItemVariant(id: string) {
+    const [v] = await db.select().from(itemVariants).where(eq(itemVariants.id, id));
+    return v;
+  }
+  async getItemVariantByBarcode(barcode: string) {
+    const [v] = await db.select().from(itemVariants).where(eq(itemVariants.barcode, barcode));
+    return v;
+  }
+  async getItemVariantBySku(sku: string) {
+    const [v] = await db.select().from(itemVariants).where(eq(itemVariants.sku, sku));
+    return v;
+  }
+  async createItemVariant(data: InsertItemVariant) {
+    const [v] = await db.insert(itemVariants).values(data).returning();
+    await db.update(items).set({ hasVariants: true }).where(eq(items.id, data.itemId));
+    return v;
+  }
+  async updateItemVariant(id: string, data: Partial<InsertItemVariant>) {
+    const [v] = await db.update(itemVariants).set(data).where(eq(itemVariants.id, id)).returning();
+    return v;
+  }
+  async deleteItemVariant(id: string) {
+    await db.delete(itemVariants).where(eq(itemVariants.id, id));
   }
 
   async getCustomers() {
