@@ -466,7 +466,10 @@ export default function PosSimulate() {
   const rawButtons: PosLayoutButton[] = (allButtonsMap?.[currentLayoutId] ?? EMPTY_BUTTONS)
     .filter(b => b.buttonType !== "empty" && b.label);
   const cols = deviceCols(currentLayout, deviceView);
-  const rows = currentLayout?.rows ?? 5;
+  const declaredRows = currentLayout?.rows ?? 5;
+  const maxButtonPos = rawButtons.length ? Math.max(...rawButtons.map(b => b.position)) : -1;
+  const neededRows = Math.ceil((maxButtonPos + 1) / cols);
+  const rows = Math.max(declaredRows, neededRows);
   const totalCells = cols * rows;
   const consumed = consumedSet(rawButtons, cols);
 

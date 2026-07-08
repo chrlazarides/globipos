@@ -831,7 +831,13 @@ export default function PosLayoutEditor() {
 
   useEffect(() => {
     if (!layoutSet) return;
-    const total = (layoutSet.columns ?? 4) * (layoutSet.rows ?? 5);
+    const cols = layoutSet.columns ?? 4;
+    const declaredRows = layoutSet.rows ?? 5;
+    const maxButtonPos = savedButtons.length ? Math.max(...savedButtons.map(b => b.position)) : -1;
+    const neededRows = Math.ceil((maxButtonPos + 1) / cols);
+    const effectiveRows = Math.max(declaredRows, neededRows);
+    if (effectiveRows > declaredRows) setRows(effectiveRows);
+    const total = cols * effectiveRows;
     const arr = Array.from({ length: total }, (_, i) => {
       const b = savedButtons.find(b => b.position === i);
       if (!b) return makeEmpty(i);
