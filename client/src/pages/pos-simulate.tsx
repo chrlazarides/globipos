@@ -202,10 +202,11 @@ const ACTION_ICONS: Record<string, any> = {
 // ─────────────────────────────────────────────────────────────────────────────
 function SimButton({
   label, color, buttonType, actionCode, colspan, rowspan, shape, icon,
-  onClick, dimmed,
+  row, col, onClick, dimmed,
 }: {
   label: string; color: string; buttonType: string;
   actionCode?: string; colspan?: number; rowspan?: number;
+  row: number; col: number;
   shape?: string | null; icon?: string | null; onClick: () => void; dimmed?: boolean;
 }) {
   const cs = colspan ?? 1;
@@ -221,8 +222,8 @@ function SimButton({
     <button
       onClick={onClick}
       style={{
-        gridColumn: cs > 1 ? `span ${cs}` : undefined,
-        gridRow:    rs > 1 ? `span ${rs}` : undefined,
+        gridColumn: `${col + 1} / span ${cs}`,
+        gridRow:    `${row + 1} / span ${rs}`,
         backgroundColor: color + "dd",
         opacity: dimmed ? 0.35 : 1,
         minHeight: "56px",
@@ -896,12 +897,17 @@ export default function PosSimulate() {
                 style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: "6px", alignContent: "start" }}
               >
                 {grid.map((btn, idx) => {
+                  if (consumed.has(idx)) return null;
+                  const row = Math.floor(idx / cols);
+                  const col = idx % cols;
                   if (!btn) {
-                    return <div key={idx} style={{ minHeight: "56px" }} className="rounded-xl bg-slate-700/30" />;
-                  }
-                  if (consumed.has(btn.position) && grid.indexOf(btn) !== idx) return null;
-                  if (consumed.has(idx) && !rawButtons.find(b => b.position === idx)) {
-                    return <div key={idx} />;
+                    return (
+                      <div
+                        key={idx}
+                        style={{ gridColumn: `${col + 1} / span 1`, gridRow: `${row + 1} / span 1`, minHeight: "56px" }}
+                        className="rounded-xl bg-slate-700/30"
+                      />
+                    );
                   }
                   return (
                     <SimButton
@@ -912,6 +918,8 @@ export default function PosSimulate() {
                       actionCode={btn.actionCode ?? undefined}
                       colspan={(btn as any).colspan ?? 1}
                       rowspan={(btn as any).rowspan ?? 1}
+                      row={row}
+                      col={col}
                       shape={(btn as any).shape}
                       icon={btn.icon}
                       onClick={() => handleButtonClick(btn)}

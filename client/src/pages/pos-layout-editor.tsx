@@ -253,10 +253,11 @@ function typeChip(type: ButtonType) {
 
 // ── GridButton ─────────────────────────────────────────────────────────────────
 function GridButton({
-  slot, onClick, isSelected, buttonRadius, allLayouts,
+  slot, cols, onClick, isSelected, buttonRadius, allLayouts,
   draggable, isDragOver, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }: {
   slot: SlotData;
+  cols: number;
   onClick: () => void;
   isSelected: boolean;
   buttonRadius?: string | null;
@@ -276,6 +277,8 @@ function GridButton({
   const rc        = radiusClass(buttonRadius, slot.shape);
   const subName   = slot.sublayoutId ? allLayouts.find(l => l.id === slot.sublayoutId)?.name : null;
   const sizeLabel = (colspan > 1 || rowspan > 1) ? `${colspan}×${rowspan}` : null;
+  const row = Math.floor(slot.position / cols);
+  const col = slot.position % cols;
 
   return (
     <button
@@ -288,8 +291,8 @@ function GridButton({
       onDragEnd={onDragEnd}
       data-testid={`grid-btn-${slot.position}`}
       style={{
-        gridColumn:      colspan > 1 ? `span ${colspan}` : undefined,
-        gridRow:         rowspan > 1 ? `span ${rowspan}` : undefined,
+        gridColumn:      `${col + 1} / span ${colspan}`,
+        gridRow:         `${row + 1} / span ${rowspan}`,
         backgroundColor: isEmpty ? undefined : slot.color + "dd",
         borderColor:     isEmpty ? undefined : slot.color,
       }}
@@ -774,17 +777,19 @@ function MiniGrid({ slots, cols, buttonRadius, label, icon: Icon, allLayouts }: 
       </p>
       <div className="rounded-lg border bg-gray-50 p-1.5" style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: "3px" }}>
         {grid.map((slot, idx) => {
-          if (consumed.has(slot.position)) return <div key={idx} />;
+          if (consumed.has(slot.position)) return null;
           const isEmpty = slot.buttonType === "empty" || !slot.label;
           const colspan = slot.colspan ?? 1;
           const rowspan = slot.rowspan ?? 1;
           const rc = radiusClass(buttonRadius, slot.shape);
+          const row = Math.floor(slot.position / cols);
+          const col = slot.position % cols;
           return (
             <div
               key={idx}
               style={{
-                gridColumn: colspan > 1 ? `span ${colspan}` : undefined,
-                gridRow:    rowspan > 1 ? `span ${rowspan}` : undefined,
+                gridColumn: `${col + 1} / span ${colspan}`,
+                gridRow:    `${row + 1} / span ${rowspan}`,
                 backgroundColor: isEmpty ? "#f3f4f6" : slot.color + "cc",
                 height: "18px",
               }}
@@ -1249,12 +1254,13 @@ export default function PosLayoutEditor() {
             data-testid="layout-grid"
           >
             {slots.map(slot => {
-              if (consumed.has(slot.position)) return <div key={slot.position} data-testid={`grid-placeholder-${slot.position}`} />;
+              if (consumed.has(slot.position)) return null;
               const isEmptySlot = slot.buttonType === "empty" || !slot.label;
               return (
                 <GridButton
                   key={slot.position}
                   slot={slot}
+                  cols={activeColumns}
                   isSelected={selected === slot.position}
                   onClick={() => setSelected(selected === slot.position ? null : slot.position)}
                   buttonRadius={buttonRadius}
