@@ -20,7 +20,7 @@ import {
   ChevronUp, ChevronDown, AlignLeft, Wallet, Minus,
   DoorOpen, FileText, BarChart2, TrendingDown,
   Smartphone, Tablet, Monitor, Tv, Layers, Circle,
-  Square, Plus, Minus as MinusIcon, Info,
+  Square, Plus, Minus as MinusIcon, Info, GripVertical,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton } from "@shared/schema";
 
@@ -254,12 +254,21 @@ function typeChip(type: ButtonType) {
 // ── GridButton ─────────────────────────────────────────────────────────────────
 function GridButton({
   slot, onClick, isSelected, buttonRadius, allLayouts,
+  draggable, isDragOver, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }: {
   slot: SlotData;
   onClick: () => void;
   isSelected: boolean;
   buttonRadius?: string | null;
   allLayouts: PosLayoutSet[];
+  draggable?: boolean;
+  isDragOver?: boolean;
+  isDragging?: boolean;
+  onDragStart?: (e: React.DragEvent<HTMLButtonElement>) => void;
+  onDragOver?: (e: React.DragEvent<HTMLButtonElement>) => void;
+  onDragLeave?: (e: React.DragEvent<HTMLButtonElement>) => void;
+  onDrop?: (e: React.DragEvent<HTMLButtonElement>) => void;
+  onDragEnd?: (e: React.DragEvent<HTMLButtonElement>) => void;
 }) {
   const isEmpty   = slot.buttonType === "empty" || !slot.label;
   const colspan   = slot.colspan ?? 1;
@@ -271,6 +280,12 @@ function GridButton({
   return (
     <button
       onClick={onClick}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
       data-testid={`grid-btn-${slot.position}`}
       style={{
         gridColumn:      colspan > 1 ? `span ${colspan}` : undefined,
@@ -284,6 +299,9 @@ function GridButton({
         ${rc}
         ${isSelected ? "ring-2 ring-primary ring-offset-2" : "hover:opacity-90"}
         ${isEmpty ? "border-dashed border-gray-200 bg-gray-50 hover:border-primary/40" : "border-transparent shadow-sm"}
+        ${draggable ? "cursor-grab active:cursor-grabbing" : ""}
+        ${isDragOver ? "ring-2 ring-blue-400 ring-offset-1 scale-[1.03] z-10" : ""}
+        ${isDragging ? "opacity-40" : ""}
       `}
     >
       {!isEmpty ? (
@@ -301,6 +319,9 @@ function GridButton({
             <span className="absolute top-1 right-1 text-[9px] text-white/70 flex items-center gap-0.5">
               <Layers className="w-2.5 h-2.5" />{subName.slice(0, 8)}
             </span>
+          )}
+          {draggable && (
+            <GripVertical className="absolute top-0.5 right-0.5 w-3 h-3 text-white/40" />
           )}
         </>
       ) : (
@@ -813,6 +834,8 @@ export default function PosLayoutEditor() {
   const [slots,        setSlots]        = useState<SlotData[]>([]);
   const [selected,     setSelected]     = useState<number | null>(null);
   const [dirty,        setDirty]        = useState(false);
+  const [draggedPos,   setDraggedPos]   = useState<number | null>(null);
+  const [dragOverPos,  setDragOverPos]  = useState<number | null>(null);
 
   // Seed from DB
   useEffect(() => {
@@ -900,6 +923,21 @@ export default function PosLayoutEditor() {
 
   function clearSlot(pos: number) {
     setSlots(prev => prev.map(s => s.position === pos ? makeEmpty(pos) : s));
+    setDirty(true);
+  }
+
+  function swapSlots(posA: number, posB: number) {
+    if (posA === posB) return;
+    setSlots(prev => {
+      const a = prev.find(s => s.position === posA);
+      const b = prev.find(s => s.position === posB);
+      if (!a || !b) return prev;
+      return prev.map(s => {
+        if (s.position === posA) return { ...b, position: posA };
+        if (s.position === posB) return { ...a, position: posB };
+        return s;
+      });
+    });
     setDirty(true);
   }
 
@@ -1212,6 +1250,7 @@ export default function PosLayoutEditor() {
           >
             {slots.map(slot => {
               if (consumed.has(slot.position)) return <div key={slot.position} data-testid={`grid-placeholder-${slot.position}`} />;
+              const isEmptySlot = slot.buttonType === "empty" || !slot.label;
               return (
                 <GridButton
                   key={slot.position}
@@ -1220,6 +1259,34 @@ export default function PosLayoutEditor() {
                   onClick={() => setSelected(selected === slot.position ? null : slot.position)}
                   buttonRadius={buttonRadius}
                   allLayouts={allLayouts}
+                  draggable={!isEmptySlot}
+                  isDragging={draggedPos === slot.position}
+                  isDragOver={dragOverPos === slot.position && draggedPos !== null && draggedPos !== slot.position}
+                  onDragStart={(e) => {
+                    setDraggedPos(slot.position);
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", String(slot.position));
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (draggedPos !== null && draggedPos !== slot.position) setDragOverPos(slot.position);
+                  }}
+                  onDragLeave={() => {
+                    setDragOverPos(prev => (prev === slot.position ? null : prev));
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggedPos !== null && draggedPos !== slot.position) {
+                      swapSlots(draggedPos, slot.position);
+                      toast({ title: "Buttons swapped" });
+                    }
+                    setDraggedPos(null);
+                    setDragOverPos(null);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedPos(null);
+                    setDragOverPos(null);
+                  }}
                 />
               );
             })}
@@ -1229,7 +1296,8 @@ export default function PosLayoutEditor() {
           <div className="mt-4 flex items-start gap-2 text-xs text-muted-foreground">
             <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
             <span>
-              Click any button to configure it. <strong>Wide/Tall/Large</strong> buttons span multiple cells.
+              Click any button to configure it, or <strong>drag and drop</strong> a button onto another cell to swap their positions.
+              <strong>Wide/Tall/Large</strong> buttons span multiple cells.
               Use <strong>Sub-Menu</strong> type to create condiment / modifier panels (hospitality style).
               Wide + Tall buttons absorb adjacent slots automatically.
             </span>
