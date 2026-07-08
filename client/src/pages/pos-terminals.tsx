@@ -44,20 +44,70 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+type ConnectionType = "usb" | "serial" | "network" | "bluetooth";
+
 interface PeripheralConfig {
+  // Receipt printer
   printer_enabled: boolean;
-  printer_port: string;
+  printer_connection: ConnectionType;
+  printer_model: string;
+  printer_port: string;          // USB/serial device path, e.g. /dev/ttyUSB0 or COM3
+  printer_ip: string;            // network connection
+  printer_tcp_port: number;      // network connection, usually 9100
+  printer_baud_rate: number;     // serial connection
+  printer_data_bits: number;     // serial connection
+  printer_parity: "N" | "E" | "O";
+  printer_stop_bits: number;
   printer_columns: number;
+
+  // Cash drawer
   drawer_enabled: boolean;
+  drawer_connection: "printer" | "usb" | "serial"; // "printer" = kick-out via printer RJ11
   drawer_port: string;
+
+  // Weighing scale
   scale_enabled: boolean;
+  scale_connection: ConnectionType;
+  scale_protocol: string;        // digi | avery_berkel | cas | mettler_toledo | ishida | generic_nci
   scale_port: string;
+  scale_ip: string;
+  scale_tcp_port: number;
+  scale_baud_rate: number;
+  scale_data_bits: number;
+  scale_parity: "N" | "E" | "O";
+  scale_stop_bits: number;
+
+  // Customer pole display
   customer_display_enabled: boolean;
+  customer_display_connection: "usb" | "serial";
+  customer_display_port: string;
+  customer_display_baud_rate: number;
+
+  // Card terminal
   card_terminal_provider: string;   // none | jcc | viva | worldpay
+  card_terminal_connection: "network" | "usb" | "bluetooth";
+  card_terminal_ip: string;
+  card_terminal_tcp_port: number;
+
+  // Barcode scanner
   barcode_scanner_enabled: boolean;
+  scanner_connection: "usb_hid" | "usb_serial" | "bluetooth";
+  scanner_port: string;
+  scanner_baud_rate: number;
+
   sco_mode: boolean;
   price_level: number;
 }
+
+const BAUD_RATES = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200];
+const SCALE_PROTOCOLS = [
+  { value: "digi", label: "Digi (SM/DS series)" },
+  { value: "avery_berkel", label: "Avery Berkel" },
+  { value: "cas", label: "CAS" },
+  { value: "mettler_toledo", label: "Mettler Toledo" },
+  { value: "ishida", label: "Ishida" },
+  { value: "generic_nci", label: "Generic NCI" },
+];
 
 interface PeripheralStatus {
   printer?: "online" | "offline" | "error" | "unknown";
@@ -81,15 +131,47 @@ type EnrichedTerminal = PosTerminal & {
 
 const DEFAULT_CONFIG: PeripheralConfig = {
   printer_enabled: false,
+  printer_connection: "usb",
+  printer_model: "",
   printer_port: "",
+  printer_ip: "",
+  printer_tcp_port: 9100,
+  printer_baud_rate: 9600,
+  printer_data_bits: 8,
+  printer_parity: "N",
+  printer_stop_bits: 1,
   printer_columns: 42,
+
   drawer_enabled: false,
+  drawer_connection: "printer",
   drawer_port: "",
+
   scale_enabled: false,
+  scale_connection: "serial",
+  scale_protocol: "digi",
   scale_port: "",
+  scale_ip: "",
+  scale_tcp_port: 4001,
+  scale_baud_rate: 9600,
+  scale_data_bits: 8,
+  scale_parity: "N",
+  scale_stop_bits: 1,
+
   customer_display_enabled: false,
+  customer_display_connection: "usb",
+  customer_display_port: "",
+  customer_display_baud_rate: 9600,
+
   card_terminal_provider: "none",
+  card_terminal_connection: "network",
+  card_terminal_ip: "",
+  card_terminal_tcp_port: 0,
+
   barcode_scanner_enabled: true,
+  scanner_connection: "usb_hid",
+  scanner_port: "",
+  scanner_baud_rate: 9600,
+
   sco_mode: false,
   price_level: 1,
 };
@@ -177,15 +259,81 @@ function buildPeripheralPills(cfg: PeripheralConfig | null, status: PeripheralSt
     return s.customer_display === "ok" ? "ok" : "error";
   }
 
+  function connDetail(
+    conn: ConnectionType | "printer" | "usb_hid" | "usb_serial",
+    opts: { port?: string; ip?: string; tcpPort?: number; baud?: number; parity?: string; dataBits?: number; stopBits?: number; protocol?: string },
+  ): string {
+    const proto = opts.protocol ? `${SCALE_PROTOCOLS.find(p => p.value === opts.protocol)?.label ?? opts.protocol} · ` : "";
+    if (conn === "network") return `${proto}Network ${opts.ip || "?.?.?.?"}:${opts.tcpPort ?? ""}`;
+    if (conn === "serial") return `${proto}Serial ${opts.port || "?"} @ ${opts.baud ?? 9600},${opts.parity ?? "N"},${opts.dataBits ?? 8},${opts.stopBits ?? 1}`;
+    if (conn === "bluetooth") return `${proto}Bluetooth ${opts.port || "paired device"}`;
+    if (conn === "printer") return "Via printer RJ11 kick-out";
+    if (conn === "usb_hid") return "USB (keyboard-wedge HID)";
+    if (conn === "usb_serial") return `USB-Serial ${opts.port || "?"} @ ${opts.baud ?? 9600}`;
+    return `${proto}USB ${opts.port || "auto-detect"}`;
+  }
+
   return [
-    { icon: Printer, label: "Printer", level: printerLevel(), tooltip: c.printer_enabled ? `Port: ${c.printer_port || "default"} · ${s.printer ?? "no report"}` : "Printer disabled" },
-    { icon: Package, label: "Drawer", level: drawerLevel(), tooltip: c.drawer_enabled ? `Cash drawer · ${s.drawer ?? "no report"}` : "Drawer disabled" },
-    { icon: Scale, label: "Scale", level: scaleLevel(), tooltip: c.scale_enabled ? `Port: ${c.scale_port || "default"} · ${s.scale ?? "no report"}` : "Scale disabled" },
-    { icon: CreditCard, label: c.card_terminal_provider !== "none" && c.card_terminal_provider ? c.card_terminal_provider.toUpperCase() : "Card", level: cardLevel(), tooltip: c.card_terminal_provider !== "none" ? `${c.card_terminal_provider} · ${s.card_terminal ?? "no report"}` : "No card terminal" },
-    { icon: MonitorSmartphone, label: "Display", level: displayLevel(), tooltip: c.customer_display_enabled ? `Customer display · ${s.customer_display ?? "no report"}` : "Customer display disabled" },
-    { icon: ScanLine, label: "Scanner", level: c.barcode_scanner_enabled ? "ok" as StatusLevel : "off" as StatusLevel, tooltip: c.barcode_scanner_enabled ? "Barcode scanner enabled" : "Barcode scanner disabled" },
+    { icon: Printer, label: "Printer", level: printerLevel(), tooltip: c.printer_enabled ? `${connDetail(c.printer_connection, { port: c.printer_port, ip: c.printer_ip, tcpPort: c.printer_tcp_port, baud: c.printer_baud_rate, parity: c.printer_parity, dataBits: c.printer_data_bits, stopBits: c.printer_stop_bits })} · ${s.printer ?? "no report"}` : "Printer disabled" },
+    { icon: Package, label: "Drawer", level: drawerLevel(), tooltip: c.drawer_enabled ? `${connDetail(c.drawer_connection, { port: c.drawer_port })} · ${s.drawer ?? "no report"}` : "Drawer disabled" },
+    { icon: Scale, label: "Scale", level: scaleLevel(), tooltip: c.scale_enabled ? `${connDetail(c.scale_connection, { port: c.scale_port, ip: c.scale_ip, tcpPort: c.scale_tcp_port, baud: c.scale_baud_rate, parity: c.scale_parity, dataBits: c.scale_data_bits, stopBits: c.scale_stop_bits, protocol: c.scale_protocol })} · ${s.scale ?? "no report"}` : "Scale disabled" },
+    { icon: CreditCard, label: c.card_terminal_provider !== "none" && c.card_terminal_provider ? c.card_terminal_provider.toUpperCase() : "Card", level: cardLevel(), tooltip: c.card_terminal_provider !== "none" ? `${c.card_terminal_provider} · ${connDetail(c.card_terminal_connection, { ip: c.card_terminal_ip, tcpPort: c.card_terminal_tcp_port })} · ${s.card_terminal ?? "no report"}` : "No card terminal" },
+    { icon: MonitorSmartphone, label: "Display", level: displayLevel(), tooltip: c.customer_display_enabled ? `${connDetail(c.customer_display_connection, { port: c.customer_display_port, baud: c.customer_display_baud_rate })} · ${s.customer_display ?? "no report"}` : "Customer display disabled" },
+    { icon: ScanLine, label: "Scanner", level: c.barcode_scanner_enabled ? "ok" as StatusLevel : "off" as StatusLevel, tooltip: c.barcode_scanner_enabled ? connDetail(c.scanner_connection, { port: c.scanner_port, baud: c.scanner_baud_rate }) : "Barcode scanner disabled" },
     { icon: Layers, label: "SCO", level: c.sco_mode ? "ok" as StatusLevel : "off" as StatusLevel, tooltip: c.sco_mode ? "Self-checkout mode enabled" : "SCO mode off" },
   ];
+}
+
+// ── Reusable serial connection parameter fields (baud/parity/data/stop bits) ──
+
+function SerialParamFields({
+  baud, parity, dataBits, stopBits,
+  onBaud, onParity, onDataBits, onStopBits,
+  testidPrefix,
+}: {
+  baud: number;
+  parity: "N" | "E" | "O";
+  dataBits: number;
+  stopBits: number;
+  onBaud: (v: number) => void;
+  onParity: (v: "N" | "E" | "O") => void;
+  onDataBits: (v: number) => void;
+  onStopBits: (v: number) => void;
+  testidPrefix: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-xs text-muted-foreground">Baud, Parity, Data Bits, Stop Bits</label>
+      <div className="grid grid-cols-4 gap-2">
+        <Select value={String(baud)} onValueChange={v => onBaud(parseInt(v))}>
+          <SelectTrigger className="h-8 text-xs" data-testid={`select-${testidPrefix}-baud`}><SelectValue /></SelectTrigger>
+          <SelectContent>{BAUD_RATES.map(b => <SelectItem key={b} value={String(b)}>{b}</SelectItem>)}</SelectContent>
+        </Select>
+        <Select value={parity} onValueChange={v => onParity(v as "N" | "E" | "O")}>
+          <SelectTrigger className="h-8 text-xs" data-testid={`select-${testidPrefix}-parity`}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="N">None (N)</SelectItem>
+            <SelectItem value="E">Even (E)</SelectItem>
+            <SelectItem value="O">Odd (O)</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={String(dataBits)} onValueChange={v => onDataBits(parseInt(v))}>
+          <SelectTrigger className="h-8 text-xs" data-testid={`select-${testidPrefix}-databits`}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="7">7</SelectItem>
+            <SelectItem value="8">8</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={String(stopBits)} onValueChange={v => onStopBits(parseInt(v))}>
+          <SelectTrigger className="h-8 text-xs" data-testid={`select-${testidPrefix}-stopbits`}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="1">1</SelectItem>
+            <SelectItem value="2">2</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
 }
 
 // ── Peripheral Config Sheet ────────────────────────────────────────────────────
@@ -283,13 +431,54 @@ function PeripheralConfigSheet({
               <Switch checked={form.printer_enabled} onCheckedChange={v => toggle("printer_enabled", v)} data-testid="toggle-printer" />
             </div>
             {form.printer_enabled && (
-              <div className="grid grid-cols-2 gap-3 ml-6">
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">Port / Path</label>
-                  <Input value={form.printer_port} onChange={e => field("printer_port", e.target.value)} placeholder="/dev/ttyUSB0" className="h-8 text-xs" data-testid="input-printer-port" />
+              <div className="ml-6 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Model</label>
+                    <Input value={form.printer_model} onChange={e => field("printer_model", e.target.value)} placeholder="Epson TM-T88VI" className="h-8 text-xs" data-testid="input-printer-model" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Connection</label>
+                    <Select value={form.printer_connection} onValueChange={v => field("printer_connection", v)}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="select-printer-connection"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="usb">USB</SelectItem>
+                        <SelectItem value="serial">Serial (RS232)</SelectItem>
+                        <SelectItem value="network">Network (Ethernet/Wi-Fi)</SelectItem>
+                        <SelectItem value="bluetooth">Bluetooth</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">Columns</label>
+
+                {form.printer_connection === "network" ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">IP Address</label>
+                      <Input value={form.printer_ip} onChange={e => field("printer_ip", e.target.value)} placeholder="192.168.1.50" className="h-8 text-xs" data-testid="input-printer-ip" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">TCP Port</label>
+                      <Input type="number" value={form.printer_tcp_port} onChange={e => field("printer_tcp_port", parseInt(e.target.value) || 9100)} className="h-8 text-xs" data-testid="input-printer-tcp-port" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">{form.printer_connection === "bluetooth" ? "Paired Device" : "Port / Path"}</label>
+                    <Input value={form.printer_port} onChange={e => field("printer_port", e.target.value)} placeholder={form.printer_connection === "serial" ? "COM3 or /dev/ttyUSB0" : form.printer_connection === "bluetooth" ? "Printer BT name/MAC" : "auto-detect (optional)"} className="h-8 text-xs" data-testid="input-printer-port" />
+                  </div>
+                )}
+
+                {form.printer_connection === "serial" && (
+                  <SerialParamFields
+                    baud={form.printer_baud_rate} parity={form.printer_parity} dataBits={form.printer_data_bits} stopBits={form.printer_stop_bits}
+                    onBaud={v => field("printer_baud_rate", v)} onParity={v => field("printer_parity", v)} onDataBits={v => field("printer_data_bits", v)} onStopBits={v => field("printer_stop_bits", v)}
+                    testidPrefix="printer"
+                  />
+                )}
+
+                <div className="space-y-1 w-1/2">
+                  <label className="text-xs text-muted-foreground">Print Width (columns)</label>
                   <Input type="number" value={form.printer_columns} onChange={e => field("printer_columns", parseInt(e.target.value) || 42)} min={24} max={80} className="h-8 text-xs" data-testid="input-printer-columns" />
                 </div>
               </div>
@@ -308,9 +497,24 @@ function PeripheralConfigSheet({
               <Switch checked={form.drawer_enabled} onCheckedChange={v => toggle("drawer_enabled", v)} data-testid="toggle-drawer" />
             </div>
             {form.drawer_enabled && (
-              <div className="ml-6">
-                <label className="text-xs text-muted-foreground">Port / Path (leave blank to use printer port)</label>
-                <Input value={form.drawer_port} onChange={e => field("drawer_port", e.target.value)} placeholder="Same as printer" className="h-8 text-xs mt-1" data-testid="input-drawer-port" />
+              <div className="ml-6 space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Connection</label>
+                  <Select value={form.drawer_connection} onValueChange={v => field("drawer_connection", v)}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-drawer-connection"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="printer">Via printer RJ11 kick-out</SelectItem>
+                      <SelectItem value="usb">USB (direct)</SelectItem>
+                      <SelectItem value="serial">Serial (RS232)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {form.drawer_connection !== "printer" && (
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Port / Path</label>
+                    <Input value={form.drawer_port} onChange={e => field("drawer_port", e.target.value)} placeholder="/dev/ttyUSB2" className="h-8 text-xs" data-testid="input-drawer-port" />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -327,9 +531,59 @@ function PeripheralConfigSheet({
               <Switch checked={form.scale_enabled} onCheckedChange={v => toggle("scale_enabled", v)} data-testid="toggle-scale" />
             </div>
             {form.scale_enabled && (
-              <div className="ml-6">
-                <label className="text-xs text-muted-foreground">Port / Path</label>
-                <Input value={form.scale_port} onChange={e => field("scale_port", e.target.value)} placeholder="/dev/ttyUSB1" className="h-8 text-xs mt-1" data-testid="input-scale-port" />
+              <div className="ml-6 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Protocol</label>
+                    <Select value={form.scale_protocol} onValueChange={v => field("scale_protocol", v)}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="select-scale-protocol"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {SCALE_PROTOCOLS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Connection</label>
+                    <Select value={form.scale_connection} onValueChange={v => field("scale_connection", v)}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="select-scale-connection"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="serial">Serial (RS232)</SelectItem>
+                        <SelectItem value="usb">USB</SelectItem>
+                        <SelectItem value="network">Network (TCP)</SelectItem>
+                        <SelectItem value="bluetooth">Bluetooth</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {form.scale_connection === "network" ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">IP Address</label>
+                      <Input value={form.scale_ip} onChange={e => field("scale_ip", e.target.value)} placeholder="192.168.1.60" className="h-8 text-xs" data-testid="input-scale-ip" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">TCP Port</label>
+                      <Input type="number" value={form.scale_tcp_port} onChange={e => field("scale_tcp_port", parseInt(e.target.value) || 4001)} className="h-8 text-xs" data-testid="input-scale-tcp-port" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">{form.scale_connection === "bluetooth" ? "Paired Device" : "Port / Path"}</label>
+                    <Input value={form.scale_port} onChange={e => field("scale_port", e.target.value)} placeholder={form.scale_connection === "serial" ? "COM4 or /dev/ttyUSB1" : "auto-detect (optional)"} className="h-8 text-xs" data-testid="input-scale-port" />
+                  </div>
+                )}
+
+                {form.scale_connection === "serial" && (
+                  <SerialParamFields
+                    baud={form.scale_baud_rate} parity={form.scale_parity} dataBits={form.scale_data_bits} stopBits={form.scale_stop_bits}
+                    onBaud={v => field("scale_baud_rate", v)} onParity={v => field("scale_parity", v)} onDataBits={v => field("scale_data_bits", v)} onStopBits={v => field("scale_stop_bits", v)}
+                    testidPrefix="scale"
+                  />
+                )}
+                <p className="text-[10px] text-muted-foreground/70">
+                  Example: {SCALE_PROTOCOLS.find(p => p.value === form.scale_protocol)?.label} @ {form.scale_baud_rate},{form.scale_parity},{form.scale_data_bits},{form.scale_stop_bits}
+                </p>
               </div>
             )}
           </div>
@@ -337,29 +591,94 @@ function PeripheralConfigSheet({
           <Separator />
 
           {/* Customer Display */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <MonitorSmartphone className="w-4 h-4 text-muted-foreground" />
-              <div>
-                <span className="font-medium text-sm">Customer Pole Display</span>
-                <p className="text-xs text-muted-foreground">Shows items and total on a secondary screen</p>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MonitorSmartphone className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <span className="font-medium text-sm">Customer Pole Display</span>
+                  <p className="text-xs text-muted-foreground">Shows items and total on a secondary screen</p>
+                </div>
               </div>
+              <Switch checked={form.customer_display_enabled} onCheckedChange={v => toggle("customer_display_enabled", v)} data-testid="toggle-customer-display" />
             </div>
-            <Switch checked={form.customer_display_enabled} onCheckedChange={v => toggle("customer_display_enabled", v)} data-testid="toggle-customer-display" />
+            {form.customer_display_enabled && (
+              <div className="ml-6 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Connection</label>
+                    <Select value={form.customer_display_connection} onValueChange={v => field("customer_display_connection", v)}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="select-display-connection"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="usb">USB</SelectItem>
+                        <SelectItem value="serial">Serial (RS232)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">Port / Path</label>
+                    <Input value={form.customer_display_port} onChange={e => field("customer_display_port", e.target.value)} placeholder="COM5 or /dev/ttyUSB3" className="h-8 text-xs" data-testid="input-display-port" />
+                  </div>
+                </div>
+                {form.customer_display_connection === "serial" && (
+                  <div className="space-y-1 w-1/2">
+                    <label className="text-xs text-muted-foreground">Baud Rate</label>
+                    <Select value={String(form.customer_display_baud_rate)} onValueChange={v => field("customer_display_baud_rate", parseInt(v))}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="select-display-baud"><SelectValue /></SelectTrigger>
+                      <SelectContent>{BAUD_RATES.map(b => <SelectItem key={b} value={String(b)}>{b}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <Separator />
 
           {/* Barcode Scanner */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ScanLine className="w-4 h-4 text-muted-foreground" />
-              <div>
-                <span className="font-medium text-sm">Barcode Scanner</span>
-                <p className="text-xs text-muted-foreground">USB HID keyboard-wedge scanner</p>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ScanLine className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <span className="font-medium text-sm">Barcode Scanner</span>
+                  <p className="text-xs text-muted-foreground">USB HID, USB-Serial, or Bluetooth scanner</p>
+                </div>
               </div>
+              <Switch checked={form.barcode_scanner_enabled} onCheckedChange={v => toggle("barcode_scanner_enabled", v)} data-testid="toggle-scanner" />
             </div>
-            <Switch checked={form.barcode_scanner_enabled} onCheckedChange={v => toggle("barcode_scanner_enabled", v)} data-testid="toggle-scanner" />
+            {form.barcode_scanner_enabled && (
+              <div className="ml-6 space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Connection</label>
+                  <Select value={form.scanner_connection} onValueChange={v => field("scanner_connection", v)}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-scanner-connection"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="usb_hid">USB (keyboard-wedge HID)</SelectItem>
+                      <SelectItem value="usb_serial">USB-Serial (COM emulation)</SelectItem>
+                      <SelectItem value="bluetooth">Bluetooth</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {form.scanner_connection !== "usb_hid" && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">{form.scanner_connection === "bluetooth" ? "Paired Device" : "Port / Path"}</label>
+                      <Input value={form.scanner_port} onChange={e => field("scanner_port", e.target.value)} placeholder="COM6 or /dev/ttyUSB4" className="h-8 text-xs" data-testid="input-scanner-port" />
+                    </div>
+                    {form.scanner_connection === "usb_serial" && (
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">Baud Rate</label>
+                        <Select value={String(form.scanner_baud_rate)} onValueChange={v => field("scanner_baud_rate", parseInt(v))}>
+                          <SelectTrigger className="h-8 text-xs" data-testid="select-scanner-baud"><SelectValue /></SelectTrigger>
+                          <SelectContent>{BAUD_RATES.map(b => <SelectItem key={b} value={String(b)}>{b}</SelectItem>)}</SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <Separator />
@@ -381,6 +700,33 @@ function PeripheralConfigSheet({
                 <SelectItem value="worldpay">Worldpay</SelectItem>
               </SelectContent>
             </Select>
+            {form.card_terminal_provider !== "none" && (
+              <div className="space-y-3 pt-1">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Connection</label>
+                  <Select value={form.card_terminal_connection} onValueChange={v => field("card_terminal_connection", v)}>
+                    <SelectTrigger className="h-8 text-xs" data-testid="select-card-connection"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="network">Network (TCP/IP — semi-integrated)</SelectItem>
+                      <SelectItem value="usb">USB</SelectItem>
+                      <SelectItem value="bluetooth">Bluetooth</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {form.card_terminal_connection === "network" && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">IP Address</label>
+                      <Input value={form.card_terminal_ip} onChange={e => field("card_terminal_ip", e.target.value)} placeholder="192.168.1.70" className="h-8 text-xs" data-testid="input-card-ip" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">TCP Port</label>
+                      <Input type="number" value={form.card_terminal_tcp_port} onChange={e => field("card_terminal_tcp_port", parseInt(e.target.value) || 0)} className="h-8 text-xs" data-testid="input-card-tcp-port" />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <Separator />
