@@ -72,6 +72,7 @@
     "framer-motion": "^11.13.1",
     "html5-qrcode": "^2.3.8",
     "input-otp": "^1.4.2",
+    "jsbarcode": "^3.12.3",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",

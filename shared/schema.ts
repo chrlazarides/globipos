@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, numeric, boolean, timestamp, date, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, numeric, boolean, timestamp, date, jsonb, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -75,6 +75,8 @@ export const items = pgTable("items", {
   imageUrl: text("image_url"),
   active: boolean("active").default(true).notNull(),
   hasVariants: boolean("has_variants").default(false).notNull(),
+  season: text("season"),
+  sequenceNo: serial("sequence_no").notNull(),
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
 
@@ -421,7 +423,7 @@ export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit
 export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });
 export const insertColorSchema = createInsertSchema(colors).omit({ id: true, updatedAt: true });
 export const insertSizeSchema = createInsertSchema(sizes).omit({ id: true, updatedAt: true });
-export const insertItemSchema = createInsertSchema(items).omit({ id: true });
+export const insertItemSchema = createInsertSchema(items).omit({ id: true, sequenceNo: true });
 export const insertItemVariantSchema = createInsertSchema(itemVariants).omit({ id: true, updatedAt: true });
 export type InsertItemVariant = z.infer<typeof insertItemVariantSchema>;
 export type ItemVariant = typeof itemVariants.$inferSelect;

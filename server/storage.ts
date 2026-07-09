@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
+import { generateVariantBarcode } from "./barcode-utils";
 import {
   users, categories, colors, sizes, items, itemVariants, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
@@ -87,6 +88,7 @@ export interface IStorage {
   getItemVariant(id: string): Promise<ItemVariant | undefined>;
   getItemVariantByBarcode(barcode: string): Promise<ItemVariant | undefined>;
   getItemVariantBySku(sku: string): Promise<ItemVariant | undefined>;
+  bulkUpsertVariantMatrix(itemId: string, season: string | null, cells: { colorId: string; colorName: string; colorIndex: number; sizeId: string; sizeName: string; sizeIndex: number; quantity: number }[]): Promise<ItemVariant[]>;
   createItemVariant(data: InsertItemVariant): Promise<ItemVariant>;
   updateItemVariant(id: string, data: Partial<InsertItemVariant>): Promise<ItemVariant | undefined>;
   deleteItemVariant(id: string): Promise<void>;
@@ -475,6 +477,55 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteItemVariant(id: string) {
     await db.delete(itemVariants).where(eq(itemVariants.id, id));
+  }
+
+  async bulkUpsertVariantMatrix(
+    itemId: string,
+    season: string | null,
+    cells: { colorId: string; colorName: string; colorIndex: number; sizeId: string; sizeName: string; sizeIndex: number; quantity: number }[]
+  ) {
+    const item = await this.getItem(itemId);
+    if (!item) throw new Error("Item not found");
+
+    const existingVariants = await db.select().from(itemVariants).where(eq(itemVariants.itemId, itemId));
+    const results: ItemVariant[] = [];
+
+    for (const cell of cells) {
+      const existing = existingVariants.find(v => v.option1Value === cell.colorName && v.option2Value === cell.sizeName);
+      if (existing) {
+        const [updated] = await db.update(itemVariants)
+          .set({ stockQuantity: cell.quantity })
+          .where(eq(itemVariants.id, existing.id))
+          .returning();
+        results.push(updated);
+        continue;
+      }
+
+      let salt = 0;
+      let barcode = generateVariantBarcode({ itemSequenceNo: item.sequenceNo, colorIndex: cell.colorIndex, sizeIndex: cell.sizeIndex, season });
+      while (await db.select().from(itemVariants).where(eq(itemVariants.barcode, barcode)).then(r => r.length > 0)) {
+        salt++;
+        barcode = generateVariantBarcode({ itemSequenceNo: item.sequenceNo, colorIndex: cell.colorIndex, sizeIndex: cell.sizeIndex, season, salt });
+      }
+
+      const sku = `${item.sku}-${cell.colorName}-${cell.sizeName}`.replace(/\s+/g, "").toUpperCase();
+
+      const [created] = await db.insert(itemVariants).values({
+        itemId,
+        sku,
+        barcode,
+        option1Name: "Color",
+        option1Value: cell.colorName,
+        option2Name: "Size",
+        option2Value: cell.sizeName,
+        stockQuantity: cell.quantity,
+        active: true,
+      }).returning();
+      results.push(created);
+    }
+
+    await db.update(items).set({ hasVariants: true, season: season || item.season }).where(eq(items.id, itemId));
+    return results;
   }
 
   async getCustomers() {

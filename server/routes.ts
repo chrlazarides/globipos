@@ -1180,6 +1180,43 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/items/:id/variants/matrix", async (req, res) => {
+    try {
+      const itemId = req.params.id as string;
+      const { season, cells } = req.body as { season?: string | null; cells: { colorId: string; sizeId: string; quantity: number }[] };
+      if (!Array.isArray(cells) || cells.length === 0) {
+        return res.status(400).json({ message: "cells array is required" });
+      }
+      const allColors = await storage.getColors();
+      const allSizes = await storage.getSizes();
+      const sortedColors = [...allColors].sort((a, b) => a.name.localeCompare(b.name));
+      const sortedSizes = [...allSizes].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+
+      const resolvedCells = cells
+        .filter(c => c.quantity > 0)
+        .map(c => {
+          const color = sortedColors.find(x => x.id === c.colorId);
+          const size = sortedSizes.find(x => x.id === c.sizeId);
+          if (!color || !size) return null;
+          return {
+            colorId: color.id,
+            colorName: color.name,
+            colorIndex: sortedColors.indexOf(color),
+            sizeId: size.id,
+            sizeName: size.name,
+            sizeIndex: sortedSizes.indexOf(size),
+            quantity: c.quantity,
+          };
+        })
+        .filter((c): c is NonNullable<typeof c> => c !== null);
+
+      const variants = await storage.bulkUpsertVariantMatrix(itemId, season || null, resolvedCells);
+      res.json(variants);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   app.patch("/api/item-variants/:id", async (req, res) => {
     try {
       sanitizeNumericFields(req.body, ["price1", "price2", "price3", "price4", "price5", "costPrice"], null as any);
