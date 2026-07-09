@@ -1,14 +1,14 @@
 import { db } from "./db";
 import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import {
-  users, categories, items, itemVariants, customers, priceContracts, priceContractItems, priceContractRules,
+  users, categories, colors, sizes, items, itemVariants, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
   emailLogs, accounts, journalEntries, journalEntryLines, expenses,
   posLocations, posTerminals, posLayoutSets, posLayoutButtons,
   posOrders, posOrderLines, posShifts, posSyncConfig, posInbox,
-  type InsertUser, type User, type InsertCategory, type Category,
+  type InsertUser, type User, type InsertCategory, type Category, type InsertColor, type Color, type InsertSize, type Size,
   type InsertItem, type Item, type InsertItemVariant, type ItemVariant, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
   type InsertPriceContractRule, type PriceContractRule,
@@ -58,6 +58,16 @@ export interface IStorage {
   getCategory(id: string): Promise<Category | undefined>;
   createCategory(data: InsertCategory): Promise<Category>;
   updateCategory(id: string, data: Partial<InsertCategory>): Promise<Category | undefined>;
+
+  getColors(): Promise<Color[]>;
+  createColor(data: InsertColor): Promise<Color>;
+  updateColor(id: string, data: Partial<InsertColor>): Promise<Color | undefined>;
+  deleteColor(id: string): Promise<void>;
+
+  getSizes(): Promise<Size[]>;
+  createSize(data: InsertSize): Promise<Size>;
+  updateSize(id: string, data: Partial<InsertSize>): Promise<Size | undefined>;
+  deleteSize(id: string): Promise<void>;
 
   getItems(): Promise<Item[]>;
   getItem(id: string): Promise<Item | undefined>;
@@ -329,6 +339,36 @@ export class DatabaseStorage implements IStorage {
   async updateCategory(id: string, data: Partial<InsertCategory>) {
     const [cat] = await db.update(categories).set(data).where(eq(categories.id, id)).returning();
     return cat;
+  }
+
+  async getColors() {
+    return db.select().from(colors).orderBy(colors.name);
+  }
+  async createColor(data: InsertColor) {
+    const [row] = await db.insert(colors).values(data).returning();
+    return row;
+  }
+  async updateColor(id: string, data: Partial<InsertColor>) {
+    const [row] = await db.update(colors).set(data).where(eq(colors.id, id)).returning();
+    return row;
+  }
+  async deleteColor(id: string) {
+    await db.delete(colors).where(eq(colors.id, id));
+  }
+
+  async getSizes() {
+    return db.select().from(sizes).orderBy(sizes.sortOrder, sizes.name);
+  }
+  async createSize(data: InsertSize) {
+    const [row] = await db.insert(sizes).values(data).returning();
+    return row;
+  }
+  async updateSize(id: string, data: Partial<InsertSize>) {
+    const [row] = await db.update(sizes).set(data).where(eq(sizes.id, id)).returning();
+    return row;
+  }
+  async deleteSize(id: string) {
+    await db.delete(sizes).where(eq(sizes.id, id));
   }
 
   async getItems() {

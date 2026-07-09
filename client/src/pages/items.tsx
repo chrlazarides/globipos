@@ -17,7 +17,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Search, Package, Upload, History, Download, RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Pencil, Trash2, Layers } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { insertItemSchema, insertItemVariantSchema, insertCategorySchema, type Item, type ItemVariant, type Category } from "@shared/schema";
+import { insertItemSchema, insertItemVariantSchema, insertCategorySchema, type Item, type ItemVariant, type Category, type Color, type Size } from "@shared/schema";
 import { ImportDialog } from "@/components/import-dialog";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { z } from "zod";
@@ -680,6 +680,65 @@ function VariantForm({ onSubmit, isPending, priceLevelNames, defaultValues }: { 
     },
   });
 
+  const { data: colorOptions = [] } = useQuery<Color[]>({ queryKey: ["/api/colors"] });
+  const { data: sizeOptions = [] } = useQuery<Size[]>({ queryKey: ["/api/sizes"] });
+
+  const optionValueField = (n: number, optName: string) => {
+    const normalized = optName.trim().toLowerCase();
+    if (normalized === "color" || normalized === "colour") {
+      return (
+        <FormField control={form.control} name={`option${n}Value` as any} render={({ field }) => (
+          <FormItem>
+            <Select value={field.value || ""} onValueChange={field.onChange}>
+              <FormControl>
+                <SelectTrigger data-testid={`select-variant-option${n}-value`}>
+                  <SelectValue placeholder="Select color" />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                {colorOptions.filter(c => c.active).map((c) => (
+                  <SelectItem key={c.id} value={c.name}>
+                    <span className="inline-flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full border inline-block" style={{ backgroundColor: c.hexCode || "#e5e5e5" }} />
+                      {c.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormItem>
+        )} />
+      );
+    }
+    if (normalized === "size") {
+      return (
+        <FormField control={form.control} name={`option${n}Value` as any} render={({ field }) => (
+          <FormItem>
+            <Select value={field.value || ""} onValueChange={field.onChange}>
+              <FormControl>
+                <SelectTrigger data-testid={`select-variant-option${n}-value`}>
+                  <SelectValue placeholder="Select size" />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                {sizeOptions.filter(s => s.active).map((s) => (
+                  <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormItem>
+        )} />
+      );
+    }
+    return (
+      <FormField control={form.control} name={`option${n}Value` as any} render={({ field }) => (
+        <FormItem>
+          <FormControl><Input {...field} value={field.value || ""} placeholder="Value" data-testid={`input-variant-option${n}-value`} /></FormControl>
+        </FormItem>
+      )} />
+    );
+  };
+
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -699,23 +758,22 @@ function VariantForm({ onSubmit, isPending, priceLevelNames, defaultValues }: { 
             </FormItem>
           )} />
         </div>
-        <p className="text-sm text-muted-foreground">Options (e.g. Color / Size / Textile)</p>
+        <p className="text-sm text-muted-foreground">Options (e.g. Color / Size / Textile) — Color and Size values are pulled from the Colors &amp; Sizes master lists</p>
         <div className="grid grid-cols-3 gap-3">
-          {[1, 2, 3].map((n) => (
-            <div key={n} className="space-y-2">
-              <FormField control={form.control} name={`option${n}Name` as any} render={({ field }) => (
-                <FormItem>
-                  <FormLabel className="text-xs">Option {n} Name</FormLabel>
-                  <FormControl><Input {...field} value={field.value || ""} placeholder={n === 1 ? "Color" : n === 2 ? "Size" : "Textile"} data-testid={`input-variant-option${n}-name`} /></FormControl>
-                </FormItem>
-              )} />
-              <FormField control={form.control} name={`option${n}Value` as any} render={({ field }) => (
-                <FormItem>
-                  <FormControl><Input {...field} value={field.value || ""} placeholder="Value" data-testid={`input-variant-option${n}-value`} /></FormControl>
-                </FormItem>
-              )} />
-            </div>
-          ))}
+          {[1, 2, 3].map((n) => {
+            const optName = form.watch(`option${n}Name` as any) || "";
+            return (
+              <div key={n} className="space-y-2">
+                <FormField control={form.control} name={`option${n}Name` as any} render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs">Option {n} Name</FormLabel>
+                    <FormControl><Input {...field} value={field.value || ""} placeholder={n === 1 ? "Color" : n === 2 ? "Size" : "Textile"} data-testid={`input-variant-option${n}-name`} /></FormControl>
+                  </FormItem>
+                )} />
+                {optionValueField(n, optName)}
+              </div>
+            );
+          })}
         </div>
         <p className="text-sm text-muted-foreground">Price overrides (leave blank to inherit from base item)</p>
         <div className="grid grid-cols-3 gap-3">

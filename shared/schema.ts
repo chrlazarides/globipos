@@ -104,6 +104,24 @@ export const itemVariants = pgTable("item_variants", {
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
 
+// Master list of colors (textile/shoes/apparel) used to populate variant option values.
+export const colors = pgTable("colors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  hexCode: text("hex_code"),
+  active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+// Master list of sizes (textile/shoes/apparel) used to populate variant option values.
+export const sizes = pgTable("sizes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
 export const customers = pgTable("customers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -401,6 +419,8 @@ export type AccountingSnapshot = typeof accountingSnapshots.$inferSelect;
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, lastLoginAt: true });
 export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
 export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });
+export const insertColorSchema = createInsertSchema(colors).omit({ id: true, updatedAt: true });
+export const insertSizeSchema = createInsertSchema(sizes).omit({ id: true, updatedAt: true });
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });
 export const insertItemVariantSchema = createInsertSchema(itemVariants).omit({ id: true, updatedAt: true });
 export type InsertItemVariant = z.infer<typeof insertItemVariantSchema>;
@@ -435,6 +455,10 @@ export type InsertSystemSetting = z.infer<typeof insertSystemSettingSchema>;
 export type SystemSetting = typeof systemSettings.$inferSelect;
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
 export type Category = typeof categories.$inferSelect;
+export type InsertColor = z.infer<typeof insertColorSchema>;
+export type Color = typeof colors.$inferSelect;
+export type InsertSize = z.infer<typeof insertSizeSchema>;
+export type Size = typeof sizes.$inferSelect;
 export type InsertItem = z.infer<typeof insertItemSchema>;
 export type Item = typeof items.$inferSelect;
 export type InsertCustomer = z.infer<typeof insertCustomerSchema>;

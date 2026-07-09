@@ -21,6 +21,8 @@ import {
   X,
   RefreshCw,
   Check,
+  Palette,
+  Ruler,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
@@ -75,7 +77,7 @@ function parseCSVToGrid(text: string): CellGrid {
   return lines.map(parseRow);
 }
 
-type EntityType = "items" | "customers" | "suppliers" | "categories" | "skip";
+type EntityType = "items" | "customers" | "suppliers" | "categories" | "colors" | "sizes" | "skip";
 
 type FieldDef = {
   key: string;
@@ -155,6 +157,24 @@ const ENTITY_CONFIG: Record<Exclude<EntityType, "skip">, { label: string; icon: 
       { key: "description", label: "Description" },
     ],
     endpoint: "/api/categories/import",
+  },
+  colors: {
+    label: "Colors",
+    icon: Palette,
+    fields: [
+      { key: "name", label: "Name", required: true },
+      { key: "hexCode", label: "Hex Code" },
+    ],
+    endpoint: "/api/colors/import",
+  },
+  sizes: {
+    label: "Sizes",
+    icon: Ruler,
+    fields: [
+      { key: "name", label: "Name", required: true },
+      { key: "sortOrder", label: "Sort Order" },
+    ],
+    endpoint: "/api/sizes/import",
   },
 };
 
@@ -438,7 +458,7 @@ function tryParseWinePriceList(data: CellGrid): { detected: boolean; brand: stri
 function detectEntity(headers: string[]): { entity: EntityType; confidence: number } {
   const lowerHeaders = headers.map((h) => h.toLowerCase().replace(/[\s_-]/g, ""));
 
-  const scores: Record<Exclude<EntityType, "skip">, number> = { items: 0, customers: 0, suppliers: 0, categories: 0 };
+  const scores: Record<Exclude<EntityType, "skip">, number> = { items: 0, customers: 0, suppliers: 0, categories: 0, colors: 0, sizes: 0 };
 
   const itemKeywords = ["sku", "barcode", "price", "price1", "price2", "costprice", "stockquantity", "stock", "packsize", "unittype", "volume", "alcohol", "vintage", "origin", "brand", "reorderlevel"];
   const customerKeywords = ["customer", "creditlimit", "pricelevel", "paymentterms", "taxid", "portalaccess"];
@@ -723,6 +743,8 @@ export default function ImportData() {
     queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
     queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
     queryClient.invalidateQueries({ queryKey: ["/api/categories"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/colors"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/sizes"] });
   };
 
   const totalSuccess = importResults.reduce((sum, r) => sum + r.success, 0);
@@ -851,6 +873,8 @@ export default function ImportData() {
                           <SelectItem value="customers">Customers</SelectItem>
                           <SelectItem value="suppliers">Suppliers</SelectItem>
                           <SelectItem value="categories">Categories</SelectItem>
+                          <SelectItem value="colors">Colors</SelectItem>
+                          <SelectItem value="sizes">Sizes</SelectItem>
                           <SelectItem value="skip">Skip this sheet</SelectItem>
                         </SelectContent>
                       </Select>

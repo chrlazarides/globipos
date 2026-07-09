@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertItemSchema, insertItemVariantSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema } from "@shared/schema";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema } from "@shared/schema";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -871,6 +871,80 @@ export async function registerRoutes(
       const [updated] = await db.update(categories).set(update).where(eq(categories.id, (req.params.id as string))).returning();
       if (!updated) return res.status(404).json({ message: "Category not found" });
       res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Colors (textile/shoes/apparel master list)
+  app.get("/api/colors", async (_req, res) => {
+    const rows = await storage.getColors();
+    res.json(rows);
+  });
+  app.post("/api/colors", async (req, res) => {
+    try {
+      const data = insertColorSchema.parse(req.body);
+      const row = await storage.createColor(data);
+      res.json(row);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.patch("/api/colors/:id", async (req, res) => {
+    try {
+      const { name, hexCode, active } = req.body;
+      const update: any = {};
+      if (name !== undefined) update.name = name;
+      if (hexCode !== undefined) update.hexCode = hexCode || null;
+      if (active !== undefined) update.active = active;
+      const updated = await storage.updateColor(req.params.id as string, update);
+      if (!updated) return res.status(404).json({ message: "Color not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.delete("/api/colors/:id", async (req, res) => {
+    try {
+      await storage.deleteColor(req.params.id as string);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Sizes (textile/shoes/apparel master list)
+  app.get("/api/sizes", async (_req, res) => {
+    const rows = await storage.getSizes();
+    res.json(rows);
+  });
+  app.post("/api/sizes", async (req, res) => {
+    try {
+      const data = insertSizeSchema.parse(req.body);
+      const row = await storage.createSize(data);
+      res.json(row);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.patch("/api/sizes/:id", async (req, res) => {
+    try {
+      const { name, sortOrder, active } = req.body;
+      const update: any = {};
+      if (name !== undefined) update.name = name;
+      if (sortOrder !== undefined) update.sortOrder = sortOrder;
+      if (active !== undefined) update.active = active;
+      const updated = await storage.updateSize(req.params.id as string, update);
+      if (!updated) return res.status(404).json({ message: "Size not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.delete("/api/sizes/:id", async (req, res) => {
+    try {
+      await storage.deleteSize(req.params.id as string);
+      res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }
@@ -4999,6 +5073,95 @@ export async function registerRoutes(
           };
 
           await storage.createSupplier(supData);
+          results.success++;
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/colors/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = worksheetToJson(sheet, "");
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            return row[col] !== undefined ? String(row[col]).trim() : "";
+          };
+
+          const name = getValue("name");
+          if (!name) {
+            results.errors.push({ row: i + 2, message: "Name is required" });
+            continue;
+          }
+
+          await storage.createColor({
+            name,
+            hexCode: getValue("hexCode") || null,
+            active: true,
+          });
+          results.success++;
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/sizes/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = worksheetToJson(sheet, "");
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            return row[col] !== undefined ? String(row[col]).trim() : "";
+          };
+
+          const name = getValue("name");
+          if (!name) {
+            results.errors.push({ row: i + 2, message: "Name is required" });
+            continue;
+          }
+          const sortOrderRaw = getValue("sortOrder");
+
+          await storage.createSize({
+            name,
+            sortOrder: sortOrderRaw ? parseInt(sortOrderRaw) || 0 : 0,
+            active: true,
+          });
           results.success++;
         } catch (e: any) {
           results.errors.push({ row: i + 2, message: e.message });
