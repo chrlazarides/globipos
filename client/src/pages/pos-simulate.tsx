@@ -541,6 +541,67 @@ export default function PosSimulate() {
         setDialog("exchange"); break;
       case "PAY_VOUCHER":
         showFeedback("Enter voucher code (simulation)", true); break;
+      // ── CPLPOS legacy function-key mapping (PC1–PC38) ──────────────────────
+      case "BROWSE": // PC3
+        showFeedback("🔍 Browse mode — scroll through items (simulation)", true); break;
+      case "CLEAR_SCREEN": // PC4
+        if (cart.length && !confirm("Clear the current sale?")) return;
+        clearCart(); showFeedback("Screen cleared", true); break;
+      case "CORRECTION": // PC6 — delete last scanned item
+        if (!cart.length) { showFeedback("Nothing to correct", false); return; }
+        { const lastIdx = cart.length - 1; showFeedback(`Removed last item: ${cart[lastIdx].label}`, true); voidLine(lastIdx); }
+        break;
+      case "LANGUAGE": // PC7
+        showFeedback("🌐 Language switched (simulation)", true); break;
+      case "ESC": // PC9
+        setSelectedLine(null); setDialog(null); showFeedback("Cancelled", true); break;
+      case "SUB_TOTAL": // PC15
+        if (!cart.length) { showFeedback("Cart is empty", false); return; }
+        showFeedback(`Sub-total: €${fmt(cartSubtotal(cart))}`, true); break;
+      case "DEPARTMENT_SALE": // PC19 — sale by department (enter amount, press dept key)
+        showFeedback("Enter amount, then press a department key (simulation)", true); break;
+      case "PAY_CHEQUE": // PC21
+        if (!cart.length) { showFeedback("Cart is empty", false); return; }
+        { const total = netCartTotal(cart);
+          setSaleHistory(p => [...p, { items: [...cart], total, time: new Date() }]);
+          clearCart(); showFeedback(`€${fmt(total)} paid by cheque`, true); }
+        break;
+      case "PAY_CREDIT": // PC22 — house credit, distinct from card
+        if (!cart.length) { showFeedback("Cart is empty", false); return; }
+        { const total = netCartTotal(cart);
+          setSaleHistory(p => [...p, { items: [...cart], total, time: new Date() }]);
+          clearCart(); showFeedback(`€${fmt(total)} charged on credit`, true); }
+        break;
+      case "USER_RATE": // PC24
+        showFeedback("👤 User / rate switched (simulation)", true); break;
+      case "SYNC": // PC27
+        showFeedback("🔄 Synchronization requested (simulation)", true); break;
+      case "CLIENT": // PC28 — alias for customer lookup
+        setCustomerSearch(""); setDialog("customer"); break;
+      case "HOT_KEY": // PC29
+        showFeedback("⚡ Hot-key — configure a direct-sale item on this button", true); break;
+      case "CANCEL_BILL": // PC30 — requires password/manager override
+        if (!cart.length) { showFeedback("Nothing to cancel", false); return; }
+        if (!confirm(`Cancel entire bill (€${fmt(netCartTotal(cart))})? Manager password required.`)) return;
+        clearCart(); showFeedback("👤 Bill cancelled (manager override)", true); break;
+      case "CREDIT_NOTE": // PC31
+        showFeedback("📄 Credit note mode — select items to return (simulation)", true); break;
+      case "SELL_GIFT_VOUCHER": // PC32
+        addGenericItem("Gift Voucher", 0, 0);
+        showFeedback("🎁 Gift voucher line added — enter amount via Price Override", true); break;
+      case "COMBO_PAYMENT": // PC33 — combinational payment (e.g. VISA + Cash)
+        if (!cart.length) { showFeedback("Cart is empty", false); return; }
+        showFeedback("Combo payment — split between multiple tender types (simulation)", true); break;
+      case "PAGOMENA": { // PC34 — add a surcharge on top of item price
+        const idx4 = lineIdx ?? selectedLine ?? (cart.length ? cart.length - 1 : null);
+        if (idx4 === null || !cart[idx4]) { showFeedback("No line selected", false); return; }
+        showFeedback(`Surcharge applied to: ${cart[idx4].label} (simulation)`, true); break;
+      }
+      case "RETURN_GIFT_VOUCHER": // PC37
+        showFeedback("🎁 Gift voucher redeemed (simulation)", true); break;
+      case "GIFT_ITEMS": // PC38 — payment with money and/or points
+        if (!customer) { showFeedback("Attach a customer first (needs loyalty points)", false); return; }
+        showFeedback(`${customer.name} — paying with points/gift balance (simulation)`, true); break;
       default:
         showFeedback(`${code} — executed (simulation)`, true);
     }
