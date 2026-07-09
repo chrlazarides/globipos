@@ -413,6 +413,42 @@ async fn get_customer_live(
 }
 
 #[tauri::command]
+async fn get_stock_by_location(
+    state: State<'_, AppState>,
+    item_id: String,
+) -> Result<Vec<Value>, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!(
+        "{}/api/pos/sync/location-stock/{}",
+        server_url.trim_end_matches('/'),
+        item_id
+    );
+
+    let resp = client
+        .get(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error {}", resp.status()));
+    }
+
+    resp.json::<Vec<Value>>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_active_price_overrides(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     let rows = sqlx::query(
         "SELECT * FROM price_overrides WHERE valid_until IS NULL OR valid_until > datetime('now')"
@@ -1313,6 +1349,7 @@ pub fn run() {
             get_fallback_rules,
             update_fallback_rule,
             get_customer_live,
+            get_stock_by_location,
             get_active_price_overrides,
             get_inbox_notifications,
             mark_inbox_processed,

@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { SearchIcon, XIcon, BarcodeIcon } from "lucide-react";
+import { SearchIcon, XIcon, BarcodeIcon, MapPinIcon, Loader2Icon } from "lucide-react";
 import type { Product } from "../types";
 import { formatCurrency } from "../lib/pricing";
 import type { PosUiTheme } from "../hooks/usePosTheme";
+import type { LocationStockRow } from "../lib/db";
 
 interface PriceCheckDialogProps {
   priceLevel: number;
   theme?: PosUiTheme;
   onSearch: (query: string) => Promise<Product[]>;
   onLookupBarcode: (barcode: string) => Promise<Product | null>;
+  onGetStockByLocation?: (itemId: string) => Promise<LocationStockRow[]>;
   onClose: () => void;
 }
 
@@ -18,12 +20,16 @@ function priceForLevel(p: Product, level: number): number {
   return prices[level - 1] || p.price1;
 }
 
-export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLookupBarcode, onClose }: PriceCheckDialogProps) {
+export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLookupBarcode, onGetStockByLocation, onClose }: PriceCheckDialogProps) {
   const isLight = theme === "light";
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [stockLoading, setStockLoading] = useState(false);
+  const [stockRows, setStockRows] = useState<LocationStockRow[]>([]);
+  const [stockError, setStockError] = useState<string | null>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -33,6 +39,9 @@ export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLook
     if (!query.trim()) { setResults([]); return; }
     let cancelled = false;
     setLoading(true);
+    setExpandedId(null);
+    setStockRows([]);
+    setStockError(null);
     const t = setTimeout(async () => {
       try {
         const byBarcode = await onLookupBarcode(query.trim());
@@ -49,6 +58,26 @@ export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLook
     }, 200);
     return () => { cancelled = true; clearTimeout(t); };
   }, [query, onSearch, onLookupBarcode]);
+
+  async function toggleStock(p: Product) {
+    if (expandedId === p.server_id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(p.server_id);
+    setStockRows([]);
+    setStockError(null);
+    if (!onGetStockByLocation) return;
+    setStockLoading(true);
+    try {
+      const rows = await onGetStockByLocation(p.server_id);
+      setStockRows(rows);
+    } catch (e) {
+      setStockError(e instanceof Error ? e.message : "Unable to load stock");
+    } finally {
+      setStockLoading(false);
+    }
+  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -102,14 +131,55 @@ export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLook
             <div className={`text-center py-6 text-sm ${emptyClass}`}>No matching products</div>
           )}
           {!loading && results.map((p) => (
-            <div key={p.server_id} className={`flex items-center justify-between px-3 py-2.5 ${rowClass}`} data-testid={`price-check-result-${p.server_id}`}>
-              <div className="min-w-0 flex-1">
-                <div className={`text-sm font-medium truncate ${rowNameClass}`}>{p.name}</div>
-                {p.barcode && <div className={`text-xs ${rowSubClass}`}>{p.barcode}</div>}
-              </div>
-              <div className="text-emerald-500 font-bold text-sm flex-shrink-0 ml-3">
-                {formatCurrency(priceForLevel(p, priceLevel))}
-              </div>
+            <div key={p.server_id}>
+              <button
+                type="button"
+                onClick={() => toggleStock(p)}
+                className={`w-full flex items-center justify-between px-3 py-2.5 text-left ${rowClass}`}
+                data-testid={`price-check-result-${p.server_id}`}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className={`text-sm font-medium truncate ${rowNameClass}`}>{p.name}</div>
+                  {p.barcode && <div className={`text-xs ${rowSubClass}`}>{p.barcode}</div>}
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                  <div className="text-emerald-500 font-bold text-sm">
+                    {formatCurrency(priceForLevel(p, priceLevel))}
+                  </div>
+                  <MapPinIcon className={isLight ? "w-3.5 h-3.5 text-slate-400" : "w-3.5 h-3.5 text-gray-500"} />
+                </div>
+              </button>
+              {expandedId === p.server_id && (
+                <div
+                  className={`px-3 pb-2.5 ${isLight ? "bg-slate-50" : "bg-gray-800/40"}`}
+                  data-testid={`price-check-stock-${p.server_id}`}
+                >
+                  {stockLoading && (
+                    <div className={`flex items-center gap-2 text-xs py-1.5 ${emptyClass}`}>
+                      <Loader2Icon className="w-3.5 h-3.5 animate-spin" /> Loading stock by location…
+                    </div>
+                  )}
+                  {!stockLoading && stockError && (
+                    <div className="text-xs text-rose-500 py-1.5">{stockError}</div>
+                  )}
+                  {!stockLoading && !stockError && !onGetStockByLocation && (
+                    <div className={`text-xs py-1.5 ${emptyClass}`}>Stock lookup unavailable</div>
+                  )}
+                  {!stockLoading && !stockError && onGetStockByLocation && stockRows.length === 0 && (
+                    <div className={`text-xs py-1.5 ${emptyClass}`}>No stock recorded at any location</div>
+                  )}
+                  {!stockLoading && stockRows.length > 0 && stockRows.map((r) => (
+                    <div
+                      key={r.locationId}
+                      className={`flex items-center justify-between text-xs py-1 ${headerTextClass}`}
+                      data-testid={`stock-row-${r.locationId}`}
+                    >
+                      <span>{r.locationName}</span>
+                      <span className="font-semibold">{r.quantity}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
           {!loading && !query.trim() && (

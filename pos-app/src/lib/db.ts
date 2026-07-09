@@ -125,6 +125,19 @@ export const getCustomerLive = (
 ): Promise<Record<string, unknown> | null> =>
   invoke<Record<string, unknown> | null>("get_customer_live", { customerId });
 
+// ── Stock by location (PLU / multi-location stock check) ────────────────────
+
+export interface LocationStockRow {
+  locationId: string;
+  locationName: string;
+  quantity: number;
+}
+
+export const getStockByLocation = (
+  itemId: string
+): Promise<LocationStockRow[]> =>
+  invoke<LocationStockRow[]>("get_stock_by_location", { itemId });
+
 // ── Price overrides ───────────────────────────────────────────────────────────
 
 export const getActivePriceOverrides = (): Promise<

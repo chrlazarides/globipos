@@ -20,7 +20,7 @@ import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
 } from "../types";
-import { getProducts, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher } from "../lib/db";
+import { getProducts, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher, getStockByLocation } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
 import { useOrder } from "../hooks/useOrder";
 import { useBarcode } from "../hooks/useBarcode";
@@ -1158,6 +1158,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           theme={posTheme}
           onSearch={(query) => getProducts(undefined, query)}
           onLookupBarcode={(barcode) => getProductByBarcode(barcode)}
+          onGetStockByLocation={(itemId) => getStockByLocation(itemId)}
           onClose={() => setDialog(null)}
         />
       )}

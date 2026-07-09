@@ -9543,6 +9543,17 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // PLU/search stock lookup — quantities for one item across ALL POS locations,
+  // used by the POS terminal's "Check Stock" search dialog. Terminal-auth (not JWT).
+  app.get("/api/pos/sync/location-stock/:itemId", requireTerminal, async (req, res) => {
+    try {
+      const rows = await storage.getStockForItemAcrossLocations(req.params.itemId as string);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Enhanced catalog sync — returns products + promotions + deposits in one call
   app.get("/api/pos/sync/catalog-v2", requireTerminal, async (req, res) => {
     try {
