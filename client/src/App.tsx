@@ -27,6 +27,7 @@ import SettingsPage from "@/pages/settings";
 import Suppliers from "@/pages/suppliers";
 import PurchaseInvoices from "@/pages/purchase-invoices";
 import ApparelPurchases from "@/pages/apparel-purchases";
+import InventoryIn from "@/pages/inventory-in";
 import SupplierPaymentsPage from "@/pages/supplier-payments";
 import CustomerPaymentsPage from "@/pages/customer-payments";
 import ImportData from "@/pages/import-data";
@@ -145,6 +146,7 @@ function AdminRouter() {
       <Route path="/suppliers" component={Suppliers} />
       <Route path="/purchase-invoices" component={PurchaseInvoices} />
       <Route path="/apparel-purchases" component={ApparelPurchases} />
+      <Route path="/inventory-in" component={InventoryIn} />
       <Route path="/supplier-payments" component={SupplierPaymentsPage} />
       <Route path="/customer-payments" component={CustomerPaymentsPage} />
       <Route path="/pricing" component={Pricing} />

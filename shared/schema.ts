@@ -124,6 +124,35 @@ export const sizes = pgTable("sizes", {
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
 
+// "Inventory In with Col/Size" — staged stock-intake lines synthesized from a
+// Department(Category)+Style+Color+Size matrix, mirroring the legacy CPLPOS
+// "Inventory In with Col/Size" workflow. Lines are appended as drafts (with a
+// barcode/SKU already synthesized) and only affect actual item/variant stock
+// once "Posted".
+export const inventoryInLines = pgTable("inventory_in_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  categoryId: varchar("category_id").notNull(),
+  style: text("style").notNull(),
+  description: text("description").notNull(),
+  costPrice: numeric("cost_price", { precision: 10, scale: 2 }).notNull().default("0"),
+  price1: numeric("price_1", { precision: 10, scale: 2 }).notNull().default("0"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("19"),
+  season: text("season"),
+  codeMethod: text("code_method").notNull().default("descriptive"), // "descriptive" (Code-39) | "sequential" (EAN-8)
+  colorId: varchar("color_id").notNull(),
+  colorName: text("color_name").notNull(),
+  sizeId: varchar("size_id").notNull(),
+  sizeName: text("size_name").notNull(),
+  quantity: integer("quantity").notNull(),
+  barcode: text("barcode").notNull(),
+  sku: text("sku").notNull(),
+  posted: boolean("posted").notNull().default(false),
+  postedAt: timestamp("posted_at"),
+  itemId: varchar("item_id"),
+  variantId: varchar("variant_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Reusable Color+Size(+Quality) sets for garments/shoes so businesses don't have to
 // reselect the same option ranges for every new model/item.
 export const variantTemplates = pgTable("variant_templates", {
@@ -441,6 +470,12 @@ export type ItemVariant = typeof itemVariants.$inferSelect;
 export const insertVariantTemplateSchema = createInsertSchema(variantTemplates).omit({ id: true, createdAt: true });
 export type InsertVariantTemplate = z.infer<typeof insertVariantTemplateSchema>;
 export type VariantTemplate = typeof variantTemplates.$inferSelect;
+
+export const insertInventoryInLineSchema = createInsertSchema(inventoryInLines).omit({
+  id: true, barcode: true, sku: true, posted: true, postedAt: true, itemId: true, variantId: true, createdAt: true,
+});
+export type InsertInventoryInLine = z.infer<typeof insertInventoryInLineSchema>;
+export type InventoryInLine = typeof inventoryInLines.$inferSelect;
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true }).extend({
   code: z.string().optional().default(""),
 });

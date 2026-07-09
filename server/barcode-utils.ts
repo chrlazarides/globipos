@@ -20,6 +20,42 @@ function seasonToDigit(season: string | null | undefined): string {
   return String(hash);
 }
 
+// Legacy CPLPOS-style "Item Code Synthesizing" for the Inventory-In with Col/Size
+// screen. B.1 = descriptive Code-39 codes built from Department/Style/Color/Size;
+// B.2 = short sequential EAN-8 codes for when the descriptive parts don't fit.
+function alnumCode(value: string, len: number): string {
+  const cleaned = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return (cleaned.slice(0, len) || "X").padEnd(len, "X");
+}
+
+export function synthesizeDescriptiveCode(params: {
+  categoryName: string;
+  style: string;
+  colorName: string;
+  sizeName: string;
+}): string {
+  const categoryPart = alnumCode(params.categoryName, 3);
+  const stylePart = alnumCode(params.style, 6);
+  const colorPart = alnumCode(params.colorName, 3);
+  const sizePart = alnumCode(params.sizeName, 4);
+  return `${categoryPart}${stylePart}${colorPart}${sizePart}`.slice(0, 16);
+}
+
+function computeEAN8CheckDigit(data7: string): string {
+  let sum = 0;
+  for (let i = 0; i < 7; i++) {
+    const digit = parseInt(data7[i], 10);
+    sum += i % 2 === 0 ? digit * 3 : digit;
+  }
+  const check = (10 - (sum % 10)) % 10;
+  return String(check);
+}
+
+export function synthesizeSequentialCode(nextSeq: number): string {
+  const data7 = String(nextSeq % 10000000).padStart(7, "0");
+  return data7 + computeEAN8CheckDigit(data7);
+}
+
 export function generateVariantBarcode(params: {
   itemSequenceNo: number;
   colorIndex: number;

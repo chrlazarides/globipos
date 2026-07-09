@@ -1,8 +1,8 @@
 import { db } from "./db";
 import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
-import { generateVariantBarcode } from "./barcode-utils";
+import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeSequentialCode } from "./barcode-utils";
 import {
-  users, categories, colors, sizes, items, itemVariants, variantTemplates, customers, priceContracts, priceContractItems, priceContractRules,
+  users, categories, colors, sizes, items, itemVariants, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
@@ -10,7 +10,8 @@ import {
   posLocations, posTerminals, posLayoutSets, posLayoutButtons,
   posOrders, posOrderLines, posShifts, posSyncConfig, posInbox,
   type InsertUser, type User, type InsertCategory, type Category, type InsertColor, type Color, type InsertSize, type Size,
-  type InsertItem, type Item, type InsertItemVariant, type ItemVariant, type InsertVariantTemplate, type VariantTemplate, type InsertCustomer, type Customer,
+  type InsertItem, type Item, type InsertItemVariant, type ItemVariant, type InsertVariantTemplate, type VariantTemplate,
+  type InsertInventoryInLine, type InventoryInLine, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
   type InsertPriceContractRule, type PriceContractRule,
   type InsertPriceContractItem, type PriceContractItem,
@@ -96,6 +97,11 @@ export interface IStorage {
   getVariantTemplates(): Promise<VariantTemplate[]>;
   createVariantTemplate(data: InsertVariantTemplate): Promise<VariantTemplate>;
   deleteVariantTemplate(id: string): Promise<void>;
+
+  getInventoryInLines(posted?: boolean): Promise<InventoryInLine[]>;
+  appendInventoryInLines(header: Omit<InsertInventoryInLine, "colorId" | "colorName" | "sizeId" | "sizeName" | "quantity">, cells: { colorId: string; colorName: string; sizeId: string; sizeName: string; quantity: number }[]): Promise<InventoryInLine[]>;
+  deleteInventoryInLine(id: string): Promise<void>;
+  postInventoryInLines(ids: string[]): Promise<{ posted: number; itemsCreated: number; variantsCreated: number }>;
 
   getCustomers(): Promise<Customer[]>;
   deleteCustomer(id: string): Promise<void>;
@@ -549,6 +555,154 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteVariantTemplate(id: string) {
     await db.delete(variantTemplates).where(eq(variantTemplates.id, id));
+  }
+
+  async getInventoryInLines(posted?: boolean) {
+    if (posted === undefined) {
+      return db.select().from(inventoryInLines).orderBy(desc(inventoryInLines.createdAt));
+    }
+    return db.select().from(inventoryInLines).where(eq(inventoryInLines.posted, posted)).orderBy(desc(inventoryInLines.createdAt));
+  }
+
+  async appendInventoryInLines(
+    header: Omit<InsertInventoryInLine, "colorId" | "colorName" | "sizeId" | "sizeName" | "quantity">,
+    cells: { colorId: string; colorName: string; sizeId: string; sizeName: string; quantity: number }[]
+  ) {
+    const category = await this.getCategory(header.categoryId);
+    if (!category) throw new Error("Category (department) not found");
+    if (cells.length === 0) throw new Error("No quantities entered in the matrix");
+
+    let nextSeq: number | null = null;
+    if (header.codeMethod === "sequential") {
+      const [row] = await db.select({ maxSku: sql<string>`max(${inventoryInLines.sku})` }).from(inventoryInLines).where(eq(inventoryInLines.codeMethod, "sequential"));
+      nextSeq = row?.maxSku ? parseInt(row.maxSku, 10) + 1 : 1;
+    }
+
+    const results: InventoryInLine[] = [];
+    for (const cell of cells) {
+      if (cell.quantity <= 0) continue;
+      let barcode: string;
+      let sku: string;
+      if (header.codeMethod === "sequential") {
+        sku = String(nextSeq!).padStart(7, "0");
+        barcode = synthesizeSequentialCode(nextSeq!);
+        nextSeq!++;
+      } else {
+        barcode = synthesizeDescriptiveCode({ categoryName: category.name, style: header.style, colorName: cell.colorName, sizeName: cell.sizeName });
+        sku = barcode;
+      }
+      // Ensure uniqueness against prior drafts/items
+      let salt = 0;
+      let finalBarcode = barcode;
+      let finalSku = sku;
+      while (
+        (await db.select().from(inventoryInLines).where(eq(inventoryInLines.barcode, finalBarcode)).then(r => r.length > 0)) ||
+        (await db.select().from(itemVariants).where(eq(itemVariants.barcode, finalBarcode)).then(r => r.length > 0))
+      ) {
+        salt++;
+        finalBarcode = header.codeMethod === "sequential" ? synthesizeSequentialCode(nextSeq! + salt) : `${barcode}`.slice(0, 15) + salt;
+        finalSku = finalBarcode;
+      }
+
+      const [created] = await db.insert(inventoryInLines).values({
+        categoryId: header.categoryId,
+        style: header.style,
+        description: header.description,
+        costPrice: header.costPrice,
+        price1: header.price1,
+        vatRate: header.vatRate,
+        season: header.season || null,
+        codeMethod: header.codeMethod,
+        colorId: cell.colorId,
+        colorName: cell.colorName,
+        sizeId: cell.sizeId,
+        sizeName: cell.sizeName,
+        quantity: cell.quantity,
+        barcode: finalBarcode,
+        sku: finalSku,
+      }).returning();
+      results.push(created);
+    }
+    if (results.length === 0) throw new Error("Enter at least one quantity in the matrix");
+    return results;
+  }
+
+  async deleteInventoryInLine(id: string) {
+    const [line] = await db.select().from(inventoryInLines).where(eq(inventoryInLines.id, id));
+    if (line?.posted) throw new Error("Cannot delete a posted line");
+    await db.delete(inventoryInLines).where(eq(inventoryInLines.id, id));
+  }
+
+  async postInventoryInLines(ids: string[]) {
+    const lines = await db.select().from(inventoryInLines).where(and(inArray(inventoryInLines.id, ids), eq(inventoryInLines.posted, false)));
+    if (lines.length === 0) return { posted: 0, itemsCreated: 0, variantsCreated: 0 };
+
+    let itemsCreated = 0;
+    let variantsCreated = 0;
+    const itemCache = new Map<string, Item>();
+
+    for (const line of lines) {
+      const itemKey = `${line.categoryId}::${line.style.toUpperCase()}`;
+      let item = itemCache.get(itemKey);
+      if (!item) {
+        const [existing] = await db.select().from(items).where(and(eq(items.categoryId, line.categoryId), ilike(items.name, line.style)));
+        if (existing) {
+          item = existing;
+        } else {
+          const [createdItem] = await db.insert(items).values({
+            name: line.style,
+            sku: `${line.style}-${Date.now().toString(36)}`.toUpperCase(),
+            barcode: null,
+            description: line.description,
+            categoryId: line.categoryId,
+            costPrice: line.costPrice,
+            price1: line.price1,
+            vatRate: line.vatRate,
+            season: line.season,
+            hasVariants: true,
+            stockQuantity: 0,
+          }).returning();
+          item = createdItem;
+          itemsCreated++;
+        }
+        itemCache.set(itemKey, item);
+      }
+
+      const [existingVariant] = await db.select().from(itemVariants).where(and(
+        eq(itemVariants.itemId, item.id),
+        eq(itemVariants.option1Value, line.colorName),
+        eq(itemVariants.option2Value, line.sizeName),
+      ));
+
+      let variantId: string;
+      if (existingVariant) {
+        await db.update(itemVariants).set({ stockQuantity: existingVariant.stockQuantity + line.quantity }).where(eq(itemVariants.id, existingVariant.id));
+        variantId = existingVariant.id;
+      } else {
+        const [createdVariant] = await db.insert(itemVariants).values({
+          itemId: item.id,
+          sku: line.sku,
+          barcode: line.barcode,
+          option1Name: "Color",
+          option1Value: line.colorName,
+          option2Name: "Size",
+          option2Value: line.sizeName,
+          costPrice: line.costPrice,
+          price1: line.price1,
+          stockQuantity: line.quantity,
+          active: true,
+        }).returning();
+        variantId = createdVariant.id;
+        variantsCreated++;
+      }
+
+      await db.update(inventoryInLines).set({ posted: true, postedAt: new Date(), itemId: item.id, variantId }).where(eq(inventoryInLines.id, line.id));
+      if (!item.hasVariants) {
+        await db.update(items).set({ hasVariants: true }).where(eq(items.id, item.id));
+      }
+    }
+
+    return { posted: lines.length, itemsCreated, variantsCreated };
   }
 
   async getCustomers() {
