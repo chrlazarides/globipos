@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema } from "@shared/schema";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema } from "@shared/schema";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -945,6 +945,48 @@ export async function registerRoutes(
     try {
       await storage.deleteSize(req.params.id as string);
       res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Per-location stock (multi-location inventory — critical for textile/shoe shops
+  // where the same item/variant needs different stock counts per store).
+  app.get("/api/location-stock", async (req, res) => {
+    try {
+      const locationId = req.query.locationId as string | undefined;
+      const itemId = req.query.itemId as string | undefined;
+      const rows = await storage.getLocationStock(locationId, itemId);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.get("/api/location-stock/item/:itemId", async (req, res) => {
+    try {
+      const rows = await storage.getStockForItemAcrossLocations(req.params.itemId as string);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.post("/api/location-stock", async (req, res) => {
+    try {
+      const data = insertItemLocationStockSchema.parse(req.body);
+      const row = await storage.setLocationStock(data.itemId, data.variantId || null, data.locationId, data.quantity ?? 0);
+      res.json(row);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.patch("/api/location-stock/adjust", async (req, res) => {
+    try {
+      const { itemId, variantId, locationId, delta } = req.body;
+      if (!itemId || !locationId || typeof delta !== "number") {
+        return res.status(400).json({ message: "itemId, locationId and numeric delta are required" });
+      }
+      const row = await storage.adjustLocationStock(itemId, variantId || null, locationId, delta);
+      res.json(row);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }

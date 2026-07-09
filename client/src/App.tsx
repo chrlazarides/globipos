@@ -15,6 +15,7 @@ import Dashboard from "@/pages/dashboard";
 import Items from "@/pages/items";
 import Categories from "@/pages/categories";
 import ColorsSizesPage from "@/pages/colors-sizes";
+import LocationStockPage from "@/pages/location-stock";
 import Customers from "@/pages/customers";
 import Invoices from "@/pages/invoices";
 import InvoiceForm from "@/pages/invoice-form";
@@ -129,6 +130,7 @@ function AdminRouter() {
       <Route path="/items" component={Items} />
       <Route path="/categories" component={Categories} />
       <Route path="/colors-sizes" component={ColorsSizesPage} />
+      <Route path="/location-stock" component={LocationStockPage} />
       <Route path="/customers" component={Customers} />
       <Route path="/invoices/new" component={InvoiceForm} />
       <Route path="/invoices/:id/edit" component={InvoiceForm} />

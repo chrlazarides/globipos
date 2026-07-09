@@ -47,6 +47,8 @@ import {
   type InsertSignagePlaylist, type SignagePlaylist,
   type InsertSignagePlaylistItem, type SignagePlaylistItem,
   type InsertSignageScreen, type SignageScreen,
+  itemLocationStock,
+  type InsertItemLocationStock, type ItemLocationStock,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -68,6 +70,11 @@ export interface IStorage {
   createSize(data: InsertSize): Promise<Size>;
   updateSize(id: string, data: Partial<InsertSize>): Promise<Size | undefined>;
   deleteSize(id: string): Promise<void>;
+
+  getLocationStock(locationId?: string, itemId?: string): Promise<ItemLocationStock[]>;
+  getStockForItemAcrossLocations(itemId: string): Promise<(ItemLocationStock & { locationName: string })[]>;
+  setLocationStock(itemId: string, variantId: string | null, locationId: string, quantity: number): Promise<ItemLocationStock>;
+  adjustLocationStock(itemId: string, variantId: string | null, locationId: string, delta: number): Promise<ItemLocationStock>;
 
   getItems(): Promise<Item[]>;
   getItem(id: string): Promise<Item | undefined>;
@@ -369,6 +376,54 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteSize(id: string) {
     await db.delete(sizes).where(eq(sizes.id, id));
+  }
+
+  async getLocationStock(locationId?: string, itemId?: string) {
+    const conditions = [];
+    if (locationId) conditions.push(eq(itemLocationStock.locationId, locationId));
+    if (itemId) conditions.push(eq(itemLocationStock.itemId, itemId));
+    if (conditions.length) {
+      return db.select().from(itemLocationStock).where(and(...conditions));
+    }
+    return db.select().from(itemLocationStock);
+  }
+  async getStockForItemAcrossLocations(itemId: string) {
+    const rows = await db.select({
+      id: itemLocationStock.id,
+      itemId: itemLocationStock.itemId,
+      variantId: itemLocationStock.variantId,
+      locationId: itemLocationStock.locationId,
+      quantity: itemLocationStock.quantity,
+      updatedAt: itemLocationStock.updatedAt,
+      locationName: posLocations.name,
+    })
+      .from(itemLocationStock)
+      .innerJoin(posLocations, eq(itemLocationStock.locationId, posLocations.id))
+      .where(eq(itemLocationStock.itemId, itemId));
+    return rows;
+  }
+  async setLocationStock(itemId: string, variantId: string | null, locationId: string, quantity: number) {
+    const conditions = [eq(itemLocationStock.itemId, itemId), eq(itemLocationStock.locationId, locationId)];
+    conditions.push(variantId ? eq(itemLocationStock.variantId, variantId) : isNull(itemLocationStock.variantId));
+    const [existing] = await db.select().from(itemLocationStock).where(and(...conditions));
+    if (existing) {
+      const [row] = await db.update(itemLocationStock).set({ quantity }).where(eq(itemLocationStock.id, existing.id)).returning();
+      return row;
+    }
+    const [row] = await db.insert(itemLocationStock).values({ itemId, variantId: variantId || null, locationId, quantity }).returning();
+    return row;
+  }
+  async adjustLocationStock(itemId: string, variantId: string | null, locationId: string, delta: number) {
+    const conditions = [eq(itemLocationStock.itemId, itemId), eq(itemLocationStock.locationId, locationId)];
+    conditions.push(variantId ? eq(itemLocationStock.variantId, variantId) : isNull(itemLocationStock.variantId));
+    const [existing] = await db.select().from(itemLocationStock).where(and(...conditions));
+    if (existing) {
+      const newQty = existing.quantity + delta;
+      const [row] = await db.update(itemLocationStock).set({ quantity: newQty }).where(eq(itemLocationStock.id, existing.id)).returning();
+      return row;
+    }
+    const [row] = await db.insert(itemLocationStock).values({ itemId, variantId: variantId || null, locationId, quantity: delta }).returning();
+    return row;
   }
 
   async getItems() {
@@ -3235,6 +3290,21 @@ export class DatabaseStorage implements IStorage {
         const item = await this.getItem(line.itemId);
         if (!item) continue;
         await db.update(items).set({ stockQuantity: item.stockQuantity + line.quantity }).where(eq(items.id, line.itemId));
+      }
+    }
+
+    // Per-location stock pools: move quantity out of fromLocation and into
+    // toLocation regardless of the warehouse heuristic above, so per-location
+    // visibility (e.g. textile stores) reflects every transfer.
+    const allLocations = await db.select().from(posLocations);
+    const fromLoc = allLocations.find(l => l.name.toLowerCase() === existing.fromLocation.toLowerCase());
+    const toLoc = allLocations.find(l => l.name.toLowerCase() === existing.toLocation.toLowerCase());
+    for (const line of transferItems) {
+      if (fromLoc) {
+        await this.adjustLocationStock(line.itemId, (line as any).variantId || null, fromLoc.id, -line.quantity);
+      }
+      if (toLoc) {
+        await this.adjustLocationStock(line.itemId, (line as any).variantId || null, toLoc.id, line.quantity);
       }
     }
 

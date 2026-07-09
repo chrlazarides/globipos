@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Item, ItemVariant, PosLocation, PosTerminal } from "@shared/schema";
+import type { Item, ItemVariant, PosLocation, PosTerminal, ItemLocationStock } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -437,6 +437,23 @@ export default function PosRegister() {
   const { data: allVariants = [] } = useQuery<ItemVariant[]>({ queryKey: ["/api/item-variants"], staleTime: 60000 });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"], staleTime: 60000 });
   const { data: terminals = [] } = useQuery<PosTerminal[]>({ queryKey: ["/api/pos/terminals"], staleTime: 60000 });
+  const { data: locationStock = [] } = useQuery<ItemLocationStock[]>({
+    queryKey: ["/api/location-stock", locationId],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/location-stock?locationId=${locationId}`);
+      return res.json();
+    },
+    enabled: !!locationId,
+    staleTime: 15000,
+  });
+
+  const stockAt = useCallback(
+    (itemId: string, variantId?: string | null) => {
+      const row = locationStock.find(s => s.itemId === itemId && (s.variantId || null) === (variantId || null));
+      return row ? row.quantity : null;
+    },
+    [locationStock]
+  );
   const { data: terminalStatus } = useQuery<CardTerminalStatus>({
     queryKey: ["/api/pos/card-terminal/status"],
     staleTime: 30000,
@@ -680,7 +697,21 @@ export default function PosRegister() {
                   {item.hasVariants && <Badge variant="outline" className="text-[10px] px-1 py-0">variants</Badge>}
                 </p>
                 <p className="text-xs text-muted-foreground">{item.sku}</p>
-                <p className="text-sm font-bold text-primary">€{parseFloat(item.price1 || "0").toFixed(2)}</p>
+                <div className="flex items-center justify-between gap-1">
+                  <p className="text-sm font-bold text-primary">€{parseFloat(item.price1 || "0").toFixed(2)}</p>
+                  {locationId && !item.hasVariants && (() => {
+                    const qty = stockAt(item.id);
+                    return qty !== null ? (
+                      <Badge
+                        variant={qty <= 0 ? "destructive" : qty <= (item.reorderLevel ?? 10) ? "secondary" : "outline"}
+                        className="text-[10px] px-1 py-0"
+                        data-testid={`badge-stock-${item.id}`}
+                      >
+                        {qty <= 0 ? "Out" : `${qty} in stock`}
+                      </Badge>
+                    ) : null;
+                  })()}
+                </div>
               </button>
             ))}
             {filteredItems.length === 0 && (
@@ -814,7 +845,21 @@ export default function PosRegister() {
                 >
                   <p className="text-sm font-medium">{variantLabel(v)}</p>
                   <p className="text-xs text-muted-foreground">{v.sku}</p>
-                  <p className="text-sm font-bold text-primary">€{parseFloat(v.price1 || variantPickerItem.price1 || "0").toFixed(2)}</p>
+                  <div className="flex items-center justify-between gap-1">
+                    <p className="text-sm font-bold text-primary">€{parseFloat(v.price1 || variantPickerItem.price1 || "0").toFixed(2)}</p>
+                    {locationId && (() => {
+                      const qty = stockAt(variantPickerItem.id, v.id);
+                      return qty !== null ? (
+                        <Badge
+                          variant={qty <= 0 ? "destructive" : qty <= (v.reorderLevel ?? 10) ? "secondary" : "outline"}
+                          className="text-[10px] px-1 py-0"
+                          data-testid={`badge-variant-stock-${v.id}`}
+                        >
+                          {qty <= 0 ? "Out" : `${qty} in stock`}
+                        </Badge>
+                      ) : null;
+                    })()}
+                  </div>
                 </button>
               ))}
               {variantsForItem(variantPickerItem.id).length === 0 && (

@@ -27,6 +27,7 @@ const mainNav = [
   { title: "Items", url: "/items", icon: Package, module: "items" },
   { title: "Categories", url: "/categories", icon: Layers, module: "items" },
   { title: "Colors & Sizes", url: "/colors-sizes", icon: Palette, module: "items" },
+  { title: "Location Stock", url: "/location-stock", icon: MapPin, module: "items" },
   { title: "Customers", url: "/customers", icon: Users, module: "customers" },
   { title: "Customer Statements", url: "/reports?tab=statements", icon: ClipboardList, module: "statements" },
   { title: "Email Log", url: "/email-logs", icon: Mail, module: "email_logs" },

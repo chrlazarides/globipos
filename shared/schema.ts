@@ -1047,6 +1047,23 @@ export const stockTakeLines = pgTable("stock_take_lines", {
   scannedAt: timestamp("scanned_at").defaultNow().notNull(),
 });
 
+// Per-location stock pools. Splits an item/variant's stock across POS locations
+// (stores/warehouses). items.stockQuantity / itemVariants.stockQuantity remain the
+// global total; this table tracks how much of that total sits at each location.
+// variantId is null for items without variants.
+export const itemLocationStock = pgTable("item_location_stock", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  variantId: varchar("variant_id").references(() => itemVariants.id, { onDelete: "cascade" }),
+  locationId: varchar("location_id").notNull().references(() => posLocations.id, { onDelete: "cascade" }),
+  quantity: integer("quantity").notNull().default(0),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+export const insertItemLocationStockSchema = createInsertSchema(itemLocationStock).omit({ id: true, updatedAt: true });
+export type InsertItemLocationStock = z.infer<typeof insertItemLocationStockSchema>;
+export type ItemLocationStock = typeof itemLocationStock.$inferSelect;
+
 export const stockTransfers = pgTable("stock_transfers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   transferNumber: text("transfer_number").notNull().unique(),
