@@ -124,6 +124,17 @@ export const sizes = pgTable("sizes", {
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
 
+// Reusable Color+Size(+Quality) sets for garments/shoes so businesses don't have to
+// reselect the same option ranges for every new model/item.
+export const variantTemplates = pgTable("variant_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  colorIds: text("color_ids").array().notNull().default(sql`'{}'::text[]`),
+  sizeIds: text("size_ids").array().notNull().default(sql`'{}'::text[]`),
+  qualities: text("qualities").array(), // e.g. ["Standard","Premium"], null = no quality/grade axis
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const customers = pgTable("customers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -427,6 +438,9 @@ export const insertItemSchema = createInsertSchema(items).omit({ id: true, seque
 export const insertItemVariantSchema = createInsertSchema(itemVariants).omit({ id: true, updatedAt: true });
 export type InsertItemVariant = z.infer<typeof insertItemVariantSchema>;
 export type ItemVariant = typeof itemVariants.$inferSelect;
+export const insertVariantTemplateSchema = createInsertSchema(variantTemplates).omit({ id: true, createdAt: true });
+export type InsertVariantTemplate = z.infer<typeof insertVariantTemplateSchema>;
+export type VariantTemplate = typeof variantTemplates.$inferSelect;
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true }).extend({
   code: z.string().optional().default(""),
 });

@@ -2,7 +2,7 @@ import { db } from "./db";
 import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import { generateVariantBarcode } from "./barcode-utils";
 import {
-  users, categories, colors, sizes, items, itemVariants, customers, priceContracts, priceContractItems, priceContractRules,
+  users, categories, colors, sizes, items, itemVariants, variantTemplates, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
@@ -10,7 +10,7 @@ import {
   posLocations, posTerminals, posLayoutSets, posLayoutButtons,
   posOrders, posOrderLines, posShifts, posSyncConfig, posInbox,
   type InsertUser, type User, type InsertCategory, type Category, type InsertColor, type Color, type InsertSize, type Size,
-  type InsertItem, type Item, type InsertItemVariant, type ItemVariant, type InsertCustomer, type Customer,
+  type InsertItem, type Item, type InsertItemVariant, type ItemVariant, type InsertVariantTemplate, type VariantTemplate, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
   type InsertPriceContractRule, type PriceContractRule,
   type InsertPriceContractItem, type PriceContractItem,
@@ -88,10 +88,14 @@ export interface IStorage {
   getItemVariant(id: string): Promise<ItemVariant | undefined>;
   getItemVariantByBarcode(barcode: string): Promise<ItemVariant | undefined>;
   getItemVariantBySku(sku: string): Promise<ItemVariant | undefined>;
-  bulkUpsertVariantMatrix(itemId: string, season: string | null, cells: { colorId: string; colorName: string; colorIndex: number; sizeId: string; sizeName: string; sizeIndex: number; quantity: number }[]): Promise<ItemVariant[]>;
+  bulkUpsertVariantMatrix(itemId: string, season: string | null, cells: { colorId: string; colorName: string; colorIndex: number; sizeId: string; sizeName: string; sizeIndex: number; quality?: string | null; qualityIndex?: number; quantity: number }[]): Promise<ItemVariant[]>;
   createItemVariant(data: InsertItemVariant): Promise<ItemVariant>;
   updateItemVariant(id: string, data: Partial<InsertItemVariant>): Promise<ItemVariant | undefined>;
   deleteItemVariant(id: string): Promise<void>;
+
+  getVariantTemplates(): Promise<VariantTemplate[]>;
+  createVariantTemplate(data: InsertVariantTemplate): Promise<VariantTemplate>;
+  deleteVariantTemplate(id: string): Promise<void>;
 
   getCustomers(): Promise<Customer[]>;
   deleteCustomer(id: string): Promise<void>;
@@ -482,7 +486,7 @@ export class DatabaseStorage implements IStorage {
   async bulkUpsertVariantMatrix(
     itemId: string,
     season: string | null,
-    cells: { colorId: string; colorName: string; colorIndex: number; sizeId: string; sizeName: string; sizeIndex: number; quantity: number }[]
+    cells: { colorId: string; colorName: string; colorIndex: number; sizeId: string; sizeName: string; sizeIndex: number; quality?: string | null; qualityIndex?: number; quantity: number }[]
   ) {
     const item = await this.getItem(itemId);
     if (!item) throw new Error("Item not found");
@@ -491,7 +495,11 @@ export class DatabaseStorage implements IStorage {
     const results: ItemVariant[] = [];
 
     for (const cell of cells) {
-      const existing = existingVariants.find(v => v.option1Value === cell.colorName && v.option2Value === cell.sizeName);
+      const existing = existingVariants.find(v =>
+        v.option1Value === cell.colorName &&
+        v.option2Value === cell.sizeName &&
+        (v.option3Value || null) === (cell.quality || null)
+      );
       if (existing) {
         const [updated] = await db.update(itemVariants)
           .set({ stockQuantity: cell.quantity })
@@ -502,13 +510,15 @@ export class DatabaseStorage implements IStorage {
       }
 
       let salt = 0;
-      let barcode = generateVariantBarcode({ itemSequenceNo: item.sequenceNo, colorIndex: cell.colorIndex, sizeIndex: cell.sizeIndex, season });
+      let barcode = generateVariantBarcode({ itemSequenceNo: item.sequenceNo, colorIndex: cell.colorIndex, sizeIndex: cell.sizeIndex, qualityIndex: cell.qualityIndex, season });
       while (await db.select().from(itemVariants).where(eq(itemVariants.barcode, barcode)).then(r => r.length > 0)) {
         salt++;
-        barcode = generateVariantBarcode({ itemSequenceNo: item.sequenceNo, colorIndex: cell.colorIndex, sizeIndex: cell.sizeIndex, season, salt });
+        barcode = generateVariantBarcode({ itemSequenceNo: item.sequenceNo, colorIndex: cell.colorIndex, sizeIndex: cell.sizeIndex, qualityIndex: cell.qualityIndex, season, salt });
       }
 
-      const sku = `${item.sku}-${cell.colorName}-${cell.sizeName}`.replace(/\s+/g, "").toUpperCase();
+      const skuParts = [item.sku, cell.colorName, cell.sizeName];
+      if (cell.quality) skuParts.push(cell.quality);
+      const sku = skuParts.join("-").replace(/\s+/g, "").toUpperCase();
 
       const [created] = await db.insert(itemVariants).values({
         itemId,
@@ -518,6 +528,8 @@ export class DatabaseStorage implements IStorage {
         option1Value: cell.colorName,
         option2Name: "Size",
         option2Value: cell.sizeName,
+        option3Name: cell.quality ? "Quality" : null,
+        option3Value: cell.quality || null,
         stockQuantity: cell.quantity,
         active: true,
       }).returning();
@@ -526,6 +538,17 @@ export class DatabaseStorage implements IStorage {
 
     await db.update(items).set({ hasVariants: true, season: season || item.season }).where(eq(items.id, itemId));
     return results;
+  }
+
+  async getVariantTemplates() {
+    return db.select().from(variantTemplates).orderBy(variantTemplates.name);
+  }
+  async createVariantTemplate(data: InsertVariantTemplate) {
+    const [row] = await db.insert(variantTemplates).values(data).returning();
+    return row;
+  }
+  async deleteVariantTemplate(id: string) {
+    await db.delete(variantTemplates).where(eq(variantTemplates.id, id));
   }
 
   async getCustomers() {

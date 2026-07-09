@@ -10,10 +10,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Grid3x3, Printer, Barcode as BarcodeIcon, QrCode } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Grid3x3, Printer, X, Save, LayoutTemplate, Trash2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Item, Color, Size, ItemVariant } from "@shared/schema";
+import type { Item, Color, Size, ItemVariant, VariantTemplate } from "@shared/schema";
 import QRCode from "qrcode";
 
 type LabelFormat = "CODE128" | "CODE39" | "QR";
@@ -44,6 +45,8 @@ function BarcodeCanvas({ value, format }: { value: string; format: LabelFormat }
   return <canvas ref={canvasRef} data-testid={`canvas-barcode-${value}`} />;
 }
 
+const NO_QUALITY = "__none__";
+
 export default function VariantMatrixPage() {
   const { toast } = useToast();
   const [itemSearch, setItemSearch] = useState("");
@@ -51,13 +54,19 @@ export default function VariantMatrixPage() {
   const [season, setSeason] = useState("");
   const [selectedColorIds, setSelectedColorIds] = useState<string[]>([]);
   const [selectedSizeIds, setSelectedSizeIds] = useState<string[]>([]);
+  const [qualities, setQualities] = useState<string[]>([]);
+  const [newQuality, setNewQuality] = useState("");
+  const [activeQuality, setActiveQuality] = useState<string>(NO_QUALITY);
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [labelFormat, setLabelFormat] = useState<LabelFormat>("CODE128");
   const [generatedVariants, setGeneratedVariants] = useState<ItemVariant[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const [templateName, setTemplateName] = useState("");
 
   const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"], staleTime: 30000 });
   const { data: colors = [] } = useQuery<Color[]>({ queryKey: ["/api/colors"], staleTime: 30000 });
   const { data: sizes = [] } = useQuery<Size[]>({ queryKey: ["/api/sizes"], staleTime: 30000 });
+  const { data: templates = [] } = useQuery<VariantTemplate[]>({ queryKey: ["/api/variant-templates"], staleTime: 10000 });
 
   const sortedColors = useMemo(() => [...colors].filter(c => c.active).sort((a, b) => a.name.localeCompare(b.name)), [colors]);
   const sortedSizes = useMemo(() => [...sizes].filter(s => s.active).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)), [sizes]);
@@ -68,7 +77,7 @@ export default function VariantMatrixPage() {
 
   const selectedItem = items.find(i => i.id === selectedItemId);
 
-  const cellKey = (colorId: string, sizeId: string) => `${colorId}::${sizeId}`;
+  const cellKey = (colorId: string, sizeId: string, quality: string) => `${colorId}::${sizeId}::${quality}`;
 
   const toggleColor = (id: string) => {
     setSelectedColorIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -76,20 +85,82 @@ export default function VariantMatrixPage() {
   const toggleSize = (id: string) => {
     setSelectedSizeIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
+  const addQuality = () => {
+    const q = newQuality.trim();
+    if (!q || qualities.includes(q)) return;
+    setQualities(prev => [...prev, q]);
+    setNewQuality("");
+    if (activeQuality === NO_QUALITY) setActiveQuality(q);
+  };
+  const removeQuality = (q: string) => {
+    setQualities(prev => prev.filter(x => x !== q));
+    if (activeQuality === q) setActiveQuality(NO_QUALITY);
+  };
+
+  const applyTemplate = (templateId: string) => {
+    setSelectedTemplateId(templateId);
+    const template = templates.find(t => t.id === templateId);
+    if (!template) return;
+    setSelectedColorIds(template.colorIds.filter(id => sortedColors.some(c => c.id === id)));
+    setSelectedSizeIds(template.sizeIds.filter(id => sortedSizes.some(s => s.id === id)));
+    const tplQualities = template.qualities || [];
+    setQualities(tplQualities);
+    setActiveQuality(tplQualities.length > 0 ? tplQualities[0] : NO_QUALITY);
+    setQuantities({});
+    toast({ title: `Applied "${template.name}" set` });
+  };
+
+  const saveTemplateMutation = useMutation({
+    mutationFn: async () => {
+      if (!templateName.trim()) throw new Error("Enter a name for this set");
+      if (selectedColorIds.length === 0 || selectedSizeIds.length === 0) throw new Error("Select at least one color and size first");
+      const res = await apiRequest("POST", "/api/variant-templates", {
+        name: templateName.trim(),
+        colorIds: selectedColorIds,
+        sizeIds: selectedSizeIds,
+        qualities: qualities.length > 0 ? qualities : null,
+      });
+      return res.json() as Promise<VariantTemplate>;
+    },
+    onSuccess: (t) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/variant-templates"] });
+      setTemplateName("");
+      toast({ title: `Saved "${t.name}" as a reusable set` });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteTemplateMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/variant-templates/${id}`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/variant-templates"] });
+      toast({ title: "Set deleted" });
+    },
+  });
 
   const generateMutation = useMutation({
     mutationFn: async () => {
+      const qualityList = qualities.length > 0 ? qualities : [NO_QUALITY];
       const cells = selectedColorIds.flatMap(colorId =>
-        selectedSizeIds.map(sizeId => ({
-          colorId,
-          sizeId,
-          quantity: parseInt(quantities[cellKey(colorId, sizeId)] || "0", 10) || 0,
-        }))
+        selectedSizeIds.flatMap(sizeId =>
+          qualityList.map(quality => ({
+            colorId,
+            sizeId,
+            quality: quality === NO_QUALITY ? null : quality,
+            quantity: parseInt(quantities[cellKey(colorId, sizeId, quality)] || "0", 10) || 0,
+          }))
+        )
       ).filter(c => c.quantity > 0);
 
       if (cells.length === 0) throw new Error("Enter at least one quantity in the matrix");
 
-      const res = await apiRequest("POST", `/api/items/${selectedItemId}/variants/matrix`, { season: season || null, cells });
+      const res = await apiRequest("POST", `/api/items/${selectedItemId}/variants/matrix`, {
+        season: season || null,
+        qualities: qualities.length > 0 ? qualities : undefined,
+        cells,
+      });
       return res.json() as Promise<ItemVariant[]>;
     },
     onSuccess: (variants) => {
@@ -106,9 +177,10 @@ export default function VariantMatrixPage() {
     if (!printWindow || !selectedItem) return;
 
     const labelsHtml = generatedVariants.map(v => {
+      const variantLine = [v.option1Value, v.option2Value, v.option3Value].filter(Boolean).join(" / ");
       return `<div class="label">
         <div class="label-name">${selectedItem.name}</div>
-        <div class="label-variant">${v.option1Value || ""} / ${v.option2Value || ""}</div>
+        <div class="label-variant">${variantLine}</div>
         <canvas id="bc-${v.id}"></canvas>
         <div class="label-sku">${v.sku}</div>
       </div>`;
@@ -133,15 +205,6 @@ export default function VariantMatrixPage() {
     printWindow.document.close();
 
     printWindow.onload = () => {
-      const script = printWindow.document.createElement("script");
-      script.textContent = generatedVariants.map(v => {
-        if (labelFormat === "QR") {
-          return `window.__qr_${v.id.replace(/-/g, "")} = true;`;
-        }
-        return "";
-      }).join("");
-      printWindow.document.body.appendChild(script);
-
       (async () => {
         for (const v of generatedVariants) {
           const canvas = printWindow.document.getElementById(`bc-${v.id}`) as HTMLCanvasElement | null;
@@ -162,13 +225,70 @@ export default function VariantMatrixPage() {
     };
   };
 
+  const activeQualityKey = qualities.length > 0 ? activeQuality : NO_QUALITY;
+
   return (
     <div className="p-6 space-y-6">
       <PageHeader
         title="Variant Matrix & Label Barcodes"
-        description="Enter quantities per color/size combination and auto-generate unique barcodes ready for label printers"
+        description="Optional add-on for garments, shoes, and other variant-based items — enter quantities per color/size(/quality) and auto-generate unique barcodes ready for label printers"
         icon={<Grid3x3 className="w-5 h-5" />}
       />
+
+      <Card>
+        <CardContent className="p-4 space-y-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-2 min-w-[240px]">
+              <Label>Load a saved Set/Template</Label>
+              <Select value={selectedTemplateId} onValueChange={applyTemplate} data-testid="select-variant-template">
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a Color+Size set…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {templates.map(t => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.name} ({t.colorIds.length} colors × {t.sizeIds.length} sizes{t.qualities?.length ? ` × ${t.qualities.length} qualities` : ""})
+                    </SelectItem>
+                  ))}
+                  {templates.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">No sets saved yet</div>}
+                </SelectContent>
+              </Select>
+            </div>
+            {selectedTemplateId && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => deleteTemplateMutation.mutate(selectedTemplateId)}
+                data-testid="button-delete-template"
+                title="Delete this set"
+              >
+                <Trash2 className="w-4 h-4 text-destructive" />
+              </Button>
+            )}
+            <div className="flex items-end gap-2 ml-auto">
+              <div className="space-y-2">
+                <Label>Save current selection as a set</Label>
+                <Input
+                  placeholder="e.g. Men's Shoe Full Run"
+                  value={templateName}
+                  onChange={e => setTemplateName(e.target.value)}
+                  className="w-56"
+                  data-testid="input-template-name"
+                />
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => saveTemplateMutation.mutate()}
+                disabled={saveTemplateMutation.isPending}
+                data-testid="button-save-template"
+              >
+                <Save className="w-4 h-4 mr-2" />
+                Save Set
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent className="p-4 space-y-4">
@@ -240,13 +360,53 @@ export default function VariantMatrixPage() {
               </div>
             </div>
           )}
+
+          {selectedItem && (
+            <div className="space-y-2 pt-2 border-t">
+              <Label>Quality / Grade (optional — e.g. Standard, Premium, 1st/2nd grade)</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Type a quality/grade and press Add"
+                  value={newQuality}
+                  onChange={e => setNewQuality(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addQuality(); } }}
+                  className="w-64"
+                  data-testid="input-new-quality"
+                />
+                <Button type="button" variant="outline" onClick={addQuality} data-testid="button-add-quality">Add</Button>
+              </div>
+              {qualities.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {qualities.map(q => (
+                    <Badge key={q} variant="secondary" className="gap-1 pr-1" data-testid={`badge-quality-${q}`}>
+                      {q}
+                      <button onClick={() => removeQuality(q)} data-testid={`button-remove-quality-${q}`}>
+                        <X className="w-3 h-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
       {selectedItem && selectedColorIds.length > 0 && selectedSizeIds.length > 0 && (
         <Card>
           <CardContent className="p-4 space-y-4">
-            <p className="text-sm font-medium">Quantity Matrix — rows are sizes, columns are colors</p>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <p className="text-sm font-medium">Quantity Matrix — rows are sizes, columns are colors</p>
+              {qualities.length > 0 && (
+                <Tabs value={activeQualityKey} onValueChange={setActiveQuality}>
+                  <TabsList>
+                    {qualities.map(q => (
+                      <TabsTrigger key={q} value={q} data-testid={`tab-quality-${q}`}>{q}</TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+              )}
+            </div>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -265,7 +425,7 @@ export default function VariantMatrixPage() {
                       <TableRow key={sid}>
                         <TableCell className="font-medium">{s?.name}</TableCell>
                         {selectedColorIds.map(cid => {
-                          const key = cellKey(cid, sid);
+                          const key = cellKey(cid, sid, activeQualityKey);
                           return (
                             <TableCell key={cid} className="text-center">
                               <Input
@@ -325,7 +485,7 @@ export default function VariantMatrixPage() {
                 <div key={v.id} className="border rounded-lg p-3 flex items-center gap-3" data-testid={`card-variant-${v.id}`}>
                   <BarcodeCanvas value={v.barcode || v.sku} format={labelFormat} />
                   <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{v.option1Value} / {v.option2Value}</p>
+                    <p className="text-sm font-medium truncate">{[v.option1Value, v.option2Value, v.option3Value].filter(Boolean).join(" / ")}</p>
                     <p className="text-xs text-muted-foreground truncate">{v.sku}</p>
                     <Badge variant="outline" className="text-[10px] mt-1">{v.stockQuantity} pcs</Badge>
                   </div>

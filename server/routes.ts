@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema } from "@shared/schema";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema } from "@shared/schema";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -1183,7 +1183,11 @@ export async function registerRoutes(
   app.post("/api/items/:id/variants/matrix", async (req, res) => {
     try {
       const itemId = req.params.id as string;
-      const { season, cells } = req.body as { season?: string | null; cells: { colorId: string; sizeId: string; quantity: number }[] };
+      const { season, qualities, cells } = req.body as {
+        season?: string | null;
+        qualities?: string[];
+        cells: { colorId: string; sizeId: string; quality?: string | null; quantity: number }[];
+      };
       if (!Array.isArray(cells) || cells.length === 0) {
         return res.status(400).json({ message: "cells array is required" });
       }
@@ -1191,6 +1195,7 @@ export async function registerRoutes(
       const allSizes = await storage.getSizes();
       const sortedColors = [...allColors].sort((a, b) => a.name.localeCompare(b.name));
       const sortedSizes = [...allSizes].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+      const sortedQualities = Array.isArray(qualities) ? [...qualities] : [];
 
       const resolvedCells = cells
         .filter(c => c.quantity > 0)
@@ -1198,6 +1203,7 @@ export async function registerRoutes(
           const color = sortedColors.find(x => x.id === c.colorId);
           const size = sortedSizes.find(x => x.id === c.sizeId);
           if (!color || !size) return null;
+          const qualityIndex = c.quality ? sortedQualities.indexOf(c.quality) : -1;
           return {
             colorId: color.id,
             colorName: color.name,
@@ -1205,6 +1211,8 @@ export async function registerRoutes(
             sizeId: size.id,
             sizeName: size.name,
             sizeIndex: sortedSizes.indexOf(size),
+            quality: c.quality || null,
+            qualityIndex: qualityIndex >= 0 ? qualityIndex : undefined,
             quantity: c.quantity,
           };
         })
@@ -1212,6 +1220,34 @@ export async function registerRoutes(
 
       const variants = await storage.bulkUpsertVariantMatrix(itemId, season || null, resolvedCells);
       res.json(variants);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/variant-templates", async (_req, res) => {
+    try {
+      const templates = await storage.getVariantTemplates();
+      res.json(templates);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/variant-templates", async (req, res) => {
+    try {
+      const parsed = insertVariantTemplateSchema.parse(req.body);
+      const template = await storage.createVariantTemplate(parsed);
+      res.json(template);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/variant-templates/:id", async (req, res) => {
+    try {
+      await storage.deleteVariantTemplate(req.params.id as string);
+      res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }
