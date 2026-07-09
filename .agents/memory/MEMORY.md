@@ -20,6 +20,7 @@
 - [Zod insert schema for child before parent](zod-insert-schema-child-before-parent.md) — omit the parent FK too when validating nested child items created before the parent row exists
 - [Module-permission middleware test pitfall](module-permission-test-pitfall.md) — a manually minted test JWT missing a field the real signToken() includes silently satisfies "empty = full access" checks, faking a passing test
 - [Single stock pool vs multi-location moves](single-stock-pool-transfers.md) — when only one global stockQuantity exists, mutate it only on the leg touching the tracked warehouse; other legs log but don't touch it
+- [POS cart lines with variants](pos-variant-cart-lines.md) — cart line dedup/qty/remove keys must be itemId+variantId compound, not itemId alone, once variants exist
 - [Radix Select empty-value crash](radix-select-empty-value-crash.md) — `<SelectItem value="">` throws and can crash a whole page render, masquerading as an unrelated feature bug
 - [Chime/quiet-hours device scope decision](chime-quiet-hours-device-scope.md) — kept deliberately per-device (localStorage), not per-user, as the default when stakeholders had no preference
 - [POS canvas mockup vs Layouts mismatch](pos-layout-mockup-graduation.md) — pos_layout_sets is button-grid only; journal/cart UX changes must be ported to the Simulator page separately

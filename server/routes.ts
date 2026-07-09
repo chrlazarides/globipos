@@ -1035,6 +1035,11 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/item-variants", async (_req, res) => {
+    const variants = await storage.getAllItemVariants();
+    res.json(variants);
+  });
+
   app.get("/api/item-variants/barcode/:barcode", async (req, res) => {
     const variant = await storage.getItemVariantByBarcode((req.params.barcode as string));
     if (!variant) return res.status(404).json({ message: "Variant not found" });

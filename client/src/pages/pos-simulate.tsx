@@ -15,7 +15,7 @@ import {
   TrendingDown, DoorOpen, X, ChevronLeft, Zap, Tag, Package,
   Layers, Calculator, Loader2, Receipt, Clock,
 } from "lucide-react";
-import type { PosLayoutSet, PosLayoutButton, Item, Customer, PosPromotion } from "@shared/schema";
+import type { PosLayoutSet, PosLayoutButton, Item, ItemVariant, Customer, PosPromotion } from "@shared/schema";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -23,6 +23,7 @@ import type { PosLayoutSet, PosLayoutButton, Item, Customer, PosPromotion } from
 interface SimCartLine {
   id: string;
   itemId?: string;
+  variantId?: string;
   label: string;
   qty: number;
   unitPrice: number;
@@ -30,17 +31,22 @@ interface SimCartLine {
   discountPct: number;
 }
 
+function simVariantLabel(v: ItemVariant) {
+  return [v.option1Value, v.option2Value, v.option3Value].filter(Boolean).join(" / ");
+}
+
 type DeviceView = "desktop" | "tablet" | "phone";
 type DialogKind =
   | "cash" | "card" | "discount_pct" | "discount_fixed" | "order_discount"
   | "price_override" | "customer" | "qty" | "z_report" | "x_report"
   | "notes" | "cash_in" | "cash_out" | "hold" | "exchange"
-  | "category" | null;
+  | "category" | "variant" | null;
 
 interface FeedbackMsg { text: string; ok: boolean; id: number }
 
 const EMPTY_BUTTONS: PosLayoutButton[] = [];
 const EMPTY_ITEMS: Item[] = [];
+const EMPTY_VARIANTS: ItemVariant[] = [];
 const EMPTY_CUSTOMERS: Customer[] = [];
 const EMPTY_CATEGORIES: { id: string; name: string }[] = [];
 const EMPTY_PROMOS: PosPromotion[] = [];
@@ -312,6 +318,7 @@ export default function PosSimulate() {
     enabled: allLayouts.length > 0,
   });
   const { data: items = EMPTY_ITEMS } = useQuery<Item[]>({ queryKey: ["/api/items"] });
+  const { data: allVariants = EMPTY_VARIANTS } = useQuery<ItemVariant[]>({ queryKey: ["/api/item-variants"] });
   const { data: categories = EMPTY_CATEGORIES } = useQuery<{ id: string; name: string }[]>({
     queryKey: ["/api/categories"],
   });
@@ -349,20 +356,34 @@ export default function PosSimulate() {
   }, []);
 
   // ── Cart operations ────────────────────────────────────────────────────────
-  const addItem = useCallback((item: Item) => {
-    const price = parseFloat(String(item.price1 || "0"));
+  const addItem = useCallback((item: Item, variant?: ItemVariant) => {
+    const price = parseFloat(String(variant?.price1 || item.price1 || "0"));
     const vat   = parseFloat(String(item.vatRate || "0"));
+    const label = variant ? `${item.name} (${simVariantLabel(variant)})` : item.name;
     setCart(prev => {
-      const idx = prev.findIndex(l => l.itemId === item.id && l.discountPct === 0);
+      const idx = prev.findIndex(l => l.itemId === item.id && l.variantId === variant?.id && l.discountPct === 0);
       if (idx >= 0) {
         const next = [...prev];
         next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
         return next;
       }
-      return [...prev, { id: uid(), itemId: item.id, label: item.name, qty: 1, unitPrice: price, vatRate: vat, discountPct: 0 }];
+      return [...prev, { id: uid(), itemId: item.id, variantId: variant?.id, label, qty: 1, unitPrice: price, vatRate: vat, discountPct: 0 }];
     });
     setSelectedLine(null);
   }, []);
+
+  const [variantPickerItem, setVariantPickerItem] = useState<Item | null>(null);
+  const variantsForSimItem = useCallback(
+    (itemId: string) => allVariants.filter(v => v.itemId === itemId && v.active),
+    [allVariants]
+  );
+  const addItemOrPickVariant = useCallback((item: Item) => {
+    if ((item as any).hasVariants) {
+      setVariantPickerItem(item);
+    } else {
+      addItem(item);
+    }
+  }, [addItem]);
 
   const addGenericItem = useCallback((label: string, price: number, vat = 0) => {
     setCart(prev => [...prev, { id: uid(), label, qty: 1, unitPrice: price, vatRate: vat, discountPct: 0 }]);
@@ -530,7 +551,7 @@ export default function PosSimulate() {
     const type = btn.buttonType as string;
     if (type === "item") {
       const item = items.find(it => it.id === btn.itemId);
-      if (item) addItem(item);
+      if (item) addItemOrPickVariant(item);
       else showFeedback(`Item not found (${btn.itemId})`, false);
     } else if (type === "category") {
       setCategoryFilter(btn.categoryId ?? null);
@@ -542,7 +563,7 @@ export default function PosSimulate() {
       if (sub) setLayoutStack(p => [...p, sub]);
       else showFeedback("Sub-layout not configured", false);
     }
-  }, [items, addItem, handleAction, showFeedback]);
+  }, [items, addItemOrPickVariant, handleAction, showFeedback]);
 
   // ── Current layout buttons ─────────────────────────────────────────────────
   const currentLayout = allLayouts.find(l => l.id === currentLayoutId) ?? rootLayout;
@@ -1158,13 +1179,54 @@ export default function PosSimulate() {
             <div className="grid grid-cols-3 gap-2 max-h-80 overflow-y-auto">
               {categoryItems.map(item => (
                 <button key={item.id}
-                  onClick={() => { addItem(item); setDialog(null); showFeedback(`Added: ${item.name}`, true); }}
+                  onClick={() => {
+                    if ((item as any).hasVariants) {
+                      setVariantPickerItem(item);
+                      setDialog(null);
+                    } else {
+                      addItem(item);
+                      setDialog(null);
+                      showFeedback(`Added: ${item.name}`, true);
+                    }
+                  }}
                   className="rounded-xl border bg-primary/5 hover:bg-primary/15 p-2 text-left transition-colors"
                   data-testid={`cat-item-${item.id}`}>
                   <p className="text-xs font-semibold truncate">{item.name}</p>
                   <p className="text-[10px] text-muted-foreground">€{fmt(parseFloat(String(item.price1 || "0")))}</p>
                 </button>
               ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Variant picker overlay */}
+      <Dialog open={!!variantPickerItem} onOpenChange={o => !o && setVariantPickerItem(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Select a variant</DialogTitle>
+          </DialogHeader>
+          {variantPickerItem && (
+            <div className="grid grid-cols-2 gap-2 max-h-80 overflow-y-auto">
+              {variantsForSimItem(variantPickerItem.id).map(v => (
+                <button
+                  key={v.id}
+                  onClick={() => {
+                    addItem(variantPickerItem, v);
+                    setVariantPickerItem(null);
+                    showFeedback(`Added: ${variantPickerItem.name} (${simVariantLabel(v)})`, true);
+                  }}
+                  className="rounded-xl border bg-primary/5 hover:bg-primary/15 p-2 text-left transition-colors"
+                  data-testid={`variant-option-${v.id}`}
+                >
+                  <p className="text-xs font-semibold truncate">{simVariantLabel(v)}</p>
+                  <p className="text-[10px] text-muted-foreground">{v.sku}</p>
+                  <p className="text-[10px] font-medium">€{fmt(parseFloat(String(v.price1 || variantPickerItem.price1 || "0")))}</p>
+                </button>
+              ))}
+              {variantsForSimItem(variantPickerItem.id).length === 0 && (
+                <p className="col-span-full text-center py-4 text-sm text-muted-foreground">No active variants for this item</p>
+              )}
             </div>
           )}
         </DialogContent>

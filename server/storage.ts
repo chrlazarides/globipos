@@ -66,6 +66,7 @@ export interface IStorage {
   updateItem(id: string, data: Partial<InsertItem>): Promise<Item | undefined>;
 
   getItemVariants(itemId: string): Promise<ItemVariant[]>;
+  getAllItemVariants(): Promise<ItemVariant[]>;
   getItemVariant(id: string): Promise<ItemVariant | undefined>;
   getItemVariantByBarcode(barcode: string): Promise<ItemVariant | undefined>;
   getItemVariantBySku(sku: string): Promise<ItemVariant | undefined>;
@@ -352,6 +353,9 @@ export class DatabaseStorage implements IStorage {
 
   async getItemVariants(itemId: string) {
     return db.select().from(itemVariants).where(eq(itemVariants.itemId, itemId)).orderBy(itemVariants.sku);
+  }
+  async getAllItemVariants() {
+    return db.select().from(itemVariants).where(eq(itemVariants.active, true));
   }
   async getItemVariant(id: string) {
     const [v] = await db.select().from(itemVariants).where(eq(itemVariants.id, id));

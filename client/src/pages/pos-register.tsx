@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Item, PosLocation, PosTerminal } from "@shared/schema";
+import type { Item, ItemVariant, PosLocation, PosTerminal } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -18,11 +18,21 @@ import { PageHeader } from "@/components/page-header";
 
 interface CartLine {
   itemId: string;
+  variantId?: string | null;
+  variantLabel?: string | null;
   description: string;
   sku: string;
   unitPrice: number;
   quantity: number;
   vatRate: number;
+}
+
+function cartLineKey(l: { itemId: string; variantId?: string | null }) {
+  return `${l.itemId}::${l.variantId || ""}`;
+}
+
+function variantLabel(v: ItemVariant) {
+  return [v.option1Value, v.option2Value, v.option3Value].filter(Boolean).join(" / ");
 }
 
 interface CardChargeResult {
@@ -67,23 +77,27 @@ function CartRow({ line, onQtyChange, onRemove }: {
   onRemove: () => void;
 }) {
   const lineTotal = line.unitPrice * line.quantity;
+  const key = cartLineKey(line);
   return (
     <div className="flex items-center gap-2 py-2 border-b last:border-0">
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">{line.description}</p>
+        <p className="text-sm font-medium truncate">
+          {line.description}
+          {line.variantLabel && <span className="text-muted-foreground font-normal"> ({line.variantLabel})</span>}
+        </p>
         <p className="text-xs text-muted-foreground">€{fmt(line.unitPrice)} ea · VAT {line.vatRate}%</p>
       </div>
       <div className="flex items-center gap-1 shrink-0">
-        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => onQtyChange(-1)} data-testid={`btn-qty-minus-${line.itemId}`}>
+        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => onQtyChange(-1)} data-testid={`btn-qty-minus-${key}`}>
           <Minus className="w-3 h-3" />
         </Button>
         <span className="w-6 text-center text-sm font-medium">{line.quantity}</span>
-        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => onQtyChange(1)} data-testid={`btn-qty-plus-${line.itemId}`}>
+        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => onQtyChange(1)} data-testid={`btn-qty-plus-${key}`}>
           <Plus className="w-3 h-3" />
         </Button>
       </div>
       <p className="w-16 text-right text-sm font-semibold shrink-0">€{fmt(lineTotal)}</p>
-      <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive shrink-0" onClick={onRemove} data-testid={`btn-remove-${line.itemId}`}>
+      <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive shrink-0" onClick={onRemove} data-testid={`btn-remove-${key}`}>
         <Trash2 className="w-3 h-3" />
       </Button>
     </div>
@@ -420,15 +434,22 @@ export default function PosRegister() {
   const [lastApproval, setLastApproval] = useState<{ ref: string; provider: string } | null>(null);
 
   const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"], staleTime: 60000 });
+  const { data: allVariants = [] } = useQuery<ItemVariant[]>({ queryKey: ["/api/item-variants"], staleTime: 60000 });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"], staleTime: 60000 });
   const { data: terminals = [] } = useQuery<PosTerminal[]>({ queryKey: ["/api/pos/terminals"], staleTime: 60000 });
   const { data: terminalStatus } = useQuery<CardTerminalStatus>({
     queryKey: ["/api/pos/card-terminal/status"],
     staleTime: 30000,
   });
+  const [variantPickerItem, setVariantPickerItem] = useState<Item | null>(null);
 
   const filteredTerminals = locationId ? terminals.filter(t => t.locationId === locationId) : terminals;
   const cardConfigured = !!(terminalStatus?.activeProvider);
+
+  const variantsForItem = useCallback(
+    (itemId: string) => allVariants.filter(v => v.itemId === itemId && v.active),
+    [allVariants]
+  );
 
   const filteredItems = items.filter(i =>
     !search ||
@@ -437,31 +458,51 @@ export default function PosRegister() {
     (i.barcode || "").includes(search)
   ).slice(0, 40);
 
-  const addToCart = useCallback((item: Item) => {
+  // If the search text matches a variant's own SKU/barcode directly, add that variant to
+  // the cart immediately rather than making the cashier pick it from a dialog.
+  const matchedVariant = search
+    ? allVariants.find(v =>
+        (v.sku && v.sku.toLowerCase() === search.toLowerCase()) ||
+        (v.barcode && v.barcode === search)
+      )
+    : undefined;
+
+  const addToCart = useCallback((item: Item, variant?: ItemVariant) => {
+    if (item.hasVariants && !variant) {
+      setVariantPickerItem(item);
+      return;
+    }
     setCart(prev => {
-      const existing = prev.find(l => l.itemId === item.id);
+      const variantId = variant?.id || null;
+      const existing = prev.find(l => l.itemId === item.id && (l.variantId || null) === variantId);
       if (existing) {
-        return prev.map(l => l.itemId === item.id ? { ...l, quantity: l.quantity + 1 } : l);
+        return prev.map(l =>
+          l.itemId === item.id && (l.variantId || null) === variantId
+            ? { ...l, quantity: l.quantity + 1 }
+            : l
+        );
       }
       return [...prev, {
         itemId: item.id,
+        variantId,
+        variantLabel: variant ? variantLabel(variant) : null,
         description: item.name,
-        sku: item.sku || "",
-        unitPrice: parseFloat(item.price1 || "0"),
+        sku: (variant?.sku || item.sku || ""),
+        unitPrice: parseFloat(variant?.price1 || item.price1 || "0"),
         quantity: 1,
         vatRate: parseFloat((item as any).vatRate || "0"),
       }];
     });
   }, []);
 
-  const changeQty = (itemId: string, delta: number) => {
+  const changeQty = (key: string, delta: number) => {
     setCart(prev =>
-      prev.map(l => l.itemId === itemId ? { ...l, quantity: Math.max(1, l.quantity + delta) } : l)
+      prev.map(l => cartLineKey(l) === key ? { ...l, quantity: Math.max(1, l.quantity + delta) } : l)
     );
   };
 
-  const removeFromCart = (itemId: string) => {
-    setCart(prev => prev.filter(l => l.itemId !== itemId));
+  const removeFromCart = (key: string) => {
+    setCart(prev => prev.filter(l => cartLineKey(l) !== key));
   };
 
   const subtotal = cart.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
@@ -497,7 +538,8 @@ export default function PosRegister() {
         receiptPrinted: false,
         lines: cart.map(l => ({
           itemId: l.itemId,
-          description: l.description,
+          variantId: l.variantId || null,
+          description: l.variantLabel ? `${l.description} (${l.variantLabel})` : l.description,
           sku: l.sku,
           quantity: String(l.quantity),
           unitPrice: fmt(l.unitPrice),
@@ -607,6 +649,15 @@ export default function PosRegister() {
               placeholder="Search items by name, SKU, or barcode…"
               value={search}
               onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter" && matchedVariant) {
+                  const parentItem = items.find(i => i.id === matchedVariant.itemId);
+                  if (parentItem) {
+                    addToCart(parentItem, matchedVariant);
+                    setSearch("");
+                  }
+                }
+              }}
               className="pl-9 h-9"
               data-testid="input-item-search"
             />
@@ -624,7 +675,10 @@ export default function PosRegister() {
                 className="text-left rounded-lg border bg-card hover:bg-accent hover:border-primary transition-colors p-3 space-y-1 cursor-pointer"
                 data-testid={`btn-item-${item.id}`}
               >
-                <p className="text-sm font-medium leading-tight line-clamp-2">{item.name}</p>
+                <p className="text-sm font-medium leading-tight line-clamp-2 flex items-center gap-1">
+                  {item.name}
+                  {item.hasVariants && <Badge variant="outline" className="text-[10px] px-1 py-0">variants</Badge>}
+                </p>
                 <p className="text-xs text-muted-foreground">{item.sku}</p>
                 <p className="text-sm font-bold text-primary">€{parseFloat(item.price1 || "0").toFixed(2)}</p>
               </button>
@@ -653,10 +707,10 @@ export default function PosRegister() {
                 <div className="max-h-64 overflow-y-auto">
                   {cart.map(line => (
                     <CartRow
-                      key={line.itemId}
+                      key={cartLineKey(line)}
                       line={line}
-                      onQtyChange={d => changeQty(line.itemId, d)}
-                      onRemove={() => removeFromCart(line.itemId)}
+                      onQtyChange={d => changeQty(cartLineKey(line), d)}
+                      onRemove={() => removeFromCart(cartLineKey(line))}
                     />
                   ))}
                 </div>
@@ -739,6 +793,37 @@ export default function PosRegister() {
           </Card>
         </div>
       </div>
+
+      {variantPickerItem && (
+        <Dialog open={!!variantPickerItem} onOpenChange={open => !open && setVariantPickerItem(null)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Select a variant</DialogTitle>
+              <DialogDescription>{variantPickerItem.name}</DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-2 gap-2 max-h-80 overflow-y-auto">
+              {variantsForItem(variantPickerItem.id).map(v => (
+                <button
+                  key={v.id}
+                  className="text-left rounded-lg border bg-card hover:bg-accent hover:border-primary transition-colors p-3 space-y-1"
+                  onClick={() => {
+                    addToCart(variantPickerItem, v);
+                    setVariantPickerItem(null);
+                  }}
+                  data-testid={`btn-variant-${v.id}`}
+                >
+                  <p className="text-sm font-medium">{variantLabel(v)}</p>
+                  <p className="text-xs text-muted-foreground">{v.sku}</p>
+                  <p className="text-sm font-bold text-primary">€{parseFloat(v.price1 || variantPickerItem.price1 || "0").toFixed(2)}</p>
+                </button>
+              ))}
+              {variantsForItem(variantPickerItem.id).length === 0 && (
+                <p className="col-span-full text-center py-4 text-sm text-muted-foreground">No active variants for this item</p>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {cardDialogOpen && heldOrderId && (
         <CardPaymentDialog
