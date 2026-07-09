@@ -1,7 +1,7 @@
 import {
   StickyNoteIcon, RepeatIcon,
   SmartphoneIcon, ShieldIcon, RotateCcwIcon,
-  CalendarClock, MonitorSmartphone, BarcodeIcon, BookOpenIcon,
+  CalendarClock, MonitorSmartphone, BarcodeIcon, BookOpenIcon, ArrowLeftRightIcon,
 } from "lucide-react";
 import { HoldIcon, RecallIcon, VoidIcon, RefundIcon, DiscountIcon } from "./icons/PosIcons";
 import type { NumpadMode } from "../types";
@@ -26,6 +26,7 @@ interface ActionBarProps {
   onShift?: () => void;
   onSco?: () => void;
   onManual?: () => void;
+  onStockTransfer?: () => void;
 }
 
 export function ActionBar({
@@ -47,6 +48,7 @@ export function ActionBar({
   onShift,
   onSco,
   onManual,
+  onStockTransfer,
 }: ActionBarProps) {
   const isLight = theme === "light";
   type Btn = {
@@ -186,6 +188,13 @@ export function ActionBar({
       onClick: onManual,
       enabled: true,
       testId: "action-manual",
+    }] : []),
+    ...(onStockTransfer ? [{
+      label: "Stock Transfer",
+      icon: ArrowLeftRightIcon,
+      onClick: onStockTransfer,
+      enabled: true,
+      testId: "action-stock-transfer",
     }] : []),
   ];
 

@@ -20,7 +20,7 @@ import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
 } from "../types";
-import { getProducts, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher, getStockByLocation } from "../lib/db";
+import { getProducts, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher, getStockByLocation, getPosLocations, createStockTransfer } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
 import { useOrder } from "../hooks/useOrder";
 import { useBarcode } from "../hooks/useBarcode";
@@ -35,6 +35,7 @@ import { LayoutGrid } from "../components/LayoutGrid";
 import { OrderTicket } from "../components/OrderTicket";
 import { CorrectionsPanel } from "../components/CorrectionsPanel";
 import { PriceCheckDialog } from "../components/PriceCheckDialog";
+import { StockTransferDialog } from "../components/StockTransferDialog";
 import { Numpad } from "../components/Numpad";
 import { ActionBar } from "../components/ActionBar";
 import { PinPrompt } from "../components/PinPrompt";
@@ -436,7 +437,7 @@ function RecallDialog({ onRecall, onClose }: {
 
 // ── Main POS Screen ───────────────────────────────────────────────────────────
 
-type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | "issue_voucher" | null;
+type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | null;
 type CashDialogMode = "cash_in" | "cash_out" | "petty_cash";
 type POSMode = "sell" | "sco" | "shift" | "fallback" | "barcode_config";
 
@@ -1101,6 +1102,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         onRefund={() => setDialog("refund")}
         onShift={() => setMode("shift")}
         onSco={() => setMode("sco")}
+        onStockTransfer={() => setDialog("stock_transfer")}
         onManual={() => {
           const base = config.server_url.replace(/\/$/, "");
           openShell(`${base}/api/manual`).catch(() => {
@@ -1159,6 +1161,18 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onSearch={(query) => getProducts(undefined, query)}
           onLookupBarcode={(barcode) => getProductByBarcode(barcode)}
           onGetStockByLocation={(itemId) => getStockByLocation(itemId)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+
+      {dialog === "stock_transfer" && (
+        <StockTransferDialog
+          theme={posTheme}
+          cashierName={session.cashier_name}
+          onSearch={(query) => getProducts(undefined, query)}
+          onLookupBarcode={(barcode) => getProductByBarcode(barcode)}
+          onGetLocations={() => getPosLocations()}
+          onSubmit={(toLocationId, cashierName, items) => createStockTransfer(toLocationId, cashierName, items)}
           onClose={() => setDialog(null)}
         />
       )}

@@ -9554,6 +9554,53 @@ export async function registerRoutes(
     }
   });
 
+  // Locations list, for the POS terminal's stock-transfer picker. Terminal-auth (not JWT).
+  app.get("/api/pos/sync/locations", requireTerminal, async (_req, res) => {
+    try {
+      const locations = await storage.getPosLocations();
+      res.json(locations.filter((l: any) => l.active).map((l: any) => ({ id: l.id, name: l.name })));
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Cashier-initiated stock transfer from the POS terminal — creates AND completes the
+  // transfer in one call (no PDA-style draft/hold workflow). Terminal-auth (not JWT).
+  app.post("/api/pos/sync/transfers", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const { toLocationId, cashierName, items: transferItems } = req.body;
+      if (!toLocationId || !Array.isArray(transferItems) || transferItems.length === 0) {
+        return res.status(400).json({ message: "toLocationId and at least one item are required" });
+      }
+      const locations = await storage.getPosLocations();
+      const fromLoc = locations.find((l: any) => l.id === terminal.locationId);
+      const toLoc = locations.find((l: any) => l.id === toLocationId);
+      if (!fromLoc) return res.status(400).json({ message: "Terminal has no valid home location" });
+      if (!toLoc) return res.status(400).json({ message: "Destination location not found" });
+      if (toLoc.id === fromLoc.id) return res.status(400).json({ message: "Destination must differ from the terminal's location" });
+
+      const transferNumber = await storage.getNextTransferNumber();
+      const data = insertStockTransferSchema.parse({
+        transferNumber,
+        fromLocation: fromLoc.name,
+        toLocation: toLoc.name,
+        createdByUsername: cashierName || terminal.name,
+      });
+      const parsedItems = transferItems.map((i: any) => insertStockTransferItemSchema.parse({
+        itemId: i.itemId,
+        itemName: i.itemName,
+        sku: i.sku ?? null,
+        quantity: i.quantity,
+      }));
+      const created = await storage.createStockTransfer(data, parsedItems);
+      const completed = await storage.completeStockTransfer(created.id);
+      res.status(201).json(completed);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
   // Enhanced catalog sync — returns products + promotions + deposits in one call
   app.get("/api/pos/sync/catalog-v2", requireTerminal, async (req, res) => {
     try {

@@ -449,6 +449,82 @@ async fn get_stock_by_location(
 }
 
 #[tauri::command]
+async fn get_pos_locations(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/api/pos/sync/locations", server_url.trim_end_matches('/'));
+
+    let resp = client
+        .get(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error {}", resp.status()));
+    }
+
+    resp.json::<Vec<Value>>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn create_stock_transfer(
+    state: State<'_, AppState>,
+    to_location_id: String,
+    cashier_name: Option<String>,
+    items: Vec<Value>,
+) -> Result<Value, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/api/pos/sync/transfers", server_url.trim_end_matches('/'));
+
+    let body = serde_json::json!({
+        "toLocationId": to_location_id,
+        "cashierName": cashier_name,
+        "items": items,
+    });
+
+    let resp = client
+        .post(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let msg = resp
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| "Transfer failed".to_string());
+        return Err(msg);
+    }
+
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_active_price_overrides(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     let rows = sqlx::query(
         "SELECT * FROM price_overrides WHERE valid_until IS NULL OR valid_until > datetime('now')"
@@ -1350,6 +1426,8 @@ pub fn run() {
             update_fallback_rule,
             get_customer_live,
             get_stock_by_location,
+            get_pos_locations,
+            create_stock_transfer,
             get_active_price_overrides,
             get_inbox_notifications,
             mark_inbox_processed,

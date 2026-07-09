@@ -138,6 +138,34 @@ export const getStockByLocation = (
 ): Promise<LocationStockRow[]> =>
   invoke<LocationStockRow[]>("get_stock_by_location", { itemId });
 
+// ── Stock transfers ───────────────────────────────────────────────────────────
+
+export interface PosLocationOption {
+  id: string;
+  name: string;
+}
+
+export interface StockTransferItemInput {
+  itemId: string;
+  itemName: string;
+  sku?: string | null;
+  quantity: number;
+}
+
+export const getPosLocations = (): Promise<PosLocationOption[]> =>
+  invoke<PosLocationOption[]>("get_pos_locations");
+
+export const createStockTransfer = (
+  toLocationId: string,
+  cashierName: string | undefined,
+  items: StockTransferItemInput[]
+): Promise<Record<string, unknown>> =>
+  invoke<Record<string, unknown>>("create_stock_transfer", {
+    toLocationId,
+    cashierName,
+    items,
+  });
+
 // ── Price overrides ───────────────────────────────────────────────────────────
 
 export const getActivePriceOverrides = (): Promise<
