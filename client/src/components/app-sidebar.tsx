@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3 } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt } from "lucide-react";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { LogoImg } from "@/components/logo-img";
@@ -45,6 +45,7 @@ const salesNav = [
 const purchasingNav = [
   { title: "Suppliers", url: "/suppliers", icon: Truck, module: "suppliers" },
   { title: "Purchase Invoices", url: "/purchase-invoices", icon: ShoppingCart, module: "suppliers" },
+  { title: "Apparel Purchases", url: "/apparel-purchases", icon: Shirt, module: "suppliers" },
   { title: "Supplier Payments", url: "/supplier-payments", icon: CreditCard, module: "suppliers" },
 ];
 
