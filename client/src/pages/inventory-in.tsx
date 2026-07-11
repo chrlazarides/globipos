@@ -10,9 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { PackagePlus, Trash2, CheckCircle2, ArrowLeftRight, MapPin } from "lucide-react";
+import { PackagePlus, Trash2, CheckCircle2, ArrowLeftRight, MapPin, Plus } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { CreateLocationDialog } from "@/components/create-location-dialog";
 import type { Category, Color, Size, InventoryInLine, PosLocation } from "@shared/schema";
 
 interface PostedLine {
@@ -54,6 +55,8 @@ export default function InventoryInPage() {
   const [locationId, setLocationId] = useState("");
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const [createLocOpen, setCreateLocOpen] = useState(false);
 
   // Quick-transfer dialog state (opens after posting)
   const [transferOpen, setTransferOpen] = useState(false);
@@ -239,9 +242,15 @@ export default function InventoryInPage() {
                 {receivingLocation.isDefaultReceiving ? "★ Default" : "Selected"}
               </Badge>
             )}
-            {locations.length === 0 && (
-              <p className="text-xs text-muted-foreground">Set up locations in POS → Locations first.</p>
-            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 flex-shrink-0"
+              onClick={() => setCreateLocOpen(true)}
+              data-testid="button-inventoryin-new-location"
+            >
+              <Plus className="w-4 h-4 mr-1" /> New
+            </Button>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -435,6 +444,12 @@ export default function InventoryInPage() {
           </p>
         </CardContent>
       </Card>
+
+      <CreateLocationDialog
+        open={createLocOpen}
+        onOpenChange={setCreateLocOpen}
+        onCreated={(loc) => setLocationId(loc.id)}
+      />
 
       {/* Quick-Transfer dialog — opens after posting */}
       <Dialog open={transferOpen} onOpenChange={setTransferOpen}>

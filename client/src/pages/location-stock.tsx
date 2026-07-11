@@ -7,9 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { MapPin, Search, Pencil, Check, X } from "lucide-react";
+import { MapPin, Search, Pencil, Check, X, Plus } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { CreateLocationDialog } from "@/components/create-location-dialog";
 import type { Item, ItemVariant, PosLocation, ItemLocationStock } from "@shared/schema";
 
 function variantLabel(v: ItemVariant) {
@@ -31,6 +32,7 @@ export default function LocationStockPage() {
   const [locationId, setLocationId] = useState<string>("");
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
 
   const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"], staleTime: 30000 });
   const { data: allVariants = [] } = useQuery<ItemVariant[]>({ queryKey: ["/api/item-variants"], staleTime: 30000 });
@@ -131,9 +133,28 @@ export default function LocationStockPage() {
             data-testid="input-stock-search"
           />
         </div>
+        <Button onClick={() => setCreateOpen(true)} data-testid="button-new-location">
+          <Plus className="w-4 h-4 mr-1" /> New Location
+        </Button>
       </div>
 
-      {!locationId ? (
+      <CreateLocationDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={(loc) => setLocationId(loc.id)}
+      />
+
+      {locations.length === 0 ? (
+        <Card>
+          <CardContent className="py-16 text-center space-y-3">
+            <MapPin className="w-10 h-10 mx-auto text-muted-foreground opacity-30" />
+            <p className="text-sm text-muted-foreground">No stock locations yet. Create your first warehouse or store location to start tracking stock per location.</p>
+            <Button onClick={() => setCreateOpen(true)} data-testid="button-new-location-empty">
+              <Plus className="w-4 h-4 mr-1" /> Create Location
+            </Button>
+          </CardContent>
+        </Card>
+      ) : !locationId ? (
         <Card>
           <CardContent className="py-16 text-center space-y-2">
             <MapPin className="w-10 h-10 mx-auto text-muted-foreground opacity-30" />

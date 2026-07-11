@@ -979,6 +979,27 @@ export async function registerRoutes(
       res.status(400).json({ message: e.message });
     }
   });
+
+  // Create a stock/warehouse location from the stock context (Location Stock &
+  // Inventory In pages). Mirrors POST /api/pos/locations but is accessible to
+  // items-module staff, who manage stock but may not have POS admin access.
+  app.post("/api/stock-locations", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const data = insertPosLocationSchema.parse(req.body);
+      // Changing the global default-receiving location is an admin-only action;
+      // items-module staff can create locations but not reassign the default.
+      const isAdmin = req.user?.role === "admin" || req.user?.role === "superuser";
+      const makeDefault = isAdmin && !!data.isDefaultReceiving;
+      const loc = await storage.createPosLocation({ ...data, isDefaultReceiving: false });
+      if (makeDefault) {
+        await storage.setDefaultReceivingLocation(loc.id);
+      }
+      res.json(loc);
+    } catch (e: any) {
+      if (e instanceof z.ZodError) return res.status(400).json({ message: "Invalid data", errors: e.errors });
+      res.status(400).json({ message: e.message });
+    }
+  });
   app.patch("/api/location-stock/adjust", async (req, res) => {
     try {
       const { itemId, variantId, locationId, delta } = req.body;

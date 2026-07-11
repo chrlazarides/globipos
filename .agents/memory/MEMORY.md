@@ -26,3 +26,4 @@
 - [POS canvas mockup vs Layouts mismatch](pos-layout-mockup-graduation.md) — pos_layout_sets is button-grid only; journal/cart UX changes must be ported to the Simulator page separately
 - [Product variants stock adjustment](product-variants-stock-adjustment.md) — centralize a per-document stock helper that branches on variantId vs parent item; apply at every create/update/delete mutation site
 - [No hard-delete route for items](no-item-delete-route.md) — items have no DELETE API (soft-delete via active:false only); a DELETE request 200s but silently returns the SPA HTML fallback, not a real deletion
+- [Lower-privilege route alias](lower-privilege-route-alias.md) — when aliasing an admin route to a lower role, strip/gate privileged sub-fields (e.g. isDefaultReceiving) or you silently widen scope + corrupt data
