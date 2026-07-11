@@ -2,7 +2,7 @@ import { db } from "./db";
 import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeSequentialCode } from "./barcode-utils";
 import {
-  users, categories, colors, sizes, items, itemVariants, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
+  users, categories, colors, sizes, items, itemVariants, itemBarcodes, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
@@ -11,6 +11,7 @@ import {
   posOrders, posOrderLines, posShifts, posSyncConfig, posInbox,
   type InsertUser, type User, type InsertCategory, type Category, type InsertColor, type Color, type InsertSize, type Size,
   type InsertItem, type Item, type InsertItemVariant, type ItemVariant, type InsertVariantTemplate, type VariantTemplate,
+  type InsertItemBarcode, type ItemBarcode,
   type InsertInventoryInLine, type InventoryInLine, type InsertCustomer, type Customer,
   type InsertPriceContract, type PriceContract,
   type InsertPriceContractRule, type PriceContractRule,
@@ -77,6 +78,11 @@ export interface IStorage {
   getStockForItemAcrossLocations(itemId: string): Promise<(ItemLocationStock & { locationName: string })[]>;
   setLocationStock(itemId: string, variantId: string | null, locationId: string, quantity: number): Promise<ItemLocationStock>;
   adjustLocationStock(itemId: string, variantId: string | null, locationId: string, delta: number): Promise<ItemLocationStock>;
+
+  getItemBarcodes(itemId: string): Promise<ItemBarcode[]>;
+  addItemBarcode(data: InsertItemBarcode): Promise<ItemBarcode>;
+  deleteItemBarcode(id: string): Promise<void>;
+  getItemByAnyBarcode(barcode: string): Promise<Item | undefined>;
 
   getItems(): Promise<Item[]>;
   getItem(id: string): Promise<Item | undefined>;
@@ -445,6 +451,26 @@ export class DatabaseStorage implements IStorage {
     const [item] = await db.select().from(items).where(eq(items.id, id));
     return item;
   }
+  async getItemBarcodes(itemId: string) {
+    return db.select().from(itemBarcodes)
+      .where(eq(itemBarcodes.itemId, itemId))
+      .orderBy(itemBarcodes.isPrimary, itemBarcodes.createdAt);
+  }
+  async addItemBarcode(data: InsertItemBarcode) {
+    const [row] = await db.insert(itemBarcodes).values(data).returning();
+    return row;
+  }
+  async deleteItemBarcode(id: string) {
+    await db.delete(itemBarcodes).where(eq(itemBarcodes.id, id));
+  }
+  async getItemByAnyBarcode(barcode: string) {
+    // Check the item_barcodes alias table first
+    const [bc] = await db.select().from(itemBarcodes).where(eq(itemBarcodes.barcode, barcode));
+    if (bc) return this.getItem(bc.itemId);
+    // Fall back to the primary barcode on the item itself
+    return this.getItemByBarcode(barcode);
+  }
+
   async getItemByBarcode(barcode: string) {
     const [item] = await db.select().from(items).where(eq(items.barcode, barcode));
     return item;

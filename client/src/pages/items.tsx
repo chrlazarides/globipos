@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,10 +15,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Package, Upload, History, Download, RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Pencil, Trash2, Layers } from "lucide-react";
+import { Plus, Search, Package, Upload, History, Download, RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Pencil, Trash2, Layers, Barcode, Globe, Star } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { insertItemSchema, insertItemVariantSchema, insertCategorySchema, type Item, type ItemVariant, type Category, type Color, type Size } from "@shared/schema";
+import { insertItemSchema, insertItemVariantSchema, insertCategorySchema, type Item, type ItemVariant, type Category, type Color, type Size, type ItemBarcode } from "@shared/schema";
 import { ImportDialog } from "@/components/import-dialog";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { z } from "zod";
@@ -965,6 +966,139 @@ function VariantsTab({ itemId, priceLevelNames }: { itemId: string; priceLevelNa
   );
 }
 
+function validateEan13(barcode: string): { valid: boolean; expected?: number } {
+  const bc = barcode.replace(/\s/g, "");
+  if (!/^\d{13}$/.test(bc)) return { valid: true }; // not 13-digit, skip check digit validation
+  const sum = bc.split("").slice(0, 12).reduce((acc, d, i) => acc + parseInt(d) * (i % 2 === 0 ? 1 : 3), 0);
+  const expected = (10 - (sum % 10)) % 10;
+  return { valid: expected === parseInt(bc[12]), expected };
+}
+
+function BarcodesTab({ itemId }: { itemId: string }) {
+  const { toast } = useToast();
+  const [newBarcode, setNewBarcode] = useState("");
+  const [newCountry, setNewCountry] = useState("");
+  const [newNote, setNewNote] = useState("");
+  const [newIsPrimary, setNewIsPrimary] = useState(false);
+  const [ean13Error, setEan13Error] = useState<string | null>(null);
+
+  const { data: barcodes = [], isLoading } = useQuery<ItemBarcode[]>({
+    queryKey: ["/api/items", itemId, "barcodes"],
+    queryFn: async () => { const r = await apiRequest("GET", `/api/items/${itemId}/barcodes`); return r.json(); },
+  });
+
+  const addMutation = useMutation({
+    mutationFn: async () => {
+      const bc = newBarcode.trim();
+      if (!bc) throw new Error("Enter a barcode");
+      const validation = validateEan13(bc);
+      if (!validation.valid) throw new Error(`Invalid EAN-13 check digit — expected ${validation.expected}`);
+      const res = await apiRequest("POST", `/api/items/${itemId}/barcodes`, { barcode: bc, country: newCountry.trim() || null, note: newNote.trim() || null, isPrimary: newIsPrimary });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items", itemId, "barcodes"] });
+      setNewBarcode(""); setNewCountry(""); setNewNote(""); setNewIsPrimary(false); setEan13Error(null);
+      toast({ title: "Barcode added" });
+    },
+    onError: (e: Error) => toast({ title: "Cannot add barcode", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/item-barcodes/${id}`, {});
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/items", itemId, "barcodes"] }); toast({ title: "Barcode removed" }); },
+    onError: (e: Error) => toast({ title: "Cannot remove", description: e.message, variant: "destructive" }),
+  });
+
+  const handleBarcodeInput = (val: string) => {
+    setNewBarcode(val);
+    const bc = val.trim();
+    if (bc.length === 13 && /^\d{13}$/.test(bc)) {
+      const v = validateEan13(bc);
+      setEan13Error(v.valid ? null : `Invalid EAN-13 check digit — expected ${v.expected}`);
+    } else {
+      setEan13Error(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4 mt-4">
+      <div className="text-sm text-muted-foreground">
+        Add all EAN-13 barcodes this product carries across different countries of manufacture. Any registered barcode will resolve to this item when scanned.
+      </div>
+
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : barcodes.length === 0 ? (
+        <p className="text-sm text-muted-foreground italic">No alternate barcodes registered yet.</p>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Barcode</TableHead>
+              <TableHead>Country</TableHead>
+              <TableHead>Note</TableHead>
+              <TableHead></TableHead>
+              <TableHead></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {barcodes.map(bc => (
+              <TableRow key={bc.id} data-testid={`row-itembarcode-${bc.id}`}>
+                <TableCell className="font-mono text-sm">
+                  {bc.barcode}
+                  {bc.isPrimary && <Badge variant="secondary" className="ml-2 text-[10px]"><Star className="w-2.5 h-2.5 mr-0.5" />Primary</Badge>}
+                </TableCell>
+                <TableCell className="text-sm">{bc.country ? <span className="flex items-center gap-1"><Globe className="w-3.5 h-3.5" />{bc.country}</span> : <span className="text-muted-foreground">—</span>}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{bc.note || "—"}</TableCell>
+                <TableCell>
+                  <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive hover:bg-destructive/10 h-7 w-7 p-0"
+                    onClick={() => deleteMutation.mutate(bc.id)} data-testid={`button-delete-barcode-${bc.id}`}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <div className="border rounded-md p-3 space-y-2 bg-muted/30">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Add barcode</p>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <Label className="text-xs">Barcode (EAN-13 or other)</Label>
+            <Input value={newBarcode} onChange={e => handleBarcodeInput(e.target.value)} placeholder="e.g. 5000157015363"
+              className={ean13Error ? "border-destructive" : ""} data-testid="input-new-barcode" />
+            {ean13Error && <p className="text-xs text-destructive mt-1">{ean13Error}</p>}
+          </div>
+          <div>
+            <Label className="text-xs">Country (optional)</Label>
+            <Input value={newCountry} onChange={e => setNewCountry(e.target.value)} placeholder="e.g. UK, Germany, Greece" data-testid="input-barcode-country" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 items-end">
+          <div>
+            <Label className="text-xs">Note (optional)</Label>
+            <Input value={newNote} onChange={e => setNewNote(e.target.value)} placeholder="e.g. Old label, promotional pack" data-testid="input-barcode-note" />
+          </div>
+          <div className="flex items-center gap-2 pb-1">
+            <input type="checkbox" id="isPrimary" checked={newIsPrimary} onChange={e => setNewIsPrimary(e.target.checked)} data-testid="checkbox-barcode-primary" />
+            <label htmlFor="isPrimary" className="text-xs cursor-pointer">Mark as primary</label>
+            <Button size="sm" className="ml-auto" onClick={() => addMutation.mutate()} disabled={addMutation.isPending || !!ean13Error} data-testid="button-add-barcode">
+              <Plus className="w-3.5 h-3.5 mr-1" />Add
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNames, itemId }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any; priceLevelNames: string[]; itemId?: string }) {
   const isEditing = !!defaultValues;
   const form = useForm({
@@ -1029,6 +1163,11 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
             {itemId && (
               <TabsTrigger value="price-history" className="flex-1" data-testid="tab-price-history">
                 <History className="w-3.5 h-3.5 mr-1" />History
+              </TabsTrigger>
+            )}
+            {itemId && (
+              <TabsTrigger value="barcodes" className="flex-1" data-testid="tab-barcodes">
+                <Barcode className="w-3.5 h-3.5 mr-1" />Barcodes
               </TabsTrigger>
             )}
           </TabsList>
@@ -1240,6 +1379,11 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
           {itemId && (
             <TabsContent value="price-history">
               <PriceHistoryTab itemId={itemId} />
+            </TabsContent>
+          )}
+          {itemId && (
+            <TabsContent value="barcodes">
+              <BarcodesTab itemId={itemId} />
             </TabsContent>
           )}
         </Tabs>

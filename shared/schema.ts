@@ -124,6 +124,19 @@ export const sizes = pgTable("sizes", {
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
 
+// Multiple EAN barcodes per item — one supermarket product can carry different
+// EAN-13 codes depending on country of manufacture (e.g. UK, Germany, Greece).
+// Scanning ANY registered barcode resolves to the same item in the POS/invoice.
+export const itemBarcodes = pgTable("item_barcodes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  barcode: text("barcode").notNull().unique(), // EAN-13 (13 digits) or other format
+  country: text("country"),                    // e.g. "UK", "Germany", "Greece"
+  note: text("note"),                          // optional free-text label
+  isPrimary: boolean("is_primary").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // "Inventory In with Col/Size" — staged stock-intake lines synthesized from a
 // Department(Category)+Style+Color+Size matrix, mirroring the legacy CPLPOS
 // "Inventory In with Col/Size" workflow. Lines are appended as drafts (with a
@@ -470,6 +483,10 @@ export type ItemVariant = typeof itemVariants.$inferSelect;
 export const insertVariantTemplateSchema = createInsertSchema(variantTemplates).omit({ id: true, createdAt: true });
 export type InsertVariantTemplate = z.infer<typeof insertVariantTemplateSchema>;
 export type VariantTemplate = typeof variantTemplates.$inferSelect;
+
+export const insertItemBarcodeSchema = createInsertSchema(itemBarcodes).omit({ id: true, createdAt: true });
+export type InsertItemBarcode = z.infer<typeof insertItemBarcodeSchema>;
+export type ItemBarcode = typeof itemBarcodes.$inferSelect;
 
 export const insertInventoryInLineSchema = createInsertSchema(inventoryInLines).omit({
   id: true, barcode: true, sku: true, posted: true, postedAt: true, itemId: true, variantId: true, createdAt: true,
