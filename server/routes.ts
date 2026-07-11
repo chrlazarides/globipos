@@ -9127,26 +9127,48 @@ export async function registerRoutes(
       const { itemIds, overrides } = req.body as { itemIds: string[]; overrides?: Record<string, { unitType: string; unitSize: number }> };
       if (!Array.isArray(itemIds) || !itemIds.length) return res.status(400).json({ message: "itemIds required" });
       const allItems = await storage.getItems();
+
+      // Reference units: g → per 100 g, ml → per 100 ml, kg → per kg, L → per L, pc → no unit price
+      function calcUnitPrice(price: number, unitSize: number, unitType: string): { unitPrice: number | null; unitLabel: string } {
+        if (!unitSize || unitSize <= 0 || unitType === "pc") return { unitPrice: null, unitLabel: "€/unit" };
+        if (unitType === "g")  return { unitPrice: (price / unitSize) * 100, unitLabel: "per 100 g" };
+        if (unitType === "ml") return { unitPrice: (price / unitSize) * 100, unitLabel: "per 100 ml" };
+        if (unitType === "kg") return { unitPrice: price / unitSize, unitLabel: "per kg" };
+        if (unitType === "L")  return { unitPrice: price / unitSize, unitLabel: "per L" };
+        return { unitPrice: price / unitSize, unitLabel: `per ${unitType}` };
+      }
+
       const records = itemIds.map((itemId: string) => {
         const item = allItems.find((i: any) => i.id === itemId);
         if (!item) return null;
         const currentPrice = parseFloat(item.price1 || "0");
         const override = overrides?.[itemId];
-        const unitSize = override?.unitSize && override.unitSize > 0 ? override.unitSize : null;
-        const unitType = override?.unitType || "unit";
-        const printedUnitPrice = unitSize ? currentPrice / unitSize : currentPrice;
-        const unitLabel = unitSize ? `€/${unitType}` : "€/unit";
+        const unitSize = override?.unitSize && override.unitSize > 0 ? override.unitSize : 0;
+        const unitType = override?.unitType || "pc";
+        const { unitPrice, unitLabel } = calcUnitPrice(currentPrice, unitSize, unitType);
         return insertAgoranomiaLabelPrintSchema.parse({
           itemId: item.id,
           itemName: item.name,
           sku: item.sku,
           printedPrice: currentPrice.toFixed(2),
-          printedUnitPrice: printedUnitPrice.toFixed(2),
+          printedUnitPrice: unitPrice !== null ? unitPrice.toFixed(2) : null,
           unitLabel,
           printedByUsername: req.user!.username,
         });
       }).filter(Boolean);
-      res.json(await storage.recordAgoranomiaLabelPrints(records as any));
+
+      const saved = await storage.recordAgoranomiaLabelPrints(records as any);
+
+      // Enrich response with barcode + volume for PLU and unit-size display on the label
+      const enriched = saved.map((s: any) => {
+        const item = allItems.find((i: any) => i.id === s.itemId);
+        return {
+          ...s,
+          barcode: item?.barcode || null,
+          volume: item?.volume || null,
+        };
+      });
+      res.json(enriched);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 

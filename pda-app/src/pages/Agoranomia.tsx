@@ -20,6 +20,8 @@ interface PrintedLabel {
   itemId: string;
   itemName: string;
   sku: string | null;
+  barcode: string | null;
+  volume: string | null;
   printedPrice: string;
   printedUnitPrice: string | null;
   unitLabel: string | null;
@@ -29,7 +31,7 @@ type UnitType = "kg" | "L" | "pc" | "g" | "ml";
 
 interface UnitConfig {
   unitType: UnitType;
-  unitSize: string; // raw text input, e.g. "0.75"
+  unitSize: string; // raw text input, e.g. "200"
 }
 
 const UNIT_OPTIONS: UnitType[] = ["pc", "kg", "g", "L", "ml"];
@@ -49,34 +51,92 @@ function guessUnitConfig(volume: string | null | undefined): UnitConfig {
   return { unitType: "pc", unitSize: "1" };
 }
 
-function computeUnitPrice(currentPrice: number, config: UnitConfig): number | null {
+/**
+ * Compute the unit price using EU-style reference units:
+ *   g   → price per 100 g  (e.g. €2.99 / 200 g × 100 = €1.50 per 100 g)
+ *   ml  → price per 100 ml
+ *   kg  → price per kg     (already a reference unit)
+ *   L   → price per L
+ *   pc  → no unit price
+ */
+function computeUnitPrice(currentPrice: number, config: UnitConfig): { unitPrice: number | null; unitLabel: string } {
   const size = parseFloat(config.unitSize);
-  if (!size || size <= 0) return null;
-  return currentPrice / size;
+  if (!size || size <= 0 || config.unitType === "pc") return { unitPrice: null, unitLabel: "" };
+  if (config.unitType === "g")  return { unitPrice: (currentPrice / size) * 100, unitLabel: "per 100 g" };
+  if (config.unitType === "ml") return { unitPrice: (currentPrice / size) * 100, unitLabel: "per 100 ml" };
+  if (config.unitType === "kg") return { unitPrice: currentPrice / size, unitLabel: "per kg" };
+  if (config.unitType === "L")  return { unitPrice: currentPrice / size, unitLabel: "per L" };
+  return { unitPrice: currentPrice / size, unitLabel: `per ${config.unitType}` };
 }
 
 function openPrintableLabels(labels: PrintedLabel[]) {
-  const win = window.open("", "_blank", "width=800,height=600");
+  const win = window.open("", "_blank", "width=900,height=700");
   if (!win) return;
   const html = `<!doctype html><html><head><title>Shelf Labels</title><style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 16px; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, Helvetica, sans-serif; background: #f5f5f5; padding: 16px; }
     .sheet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-    .label { border: 1px dashed #999; border-radius: 8px; padding: 12px; text-align: center; }
-    .name { font-weight: 700; font-size: 14px; margin-bottom: 6px; min-height: 34px; }
-    .sku { font-size: 10px; color: #666; margin-bottom: 8px; }
-    .price { font-size: 26px; font-weight: 800; }
-    .unit { font-size: 12px; color: #444; margin-top: 4px; }
-    @media print { .label { break-inside: avoid; } }
+    .label {
+      background: #fff;
+      border: 1.5px solid #ccc;
+      border-radius: 8px;
+      padding: 14px 12px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      break-inside: avoid;
+    }
+    .product-name {
+      font-weight: 700;
+      font-size: 13px;
+      line-height: 1.3;
+      color: #111;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 6px;
+      margin-bottom: 2px;
+    }
+    .row { display: flex; justify-content: space-between; align-items: baseline; gap: 4px; }
+    .row-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.03em; flex-shrink: 0; }
+    .row-value { font-size: 12px; font-weight: 600; color: #111; text-align: right; }
+    .price-row .row-value { font-size: 22px; font-weight: 800; color: #111; }
+    .unit-price-row { background: #f8f8f8; border-radius: 4px; padding: 4px 6px; }
+    .unit-price-row .row-label { color: #444; }
+    .unit-price-row .row-value { font-size: 13px; color: #222; }
+    .plu-row .row-value { font-family: monospace; font-size: 11px; letter-spacing: 0.05em; }
+    @media print {
+      body { background: none; padding: 0; }
+      .label { border-color: #bbb; break-inside: avoid; }
+    }
   </style></head><body>
   <div class="sheet">
-    ${labels.map((l) => `
+    ${labels.map((l) => {
+      const plu = l.barcode || l.sku || "—";
+      const unitDisplay = l.volume || null;
+      return `
       <div class="label">
-        <div class="name">${l.itemName}</div>
-        <div class="sku">SKU ${l.sku || "—"}</div>
-        <div class="price">&euro;${parseFloat(l.printedPrice).toFixed(2)}</div>
-        ${l.printedUnitPrice && l.unitLabel && l.unitLabel !== "€/unit" ? `<div class="unit">&euro;${parseFloat(l.printedUnitPrice).toFixed(2)} ${l.unitLabel}</div>` : ""}
+        <div class="product-name">${l.itemName}${unitDisplay ? ` <span style="font-weight:400;color:#555;">${unitDisplay}</span>` : ""}</div>
+        <div class="row price-row">
+          <span class="row-label">Price</span>
+          <span class="row-value">&euro;${parseFloat(l.printedPrice).toFixed(2)}</span>
+        </div>
+        ${l.printedUnitPrice && l.unitLabel && l.unitLabel !== "€/unit"
+          ? `<div class="row unit-price-row">
+               <span class="row-label">Unit Price</span>
+               <span class="row-value">&euro;${parseFloat(l.printedUnitPrice).toFixed(2)} ${l.unitLabel}</span>
+             </div>`
+          : ""}
+        ${unitDisplay
+          ? `<div class="row">
+               <span class="row-label">Unit</span>
+               <span class="row-value">${unitDisplay}</span>
+             </div>`
+          : ""}
+        <div class="row plu-row" style="margin-top:4px;border-top:1px solid #eee;padding-top:4px;">
+          <span class="row-label">PLU</span>
+          <span class="row-value">${plu}</span>
+        </div>
       </div>
-    `).join("")}
+    `}).join("")}
   </div>
   <script>window.onload = () => window.print();</script>
   </body></html>`;
@@ -181,7 +241,7 @@ export default function Agoranomia() {
       <div className="space-y-1.5">
         {needsReprint.map((row) => {
           const cfg = configFor(row);
-          const unitPrice = computeUnitPrice(row.currentPrice, cfg);
+          const { unitPrice, unitLabel } = computeUnitPrice(row.currentPrice, cfg);
           return (
             <div
               key={row.itemId}
@@ -197,13 +257,15 @@ export default function Agoranomia() {
                   data-testid={`checkbox-audit-${row.itemId}`}
                 />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{row.itemName}</p>
+                  <p className="text-sm font-medium truncate">{row.itemName}{row.volume ? <span className="font-normal text-muted-foreground"> {row.volume}</span> : null}</p>
                   <p className="text-xs text-muted-foreground">
                     SKU {row.sku} · Label: {row.lastPrintedPrice !== null ? `€${row.lastPrintedPrice.toFixed(2)}` : "never printed"} → Now: €{row.currentPrice.toFixed(2)}
                   </p>
                 </div>
               </label>
-              <div className="flex items-center gap-2 pl-7 text-xs">
+
+              {/* Unit config + preview */}
+              <div className="flex items-center gap-2 pl-7 text-xs flex-wrap">
                 <span className="text-muted-foreground">Unit size</span>
                 <input
                   value={cfg.unitSize}
@@ -220,10 +282,37 @@ export default function Agoranomia() {
                   {UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}
                 </select>
                 {unitPrice !== null && cfg.unitType !== "pc" && (
-                  <span className="text-muted-foreground" data-testid={`text-unit-price-${row.itemId}`}>
-                    = €{unitPrice.toFixed(2)} / {cfg.unitType}
+                  <span className="text-muted-foreground font-medium" data-testid={`text-unit-price-${row.itemId}`}>
+                    = €{unitPrice.toFixed(2)} {unitLabel}
                   </span>
                 )}
+              </div>
+
+              {/* Label preview */}
+              <div className="pl-7">
+                <div className="inline-block border border-dashed border-border rounded-md px-3 py-2 text-[11px] leading-relaxed bg-muted/30 min-w-[180px]">
+                  <div className="font-bold text-[12px]">{row.itemName}{row.volume ? ` ${row.volume}` : ""}</div>
+                  <div className="flex justify-between gap-4 mt-1">
+                    <span className="text-muted-foreground uppercase text-[9px] tracking-wide">Price</span>
+                    <span className="font-extrabold text-base">€{row.currentPrice.toFixed(2)}</span>
+                  </div>
+                  {unitPrice !== null && (
+                    <div className="flex justify-between gap-4 bg-muted rounded px-1 py-0.5 mt-0.5">
+                      <span className="text-muted-foreground uppercase text-[9px] tracking-wide">Unit Price</span>
+                      <span className="font-semibold">€{unitPrice.toFixed(2)} {unitLabel}</span>
+                    </div>
+                  )}
+                  {row.volume && (
+                    <div className="flex justify-between gap-4 mt-0.5">
+                      <span className="text-muted-foreground uppercase text-[9px] tracking-wide">Unit</span>
+                      <span>{row.volume}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between gap-4 border-t border-border mt-1 pt-1">
+                    <span className="text-muted-foreground uppercase text-[9px] tracking-wide">PLU</span>
+                    <span className="font-mono">{row.barcode || row.sku || "—"}</span>
+                  </div>
+                </div>
               </div>
             </div>
           );
