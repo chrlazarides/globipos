@@ -1,41 +1,57 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ArrowLeftRight, Plus, Trash2, CheckCircle2, Search, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeftRight, Plus, Trash2, CheckCircle2, Search, ChevronDown, ChevronRight, PackageSearch, AlertTriangle } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { PosLocation, StockTransfer, StockTransferItem } from "@shared/schema";
+import type { PosLocation, StockTransfer, StockTransferItem, Item, ItemLocationStock } from "@shared/schema";
 
 type TransferWithItems = StockTransfer & { items: StockTransferItem[] };
 
 interface DraftLine { key: string; itemId: string; itemName: string; sku: string | null; barcode: string | null; quantity: number; }
-interface ItemResult { id: string; name: string; sku: string; barcode: string | null; }
 
 export default function StockTransfersPage() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [historyFilter, setHistoryFilter] = useState("");
 
   const { data: transfers = [], isLoading } = useQuery<TransferWithItems[]>({ queryKey: ["/api/stock-transfers"] });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"] });
+  const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"], staleTime: 30000 });
 
   const [fromLocation, setFromLocation] = useState("");
   const [toLocation, setToLocation] = useState("");
   const [notes, setNotes] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [searchQ, setSearchQ] = useState("");
-  const [searchResults, setSearchResults] = useState<ItemResult[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [pendingItem, setPendingItem] = useState<ItemResult | null>(null);
-  const [pendingQty, setPendingQty] = useState("1");
+  const [scanning, setScanning] = useState(false);
+
+  // On-hand at the selected source location (per-location stock pool)
+  const { data: sourceStock = [] } = useQuery<ItemLocationStock[]>({
+    queryKey: ["/api/location-stock", fromLocation],
+    queryFn: async () => (await apiRequest("GET", `/api/location-stock?locationId=${fromLocation}`)).json(),
+    enabled: !!fromLocation,
+  });
+
+  const onHandMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of sourceStock) m.set(s.itemId, (m.get(s.itemId) || 0) + s.quantity);
+    return m;
+  }, [sourceStock]);
+  const onHand = (itemId: string) => onHandMap.get(itemId) ?? 0;
+
+  const resetForm = () => {
+    setFromLocation(""); setToLocation(""); setNotes(""); setLines([]); setSearchQ("");
+  };
 
   const completeMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -67,41 +83,78 @@ export default function StockTransfersPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/stock-transfers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/location-stock"] });
       toast({ title: "Transfer completed and stock updated" });
       setOpen(false);
-      setFromLocation(""); setToLocation(""); setNotes(""); setLines([]); setSearchQ(""); setSearchResults([]); setPendingItem(null);
+      resetForm();
     },
     onError: (e: Error) => toast({ title: "Cannot create transfer", description: e.message, variant: "destructive" }),
   });
 
-  const handleSearch = async (q: string) => {
-    setSearchQ(q);
-    if (!q.trim()) { setSearchResults([]); return; }
-    setSearching(true);
-    try {
-      const byBarcode = await apiRequest("GET", `/api/items/barcode/${encodeURIComponent(q.trim())}`);
-      if (byBarcode.ok) {
-        const item = await byBarcode.json();
-        setSearchResults([item]);
-      } else {
-        const all = await apiRequest("GET", `/api/items?search=${encodeURIComponent(q.trim())}`);
-        if (all.ok) {
-          const data = await all.json();
-          setSearchResults((Array.isArray(data) ? data : data.items || []).slice(0, 15));
-        }
-      }
-    } catch { setSearchResults([]); } finally { setSearching(false); }
-  };
+  // Browsable, searchable item picker. Empty query → show what's on hand at the
+  // source location; typed query → filter the whole catalogue by name/sku/barcode.
+  const pickerItems = useMemo(() => {
+    const q = searchQ.trim().toLowerCase();
+    let list = items.filter(i => i.active !== false && !i.hasVariants);
+    if (q) {
+      list = list.filter(i =>
+        i.name.toLowerCase().includes(q) ||
+        (i.sku || "").toLowerCase().includes(q) ||
+        (i.barcode || "").toLowerCase().includes(q)
+      );
+    } else if (fromLocation) {
+      list = list.filter(i => onHand(i.id) > 0);
+    }
+    return [...list]
+      .sort((a, b) => onHand(b.id) - onHand(a.id) || a.name.localeCompare(b.name))
+      .slice(0, 60);
+  }, [items, searchQ, fromLocation, onHandMap]);
 
-  const addLine = (item: ItemResult) => {
-    const qty = parseInt(pendingQty) || 1;
+  const addLine = (item: Item, qty = 1) => {
     setLines(prev => {
       const ex = prev.find(l => l.itemId === item.id);
       if (ex) return prev.map(l => l.itemId === item.id ? { ...l, quantity: l.quantity + qty } : l);
       return [...prev, { key: item.id, itemId: item.id, itemName: item.name, sku: item.sku, barcode: item.barcode, quantity: qty }];
     });
-    setPendingItem(null); setPendingQty("1"); setSearchQ(""); setSearchResults([]);
   };
+
+  // Enter in the search field acts as a barcode scan: exact-match lookup (also
+  // resolves alternate/EAN barcodes registered on the item) then auto-adds.
+  const handleScan = async () => {
+    const code = searchQ.trim();
+    if (!code) return;
+    setScanning(true);
+    try {
+      const res = await apiRequest("GET", `/api/items/barcode/${encodeURIComponent(code)}`);
+      if (res.ok) {
+        const item = await res.json();
+        if (item.hasVariants || item.variantId) {
+          toast({ title: "Not supported", description: `${item.name} has colour/size variants — variant-level transfers aren't available yet.`, variant: "destructive" });
+          return;
+        }
+        addLine(item);
+        setSearchQ("");
+        toast({ title: "Added", description: item.name });
+        return;
+      }
+    } catch { /* fall through to list filtering */ } finally { setScanning(false); }
+    // If only one item matches the typed text, add it directly for speed
+    if (pickerItems.length === 1) { addLine(pickerItems[0]); setSearchQ(""); }
+  };
+
+  const hasWarnings = lines.some(l => fromLocation && onHand(l.itemId) > 0 && l.quantity > onHand(l.itemId));
+
+  const filteredTransfers = useMemo(() => {
+    const q = historyFilter.trim().toLowerCase();
+    if (!q) return transfers;
+    return transfers.filter(t =>
+      t.transferNumber.toLowerCase().includes(q) ||
+      t.fromLocation.toLowerCase().includes(q) ||
+      t.toLocation.toLowerCase().includes(q) ||
+      (t.createdByUsername || "").toLowerCase().includes(q) ||
+      t.items.some(i => i.itemName.toLowerCase().includes(q) || (i.barcode || "").toLowerCase().includes(q))
+    );
+  }, [transfers, historyFilter]);
 
   const statusColor = (s: string) => s === "completed" ? "default" : s === "cancelled" ? "destructive" : "secondary";
 
@@ -114,12 +167,25 @@ export default function StockTransfersPage() {
         action={<Button onClick={() => setOpen(true)} data-testid="button-new-transfer"><Plus className="w-4 h-4 mr-1" />New Transfer</Button>}
       />
 
+      <div className="relative max-w-sm">
+        <Search className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground" />
+        <Input
+          placeholder="Filter transfers by #, location, item…"
+          value={historyFilter}
+          onChange={e => setHistoryFilter(e.target.value)}
+          className="pl-9"
+          data-testid="input-transfer-history-filter"
+        />
+      </div>
+
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
             <p className="text-sm text-muted-foreground p-6">Loading…</p>
-          ) : transfers.length === 0 ? (
-            <p className="text-sm text-muted-foreground p-6">No transfers yet. Create one using the button above.</p>
+          ) : filteredTransfers.length === 0 ? (
+            <p className="text-sm text-muted-foreground p-6" data-testid="text-no-transfers">
+              {transfers.length === 0 ? "No transfers yet. Create one using the button above." : "No transfers match your filter."}
+            </p>
           ) : (
             <Table>
               <TableHeader>
@@ -136,7 +202,7 @@ export default function StockTransfersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {transfers.map(t => (
+                {filteredTransfers.map(t => (
                   <>
                     <TableRow key={t.id} data-testid={`row-transfer-${t.id}`} className="cursor-pointer" onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}>
                       <TableCell className="text-muted-foreground">
@@ -186,7 +252,7 @@ export default function StockTransfersPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={open} onOpenChange={o => { if (!o) { setOpen(false); setLines([]); setFromLocation(""); setToLocation(""); setNotes(""); setSearchQ(""); setSearchResults([]); setPendingItem(null); } }}>
+      <Dialog open={open} onOpenChange={o => { if (!o) { setOpen(false); resetForm(); } else setOpen(true); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><ArrowLeftRight className="w-4 h-4" />New Stock Transfer</DialogTitle></DialogHeader>
 
@@ -217,41 +283,54 @@ export default function StockTransfersPage() {
             </div>
 
             <div className="border rounded-md p-3 space-y-2">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Add Items</p>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
-                  <Input
-                    value={searchQ}
-                    onChange={e => handleSearch(e.target.value)}
-                    placeholder="Scan barcode or type product name…"
-                    className="pl-8 text-sm"
-                    data-testid="input-transfer-search"
-                  />
-                </div>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Add Items</p>
+                {fromLocation
+                  ? <span className="text-[11px] text-muted-foreground">Showing on-hand at <strong>{locations.find(l => l.id === fromLocation)?.name}</strong></span>
+                  : <span className="text-[11px] text-amber-600">Select a source to see on-hand stock</span>}
+              </div>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
                 <Input
-                  type="number"
-                  min="1"
-                  value={pendingQty}
-                  onChange={e => setPendingQty(e.target.value)}
-                  className="w-16 text-center"
-                  data-testid="input-transfer-qty"
+                  value={searchQ}
+                  onChange={e => setSearchQ(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleScan(); } }}
+                  placeholder="Scan barcode (Enter) or type to search the list…"
+                  className="pl-8 text-sm"
+                  data-testid="input-transfer-search"
                 />
               </div>
-              {searching && <p className="text-xs text-muted-foreground">Searching…</p>}
-              {searchResults.length > 0 && (
-                <div className="border rounded-md divide-y max-h-40 overflow-y-auto">
-                  {searchResults.map(item => (
-                    <div key={item.id} className="flex items-center justify-between px-3 py-2 hover:bg-muted/50 cursor-pointer" onClick={() => addLine(item)} data-testid={`transfer-result-${item.id}`}>
-                      <div>
-                        <p className="text-sm font-medium">{item.name}</p>
-                        <p className="text-xs text-muted-foreground">{item.sku}{item.barcode ? ` · ${item.barcode}` : ""}</p>
+
+              <div className="border rounded-md divide-y max-h-56 overflow-y-auto" data-testid="list-transfer-picker">
+                {scanning && <p className="text-xs text-muted-foreground px-3 py-2">Looking up…</p>}
+                {pickerItems.length === 0 ? (
+                  <div className="px-3 py-6 text-center text-xs text-muted-foreground flex flex-col items-center gap-1">
+                    <PackageSearch className="w-5 h-5 opacity-40" />
+                    {searchQ ? "No matching items." : fromLocation ? "No stock on hand at this location. Type to search the full catalogue." : "Type to search items."}
+                  </div>
+                ) : pickerItems.map(item => {
+                  const oh = onHand(item.id);
+                  const inCart = lines.find(l => l.itemId === item.id);
+                  return (
+                    <div key={item.id} className="flex items-center justify-between px-3 py-2 hover:bg-muted/50" data-testid={`transfer-result-${item.id}`}>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{item.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">{item.sku}{item.barcode ? ` · ${item.barcode}` : ""}</p>
                       </div>
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={e => { e.stopPropagation(); addLine(item); }}>Add ×{pendingQty}</Button>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {fromLocation && (
+                          <Badge variant={oh > 0 ? "secondary" : "outline"} className="text-[10px]" data-testid={`badge-onhand-${item.id}`}>
+                            {oh} on hand
+                          </Badge>
+                        )}
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => addLine(item)} data-testid={`button-add-item-${item.id}`}>
+                          {inCart ? `Added (${inCart.quantity})` : "Add"}
+                        </Button>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              )}
+                  );
+                })}
+              </div>
             </div>
 
             {lines.length > 0 && (
@@ -260,40 +339,54 @@ export default function StockTransfersPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="text-xs">Item</TableHead>
-                      <TableHead className="text-xs">Barcode</TableHead>
+                      {fromLocation && <TableHead className="text-xs text-right">On hand</TableHead>}
                       <TableHead className="text-xs text-right">Qty</TableHead>
                       <TableHead className="w-8"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {lines.map(l => (
-                      <TableRow key={l.key}>
-                        <TableCell className="text-sm">{l.itemName}<br /><span className="text-xs text-muted-foreground">{l.sku}</span></TableCell>
-                        <TableCell className="text-xs font-mono text-muted-foreground">{l.barcode || "—"}</TableCell>
-                        <TableCell className="text-right">
-                          <Input
-                            type="number"
-                            min="1"
-                            value={l.quantity}
-                            onChange={e => setLines(prev => prev.map(x => x.key === l.key ? { ...x, quantity: parseInt(e.target.value) || 1 } : x))}
-                            className="w-16 ml-auto text-center h-7 text-sm"
-                            data-testid={`input-line-qty-${l.itemId}`}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => setLines(prev => prev.filter(x => x.key !== l.key))} data-testid={`button-remove-line-${l.itemId}`}>
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {lines.map(l => {
+                      const oh = onHand(l.itemId);
+                      const over = fromLocation && oh > 0 && l.quantity > oh;
+                      return (
+                        <TableRow key={l.key}>
+                          <TableCell className="text-sm">{l.itemName}<br /><span className="text-xs text-muted-foreground">{l.sku}</span></TableCell>
+                          {fromLocation && (
+                            <TableCell className={`text-right text-xs ${over ? "text-destructive font-medium" : "text-muted-foreground"}`}>
+                              {oh}{over && <AlertTriangle className="w-3 h-3 inline ml-1" />}
+                            </TableCell>
+                          )}
+                          <TableCell className="text-right">
+                            <Input
+                              type="number"
+                              min="1"
+                              value={l.quantity}
+                              onChange={e => setLines(prev => prev.map(x => x.key === l.key ? { ...x, quantity: parseInt(e.target.value) || 1 } : x))}
+                              className={`w-16 ml-auto text-center h-7 text-sm ${over ? "border-destructive" : ""}`}
+                              data-testid={`input-line-qty-${l.itemId}`}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => setLines(prev => prev.filter(x => x.key !== l.key))} data-testid={`button-remove-line-${l.itemId}`}>
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
             )}
 
+            {hasWarnings && (
+              <p className="text-xs text-amber-600 flex items-center gap-1" data-testid="text-transfer-warning">
+                <AlertTriangle className="w-3.5 h-3.5" /> Some lines exceed the quantity on hand at the source location.
+              </p>
+            )}
+
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button variant="outline" onClick={() => { setOpen(false); resetForm(); }}>Cancel</Button>
               <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending || lines.length === 0} data-testid="button-submit-transfer">
                 <CheckCircle2 className="w-4 h-4 mr-1" />
                 {createMutation.isPending ? "Transferring…" : `Transfer ${lines.length} item${lines.length !== 1 ? "s" : ""}`}
