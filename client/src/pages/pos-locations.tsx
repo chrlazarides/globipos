@@ -14,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Switch } from "@/components/ui/switch";
-import { MapPin, Plus, Pencil, Trash2, Loader2, Building2 } from "lucide-react";
+import { MapPin, Plus, Pencil, Trash2, Loader2, Building2, PackageCheck } from "lucide-react";
 
 const formSchema = insertPosLocationSchema.extend({
   name: z.string().min(1, "Name required"),
@@ -34,6 +34,7 @@ function LocationForm({ initial, onClose }: { initial?: PosLocation; onClose: ()
       timezone: initial?.timezone ?? "Europe/Nicosia",
       currencyCode: initial?.currencyCode ?? "EUR",
       active: initial?.active ?? true,
+      isDefaultReceiving: initial?.isDefaultReceiving ?? false,
     },
   });
 
@@ -79,12 +80,20 @@ function LocationForm({ initial, onClose }: { initial?: PosLocation; onClose: ()
         <FormField control={form.control} name="timezone" render={({ field }) => (
           <FormItem><FormLabel>Timezone</FormLabel><FormControl><Input {...field} placeholder="Europe/Nicosia" /></FormControl><FormMessage /></FormItem>
         )} />
-        <FormField control={form.control} name="active" render={({ field }) => (
-          <FormItem className="flex items-center gap-3">
-            <FormControl><Switch checked={field.value ?? true} onCheckedChange={field.onChange} /></FormControl>
-            <FormLabel className="!mt-0">Active</FormLabel>
-          </FormItem>
-        )} />
+        <div className="flex gap-6">
+          <FormField control={form.control} name="active" render={({ field }) => (
+            <FormItem className="flex items-center gap-3">
+              <FormControl><Switch checked={field.value ?? true} onCheckedChange={field.onChange} /></FormControl>
+              <FormLabel className="!mt-0">Active</FormLabel>
+            </FormItem>
+          )} />
+          <FormField control={form.control} name="isDefaultReceiving" render={({ field }) => (
+            <FormItem className="flex items-center gap-3">
+              <FormControl><Switch checked={field.value ?? false} onCheckedChange={field.onChange} /></FormControl>
+              <FormLabel className="!mt-0">Default Receiving Location</FormLabel>
+            </FormItem>
+          )} />
+        </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
           <Button type="submit" disabled={mutation.isPending} data-testid="button-save-location">
@@ -112,6 +121,15 @@ export default function PosLocations() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const setDefaultMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/pos/locations/${id}/set-default-receiving`, {});
+      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/pos/locations"] }); toast({ title: "Default receiving location updated" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const openCreate = () => { setEditing(undefined); setOpen(true); };
   const openEdit = (loc: PosLocation) => { setEditing(loc); setOpen(true); };
 
@@ -120,7 +138,7 @@ export default function PosLocations() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><MapPin className="w-6 h-6" />POS Locations</h1>
-          <p className="text-sm text-muted-foreground mt-1">Manage store locations for GlobiPOS terminals</p>
+          <p className="text-sm text-muted-foreground mt-1">Manage store locations for GlobiPOS terminals. Mark one as the default receiving location for Inventory In.</p>
         </div>
         <Button onClick={openCreate} data-testid="button-add-location"><Plus className="w-4 h-4 mr-2" />Add Location</Button>
       </div>
@@ -139,24 +157,36 @@ export default function PosLocations() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {locations.map(loc => (
-            <Card key={loc.id} data-testid={`card-location-${loc.id}`}>
+            <Card key={loc.id} data-testid={`card-location-${loc.id}`} className={loc.isDefaultReceiving ? "ring-2 ring-primary" : ""}>
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <CardTitle className="text-base">{loc.name}</CardTitle>
                     <code className="text-xs text-muted-foreground">{loc.code}</code>
                   </div>
-                  <Badge variant={loc.active ? "default" : "secondary"}>{loc.active ? "Active" : "Inactive"}</Badge>
+                  <div className="flex flex-col gap-1 items-end">
+                    <Badge variant={loc.active ? "default" : "secondary"}>{loc.active ? "Active" : "Inactive"}</Badge>
+                    {loc.isDefaultReceiving && (
+                      <Badge variant="outline" className="text-[10px] border-primary text-primary gap-1">
+                        <PackageCheck className="w-2.5 h-2.5" />Default Receiving
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="text-sm space-y-1 text-muted-foreground">
                 {loc.address && <p className="truncate">{loc.address}</p>}
                 {loc.phone && <p>{loc.phone}</p>}
                 <p>{loc.currencyCode} · {loc.timezone}</p>
-                <div className="flex gap-2 pt-2">
+                <div className="flex flex-wrap gap-2 pt-2">
                   <Button size="sm" variant="outline" onClick={() => openEdit(loc)} data-testid={`button-edit-location-${loc.id}`}>
                     <Pencil className="w-3.5 h-3.5 mr-1" />Edit
                   </Button>
+                  {!loc.isDefaultReceiving && (
+                    <Button size="sm" variant="outline" className="text-primary border-primary hover:bg-primary/10 text-xs" onClick={() => setDefaultMutation.mutate(loc.id)} disabled={setDefaultMutation.isPending} data-testid={`button-set-default-receiving-${loc.id}`}>
+                      <PackageCheck className="w-3 h-3 mr-1" />Set Default Receiving
+                    </Button>
+                  )}
                   <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => deleteMutation.mutate(loc.id)} data-testid={`button-delete-location-${loc.id}`}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>

@@ -1270,9 +1270,9 @@ export async function registerRoutes(
 
   app.post("/api/inventory-in", async (req, res) => {
     try {
-      const { categoryId, style, description, costPrice, price1, vatRate, season, codeMethod, cells } = req.body as {
+      const { categoryId, style, description, costPrice, price1, vatRate, season, codeMethod, locationId, cells } = req.body as {
         categoryId: string; style: string; description: string; costPrice: string; price1: string; vatRate: string;
-        season?: string | null; codeMethod?: string;
+        season?: string | null; codeMethod?: string; locationId?: string | null;
         cells: { colorId: string; sizeId: string; quantity: number }[];
       };
       if (!Array.isArray(cells) || cells.length === 0) {
@@ -1292,6 +1292,7 @@ export async function registerRoutes(
 
       const header = insertInventoryInLineSchema.omit({ colorId: true, colorName: true, sizeId: true, sizeName: true, quantity: true }).parse({
         categoryId, style, description, costPrice, price1, vatRate, season: season || null, codeMethod: codeMethod || "descriptive",
+        locationId: locationId || null,
       });
       const lines = await storage.appendInventoryInLines(header, resolvedCells);
       res.json(lines);
@@ -8572,8 +8573,15 @@ export async function registerRoutes(
   // ─── GlobiPOS Routes ────────────────────────────────────────────────────────
 
   // POS Locations
-  app.get("/api/pos/locations", requireAdmin, async (req, res) => {
+  app.get("/api/pos/locations", requireStaff, async (req, res) => {
     try { res.json(await storage.getPosLocations()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/locations/:id/set-default-receiving", requireAdmin, async (req, res) => {
+    try {
+      await storage.setDefaultReceivingLocation(req.params.id as string);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.get("/api/pos/locations/:id", requireAdmin, async (req, res) => {
     try {
@@ -9036,6 +9044,28 @@ export async function registerRoutes(
       if (!session) return res.status(404).json({ message: "Session not found" });
       res.json(session);
     } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Back-office Stock Transfers (same storage, accessible to all staff)
+  app.get("/api/stock-transfers", requireStaff, async (_req, res) => {
+    try { res.json(await storage.getStockTransfers()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/stock-transfers", requireStaff, async (req, res) => {
+    try {
+      const { items: transferItems, ...transferBody } = req.body;
+      const transferNumber = await storage.getNextTransferNumber();
+      const data = insertStockTransferSchema.parse({ ...transferBody, transferNumber, createdByUsername: req.user!.username });
+      const parsedItems = (transferItems || []).map((i: any) => insertStockTransferItemSchema.parse(i));
+      res.status(201).json(await storage.createStockTransfer(data, parsedItems));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/stock-transfers/:id/complete", requireStaff, async (req, res) => {
+    try {
+      const transfer = await storage.completeStockTransfer(req.params.id as string);
+      if (!transfer) return res.status(404).json({ message: "Transfer not found" });
+      res.json(transfer);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // Stock Transfers (movement log)

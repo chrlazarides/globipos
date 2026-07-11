@@ -28,6 +28,7 @@ import Suppliers from "@/pages/suppliers";
 import PurchaseInvoices from "@/pages/purchase-invoices";
 import ApparelPurchases from "@/pages/apparel-purchases";
 import InventoryIn from "@/pages/inventory-in";
+import StockTransfers from "@/pages/stock-transfers";
 import SupplierPaymentsPage from "@/pages/supplier-payments";
 import CustomerPaymentsPage from "@/pages/customer-payments";
 import ImportData from "@/pages/import-data";
@@ -147,6 +148,7 @@ function AdminRouter() {
       <Route path="/purchase-invoices" component={PurchaseInvoices} />
       <Route path="/apparel-purchases" component={ApparelPurchases} />
       <Route path="/inventory-in" component={InventoryIn} />
+      <Route path="/stock-transfers" component={StockTransfers} />
       <Route path="/supplier-payments" component={SupplierPaymentsPage} />
       <Route path="/customer-payments" component={CustomerPaymentsPage} />
       <Route path="/pricing" component={Pricing} />

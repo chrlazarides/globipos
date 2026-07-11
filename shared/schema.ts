@@ -152,6 +152,7 @@ export const inventoryInLines = pgTable("inventory_in_lines", {
   vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("19"),
   season: text("season"),
   codeMethod: text("code_method").notNull().default("descriptive"), // "descriptive" (Code-39) | "sequential" (EAN-8)
+  locationId: varchar("location_id"),
   colorId: varchar("color_id").notNull(),
   colorName: text("color_name").notNull(),
   sizeId: varchar("size_id").notNull(),
@@ -616,6 +617,7 @@ export const posLocations = pgTable("pos_locations", {
   timezone: text("timezone").notNull().default("Europe/Nicosia"),
   currencyCode: text("currency_code").notNull().default("EUR"),
   active: boolean("active").notNull().default(true),
+  isDefaultReceiving: boolean("is_default_receiving").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

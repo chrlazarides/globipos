@@ -107,7 +107,9 @@ export interface IStorage {
   getInventoryInLines(posted?: boolean): Promise<InventoryInLine[]>;
   appendInventoryInLines(header: Omit<InsertInventoryInLine, "colorId" | "colorName" | "sizeId" | "sizeName" | "quantity">, cells: { colorId: string; colorName: string; sizeId: string; sizeName: string; quantity: number }[]): Promise<InventoryInLine[]>;
   deleteInventoryInLine(id: string): Promise<void>;
-  postInventoryInLines(ids: string[]): Promise<{ posted: number; itemsCreated: number; variantsCreated: number }>;
+  postInventoryInLines(ids: string[]): Promise<{ posted: number; itemsCreated: number; variantsCreated: number; lines: Array<{ id: string; barcode: string; description: string; colorName: string; sizeName: string; quantity: number; itemId: string; variantId: string; locationId: string | null }> }>;
+  getDefaultReceivingLocation(): Promise<import("@shared/schema").PosLocation | undefined>;
+  setDefaultReceivingLocation(id: string): Promise<void>;
 
   getCustomers(): Promise<Customer[]>;
   deleteCustomer(id: string): Promise<void>;
@@ -661,11 +663,12 @@ export class DatabaseStorage implements IStorage {
 
   async postInventoryInLines(ids: string[]) {
     const lines = await db.select().from(inventoryInLines).where(and(inArray(inventoryInLines.id, ids), eq(inventoryInLines.posted, false)));
-    if (lines.length === 0) return { posted: 0, itemsCreated: 0, variantsCreated: 0 };
+    if (lines.length === 0) return { posted: 0, itemsCreated: 0, variantsCreated: 0, lines: [] };
 
     let itemsCreated = 0;
     let variantsCreated = 0;
     const itemCache = new Map<string, Item>();
+    const resultLines: Array<{ id: string; barcode: string; description: string; colorName: string; sizeName: string; quantity: number; itemId: string; variantId: string; locationId: string | null }> = [];
 
     for (const line of lines) {
       const itemKey = `${line.categoryId}::${line.style.toUpperCase()}`;
@@ -726,9 +729,36 @@ export class DatabaseStorage implements IStorage {
       if (!item.hasVariants) {
         await db.update(items).set({ hasVariants: true }).where(eq(items.id, item.id));
       }
+
+      // Increment per-location stock if a receiving location was set on this line
+      if (line.locationId) {
+        await this.adjustLocationStock(item.id, variantId, line.locationId, line.quantity);
+      }
+
+      resultLines.push({
+        id: line.id,
+        barcode: line.barcode,
+        description: `${line.description} — ${line.colorName} / ${line.sizeName}`,
+        colorName: line.colorName,
+        sizeName: line.sizeName,
+        quantity: line.quantity,
+        itemId: item.id,
+        variantId,
+        locationId: line.locationId ?? null,
+      });
     }
 
-    return { posted: lines.length, itemsCreated, variantsCreated };
+    return { posted: lines.length, itemsCreated, variantsCreated, lines: resultLines };
+  }
+
+  async getDefaultReceivingLocation() {
+    const [loc] = await db.select().from(posLocations).where(eq(posLocations.isDefaultReceiving, true)).limit(1);
+    return loc ?? undefined;
+  }
+
+  async setDefaultReceivingLocation(id: string) {
+    await db.update(posLocations).set({ isDefaultReceiving: false });
+    await db.update(posLocations).set({ isDefaultReceiving: true }).where(eq(posLocations.id, id));
   }
 
   async getCustomers() {

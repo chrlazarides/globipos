@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus, ArrowLeftRight } from "lucide-react";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { LogoImg } from "@/components/logo-img";
@@ -30,6 +30,7 @@ const mainNav = [
   { title: "Location Stock", url: "/location-stock", icon: MapPin, module: "items" },
   { title: "Variant Matrix & Barcodes", url: "/variant-matrix", icon: Grid3x3, module: "items" },
   { title: "Inventory In (Col/Size)", url: "/inventory-in", icon: PackagePlus, module: "items" },
+  { title: "Stock Transfers", url: "/stock-transfers", icon: ArrowLeftRight, module: "items" },
   { title: "Customers", url: "/customers", icon: Users, module: "customers" },
   { title: "Customer Statements", url: "/reports?tab=statements", icon: ClipboardList, module: "statements" },
   { title: "Email Log", url: "/email-logs", icon: Mail, module: "email_logs" },
