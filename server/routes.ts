@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema } from "@shared/schema";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema } from "@shared/schema";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -9410,6 +9410,175 @@ export async function registerRoutes(
   });
 
   // ── POS Phase 3: Promotions ────────────────────────────────────────────────
+
+  // ── Expiration / Best-Before batch tracking ────────────────────────────────
+  // The "near expiry" window (in days) controls what counts as expiring soon.
+  // Buckets: expired (<0d) / critical (<=7d) / warning (<=EXP_DEFAULT_WINDOW) / ok.
+  const EXP_DEFAULT_WINDOW = 30;
+
+  const enrichBatch = (b: any) => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const exp = new Date(b.expirationDate + "T00:00:00");
+    const daysUntil = Math.round((exp.getTime() - today.getTime()) / 86400000);
+    let bucket: string;
+    if (daysUntil < 0) bucket = "expired";
+    else if (daysUntil <= 7) bucket = "critical";
+    else if (daysUntil <= EXP_DEFAULT_WINDOW) bucket = "warning";
+    else bucket = "ok";
+    return { ...b, daysUntil, bucket };
+  };
+
+  // List all tracked batches (enriched with daysUntil + bucket), newest expiry first.
+  app.get("/api/expiration/batches", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const rows = await db.select().from(expirationBatches)
+        .orderBy(expirationBatches.expirationDate);
+      res.json(rows.map(enrichBatch));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Summary report: counts + at-risk value grouped into expired / critical / warning / ok.
+  app.get("/api/expiration/report", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const rows = (await db.select().from(expirationBatches)
+        .where(sql`${expirationBatches.status} NOT IN ('sold_out','discarded')`))
+        .map(enrichBatch);
+      const buckets: Record<string, { count: number; units: number; value: number; batches: any[] }> = {
+        expired: { count: 0, units: 0, value: 0, batches: [] },
+        critical: { count: 0, units: 0, value: 0, batches: [] },
+        warning: { count: 0, units: 0, value: 0, batches: [] },
+        ok: { count: 0, units: 0, value: 0, batches: [] },
+      };
+      for (const r of rows) {
+        const b = buckets[r.bucket];
+        b.count += 1;
+        b.units += r.quantity;
+        b.value += r.quantity * parseFloat(r.costPrice || "0");
+        b.batches.push(r);
+      }
+      res.json({
+        buckets,
+        alertCount: buckets.expired.count + buckets.critical.count + buckets.warning.count,
+        expiredCount: buckets.expired.count,
+        soonCount: buckets.critical.count + buckets.warning.count,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  const EXP_STATUSES = ["active", "sold_out", "expired", "discounted", "discarded"];
+  const isoDateRe = /^\d{4}-\d{2}-\d{2}$/;
+
+  // Create a tracked batch. itemName/sku/barcode/costPrice are ALWAYS snapshotted
+  // server-side from the authoritative item row — client-supplied values for these
+  // fields are ignored so report totals (value at risk) and offer labels stay correct.
+  app.post("/api/expiration/batches", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const parsed = insertExpirationBatchSchema.parse(req.body);
+      if (!isoDateRe.test(parsed.expirationDate)) return res.status(400).json({ message: "expirationDate must be YYYY-MM-DD" });
+      if ((parsed.quantity ?? 0) < 0) return res.status(400).json({ message: "quantity must be >= 0" });
+      const [item] = await db.select().from(items).where(eq(items.id, parsed.itemId));
+      if (!item) return res.status(400).json({ message: "Item not found" });
+      const [row] = await db.insert(expirationBatches).values({
+        itemId: parsed.itemId,
+        itemName: item.name,
+        sku: item.sku,
+        barcode: item.barcode,
+        costPrice: item.costPrice,
+        expirationDate: parsed.expirationDate,
+        quantity: parsed.quantity ?? 0,
+        batchCode: parsed.batchCode ?? null,
+        locationId: parsed.locationId ?? null,
+        notes: parsed.notes ?? null,
+        status: parsed.status ?? "active",
+        createdByUsername: (req as any).user?.username ?? null,
+      }).returning();
+      res.json(enrichBatch(row));
+    } catch (e: any) {
+      if (e instanceof z.ZodError) return res.status(400).json({ message: "Invalid data", errors: e.errors });
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Update a batch (quantity adjustments, status changes, notes, expiry corrections).
+  app.patch("/api/expiration/batches/:id", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const allowed: any = {};
+      if (req.body.quantity !== undefined) {
+        const q = Number(req.body.quantity);
+        if (!Number.isInteger(q) || q < 0) return res.status(400).json({ message: "quantity must be a non-negative integer" });
+        allowed.quantity = q;
+      }
+      if (req.body.expirationDate !== undefined) {
+        if (!isoDateRe.test(String(req.body.expirationDate))) return res.status(400).json({ message: "expirationDate must be YYYY-MM-DD" });
+        allowed.expirationDate = req.body.expirationDate;
+      }
+      if (req.body.status !== undefined) {
+        if (!EXP_STATUSES.includes(req.body.status)) return res.status(400).json({ message: `status must be one of ${EXP_STATUSES.join(", ")}` });
+        allowed.status = req.body.status;
+      }
+      if (req.body.costPrice !== undefined) {
+        const c = parseFloat(req.body.costPrice);
+        if (!(c >= 0)) return res.status(400).json({ message: "costPrice must be >= 0" });
+        allowed.costPrice = String(req.body.costPrice);
+      }
+      if (req.body.notes !== undefined) allowed.notes = req.body.notes || null;
+      if (req.body.batchCode !== undefined) allowed.batchCode = req.body.batchCode || null;
+      if (req.body.locationId !== undefined) allowed.locationId = req.body.locationId || null;
+      if (Object.keys(allowed).length === 0) return res.status(400).json({ message: "No valid fields to update" });
+      const [row] = await db.update(expirationBatches).set(allowed)
+        .where(eq(expirationBatches.id, req.params.id as string)).returning();
+      if (!row) return res.status(404).json({ message: "Not found" });
+      res.json(enrichBatch(row));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/expiration/batches/:id", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      await db.delete(expirationBatches).where(eq(expirationBatches.id, req.params.id as string));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // One-click near-expiry markdown: creates (or updates) a POS promotion applying a
+  // percentage discount to the batch's item, then marks the batch "discounted" and
+  // links the promotion so it shows in the report.
+  app.post("/api/expiration/batches/:id/markdown", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const [batch] = await db.select().from(expirationBatches).where(eq(expirationBatches.id, req.params.id as string));
+      if (!batch) return res.status(404).json({ message: "Batch not found" });
+      const discountPct = parseFloat(req.body.discountPct ?? "20");
+      if (!(discountPct > 0 && discountPct <= 95)) return res.status(400).json({ message: "discountPct must be 1-95" });
+      const validUntil = new Date(batch.expirationDate + "T23:59:59");
+
+      let promo;
+      if (batch.promotionId) {
+        [promo] = await db.update(posPromotions).set({
+          discountPct: discountPct.toFixed(2),
+          validUntil,
+          active: true,
+        }).where(eq(posPromotions.id, batch.promotionId)).returning();
+      }
+      if (!promo) {
+        [promo] = await db.insert(posPromotions).values({
+          name: `Near-expiry: ${batch.itemName} (-${discountPct}%)`,
+          type: "qty_threshold",
+          locationId: batch.locationId ?? null,
+          productIds: [batch.itemId],
+          thresholdQty: 1,
+          discountPct: discountPct.toFixed(2),
+          priority: 100,
+          stackable: false,
+          validFrom: new Date(),
+          validUntil,
+          active: true,
+        }).returning();
+      }
+      const [updated] = await db.update(expirationBatches)
+        .set({ status: "discounted", promotionId: promo.id })
+        .where(eq(expirationBatches.id, batch.id)).returning();
+      res.json({ batch: enrichBatch(updated), promotion: promo });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
 
   app.get("/api/pos/promotions", requireAdmin, async (req, res) => {
     try {

@@ -93,6 +93,8 @@ export default function Dashboard() {
     paretoCustomers: { name: string; revenue: number; cumPct: number }[];
   }>({ queryKey: ["/api/dashboard/charts"] });
 
+  const { data: expReport } = useQuery<{ alertCount: number; expiredCount: number; soonCount: number }>({ queryKey: ["/api/expiration/report"] });
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-6">
@@ -132,6 +134,26 @@ export default function Dashboard() {
           <Button data-testid="button-new-invoice">New Invoice</Button>
         </Link>
       </div>
+
+      {/* Expiration alert banner */}
+      {expReport && expReport.alertCount > 0 && (
+        <Link href="/expiration">
+          <div
+            className="flex items-center gap-3 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 cursor-pointer hover-elevate"
+            data-testid="banner-expiration-alert"
+          >
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+            <div className="text-sm">
+              <span className="font-semibold text-amber-800 dark:text-amber-200">
+                {expReport.expiredCount > 0 && `${expReport.expiredCount} expired`}
+                {expReport.expiredCount > 0 && expReport.soonCount > 0 && " · "}
+                {expReport.soonCount > 0 && `${expReport.soonCount} expiring soon`}
+              </span>
+              <span className="text-amber-700 dark:text-amber-300"> — review stock and create markdown offers before it's too late.</span>
+            </div>
+          </div>
+        </Link>
+      )}
 
       {/* Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">

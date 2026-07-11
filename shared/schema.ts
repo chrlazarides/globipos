@@ -1241,3 +1241,32 @@ export type GoodsReceivedVoucher = typeof goodsReceivedVouchers.$inferSelect;
 export const insertGoodsReceivedVoucherItemSchema = createInsertSchema(goodsReceivedVoucherItems).omit({ id: true, grvId: true });
 export type InsertGoodsReceivedVoucherItem = z.infer<typeof insertGoodsReceivedVoucherItemSchema>;
 export type GoodsReceivedVoucherItem = typeof goodsReceivedVoucherItems.$inferSelect;
+
+// ── Expiration / Best-Before batch tracking ──────────────────────────────────
+// Each row is a tracked batch of a perishable item with an expiration (best
+// before) date and the quantity received in that batch. Powers the Expiration
+// Management report, near-expiry notifications, and one-click markdown offers.
+// A batch may optionally be pinned to a POS location and linked to a
+// pos_promotions row once a near-expiry markdown offer is created for it.
+export const expirationBatches = pgTable("expiration_batches", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  itemName: text("item_name").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  locationId: varchar("location_id").references(() => posLocations.id, { onDelete: "set null" }),
+  batchCode: text("batch_code"),
+  expirationDate: date("expiration_date").notNull(),
+  quantity: integer("quantity").notNull().default(0),
+  costPrice: numeric("cost_price", { precision: 10, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+  status: text("status").notNull().default("active"), // active | sold_out | expired | discounted | discarded
+  promotionId: varchar("promotion_id"),
+  createdByUsername: text("created_by_username"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+export const insertExpirationBatchSchema = createInsertSchema(expirationBatches).omit({ id: true, createdAt: true, updatedAt: true, promotionId: true });
+export type InsertExpirationBatch = z.infer<typeof insertExpirationBatchSchema>;
+export type ExpirationBatch = typeof expirationBatches.$inferSelect;
