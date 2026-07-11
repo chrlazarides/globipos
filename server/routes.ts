@@ -9124,7 +9124,7 @@ export async function registerRoutes(
   });
   app.post("/api/pda/agoranomia/print-batch", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const { itemIds, overrides } = req.body as { itemIds: string[]; overrides?: Record<string, { unitType: string; unitSize: number }> };
+      const { itemIds, overrides } = req.body as { itemIds: string[]; overrides?: Record<string, { unitType: string; unitSize: number; expirationDate?: string }> };
       if (!Array.isArray(itemIds) || !itemIds.length) return res.status(400).json({ message: "itemIds required" });
       const allItems = await storage.getItems();
 
@@ -9159,13 +9159,15 @@ export async function registerRoutes(
 
       const saved = await storage.recordAgoranomiaLabelPrints(records as any);
 
-      // Enrich response with barcode + volume for PLU and unit-size display on the label
+      // Enrich response with barcode + volume + expirationDate for the printed label
       const enriched = saved.map((s: any) => {
         const item = allItems.find((i: any) => i.id === s.itemId);
+        const ovr = overrides?.[s.itemId];
         return {
           ...s,
           barcode: item?.barcode || null,
           volume: item?.volume || null,
+          expirationDate: ovr?.expirationDate || null,
         };
       });
       res.json(enriched);
