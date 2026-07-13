@@ -1380,9 +1380,19 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            std::fs::create_dir_all(&data_dir)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            let db_path = data_dir.join("globipos.db");
+
             let pool: SqlitePool = tauri::async_runtime::block_on(async {
-                let db_url = "sqlite:globipos.db";
-                let pool = SqlitePool::connect(db_url).await?;
+                let opts = sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&db_path)
+                    .create_if_missing(true);
+                let pool = SqlitePool::connect_with(opts).await?;
                 migrations::run_migrations(&pool).await?;
                 Ok::<SqlitePool, sqlx::Error>(pool)
             })
