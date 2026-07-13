@@ -223,6 +223,53 @@ function buildReleaseUrl(repo: string, version: string, suffix: string) {
   return `${repo.replace(/\/$/, "")}/releases/download/${tag}/GlobiPOS.Terminal_${ver}${suffix}`;
 }
 
+// ── Live GitHub release builds ────────────────────────────────────────────────
+interface ReleaseAsset {
+  name: string;
+  size: number;
+  downloadUrl: string;
+  downloads: number;
+}
+interface PosRelease {
+  tag: string;
+  name: string;
+  publishedAt: string;
+  prerelease: boolean;
+  htmlUrl: string;
+  assets: ReleaseAsset[];
+}
+
+const ASSET_PLATFORM_MATCHERS: Record<PlatformId, (name: string) => boolean> = {
+  windows: (n) => n.endsWith(".msi") || n.endsWith(".exe"),
+  macos:   (n) => n.endsWith(".dmg") || n.endsWith(".app.tar.gz"),
+  linux:   (n) => n.endsWith(".AppImage") || n.endsWith(".deb") || n.endsWith(".rpm"),
+  android: (n) => n.endsWith(".apk"),
+  ios:     () => false,
+};
+
+function assetLabel(name: string): string {
+  if (name.endsWith(".msi")) return "MSI Installer (recommended)";
+  if (name.endsWith(".exe")) return "Setup EXE";
+  if (name.endsWith(".dmg")) return "DMG (Universal — Intel + Apple Silicon)";
+  if (name.endsWith(".app.tar.gz")) return "App bundle (.app.tar.gz)";
+  if (name.endsWith(".AppImage")) return "AppImage (universal — no install needed)";
+  if (name.endsWith(".deb")) return "DEB package (Ubuntu / Debian)";
+  if (name.endsWith(".rpm")) return "RPM package (Fedora / RHEL)";
+  if (name.endsWith(".apk")) {
+    if (name.includes("arm64")) return "APK (ARM64 — most modern phones)";
+    if (name.includes("x86_64")) return "APK (x86_64 — emulators/tablets)";
+    if (name.includes("x86")) return "APK (x86 — older tablets)";
+    if (name.includes("arm")) return "APK (ARMv7 — older devices)";
+    return "APK";
+  }
+  return name;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function PosDownload() {
   const detected = detectPlatform();
@@ -233,10 +280,19 @@ export default function PosDownload() {
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
   const serverUrl = typeof window !== "undefined" ? window.location.origin : "";
   const githubRepo = settings.find(s => s.key === "pos_github_repo")?.value ?? "";
-  const appVersion = settings.find(s => s.key === "pos_app_version")?.value ?? "1.0.0";
+  const settingsVersion = settings.find(s => s.key === "pos_app_version")?.value ?? "1.0.0";
+
+  const { data: releases = [], isLoading: buildsLoading, isError: buildsError } = useQuery<PosRelease[]>({
+    queryKey: ["/api/pos/builds"],
+    enabled: !!githubRepo,
+  });
+
+  const latestRelease = releases.find(r => !r.prerelease && r.assets.length > 0) ?? releases[0];
+  const appVersion = latestRelease ? latestRelease.tag.replace(/^v/, "") : settingsVersion;
 
   const platform = PLATFORMS.find(p => p.id === selected)!;
-  const hasNativeRelease = !!githubRepo && platform.nativeFiles.length > 0;
+  const platformAssets = (latestRelease?.assets ?? []).filter(a => ASSET_PLATFORM_MATCHERS[selected](a.name));
+  const hasNativeRelease = platformAssets.length > 0 || (!!githubRepo && platform.nativeFiles.length > 0);
 
   function copy(text: string, key: string) {
     navigator.clipboard.writeText(text).then(() => {
@@ -406,8 +462,47 @@ export default function PosDownload() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    {hasNativeRelease ? (
+                    {buildsLoading ? (
                       <div className="space-y-2">
+                        {[1, 2].map(i => (
+                          <div key={i} className="h-10 rounded-md bg-muted animate-pulse" data-testid={`skeleton-build-${i}`} />
+                        ))}
+                      </div>
+                    ) : platformAssets.length > 0 ? (
+                      <div className="space-y-2">
+                        {latestRelease && (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground pb-1" data-testid="text-latest-release-info">
+                            <Tag className="w-3 h-3" />
+                            <span className="font-medium text-foreground">{latestRelease.tag}</span>
+                            <span>· released {new Date(latestRelease.publishedAt).toLocaleDateString()}</span>
+                          </div>
+                        )}
+                        {platformAssets.map(a => (
+                          <Button key={a.name} asChild className="w-full justify-start" data-testid={`btn-download-${a.name}`}>
+                            <a href={a.downloadUrl} target="_blank" rel="noopener noreferrer">
+                              <Download className="w-4 h-4 mr-2" />
+                              <span className="truncate">{assetLabel(a.name)}</span>
+                              <span className="ml-auto flex items-center gap-2 text-xs opacity-70">
+                                {formatSize(a.size)}
+                                <ExternalLink className="w-3 h-3" />
+                              </span>
+                            </a>
+                          </Button>
+                        ))}
+                        <Button asChild variant="ghost" size="sm" className="text-xs text-muted-foreground w-full justify-start">
+                          <a href={latestRelease?.htmlUrl ?? `${githubRepo}/releases`} target="_blank" rel="noopener noreferrer">
+                            <Github className="w-3 h-3 mr-1" /> All releases on GitHub
+                          </a>
+                        </Button>
+                      </div>
+                    ) : hasNativeRelease ? (
+                      <div className="space-y-2">
+                        {buildsError && (
+                          <div className="flex gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800" data-testid="text-builds-error">
+                            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-amber-500" />
+                            <p>Couldn't reach GitHub to list the latest builds — showing standard links which may not match the newest release.</p>
+                          </div>
+                        )}
                         {platform.nativeFiles.map(f => (
                           <Button key={f.suffix} asChild className="w-full justify-start" data-testid={`btn-download-${f.suffix}`}>
                             <a href={buildReleaseUrl(githubRepo, appVersion, f.suffix)} target="_blank" rel="noopener noreferrer">

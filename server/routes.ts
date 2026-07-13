@@ -8594,6 +8594,50 @@ export async function registerRoutes(
   // ─── GlobiPOS Routes ────────────────────────────────────────────────────────
 
   // POS Locations
+  // POS build downloads — live list of release assets from GitHub
+  let posBuildsCache: { data: any; fetchedAt: number } | null = null;
+  app.get("/api/pos/builds", requireStaff, async (_req, res) => {
+    try {
+      const CACHE_MS = 5 * 60 * 1000;
+      if (posBuildsCache && Date.now() - posBuildsCache.fetchedAt < CACHE_MS) {
+        return res.json(posBuildsCache.data);
+      }
+      const settings = await storage.getSettings();
+      const repoUrl = settings.find((s) => s.key === "pos_github_repo")?.value ?? "";
+      const m = repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+      if (!m) return res.status(400).json({ message: "pos_github_repo setting is not a valid GitHub URL" });
+      const [, owner, repo] = m;
+      const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": "GlobiPOS" };
+      if (process.env.GLOBISYNC) headers.Authorization = `token ${process.env.GLOBISYNC}`;
+      const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=5`, { headers });
+      if (!ghRes.ok) {
+        return res.status(502).json({ message: `GitHub API error: ${ghRes.status}` });
+      }
+      const releases: any[] = await ghRes.json();
+      const data = releases
+        .filter((r) => !r.draft)
+        .map((r) => ({
+          tag: r.tag_name,
+          name: r.name,
+          publishedAt: r.published_at,
+          prerelease: r.prerelease,
+          htmlUrl: r.html_url,
+          assets: (r.assets ?? [])
+            .filter((a: any) => !a.name.endsWith(".sig") && a.name !== "latest.json")
+            .map((a: any) => ({
+              name: a.name,
+              size: a.size,
+              downloadUrl: a.browser_download_url,
+              downloads: a.download_count,
+            })),
+        }));
+      posBuildsCache = { data, fetchedAt: Date.now() };
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.get("/api/pos/locations", requireStaff, async (req, res) => {
     try { res.json(await storage.getPosLocations()); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
