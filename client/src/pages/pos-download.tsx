@@ -327,13 +327,13 @@ export default function PosDownload() {
               <CheckCircle2 className="w-5 h-5 text-green-600" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="font-semibold flex items-center gap-2 flex-wrap">
+              <div className="font-semibold flex items-center gap-2 flex-wrap">
                 App is live and ready to install
                 <Badge className="bg-green-500 hover:bg-green-500 text-white text-xs">PWA ready now</Badge>
                 {hasNativeRelease && (
                   <Badge variant="outline" className="text-xs">Native v{appVersion} available</Badge>
                 )}
-              </p>
+              </div>
               <p className="text-sm text-muted-foreground mt-0.5">
                 The PWA works on all devices with zero setup. Native compiled binaries need a one-time GitHub build (15 min).
               </p>
