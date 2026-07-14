@@ -1306,6 +1306,9 @@ export default function PosTerminalHub() {
       {/* Cashiers */}
       <CashiersSection locations={locations} />
 
+      {/* Audit log */}
+      <AuditLogSection />
+
       {/* New/Edit Terminal dialog */}
       <Dialog open={open} onOpenChange={o => { if (!o) { setOpen(false); setEditing(undefined); } }}>
         <DialogContent>
@@ -1451,6 +1454,121 @@ function CashiersSection({ locations }: { locations: PosLocation[] }) {
           </div>
         </DialogContent>
       </Dialog>
+    </section>
+  );
+}
+
+// ── Terminal audit log viewer ─────────────────────────────────────────────────
+type AuditLogRow = {
+  id: string;
+  terminalId: string;
+  terminalName: string | null;
+  terminalCode: string | null;
+  localId: number;
+  cashierId: string | null;
+  cashierName: string | null;
+  action: string;
+  entity: string | null;
+  entityId: string | null;
+  detail: string | null;
+  deviceCreatedAt: string | null;
+  createdAt: string;
+};
+
+function AuditLogSection() {
+  const [actionFilter, setActionFilter] = useState<string>("all");
+  const [terminalFilter, setTerminalFilter] = useState<string>("all");
+
+  const { data: logs = [], isLoading } = useQuery<AuditLogRow[]>({
+    queryKey: ["/api/pos/audit-logs"],
+    refetchInterval: 60000,
+  });
+
+  const actions = Array.from(new Set(logs.map(l => l.action))).sort();
+  const terminals = Array.from(
+    new Map(logs.map(l => [l.terminalId, l.terminalName || l.terminalCode || l.terminalId])).entries()
+  );
+
+  const filtered = logs.filter(l =>
+    (actionFilter === "all" || l.action === actionFilter) &&
+    (terminalFilter === "all" || l.terminalId === terminalFilter)
+  ).slice(0, 200);
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div>
+          <h2 className="text-lg font-semibold">Terminal Audit Log</h2>
+          <p className="text-sm text-muted-foreground">Actions synced from POS terminals (login, voids, price overrides, drawer opens…)</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={terminalFilter} onValueChange={setTerminalFilter}>
+            <SelectTrigger className="w-[160px]" data-testid="select-audit-terminal">
+              <SelectValue placeholder="Terminal" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All terminals</SelectItem>
+              {terminals.map(([id, name]) => (
+                <SelectItem key={id} value={id}>{name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={actionFilter} onValueChange={setActionFilter}>
+            <SelectTrigger className="w-[160px]" data-testid="select-audit-action">
+              <SelectValue placeholder="Action" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All actions</SelectItem>
+              {actions.map(a => (
+                <SelectItem key={a} value={a}>{a}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-10"><Loader2 className="w-5 h-5 animate-spin" /></div>
+          ) : filtered.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8" data-testid="text-audit-empty">
+              No audit entries yet. Entries appear after terminals sync.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50 text-left">
+                    <th className="px-3 py-2 font-medium">Time</th>
+                    <th className="px-3 py-2 font-medium">Terminal</th>
+                    <th className="px-3 py-2 font-medium">Cashier</th>
+                    <th className="px-3 py-2 font-medium">Action</th>
+                    <th className="px-3 py-2 font-medium">Entity</th>
+                    <th className="px-3 py-2 font-medium">Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(l => (
+                    <tr key={l.id} className="border-b last:border-0" data-testid={`row-audit-${l.id}`}>
+                      <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                        {new Date(l.deviceCreatedAt || l.createdAt).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">{l.terminalName || l.terminalCode || "—"}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{l.cashierName || "—"}</td>
+                      <td className="px-3 py-2"><Badge variant="secondary">{l.action}</Badge></td>
+                      <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                        {l.entity ? `${l.entity}${l.entityId ? ` #${l.entityId}` : ""}` : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground max-w-[320px] truncate">{l.detail || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </section>
   );
 }

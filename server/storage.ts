@@ -8,7 +8,7 @@ import {
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
   emailLogs, accounts, journalEntries, journalEntryLines, expenses,
   posLocations, posTerminals, posLayoutSets, posLayoutButtons,
-  posOrders, posOrderLines, posShifts, posSyncConfig, posInbox,
+  posOrders, posOrderLines, posShifts, posSyncConfig, posInbox, posAuditLogs,
   type InsertUser, type User, type InsertCategory, type Category, type InsertColor, type Color, type InsertSize, type Size,
   type InsertItem, type Item, type InsertItemVariant, type ItemVariant, type InsertVariantTemplate, type VariantTemplate,
   type InsertItemBarcode, type ItemBarcode,
@@ -42,7 +42,7 @@ import {
   type InsertPosLayoutButton, type PosLayoutButton,
   type InsertPosOrder, type PosOrder,
   type InsertPosOrderLine, type PosOrderLine,
-  type InsertPosShift, type PosShift,
+  type InsertPosShift, type PosShift, type InsertPosAuditLog, type PosAuditLog,
   type InsertPosSyncConfig, type PosSyncConfig,
   type InsertPosInbox, type PosInbox,
   signageMedia, signagePlaylists, signagePlaylistItems, signageScreens,
@@ -292,6 +292,10 @@ export interface IStorage {
   getHeldOrdersWithRecentChargeAttempt(sinceMs: number): Promise<PosOrder[]>;
 
   createPosShift(data: InsertPosShift & { syncedAt?: Date }): Promise<PosShift>;
+
+  insertPosAuditLogs(rows: InsertPosAuditLog[]): Promise<number>;
+  getPosAuditLogs(filters?: { terminalId?: string; cashierId?: string; action?: string; limit?: number }): Promise<PosAuditLog[]>;
+  getPosCashierActivity(start: Date, end: Date): Promise<{ orders: { cashierId: string | null; cashierName: string | null; orders: number; sales: number; voids: number }[]; audits: { cashierId: string | null; cashierName: string | null; action: string; count: number }[] }>;
 
   getPosSyncConfig(): Promise<PosSyncConfig[]>;
   upsertPosSyncConfig(ruleKey: string, label: string, offlineBehavior: string, description?: string): Promise<PosSyncConfig>;
@@ -3403,6 +3407,50 @@ export class DatabaseStorage implements IStorage {
   async updatePosShift(id: string, data: Partial<InsertPosShift & { syncedAt?: Date }>): Promise<PosShift | undefined> {
     const [row] = await db.update(posShifts).set(data as any).where(eq(posShifts.id, id)).returning();
     return row;
+  }
+
+  // ─── POS Audit Logs (synced from terminals) ───────────────────────────────
+  async insertPosAuditLogs(rows: InsertPosAuditLog[]): Promise<number> {
+    if (!rows.length) return 0;
+    const inserted = await db.insert(posAuditLogs).values(rows)
+      .onConflictDoNothing({ target: [posAuditLogs.terminalId, posAuditLogs.localId] })
+      .returning({ id: posAuditLogs.id });
+    return inserted.length;
+  }
+  async getPosAuditLogs(filters?: { terminalId?: string; cashierId?: string; action?: string; limit?: number }): Promise<PosAuditLog[]> {
+    const conds = [];
+    if (filters?.terminalId) conds.push(eq(posAuditLogs.terminalId, filters.terminalId));
+    if (filters?.cashierId) conds.push(eq(posAuditLogs.cashierId, filters.cashierId));
+    if (filters?.action) conds.push(eq(posAuditLogs.action, filters.action));
+    const base = db.select().from(posAuditLogs);
+    const q = conds.length ? base.where(and(...conds)) : base;
+    return q.orderBy(desc(posAuditLogs.createdAt)).limit(filters?.limit ?? 300);
+  }
+
+  async getPosCashierActivity(start: Date, end: Date): Promise<{ orders: { cashierId: string | null; cashierName: string | null; orders: number; sales: number; voids: number }[]; audits: { cashierId: string | null; cashierName: string | null; action: string; count: number }[] }> {
+    // SQL-side aggregation with date filtering — no row limits, so totals stay accurate at any volume
+    const orderRows = await db.execute(sql`
+      SELECT cashier_id, cashier_name,
+        COUNT(*) FILTER (WHERE status <> 'voided')::int AS orders,
+        COALESCE(SUM(total::numeric) FILTER (WHERE status <> 'voided'), 0)::float AS sales,
+        COUNT(*) FILTER (WHERE status = 'voided')::int AS voids
+      FROM pos_orders
+      WHERE created_at >= ${start} AND created_at <= ${end}
+      GROUP BY cashier_id, cashier_name
+    `);
+    const auditRows = await db.execute(sql`
+      SELECT cashier_id, cashier_name, action, COUNT(*)::int AS count
+      FROM pos_audit_logs
+      WHERE COALESCE(
+        CASE WHEN device_created_at ~ '^\\d{4}-\\d{2}-\\d{2}' THEN device_created_at::timestamp END,
+        created_at
+      ) BETWEEN ${start} AND ${end}
+      GROUP BY cashier_id, cashier_name, action
+    `);
+    return {
+      orders: (orderRows.rows as any[]).map(r => ({ cashierId: r.cashier_id, cashierName: r.cashier_name, orders: r.orders, sales: r.sales, voids: r.voids })),
+      audits: (auditRows.rows as any[]).map(r => ({ cashierId: r.cashier_id, cashierName: r.cashier_name, action: r.action, count: r.count })),
+    };
   }
 
   // ─── POS Sync Config ──────────────────────────────────────────────────────

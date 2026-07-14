@@ -164,6 +164,28 @@ app.use((req, res, next) => {
     console.error("[migration] wa_cart_state table error:", e);
   }
 
+  // Schema migration: create pos_audit_logs table if it doesn't exist (terminal audit log sync)
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS pos_audit_logs (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        terminal_id VARCHAR NOT NULL,
+        local_id INTEGER NOT NULL,
+        cashier_id TEXT,
+        cashier_name TEXT,
+        action TEXT NOT NULL,
+        entity TEXT,
+        entity_id TEXT,
+        detail TEXT,
+        device_created_at TEXT,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS pos_audit_terminal_local_idx ON pos_audit_logs (terminal_id, local_id);
+    `);
+  } catch (e) {
+    console.error("[migration] pos_audit_logs table error:", e);
+  }
+
   // One-time opening balance migration — sets carry-over balances from previous system
   // Idempotent: only sets where opening_balance is still 0
   try {

@@ -31,6 +31,10 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         run_v3(pool).await?;
         set_version(pool, 3).await?;
     }
+    if current < 4 {
+        run_v4(pool).await?;
+        set_version(pool, 4).await?;
+    }
 
     Ok(())
 }
@@ -215,6 +219,14 @@ async fn run_v1(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     for sql in statements {
         sqlx::query(sql).execute(pool).await?;
     }
+    Ok(())
+}
+
+async fn run_v4(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // Audit-log server sync tracking
+    let _ = sqlx::query("ALTER TABLE audit_log ADD COLUMN pushed INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await;
     Ok(())
 }
 

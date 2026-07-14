@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, numeric, boolean, timestamp, date, jsonb, serial } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -761,6 +761,20 @@ export const posInbox = pgTable("pos_inbox", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const posAuditLogs = pgTable("pos_audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  terminalId: varchar("terminal_id").notNull(),
+  localId: integer("local_id").notNull(), // device-side audit_log rowid, for dedupe
+  cashierId: text("cashier_id"),
+  cashierName: text("cashier_name"),
+  action: text("action").notNull(),
+  entity: text("entity"),
+  entityId: text("entity_id"),
+  detail: text("detail"),
+  deviceCreatedAt: text("device_created_at"), // timestamp string from the terminal
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("pos_audit_terminal_local_idx").on(t.terminalId, t.localId)]);
+
 // POS Insert schemas
 export const insertPosLocationSchema = createInsertSchema(posLocations).omit({ id: true, createdAt: true });
 export type InsertPosLocation = z.infer<typeof insertPosLocationSchema>;
@@ -789,6 +803,10 @@ export type PosOrderLine = typeof posOrderLines.$inferSelect;
 export const insertPosShiftSchema = createInsertSchema(posShifts).omit({ id: true, createdAt: true, syncedAt: true });
 export type InsertPosShift = z.infer<typeof insertPosShiftSchema>;
 export type PosShift = typeof posShifts.$inferSelect;
+
+export const insertPosAuditLogSchema = createInsertSchema(posAuditLogs).omit({ id: true, createdAt: true });
+export type InsertPosAuditLog = z.infer<typeof insertPosAuditLogSchema>;
+export type PosAuditLog = typeof posAuditLogs.$inferSelect;
 
 export const insertPosSyncConfigSchema = createInsertSchema(posSyncConfig).omit({ id: true, updatedAt: true });
 export type InsertPosSyncConfig = z.infer<typeof insertPosSyncConfigSchema>;

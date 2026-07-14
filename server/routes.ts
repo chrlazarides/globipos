@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema } from "@shared/schema";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema } from "@shared/schema";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -9427,6 +9427,78 @@ export async function registerRoutes(
       const shift = await storage.createPosShift(data);
       res.json({ status: "ok", id: shift.id });
     } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Audit log ingest — terminals push their local audit_log entries
+  app.post("/api/pos/sync/audit-logs", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const { entries } = req.body;
+      if (!Array.isArray(entries)) return res.status(400).json({ message: "entries array required" });
+      const rows = entries
+        .filter((e: any) => e && Number.isFinite(Number(e.localId)) && e.action)
+        .map((e: any) => insertPosAuditLogSchema.parse({
+          terminalId: terminal.id,
+          localId: Number(e.localId),
+          cashierId: e.cashierId ?? null,
+          cashierName: e.cashierName ?? null,
+          action: String(e.action),
+          entity: e.entity ?? null,
+          entityId: e.entityId ?? null,
+          detail: e.detail ?? null,
+          deviceCreatedAt: e.createdAt ?? null,
+        }));
+      const inserted = await storage.insertPosAuditLogs(rows);
+      res.json({ status: "ok", received: entries.length, inserted });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Admin: view synced POS audit logs
+  app.get("/api/pos/audit-logs", requireAdmin, async (req, res) => {
+    try {
+      const { terminalId, cashierId, action, limit } = req.query;
+      const logs = await storage.getPosAuditLogs({
+        terminalId: terminalId as string | undefined,
+        cashierId: cashierId as string | undefined,
+        action: action as string | undefined,
+        limit: limit ? Math.min(Number(limit) || 300, 1000) : undefined,
+      });
+      const terminals = await storage.getPosTerminals();
+      const tMap = new Map(terminals.map((t: any) => [t.id, t]));
+      res.json(logs.map(l => ({
+        ...l,
+        terminalName: tMap.get(l.terminalId)?.name ?? null,
+        terminalCode: tMap.get(l.terminalId)?.code ?? null,
+      })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Report: POS cashier activity (sales from pos_orders + audit action counts)
+  app.get("/api/reports/pos-cashier-activity", requireStaff, requireModule("reports"), async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+      const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 86400000);
+      const end = endDate ? new Date(endDate + "T23:59:59.999Z") : new Date();
+      // SQL-side aggregation — accurate at any data volume (no row-limit truncation)
+      const { orders, audits } = await storage.getPosCashierActivity(start, end);
+      const byCashier: Record<string, any> = {};
+      const keyOf = (id: string | null, name: string | null) => id || name || "unknown";
+      for (const o of orders) {
+        const k = keyOf(o.cashierId, o.cashierName);
+        byCashier[k] ??= { cashierId: o.cashierId, cashierName: o.cashierName || "Unknown", orders: 0, sales: 0, voids: 0, auditActions: {} };
+        byCashier[k].orders += o.orders;
+        byCashier[k].sales += o.sales;
+        byCashier[k].voids += o.voids;
+      }
+      for (const a of audits) {
+        const k = keyOf(a.cashierId, a.cashierName);
+        byCashier[k] ??= { cashierId: a.cashierId, cashierName: a.cashierName || "Unknown", orders: 0, sales: 0, voids: 0, auditActions: {} };
+        byCashier[k].auditActions[a.action] = (byCashier[k].auditActions[a.action] || 0) + a.count;
+      }
+      const rows = Object.values(byCashier).map((r: any) => ({ ...r, sales: r.sales.toFixed(2) }));
+      rows.sort((a: any, b: any) => Number(b.sales) - Number(a.sales));
+      res.json({ startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10), cashiers: rows });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   // Customer lookup

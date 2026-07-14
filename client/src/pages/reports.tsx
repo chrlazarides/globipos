@@ -243,6 +243,9 @@ export default function Reports() {
           <TabsTrigger value="statements" data-testid="tab-statements">
             <Users className="w-4 h-4 mr-1" /> Statements
           </TabsTrigger>
+          <TabsTrigger value="pos-cashiers" data-testid="tab-pos-cashiers">
+            <BarChart2 className="w-4 h-4 mr-1" /> POS Cashiers
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="sales" className="mt-4 space-y-4">
@@ -1523,6 +1526,9 @@ export default function Reports() {
           )}
         </TabsContent>
 
+        <TabsContent value="pos-cashiers" className="mt-4 space-y-4">
+          <PosCashierActivityTab />
+        </TabsContent>
       </Tabs>
 
       <Dialog open={showEmailPreview} onOpenChange={(open) => { if (!sendSavingsEmailMutation.isPending) setShowEmailPreview(open); }}>
@@ -1591,5 +1597,110 @@ export default function Reports() {
       </Dialog>
 
     </div>
+  );
+}
+
+// ── POS cashier activity report ───────────────────────────────────────────────
+type CashierActivityRow = {
+  cashierId: string | null;
+  cashierName: string;
+  orders: number;
+  sales: string;
+  voids: number;
+  auditActions: Record<string, number>;
+};
+
+function PosCashierActivityTab() {
+  const [from, setFrom] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return d.toISOString().split("T")[0];
+  });
+  const [to, setTo] = useState(new Date().toISOString().split("T")[0]);
+
+  const { data, isLoading } = useQuery<{ startDate: string; endDate: string; cashiers: CashierActivityRow[] }>({
+    queryKey: ["/api/reports/pos-cashier-activity", { startDate: from, endDate: to }],
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/pos-cashier-activity?startDate=${from}&endDate=${to}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load cashier activity");
+      return res.json();
+    },
+  });
+
+  const rows = data?.cashiers ?? [];
+  const totalSales = rows.reduce((s, r) => s + Number(r.sales), 0);
+  const totalOrders = rows.reduce((s, r) => s + r.orders, 0);
+  const totalVoids = rows.reduce((s, r) => s + r.voids, 0);
+
+  return (
+    <>
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-end gap-4 flex-wrap">
+            <div>
+              <Label htmlFor="cashier-from">From</Label>
+              <Input id="cashier-from" type="date" value={from} onChange={e => setFrom(e.target.value)} data-testid="input-cashier-from" />
+            </div>
+            <div>
+              <Label htmlFor="cashier-to">To</Label>
+              <Input id="cashier-to" type="date" value={to} onChange={e => setTo(e.target.value)} data-testid="input-cashier-to" />
+            </div>
+            <div className="flex gap-6 ml-auto text-sm">
+              <div><span className="text-muted-foreground">Sales:</span> <span className="font-semibold" data-testid="text-cashier-total-sales">€{totalSales.toFixed(2)}</span></div>
+              <div><span className="text-muted-foreground">Orders:</span> <span className="font-semibold" data-testid="text-cashier-total-orders">{totalOrders}</span></div>
+              <div><span className="text-muted-foreground">Voids:</span> <span className="font-semibold" data-testid="text-cashier-total-voids">{totalVoids}</span></div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Cashier Activity</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <Skeleton className="h-40 w-full" />
+          ) : rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8" data-testid="text-cashier-empty">
+              No POS activity in this period.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Cashier</TableHead>
+                  <TableHead className="text-right">Orders</TableHead>
+                  <TableHead className="text-right">Sales</TableHead>
+                  <TableHead className="text-right">Voids</TableHead>
+                  <TableHead>Audit Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r, i) => (
+                  <TableRow key={r.cashierId || r.cashierName || i} data-testid={`row-cashier-${r.cashierId || i}`}>
+                    <TableCell className="font-medium">{r.cashierName}</TableCell>
+                    <TableCell className="text-right">{r.orders}</TableCell>
+                    <TableCell className="text-right">€{Number(r.sales).toFixed(2)}</TableCell>
+                    <TableCell className="text-right">{r.voids > 0 ? <Badge variant="destructive">{r.voids}</Badge> : "0"}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {Object.entries(r.auditActions).length === 0 ? (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        ) : (
+                          Object.entries(r.auditActions).map(([a, n]) => (
+                            <Badge key={a} variant="secondary" className="text-xs">{a}: {n}</Badge>
+                          ))
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </>
   );
 }

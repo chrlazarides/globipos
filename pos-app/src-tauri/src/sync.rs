@@ -262,6 +262,63 @@ pub async fn flush_outbox(
     Ok(synced)
 }
 
+// ── Audit-log push ────────────────────────────────────────────────────────────
+
+pub async fn push_audit_logs(
+    pool: &SqlitePool,
+    server_url: &str,
+    terminal_code: &str,
+) -> Result<usize, String> {
+    let rows = sqlx::query(
+        r#"SELECT id, cashier_id, cashier_name, action, entity, entity_id, detail, created_at
+           FROM audit_log WHERE pushed = 0 ORDER BY id ASC LIMIT 200"#
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if rows.is_empty() { return Ok(0); }
+
+    let entries: Vec<Value> = rows.iter().map(|r| {
+        serde_json::json!({
+            "localId":     r.try_get::<i64, _>("id").unwrap_or_default(),
+            "cashierId":   r.try_get::<Option<String>, _>("cashier_id").unwrap_or(None),
+            "cashierName": r.try_get::<Option<String>, _>("cashier_name").unwrap_or(None),
+            "action":      r.try_get::<String, _>("action").unwrap_or_default(),
+            "entity":      r.try_get::<Option<String>, _>("entity").unwrap_or(None),
+            "entityId":    r.try_get::<Option<String>, _>("entity_id").unwrap_or(None),
+            "detail":      r.try_get::<Option<String>, _>("detail").unwrap_or(None),
+            "createdAt":   r.try_get::<String, _>("created_at").unwrap_or_default(),
+        })
+    }).collect();
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/api/pos/sync/audit-logs", server_url.trim_end_matches('/'));
+    let resp = client.post(&url)
+        .header("X-Terminal-Code", terminal_code)
+        .json(&serde_json::json!({ "entries": entries }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let max_id: i64 = rows.iter().map(|r| r.try_get::<i64, _>("id").unwrap_or(0)).max().unwrap_or(0);
+    sqlx::query("UPDATE audit_log SET pushed = 1 WHERE id <= ? AND pushed = 0")
+        .bind(max_id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(rows.len())
+}
+
 async fn schedule_retry(
     pool: &SqlitePool,
     outbox_id: &str,

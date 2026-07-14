@@ -279,6 +279,8 @@ async fn flush_outbox(state: State<'_, AppState>) -> Result<usize, String> {
     };
 
     let result = sync::flush_outbox(&state.db, &server_url, &terminal_code).await?;
+    // Best-effort: also push any un-synced audit-log entries to the back office
+    let _ = sync::push_audit_logs(&state.db, &server_url, &terminal_code).await;
     update_outbox_counts(&*state).await?;
     Ok(result)
 }
