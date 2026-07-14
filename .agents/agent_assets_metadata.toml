@@ -18,3 +18,9 @@ id = "35gm2ugyn_uY_sVhZtr5V"
 uri = "file://USER_MANUAL.md"
 type = "text"
 title = "GlobiPOS User Manual"
+
+[[outputs]]
+id = "FuZ_5h2ubkiHH5mcUMs4E"
+uri = "file://exports/items-restore.json"
+type = "unspecified"
+title = "Items restore file (216 items + 27 categories)"
