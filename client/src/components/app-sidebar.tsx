@@ -29,6 +29,7 @@ const mainNav = [
   { title: "Colors & Sizes", url: "/colors-sizes", icon: Palette, module: "items" },
   { title: "Location Stock", url: "/location-stock", icon: MapPin, module: "items" },
   { title: "Variant Matrix & Barcodes", url: "/variant-matrix", icon: Grid3x3, module: "items" },
+  { title: "Barcode Labels", url: "/barcode-labels", icon: Tag, module: "items" },
   { title: "Inventory In (Col/Size)", url: "/inventory-in", icon: PackagePlus, module: "items" },
   { title: "Stock Transfers", url: "/stock-transfers", icon: ArrowLeftRight, module: "items" },
   { title: "Expiration & Alerts", url: "/expiration", icon: CalendarClock, module: "items" },
