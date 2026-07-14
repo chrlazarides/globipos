@@ -20,7 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertPosTerminalSchema } from "@shared/schema";
-import type { PosTerminal, PosLocation, PosLayoutSet } from "@shared/schema";
+import type { PosTerminal, PosLocation, PosLayoutSet, PosCashier } from "@shared/schema";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1303,6 +1303,9 @@ export default function PosTerminalHub() {
         </div>
       )}
 
+      {/* Cashiers */}
+      <CashiersSection locations={locations} />
+
       {/* New/Edit Terminal dialog */}
       <Dialog open={open} onOpenChange={o => { if (!o) { setOpen(false); setEditing(undefined); } }}>
         <DialogContent>
@@ -1311,5 +1314,143 @@ export default function PosTerminalHub() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// ── Cashiers management ────────────────────────────────────────────────────────
+function CashiersSection({ locations }: { locations: PosLocation[] }) {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingCashier, setEditingCashier] = useState<PosCashier | undefined>();
+  const [name, setName] = useState("");
+  const [pin, setPin] = useState("");
+  const [role, setRole] = useState("cashier");
+  const [locationId, setLocationId] = useState<string>("all");
+
+  const { data: cashiers = [], isLoading } = useQuery<PosCashier[]>({ queryKey: ["/api/pos/cashiers"] });
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, unknown> = { name: name.trim(), role, locationId: locationId === "all" ? null : locationId, active: true };
+      if (pin.trim()) body.pin = pin.trim();
+      if (editingCashier) return apiRequest("PUT", `/api/pos/cashiers/${editingCashier.id}`, body);
+      return apiRequest("POST", "/api/pos/cashiers", body);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pos/cashiers"] });
+      setDialogOpen(false);
+      toast({ title: editingCashier ? "Cashier updated" : "Cashier created", description: "Terminals pick up changes on their next sync or re-registration." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/pos/cashiers/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/pos/cashiers"] }),
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  function openNew() {
+    setEditingCashier(undefined);
+    setName(""); setPin(""); setRole("cashier"); setLocationId("all");
+    setDialogOpen(true);
+  }
+  function openEdit(c: PosCashier) {
+    setEditingCashier(c);
+    setName(c.name); setPin(""); setRole(c.role); setLocationId(c.locationId ?? "all");
+    setDialogOpen(true);
+  }
+
+  const pinValid = editingCashier ? (pin.trim() === "" || /^\d{4,8}$/.test(pin.trim())) : /^\d{4,8}$/.test(pin.trim());
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <User className="w-4 h-4 text-muted-foreground" />
+          <h2 className="font-semibold text-sm">Cashiers & PINs</h2>
+          <Badge variant="outline" className="text-[10px]">{cashiers.length}</Badge>
+        </div>
+        <Button size="sm" onClick={openNew} data-testid="button-add-cashier">
+          <Plus className="w-4 h-4 mr-1" /> Add Cashier
+        </Button>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+          ) : cashiers.length === 0 ? (
+            <div className="py-8 text-center text-muted-foreground text-sm">
+              <p className="font-medium">No cashiers yet</p>
+              <p className="mt-1">Add a cashier with a PIN — that PIN is what you type on the POS terminal to log in.</p>
+            </div>
+          ) : (
+            <div className="divide-y">
+              {cashiers.map(c => (
+                <div key={c.id} className="flex items-center gap-3 px-4 py-2.5" data-testid={`row-cashier-${c.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{c.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      PIN: <span className="font-mono">{c.pin}</span> · {c.role}
+                      {c.locationId ? ` · ${locations.find(l => l.id === c.locationId)?.name ?? "location"}` : " · all locations"}
+                    </p>
+                  </div>
+                  {!c.active && <Badge variant="secondary" className="text-[10px]">inactive</Badge>}
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(c)} data-testid={`button-edit-cashier-${c.id}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { if (confirm(`Delete cashier "${c.name}"?`)) deleteMutation.mutate(c.id); }} data-testid={`button-delete-cashier-${c.id}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>{editingCashier ? "Edit Cashier" : "New Cashier"}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Name</label>
+              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Maria" data-testid="input-cashier-name" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium">{editingCashier ? "New PIN (leave blank to keep current)" : "PIN (4–8 digits)"}</label>
+              <Input value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))} inputMode="numeric" placeholder="e.g. 1234" data-testid="input-cashier-pin" />
+              {pin && !pinValid && <p className="text-xs text-destructive">PIN must be 4–8 digits</p>}
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Role</label>
+              <Select value={role} onValueChange={setRole}>
+                <SelectTrigger data-testid="select-cashier-role"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cashier">Cashier</SelectItem>
+                  <SelectItem value="supervisor">Supervisor</SelectItem>
+                  <SelectItem value="manager">Manager</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Location</label>
+              <Select value={locationId} onValueChange={setLocationId}>
+                <SelectTrigger data-testid="select-cashier-location"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All locations</SelectItem>
+                  {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              className="w-full"
+              disabled={!name.trim() || !pinValid || saveMutation.isPending}
+              onClick={() => saveMutation.mutate()}
+              data-testid="button-save-cashier"
+            >
+              {saveMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {editingCashier ? "Save changes" : "Create cashier"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </section>
   );
 }
