@@ -163,6 +163,23 @@ jobs:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android build --apk --split-per-abi
 
+      - name: Sign APKs
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > /tmp/globipos-release.p12
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
+          find pos-app/src-tauri/gen/android/app/build/outputs/apk -name '*-unsigned.apk' | while read -r apk; do
+            signed="${apk%-unsigned.apk}-signed.apk"
+            "$BT/zipalign" -f -p 4 "$apk" "$signed.aligned"
+            "$BT/apksigner" sign --ks /tmp/globipos-release.p12 --ks-key-alias globipos --ks-pass env:ANDROID_KEYSTORE_PASSWORD --out "$signed" "$signed.aligned"
+            "$BT/apksigner" verify "$signed"
+            rm -f "$signed.aligned" "$apk"
+          done
+          rm -f /tmp/globipos-release.p12
+
       - name: Upload APK to release
         uses: softprops/action-gh-release@v2
         with:
