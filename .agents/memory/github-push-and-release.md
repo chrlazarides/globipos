@@ -15,3 +15,13 @@ description: How to push commits and cut a POS release build from the Replit san
 
 **Why:** discovered while cutting the v1.0.2 fresh rebuild (July 2026); several dead tokens and the fetch-block made the obvious paths fail.
 **How to apply:** any future "push to GitHub" or "new POS release" request — bump versions remotely via API commit, tag via API, verify run via /actions/runs.
+
+## Android APK signing (added for v1.0.4)
+Release APKs are signed in CI: `apksigner` + `zipalign` from the newest
+build-tools, using a PKCS12 keystore (alias `globipos`) stored base64 in repo
+secrets `ANDROID_KEYSTORE_B64` / `ANDROID_KEYSTORE_PASSWORD`. The keystore was
+generated with openssl (no JDK needed) and a local copy sits in
+`.local/android-signing/`. **Why:** unsigned "release-unsigned" APKs refuse to
+install on Android; and future versions must be signed with the SAME key or
+devices demand uninstall/reinstall. Never regenerate the keystore casually.
+Signed assets are named `app-{abi}-release-signed.apk`.
