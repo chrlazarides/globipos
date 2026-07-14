@@ -284,7 +284,6 @@ export default function PosDownload() {
 
   const { data: releases = [], isLoading: buildsLoading, isError: buildsError } = useQuery<PosRelease[]>({
     queryKey: ["/api/pos/builds"],
-    enabled: !!githubRepo,
   });
 
   const latestRelease = releases.find(r => !r.prerelease && r.assets.length > 0) ?? releases[0];

@@ -8603,7 +8603,9 @@ export async function registerRoutes(
         return res.json(posBuildsCache.data);
       }
       const settings = await storage.getSettings();
-      const repoUrl = settings.find((s) => s.key === "pos_github_repo")?.value ?? "";
+      const repoUrl = settings.find((s) => s.key === "pos_github_repo")?.value
+        || process.env.POS_GITHUB_REPO
+        || "https://github.com/chrlazarides/globipos";
       const m = repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
       if (!m) return res.status(400).json({ message: "pos_github_repo setting is not a valid GitHub URL" });
       const [, owner, repo] = m;
