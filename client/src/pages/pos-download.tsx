@@ -349,6 +349,46 @@ export default function PosDownload() {
         </CardContent>
       </Card>
 
+      {/* All ready-to-run downloads */}
+      {latestRelease && latestRelease.assets.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+              <Package className="w-4 h-4 text-primary" />
+              Ready-to-run downloads
+              <Badge variant="outline" className="text-xs font-normal">{latestRelease.tag}</Badge>
+              <span className="text-xs font-normal text-muted-foreground">released {new Date(latestRelease.publishedAt).toLocaleDateString()}</span>
+            </CardTitle>
+            <CardDescription>All compiled installers from the latest GitHub release — download and run, no build needed.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {PLATFORMS.filter(p => p.id !== "ios").map(p => {
+                const assets = latestRelease.assets.filter(a => ASSET_PLATFORM_MATCHERS[p.id](a.name));
+                if (assets.length === 0) return null;
+                return (
+                  <div key={p.id} className="rounded-lg border p-3 space-y-2" data-testid={`downloads-group-${p.id}`}>
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <p.icon className={`w-4 h-4 ${p.color}`} />
+                      {p.label}
+                    </div>
+                    {assets.map(a => (
+                      <Button key={a.name} asChild variant="outline" size="sm" className="w-full justify-start" data-testid={`btn-dl-all-${a.name}`}>
+                        <a href={a.downloadUrl} target="_blank" rel="noopener noreferrer">
+                          <Download className="w-3.5 h-3.5 mr-2 flex-shrink-0" />
+                          <span className="truncate text-xs">{assetLabel(a.name)}</span>
+                          <span className="ml-auto text-[11px] opacity-70 flex-shrink-0">{formatSize(a.size)}</span>
+                        </a>
+                      </Button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Platform picker */}
         <div className="space-y-2">
