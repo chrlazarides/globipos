@@ -24,3 +24,9 @@ id = "FuZ_5h2ubkiHH5mcUMs4E"
 uri = "file://exports/items-restore.json"
 type = "unspecified"
 title = "Items restore file (216 items + 27 categories)"
+
+[[outputs]]
+id = "V8zI-WKPVcfAp5fKdMJAo"
+uri = "file://exports/GlobiPOS-Export-Tool.zip"
+type = "unspecified"
+title = "GlobiPOS Export Tool (run on your SQL Server PC)"
