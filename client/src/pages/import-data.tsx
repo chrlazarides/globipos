@@ -194,7 +194,17 @@ type SheetResult = {
   sheetName: string;
   entity: string;
   success: number;
+  updated: number;
   errors: { row: number; message: string }[];
+};
+
+const IMPORT_ORDER: Record<Exclude<EntityType, "skip">, number> = {
+  categories: 0,
+  colors: 1,
+  sizes: 2,
+  suppliers: 3,
+  customers: 4,
+  items: 5,
 };
 
 const WINE_CATEGORY_KEYWORDS = [
@@ -224,7 +234,8 @@ function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[] } {
   const getCellVal = (r: number, c: number): string => {
     const v = data[r]?.[c];
     if (v === null || v === undefined) return "";
-    return String(v).trim();
+    const s = String(v).trim();
+    return /^null$/i.test(s) ? "" : s;
   };
 
   const HEADER_KEYWORDS = [
@@ -320,7 +331,8 @@ function tryParseWinePriceList(data: CellGrid): { detected: boolean; brand: stri
   const getCellVal = (r: number, c: number): string => {
     const v = data[r]?.[c];
     if (v === null || v === undefined) return "";
-    return String(v).trim();
+    const s = String(v).trim();
+    return /^null$/i.test(s) ? "" : s;
   };
 
   const STANDARD_HEADER_WORDS = [
@@ -455,10 +467,29 @@ function tryParseWinePriceList(data: CellGrid): { detected: boolean; brand: stri
   return { detected: true, brand, origin, rows: flatRows, headers };
 }
 
-function detectEntity(headers: string[]): { entity: EntityType; confidence: number } {
+const SHEET_NAME_HINTS: [RegExp, Exclude<EntityType, "skip">][] = [
+  [/custom|client|debtor|πελατ/i, "customers"],
+  [/suppl|vendor|creditor|προμηθ/i, "suppliers"],
+  [/categor|group|κατηγορ/i, "categories"],
+  [/colou?r|χρώμα/i, "colors"],
+  [/size|μέγεθ/i, "sizes"],
+  [/item|product|stock|inventory|article|είδη|προϊόν/i, "items"],
+];
+
+function detectEntity(headers: string[], sheetName?: string): { entity: EntityType; confidence: number } {
   const lowerHeaders = headers.map((h) => h.toLowerCase().replace(/[\s_-]/g, ""));
 
   const scores: Record<Exclude<EntityType, "skip">, number> = { items: 0, customers: 0, suppliers: 0, categories: 0, colors: 0, sizes: 0 };
+
+  if (sheetName) {
+    const cleanName = sheetName.replace(/^dbo\.?/i, "").replace(/\$$/, "");
+    for (const [pattern, entity] of SHEET_NAME_HINTS) {
+      if (pattern.test(cleanName)) {
+        scores[entity] += 8;
+        break;
+      }
+    }
+  }
 
   const itemKeywords = ["sku", "barcode", "price", "price1", "price2", "costprice", "stockquantity", "stock", "packsize", "unittype", "volume", "alcohol", "vintage", "origin", "brand", "reorderlevel"];
   const customerKeywords = ["customer", "creditlimit", "pricelevel", "paymentterms", "taxid", "portalaccess"];
@@ -559,6 +590,7 @@ export default function ImportData() {
   const [activeSheet, setActiveSheet] = useState("");
   const [importResults, setImportResults] = useState<SheetResult[]>([]);
   const [importProgress, setImportProgress] = useState(0);
+  const [updateExisting, setUpdateExisting] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
@@ -622,7 +654,7 @@ export default function ImportData() {
           }
 
           const parsed = smartSheetParse(grid);
-          const { entity, confidence } = detectEntity(parsed.headers);
+          const { entity, confidence } = detectEntity(parsed.headers, name);
           const config = entity !== "skip" ? ENTITY_CONFIG[entity] : null;
           const columnMap = config ? autoMapColumns(parsed.headers, config.fields) : {};
 
@@ -683,7 +715,12 @@ export default function ImportData() {
     );
   };
 
-  const sheetsToImport = sheets.filter((s) => s.detectedEntity !== "skip");
+  const sheetsToImport = sheets
+    .filter((s) => s.detectedEntity !== "skip")
+    .sort((a, b) =>
+      IMPORT_ORDER[a.detectedEntity as Exclude<EntityType, "skip">] -
+      IMPORT_ORDER[b.detectedEntity as Exclude<EntityType, "skip">]
+    );
 
   const handleImport = async () => {
     setStep("importing");
@@ -706,7 +743,7 @@ export default function ImportData() {
           res = await fetch(config.endpoint + "/json", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rows: sheet._preParsedRows }),
+            body: JSON.stringify({ rows: sheet._preParsedRows, mode: updateExisting ? "upsert" : undefined }),
           });
         } else {
           if (!fileInputRef.current?.files?.[0]) throw new Error("File not available");
@@ -714,6 +751,7 @@ export default function ImportData() {
           formData.append("file", fileInputRef.current.files[0]);
           formData.append("columnMap", JSON.stringify(cleanedMap));
           formData.append("sheetName", sheet.sheetName);
+          if (updateExisting) formData.append("mode", "upsert");
           res = await fetch(config.endpoint, { method: "POST", body: formData });
         }
 
@@ -723,6 +761,7 @@ export default function ImportData() {
           sheetName: sheet.sheetName,
           entity: config.label,
           success: data.success || 0,
+          updated: data.updated || 0,
           errors: data.errors || [],
         });
       } catch (err: any) {
@@ -730,6 +769,7 @@ export default function ImportData() {
           sheetName: sheet.sheetName,
           entity: config.label,
           success: 0,
+          updated: 0,
           errors: [{ row: 0, message: err.message || "Import failed" }],
         });
       }
@@ -748,6 +788,7 @@ export default function ImportData() {
   };
 
   const totalSuccess = importResults.reduce((sum, r) => sum + r.success, 0);
+  const totalUpdated = importResults.reduce((sum, r) => sum + r.updated, 0);
   const totalErrors = importResults.reduce((sum, r) => sum + r.errors.length, 0);
 
   const currentSheet = sheets.find((s) => s.sheetName === activeSheet);
@@ -820,7 +861,17 @@ export default function ImportData() {
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer select-none" data-testid="label-update-existing">
+                    <input
+                      type="checkbox"
+                      checked={updateExisting}
+                      onChange={(e) => setUpdateExisting(e.target.checked)}
+                      className="h-4 w-4 accent-primary"
+                      data-testid="checkbox-update-existing"
+                    />
+                    Update existing records (match by code / SKU)
+                  </label>
                   <Button variant="outline" onClick={reset} data-testid="button-import-change-file">
                     <RefreshCw className="w-4 h-4 mr-2" />
                     Change File
@@ -1142,7 +1193,13 @@ export default function ImportData() {
                 {totalSuccess > 0 && (
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-green-500" />
-                    <span className="text-sm font-medium">{totalSuccess} records imported successfully</span>
+                    <span className="text-sm font-medium">{totalSuccess} records created</span>
+                  </div>
+                )}
+                {totalUpdated > 0 && (
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="w-5 h-5 text-blue-500" />
+                    <span className="text-sm font-medium">{totalUpdated} existing records updated</span>
                   </div>
                 )}
                 {totalErrors > 0 && (
@@ -1165,7 +1222,8 @@ export default function ImportData() {
                     <Badge variant="secondary">{result.entity}</Badge>
                   </CardTitle>
                   <div className="flex items-center gap-2">
-                    {result.success > 0 && <Badge>{result.success} imported</Badge>}
+                    {result.success > 0 && <Badge>{result.success} created</Badge>}
+                    {result.updated > 0 && <Badge variant="secondary">{result.updated} updated</Badge>}
                     {result.errors.length > 0 && (
                       <Badge variant="destructive">{result.errors.length} error{result.errors.length !== 1 ? "s" : ""}</Badge>
                     )}

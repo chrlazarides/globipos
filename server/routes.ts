@@ -1415,17 +1415,22 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const upsert = req.body.mode === "upsert";
       const categories = await storage.getCategories();
       const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
+      const existingBySku = upsert
+        ? new Map((await storage.getItems()).map((it) => [it.sku.toLowerCase(), it]))
+        : new Map<string, any>();
 
-      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
 
       for (let i = 0; i < rows.length; i++) {
         try {
           const row = rows[i];
           const getValue = (field: string) => {
             const col = columnMap[field] || field;
-            return row[col] !== undefined ? String(row[col]).trim() : "";
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
           };
 
           const name = getValue("name");
@@ -1470,8 +1475,29 @@ export async function registerRoutes(
             active: true,
           };
 
-          await storage.createItem(itemData);
-          results.success++;
+          const existing = upsert ? existingBySku.get(sku.toLowerCase()) : undefined;
+          if (existing) {
+            const updateData: Record<string, any> = { name };
+            if (getValue("barcode")) updateData.barcode = itemData.barcode;
+            if (getValue("description")) updateData.description = itemData.description;
+            if (categoryId) updateData.categoryId = categoryId;
+            if (getValue("unitType")) updateData.unitType = itemData.unitType;
+            if (getValue("packSize")) updateData.packSize = itemData.packSize;
+            for (const p of ["price1", "price2", "price3", "price4", "price5", "costPrice"] as const) {
+              if (getValue(p)) updateData[p] = (itemData as any)[p];
+            }
+            if (getValue("stockQuantity")) updateData.stockQuantity = itemData.stockQuantity;
+            if (getValue("reorderLevel")) updateData.reorderLevel = itemData.reorderLevel;
+            for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
+              if (getValue(f)) updateData[f] = (itemData as any)[f];
+            }
+            await storage.updateItem(existing.id, updateData);
+            results.updated++;
+          } else {
+            const created = await storage.createItem(itemData);
+            if (upsert) existingBySku.set(sku.toLowerCase(), created);
+            results.success++;
+          }
         } catch (e: any) {
           results.errors.push({ row: i + 2, message: e.message });
         }
@@ -1493,9 +1519,18 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Too many rows (max 10000)" });
       }
 
+      const upsert = req.body.mode === "upsert";
       const categories = await storage.getCategories();
       const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
-      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+      const existingBySku = upsert
+        ? new Map((await storage.getItems()).map((it) => [it.sku.toLowerCase(), it]))
+        : new Map<string, any>();
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
+
+      const clean = (v: any): string => {
+        const s = v === null || v === undefined ? "" : String(v).trim();
+        return /^null$/i.test(s) ? "" : s;
+      };
 
       for (let i = 0; i < rows.length; i++) {
         try {
@@ -1504,14 +1539,14 @@ export async function registerRoutes(
             results.errors.push({ row: i + 1, message: "Invalid row data" });
             continue;
           }
-          const name = String(row.name || "").trim();
-          const sku = String(row.sku || "").trim();
+          const name = clean(row.name);
+          const sku = clean(row.sku);
           if (!name || !sku) {
             results.errors.push({ row: i + 1, message: "Name and SKU are required" });
             continue;
           }
 
-          const categoryName = String(row.category || "").trim();
+          const categoryName = clean(row.category);
           let categoryId: string | null = null;
           if (categoryName) {
             categoryId = catMap.get(categoryName.toLowerCase()) || null;
@@ -1522,30 +1557,53 @@ export async function registerRoutes(
             }
           }
 
-          await storage.createItem({
+          const itemData = {
             name,
             sku,
-            barcode: row.barcode || null,
-            description: row.description || null,
+            barcode: clean(row.barcode) || null,
+            description: clean(row.description) || null,
             categoryId,
-            unitType: row.unitType || "pc",
-            packSize: parseInt(row.packSize) || 1,
-            price1: row.price1 || "0",
-            price2: row.price2 || "0",
-            price3: row.price3 || "0",
-            price4: row.price4 || "0",
-            price5: row.price5 || "0",
-            costPrice: row.costPrice || "0",
-            stockQuantity: parseInt(row.stockQuantity) || 0,
-            reorderLevel: parseInt(row.reorderLevel) || 10,
-            volume: row.volume || null,
-            alcoholPercentage: row.alcoholPercentage || null,
-            brand: row.brand || null,
-            origin: row.origin || null,
-            vintage: row.vintage || null,
+            unitType: clean(row.unitType) || "pc",
+            packSize: parseInt(clean(row.packSize)) || 1,
+            price1: clean(row.price1) || "0",
+            price2: clean(row.price2) || "0",
+            price3: clean(row.price3) || "0",
+            price4: clean(row.price4) || "0",
+            price5: clean(row.price5) || "0",
+            costPrice: clean(row.costPrice) || "0",
+            stockQuantity: parseInt(clean(row.stockQuantity)) || 0,
+            reorderLevel: parseInt(clean(row.reorderLevel)) || 10,
+            volume: clean(row.volume) || null,
+            alcoholPercentage: clean(row.alcoholPercentage) || null,
+            brand: clean(row.brand) || null,
+            origin: clean(row.origin) || null,
+            vintage: clean(row.vintage) || null,
             active: true,
-          });
-          results.success++;
+          };
+
+          const existing = upsert ? existingBySku.get(sku.toLowerCase()) : undefined;
+          if (existing) {
+            const updateData: Record<string, any> = { name };
+            if (clean(row.barcode)) updateData.barcode = itemData.barcode;
+            if (clean(row.description)) updateData.description = itemData.description;
+            if (categoryId) updateData.categoryId = categoryId;
+            if (clean(row.unitType)) updateData.unitType = itemData.unitType;
+            if (clean(row.packSize)) updateData.packSize = itemData.packSize;
+            for (const p of ["price1", "price2", "price3", "price4", "price5", "costPrice"] as const) {
+              if (clean((row as any)[p])) updateData[p] = (itemData as any)[p];
+            }
+            if (clean(row.stockQuantity)) updateData.stockQuantity = itemData.stockQuantity;
+            if (clean(row.reorderLevel)) updateData.reorderLevel = itemData.reorderLevel;
+            for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
+              if (clean((row as any)[f])) updateData[f] = (itemData as any)[f];
+            }
+            await storage.updateItem(existing.id, updateData);
+            results.updated++;
+          } else {
+            const created = await storage.createItem(itemData);
+            if (upsert) existingBySku.set(sku.toLowerCase(), created);
+            results.success++;
+          }
         } catch (e: any) {
           results.errors.push({ row: i + 1, message: e.message });
         }
@@ -1774,15 +1832,20 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const upsert = req.body.mode === "upsert";
+      const existingByCode = upsert
+        ? new Map((await storage.getCustomers()).map((c) => [c.code.toLowerCase(), c]))
+        : new Map<string, any>();
 
-      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
 
       for (let i = 0; i < rows.length; i++) {
         try {
           const row = rows[i];
           const getValue = (field: string) => {
             const col = columnMap[field] || field;
-            return row[col] !== undefined ? String(row[col]).trim() : "";
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
           };
 
           const name = getValue("name");
@@ -1812,8 +1875,22 @@ export async function registerRoutes(
             active: true,
           };
 
-          await storage.createCustomer(custData);
-          results.success++;
+          const existing = upsert ? existingByCode.get(code.toLowerCase()) : undefined;
+          if (existing) {
+            const updateData: Record<string, any> = { name };
+            for (const f of ["email", "phone", "address", "city", "taxId", "notes", "portalAccessCode"] as const) {
+              if (getValue(f)) updateData[f] = (custData as any)[f];
+            }
+            if (getValue("paymentTerms")) updateData.paymentTerms = custData.paymentTerms;
+            if (getValue("creditLimit")) updateData.creditLimit = custData.creditLimit;
+            if (getValue("priceLevel")) updateData.priceLevel = custData.priceLevel;
+            await storage.updateCustomer(existing.id, updateData);
+            results.updated++;
+          } else {
+            const created = await storage.createCustomer(custData);
+            if (upsert) existingByCode.set(code.toLowerCase(), created);
+            results.success++;
+          }
         } catch (e: any) {
           results.errors.push({ row: i + 2, message: e.message });
         }
@@ -5270,14 +5347,19 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
-      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+      const upsert = req.body.mode === "upsert";
+      const existingByCode = upsert
+        ? new Map((await storage.getSuppliers()).map((s) => [s.code.toLowerCase(), s]))
+        : new Map<string, any>();
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
 
       for (let i = 0; i < rows.length; i++) {
         try {
           const row = rows[i];
           const getValue = (field: string) => {
             const col = columnMap[field] || field;
-            return row[col] !== undefined ? String(row[col]).trim() : "";
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
           };
 
           const name = getValue("name");
@@ -5306,8 +5388,20 @@ export async function registerRoutes(
             active: true,
           };
 
-          await storage.createSupplier(supData);
-          results.success++;
+          const existing = upsert ? existingByCode.get(code.toLowerCase()) : undefined;
+          if (existing) {
+            const updateData: Record<string, any> = { name };
+            for (const f of ["contactPerson", "email", "phone", "address", "city", "country", "taxId", "notes"] as const) {
+              if (getValue(f)) updateData[f] = (supData as any)[f];
+            }
+            if (getValue("paymentTerms")) updateData.paymentTerms = supData.paymentTerms;
+            await storage.updateSupplier(existing.id, updateData);
+            results.updated++;
+          } else {
+            const created = await storage.createSupplier(supData);
+            if (upsert) existingByCode.set(code.toLowerCase(), created);
+            results.success++;
+          }
         } catch (e: any) {
           results.errors.push({ row: i + 2, message: e.message });
         }
@@ -5330,14 +5424,16 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
-      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+      const existingColors = new Set((await storage.getColors()).map((c) => c.name.toLowerCase()));
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
 
       for (let i = 0; i < rows.length; i++) {
         try {
           const row = rows[i];
           const getValue = (field: string) => {
             const col = columnMap[field] || field;
-            return row[col] !== undefined ? String(row[col]).trim() : "";
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
           };
 
           const name = getValue("name");
@@ -5346,12 +5442,17 @@ export async function registerRoutes(
             continue;
           }
 
-          await storage.createColor({
-            name,
-            hexCode: getValue("hexCode") || null,
-            active: true,
-          });
-          results.success++;
+          if (existingColors.has(name.toLowerCase())) {
+            results.updated++;
+          } else {
+            await storage.createColor({
+              name,
+              hexCode: getValue("hexCode") || null,
+              active: true,
+            });
+            existingColors.add(name.toLowerCase());
+            results.success++;
+          }
         } catch (e: any) {
           results.errors.push({ row: i + 2, message: e.message });
         }
@@ -5374,14 +5475,16 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
-      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+      const existingSizes = new Set((await storage.getSizes()).map((s) => s.name.toLowerCase()));
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
 
       for (let i = 0; i < rows.length; i++) {
         try {
           const row = rows[i];
           const getValue = (field: string) => {
             const col = columnMap[field] || field;
-            return row[col] !== undefined ? String(row[col]).trim() : "";
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
           };
 
           const name = getValue("name");
@@ -5391,12 +5494,17 @@ export async function registerRoutes(
           }
           const sortOrderRaw = getValue("sortOrder");
 
-          await storage.createSize({
-            name,
-            sortOrder: sortOrderRaw ? parseInt(sortOrderRaw) || 0 : 0,
-            active: true,
-          });
-          results.success++;
+          if (existingSizes.has(name.toLowerCase())) {
+            results.updated++;
+          } else {
+            await storage.createSize({
+              name,
+              sortOrder: sortOrderRaw ? parseInt(sortOrderRaw) || 0 : 0,
+              active: true,
+            });
+            existingSizes.add(name.toLowerCase());
+            results.success++;
+          }
         } catch (e: any) {
           results.errors.push({ row: i + 2, message: e.message });
         }
@@ -5419,14 +5527,16 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
-      const results: { success: number; errors: { row: number; message: string }[] } = { success: 0, errors: [] };
+      const existingCats = new Set((await storage.getCategories()).map((c) => c.name.toLowerCase()));
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
 
       for (let i = 0; i < rows.length; i++) {
         try {
           const row = rows[i];
           const getValue = (field: string) => {
             const col = columnMap[field] || field;
-            return row[col] !== undefined ? String(row[col]).trim() : "";
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
           };
 
           const name = getValue("name");
@@ -5435,13 +5545,18 @@ export async function registerRoutes(
             continue;
           }
 
-          await storage.createCategory({
-            name,
-            description: getValue("description") || null,
-            parentId: null,
-            active: true,
-          });
-          results.success++;
+          if (existingCats.has(name.toLowerCase())) {
+            results.updated++;
+          } else {
+            await storage.createCategory({
+              name,
+              description: getValue("description") || null,
+              parentId: null,
+              active: true,
+            });
+            existingCats.add(name.toLowerCase());
+            results.success++;
+          }
         } catch (e: any) {
           results.errors.push({ row: i + 2, message: e.message });
         }

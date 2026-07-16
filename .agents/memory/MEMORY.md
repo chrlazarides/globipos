@@ -30,3 +30,4 @@
 - [Lower-privilege route alias](lower-privilege-route-alias.md) — when aliasing an admin route to a lower role, strip/gate privileged sub-fields (e.g. isDefaultReceiving) or you silently widen scope + corrupt data
 - [barcode endpoint variant merge](barcode-endpoint-variant-merge.md) — GET /api/items/barcode can return a variant-merged item; guard hasVariants/variantId in any scan handler feeding a variant-unaware model (a UI filter isn't enough)
 - [Client console.error kills dev server](vite-client-console-error-kills-server.md) — forwarded React warnings (e.g. div-in-p from Badge) hit the Vite error logger which process.exit(1)s; page open = silent server death
+- [Smart import dual paths](smart-import-dual-paths.md) — upsert/normalization changes must hit both the multipart routes AND /api/items/import/json (pre-parsed path)
