@@ -16,6 +16,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { load as loadStore } from "@tauri-apps/plugin-store";
 import { open as openShell } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
@@ -28,6 +29,9 @@ import { usePermissions } from "../hooks/usePermissions";
 import { useHardware } from "../hooks/useHardware";
 import { useShift } from "../hooks/useShift";
 import { usePosTheme } from "../hooks/usePosTheme";
+import { useMultiBuy } from "../hooks/useMultiBuy";
+import type { AppliedPromo } from "../hooks/useMultiBuy";
+import type { PromoLineInput } from "../hooks/useOrder";
 import { useResponsiveColumns, type LayoutColumnConfig } from "../hooks/useWindowSize";
 import { SyncHeader } from "../components/SyncHeader";
 import { CategoryNav } from "../components/CategoryNav";
@@ -43,10 +47,14 @@ import ScaleBar from "../components/ScaleBar";
 import CustomerDisplay from "../components/CustomerDisplay";
 import PaymentDialog from "../components/PaymentDialog";
 import RefundDialog from "../components/RefundDialog";
+import AgeVerificationDialog from "../components/AgeVerificationDialog";
+import ProduceGrid from "../components/ProduceGrid";
 import type { PaymentResult } from "../hooks/usePayment";
 import { FallbackRules } from "./FallbackRules";
 import { BarcodeConfig } from "./BarcodeConfig";
 import { ReceiptDesigner } from "./ReceiptDesigner";
+import ScoMonitor from "./ScoMonitor";
+import HardwareConfigPage from "./HardwareConfigPage";
 import type { BarcodeConfig as BarcodeConfigType, ReceiptConfig as ReceiptConfigType } from "../types";
 import { DEFAULT_RECEIPT_CONFIG } from "../types";
 import ShiftManager from "./ShiftManager";
@@ -439,9 +447,9 @@ function RecallDialog({ onRecall, onClose }: {
 
 // ── Main POS Screen ───────────────────────────────────────────────────────────
 
-type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | null;
+type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | "age_check" | "produce" | "bottle_return" | "coupon" | "click_collect" | null;
 type CashDialogMode = "cash_in" | "cash_out" | "petty_cash";
-type POSMode = "sell" | "sco" | "shift" | "fallback" | "barcode_config" | "receipt_design";
+type POSMode = "sell" | "sco" | "shift" | "fallback" | "barcode_config" | "receipt_design" | "hardware_config" | "sco_monitor";
 
 interface PaymentSuccessState {
   total: number;
@@ -544,10 +552,11 @@ function PaymentSuccessOverlay({
 }
 
 export function POS({ config, session, sync, onLogout }: POSProps) {
-  const engine  = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
-  const perms   = usePermissions(session);
-  const hw      = useHardware();
-  const shift   = useShift();
+  const engine    = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
+  const perms     = usePermissions(session);
+  const hw        = useHardware();
+  const shift     = useShift();
+  const multiBuy  = useMultiBuy();
   const { theme: posTheme, toggleTheme } = usePosTheme();
 
   const [products, setProducts]           = useState<Product[]>([]);
@@ -555,6 +564,27 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [layoutButtons, setLayoutButtons] = useState<LayoutButton[]>([]);
   const [layoutConfig, setLayoutConfig]   = useState<LayoutColumnConfig | null>(null);
   const [maxButtonPos, setMaxButtonPos]   = useState(19); // default 4×5-1
+
+  // ── Phase 3 wiring: age check, multi-buy, click-collect ───────────────────
+  const [ageCheckPending, setAgeCheckPending] = useState<{ product: Product; qty: number; priceOverride?: number } | null>(null);
+  // Coupons applied manually or via barcode scan — persisted across re-evaluations
+  const [appliedCoupons, setAppliedCoupons]   = useState<PromoLineInput[]>([]);
+  // Stable keys to short-circuit the multi-buy useEffect and avoid infinite loops
+  const prevLinesKeyRef  = useRef<string>("");
+  const prevCouponKeyRef = useRef<string>("");
+  type CCOrder = { id: string; order_number?: string; payload: string; created_at?: string };
+  const [ccOrders, setCcOrders] = useState<CCOrder[]>([]);
+
+  // Derived — read from engine.lines so OrderTicket and PaymentDialog share one truth
+  const promoLines = engine.lines.filter((l) => l.id.startsWith("multibuy-") || l.id.startsWith("coupon-"));
+  const appliedPromos: AppliedPromo[] = promoLines.map((l) => ({
+    promo_id:       l.id.replace(/^(multibuy-|coupon-)/, ""),
+    promo_name:     l.description,
+    discount_amount: Math.abs(l.line_total),
+    description:    l.description,
+    affected_line_ids: [],
+  }));
+  const totalSavings = promoLines.reduce((s, l) => s + Math.abs(l.line_total), 0);
 
   // Responsive column count — recalculates live on window resize.
   // Depends on layoutConfig state so must be declared after it.
@@ -624,6 +654,63 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   useEffect(() => {
     getProducts(selectedCategory ?? undefined).then(setProducts).catch(() => {});
   }, [selectedCategory]);
+
+  // Re-evaluate multi-buy promotions whenever cart product lines or applied coupons change.
+  // Uses stable string keys to short-circuit when only the promo lines changed (our own update),
+  // preventing an infinite update loop.
+  useEffect(() => {
+    const productLines = engine.lines.filter(
+      (l) => !l.id.startsWith("multibuy-") && !l.id.startsWith("coupon-")
+    );
+    const linesKey  = productLines.map((l) => `${l.id}:${l.qty}:${l.unit_price}:${l.override_price ?? ""}:${l.voided ? "v" : ""}:${l.line_discount_pct}:${l.line_discount_fixed}`).join("|");
+    const couponKey = appliedCoupons.map((c) => c.promo_id).join("|");
+
+    // Skip if nothing that affects promo computation changed
+    if (linesKey === prevLinesKeyRef.current && couponKey === prevCouponKeyRef.current) return;
+    prevLinesKeyRef.current  = linesKey;
+    prevCouponKeyRef.current = couponKey;
+
+    if (productLines.length === 0) {
+      engine.applyPromoLines([]);
+      // Also clear any applied coupons when the order is emptied/cleared
+      if (appliedCoupons.length > 0) setAppliedCoupons([]);
+      return;
+    }
+
+    const mbResults  = multiBuy.evaluate(productLines);
+    const allPromos: PromoLineInput[] = [
+      ...mbResults.map((r) => ({ promo_id: r.promo_id,         description: r.description, discount_amount: r.discount_amount })),
+      ...appliedCoupons.map((c) => ({ ...c, promo_id: `coupon-${c.promo_id}` })),
+    ];
+    engine.applyPromoLines(allPromos);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine.lines, appliedCoupons]);
+
+  // ── handleAddProduct — wraps engine.addProduct with age check + deposit ───
+  const handleAddProduct = useCallback((product: Product, qty: number = 1, priceOverride?: number) => {
+    if ((product as any).age_restricted) {
+      setAgeCheckPending({ product, qty, priceOverride });
+      return;
+    }
+    engine.addProduct(product, qty, priceOverride);
+    // Auto-add container deposit line
+    const depositAmount = (product as any).deposit_amount as number | undefined;
+    if (depositAmount && depositAmount > 0) {
+      const depositProduct: Product = {
+        ...product,
+        id: `deposit-${product.id}`,
+        server_id: `deposit-${product.server_id ?? product.id}`,
+        name: `Deposit - ${product.name}`,
+        sku: `DEP-${product.sku ?? ""}`,
+        price1: depositAmount,
+        price2: depositAmount,
+        price3: depositAmount,
+        price4: depositAmount,
+        price5: depositAmount,
+      };
+      engine.addProduct(depositProduct, qty);
+    }
+  }, [engine]);
 
   // Customer display: publish order state to shared Tauri store on every change.
   // The CustomerDisplay component (in its own window or same window) polls this store.
@@ -718,6 +805,43 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       const { getProductByBarcode } = await import("../lib/db");
       const { parseScaleBarcode, DEFAULT_BARCODE_CONFIG } = await import("../lib/scaleBarcode");
 
+      // ── Coupon / voucher barcode detection ────────────────────────────────
+      // Detect coupon barcodes by common prefixes or the barcode config coupon flag
+      const isLikelyCoupon = /^(CPN|COUP|GV|GVC|VOUCHER|CV)[0-9A-Z\-]+/i.test(barcode)
+        || barcode.startsWith("98") // EAN-13 coupon prefix (ISO standard)
+        || barcode.startsWith("5");  // common GS1 coupon indicator
+
+      if (isLikelyCoupon) {
+        const result = await multiBuy.validateCoupon(barcode);
+        if (result.valid && result.promo) {
+          const productLinesSnap = engine.lines.filter(
+            (l) => !l.id.startsWith("multibuy-") && !l.id.startsWith("coupon-")
+          );
+          const applied = multiBuy.applyCoupon(result.promo, productLinesSnap);
+          if (applied) {
+            // Inject coupon as a real negative line via applyPromoLines (adds to total)
+            setAppliedCoupons((prev) => {
+              const already = prev.find((c) => c.promo_id === applied.promo_id);
+              if (already) return prev; // don't double-apply same coupon
+              return [...prev, {
+                promo_id: applied.promo_id,
+                description: applied.description,
+                discount_amount: applied.discount_amount,
+              }];
+            });
+            await invoke("write_audit", {
+              cashierId: session.cashier_id,
+              cashierName: session.cashier_name,
+              action: "coupon_scanned",
+              entity: "order",
+              detail: `Coupon ${barcode}: -€${applied.discount_amount.toFixed(2)}`,
+            }).catch(() => {});
+          }
+          return;
+        }
+        // Fall through to product lookup if not a known coupon
+      }
+
       const scale = parseScaleBarcode(barcode, barcodeConfigRef.current ?? DEFAULT_BARCODE_CONFIG);
 
       if (scale) {
@@ -727,20 +851,17 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
 
         if (product) {
           if (scale.type === "weight" && scale.value > 0) {
-            // qty = weight in kg (e.g. 1.500)
-            engine.addProduct(product, parseFloat(scale.value.toFixed(3)));
+            handleAddProduct(product, parseFloat(scale.value.toFixed(3)));
           } else if (scale.type === "price" && scale.value > 0) {
-            // embedded price overrides the catalogue price
-            engine.addProduct(product, 1, parseFloat(scale.value.toFixed(2)));
+            handleAddProduct(product, 1, parseFloat(scale.value.toFixed(2)));
           } else {
-            // PLU-only — plain add at qty 1
-            engine.addProduct(product);
+            handleAddProduct(product);
           }
         }
       } else {
         // Standard (non-scale) barcode lookup
         const product = await getProductByBarcode(barcode);
-        if (product) engine.addProduct(product);
+        if (product) handleAddProduct(product);
       }
     },
   });
@@ -803,8 +924,21 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         break;
       // ── Language switch (receipt labels) ────────────────────────────────
       case "TOGGLE_LANGUAGE": toggleLanguage(); break;
+      // ── Phase 3: New actions ─────────────────────────────────────────────
+      case "PRODUCE":         setDialog("produce"); break;
+      case "PLU_ENTRY":       setDialog("produce"); break;
+      case "BOTTLE_RETURN":   setDialog("bottle_return"); break;
+      case "COUPON":          setDialog("coupon"); break;
+      case "REDEEM_VOUCHER":  setDialog("payment"); break;
+      case "CLICK_COLLECT":
+        invoke<Array<{id:string;order_number?:string;payload:string;created_at?:string}>>("get_click_collect_orders")
+          .then((orders) => { setCcOrders(orders); setDialog("click_collect"); })
+          .catch(() => { setCcOrders([]); setDialog("click_collect"); });
+        break;
+      case "SCO_MONITOR":     setMode("sco_monitor"); break;
+      case "HARDWARE_CONFIG": setMode("hardware_config"); break;
     }
-  }, [engine, perms, hw, shift, toggleLanguage]);
+  }, [engine, perms, hw, shift, toggleLanguage, multiBuy, session.cashier_id, session.cashier_name]);
 
   // ── Numpad confirm ────────────────────────────────────────────────────────
   function handleNumpadConfirm(value: number) {
@@ -1030,6 +1164,14 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     );
   }
 
+  if (mode === "hardware_config") {
+    return <HardwareConfigPage onClose={() => setMode("sell")} />;
+  }
+
+  if (mode === "sco_monitor") {
+    return <ScoMonitor config={config} onClose={() => setMode("sell")} />;
+  }
+
   const selectedLine = engine.lines.find((l) => l.id === engine.selectedLineId);
   const hasLines = engine.lines.length > 0;
 
@@ -1081,6 +1223,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onPay={() => setDialog("payment")}
           onClear={engine.clearOrder}
           theme={posTheme}
+          appliedPromos={appliedPromos}
+          totalSavings={totalSavings}
         />
 
         <CorrectionsPanel
@@ -1111,7 +1255,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
             rows={activeRows}
             priceLevel={engine.order.price_level}
             colorTheme={isLightTheme ? "light" : "standard"}
-            onItemButton={engine.addProduct}
+            onItemButton={handleAddProduct}
             onCategoryButton={setSelectedCategory}
             onActionButton={handleAction}
           />
@@ -1145,6 +1289,16 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
             window.open(`${base}/api/manual`, "_blank", "noopener,noreferrer");
           });
         }}
+        onProduce={() => setDialog("produce")}
+        onBottleReturn={() => setDialog("bottle_return")}
+        onCoupon={() => setDialog("coupon")}
+        onClickCollect={() => {
+          invoke<Array<{id:string;order_number?:string;payload:string;created_at?:string}>>("get_click_collect_orders")
+            .then((orders) => { setCcOrders(orders); setDialog("click_collect"); })
+            .catch(() => { setCcOrders([]); setDialog("click_collect"); });
+        }}
+        onScoMonitor={() => setMode("sco_monitor")}
+        onHardwareConfig={() => setMode("hardware_config")}
       />
 
       {/* ── Dialogs ── */}
@@ -1290,6 +1444,223 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         />
       )}
 
+      {/* Age verification — auto-shown when a restricted item is scanned */}
+      {ageCheckPending && (
+        <AgeVerificationDialog
+          open={!!ageCheckPending}
+          productName={ageCheckPending.product.name}
+          minAge={(ageCheckPending.product as any).min_age ?? 18}
+          onApprove={() => {
+            engine.addProduct(ageCheckPending.product, ageCheckPending.qty, ageCheckPending.priceOverride);
+            const depositAmount = (ageCheckPending.product as any).deposit_amount as number | undefined;
+            if (depositAmount && depositAmount > 0) {
+              const dep: Product = {
+                ...ageCheckPending.product,
+                id: `deposit-${ageCheckPending.product.id}`,
+                server_id: `deposit-${ageCheckPending.product.server_id ?? ageCheckPending.product.id}`,
+                name: `Deposit - ${ageCheckPending.product.name}`,
+                sku: `DEP-${ageCheckPending.product.sku ?? ""}`,
+                price1: depositAmount, price2: depositAmount, price3: depositAmount,
+                price4: depositAmount, price5: depositAmount,
+              };
+              engine.addProduct(dep, ageCheckPending.qty);
+            }
+            invoke("write_audit", {
+              cashierId: session.cashier_id, cashierName: session.cashier_name,
+              action: "age_verify_passed", entity: "sale",
+              detail: ageCheckPending.product.name,
+            }).catch(() => {});
+            setAgeCheckPending(null);
+          }}
+          onReject={() => {
+            invoke("write_audit", {
+              cashierId: session.cashier_id, cashierName: session.cashier_name,
+              action: "age_verify_refused", entity: "sale",
+              detail: ageCheckPending.product.name,
+            }).catch(() => {});
+            setAgeCheckPending(null);
+          }}
+        />
+      )}
+
+      {/* Produce grid dialog */}
+      {dialog === "produce" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-2xl mx-4 flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <h2 className="font-semibold text-lg">Produce / PLU</h2>
+              <button
+                onClick={() => setDialog(null)}
+                className="text-gray-400 hover:text-gray-700 rounded-full p-1"
+                data-testid="btn-close-produce"
+              >✕</button>
+            </div>
+            <div className="flex-1 min-h-0 p-4 overflow-hidden">
+              <ProduceGrid
+                onAdd={(product, qty) => {
+                  handleAddProduct(product, qty);
+                  setDialog(null);
+                }}
+                currentWeightKg={hw.config?.scale_enabled ? (hw.scaleWeight?.kg ?? undefined) : undefined}
+                onRequestWeigh={hw.config?.scale_enabled ? () => hw.startWeightPolling(200) : undefined}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bottle return dialog */}
+      {dialog === "bottle_return" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+            <h2 className="text-white font-semibold mb-4">Bottle / Container Return</h2>
+            <BottleReturnDialogContent
+              products={products}
+              onConfirm={(name, amount) => {
+                const depositProduct: Product = {
+                  id: `bottle-return-${Date.now()}`,
+                  server_id: null,
+                  name,
+                  sku: "RETURN",
+                  barcode: null,
+                  price1: -Math.abs(amount),
+                  price2: -Math.abs(amount),
+                  price3: -Math.abs(amount),
+                  price4: -Math.abs(amount),
+                  price5: -Math.abs(amount),
+                  category_id: null,
+                  vat_rate: 0,
+                  active: true,
+                  stock_quantity: 999,
+                  unit: "pcs",
+                  has_variants: false,
+                } as unknown as Product;
+                engine.addProduct(depositProduct, 1);
+                setDialog(null);
+              }}
+              onClose={() => setDialog(null)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Coupon entry dialog */}
+      {dialog === "coupon" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-xs p-6 shadow-2xl">
+            <h2 className="text-white font-semibold mb-4">Apply Coupon</h2>
+            <CouponEntryContent
+              onApply={async (code) => {
+                const result = await multiBuy.validateCoupon(code);
+                if (result.valid && result.promo) {
+                  const productLinesSnap = engine.lines.filter(
+                    (l) => !l.id.startsWith("multibuy-") && !l.id.startsWith("coupon-")
+                  );
+                  const applied = multiBuy.applyCoupon(result.promo, productLinesSnap);
+                  if (applied) {
+                    // Inject coupon as a real negative line so order.total is reduced
+                    setAppliedCoupons((prev) => {
+                      const already = prev.find((c) => c.promo_id === applied.promo_id);
+                      if (already) return prev;
+                      return [...prev, {
+                        promo_id: applied.promo_id,
+                        description: applied.description,
+                        discount_amount: applied.discount_amount,
+                      }];
+                    });
+                    return { success: true, message: `Saved €${applied.discount_amount.toFixed(2)}` };
+                  }
+                }
+                return { success: false, message: result.message ?? "Invalid or expired coupon" };
+              }}
+              onClose={() => setDialog(null)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Click & Collect queue */}
+      {dialog === "click_collect" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-white font-semibold">Click & Collect Queue</h2>
+              <button onClick={() => setDialog(null)} className="text-gray-400 hover:text-white">✕</button>
+            </div>
+            {ccOrders.length === 0 ? (
+              <div className="text-center text-gray-500 py-8">No pending pickup orders</div>
+            ) : (
+              <div className="flex-1 overflow-y-auto space-y-3 min-h-0">
+                {ccOrders.map((order) => {
+                  let parsed: any = {};
+                  try { parsed = JSON.parse(order.payload); } catch {}
+                  const lines: any[] = parsed.lines ?? [];
+                  const total = lines.reduce((s: number, l: any) => s + (l.line_total ?? 0), 0);
+                  return (
+                    <div key={order.id} className="bg-gray-800 rounded-xl p-4 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-white font-medium">Order #{parsed.order_number ?? order.order_number ?? "—"}</p>
+                          <p className="text-gray-500 text-xs">{parsed.customer_name ?? "Walk-in"}</p>
+                        </div>
+                        <p className="text-burgundy-400 font-bold">€{total.toFixed(2)}</p>
+                      </div>
+                      <div className="text-xs text-gray-500 space-y-0.5">
+                        {lines.slice(0, 3).map((l: any, i: number) => (
+                          <div key={i}>{l.qty ?? 1}× {l.description ?? l.name}</div>
+                        ))}
+                        {lines.length > 3 && <div>+{lines.length - 3} more items</div>}
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={async () => {
+                            // Load the click-collect order lines into the cart
+                            engine.clearOrder();
+                            for (const l of lines) {
+                              const p: Product = {
+                                id: l.product_id ?? l.id ?? `cc-${Date.now()}`,
+                                server_id: l.product_id ?? null,
+                                name: l.description ?? l.name ?? "Item",
+                                sku: l.sku ?? "",
+                                barcode: null,
+                                price1: l.unit_price ?? l.price1 ?? 0,
+                                price2: l.unit_price ?? 0,
+                                price3: l.unit_price ?? 0,
+                                price4: l.unit_price ?? 0,
+                                price5: l.unit_price ?? 0,
+                                category_id: null,
+                                vat_rate: l.vat_rate ?? 0,
+                                active: true,
+                                stock_quantity: 999,
+                                unit: l.unit ?? "pcs",
+                                has_variants: false,
+                              } as unknown as Product;
+                              engine.addProduct(p, l.qty ?? 1);
+                            }
+                            await invoke("mark_inbox_processed", { id: order.id }).catch(() => {});
+                            setDialog(null);
+                          }}
+                          className="flex-1 py-2 bg-green-700 hover:bg-green-600 text-white rounded-lg text-sm font-semibold"
+                          data-testid={`cc-accept-${order.id}`}
+                        >Accept</button>
+                        <button
+                          onClick={async () => {
+                            await invoke("mark_inbox_processed", { id: order.id }).catch(() => {});
+                            setCcOrders((prev) => prev.filter((o) => o.id !== order.id));
+                          }}
+                          className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm"
+                          data-testid={`cc-reject-${order.id}`}
+                        >Reject</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Permission PIN prompt */}
       {perms.pinPromptAction && perms.pinPromptRole && (
         <PinPrompt
@@ -1314,5 +1685,144 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         />
       )}
     </div>
+  );
+}
+
+// ── Bottle return inline content ───────────────────────────────────────────────
+
+function BottleReturnDialogContent({
+  products,
+  onConfirm,
+  onClose,
+}: {
+  products: Product[];
+  onConfirm: (name: string, amount: number) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [amount, setAmount] = useState("");
+  const [selectedName, setSelectedName] = useState("");
+
+  const filtered = products.filter(
+    (p) => query && (p.name.toLowerCase().includes(query.toLowerCase()) || p.sku?.includes(query))
+  ).slice(0, 8);
+
+  const depositAmount = parseFloat(amount) || 0;
+
+  return (
+    <>
+      <label className="text-gray-400 text-xs mb-1 block">Search item (optional)</label>
+      <input
+        type="text"
+        className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+        placeholder="Item name or SKU…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        data-testid="input-bottle-search"
+      />
+      {filtered.length > 0 && (
+        <div className="mb-3 space-y-1 max-h-32 overflow-y-auto">
+          {filtered.map((p) => {
+            const dep = (p as any).deposit_amount as number | undefined;
+            return (
+              <button
+                key={p.id}
+                className="w-full flex justify-between text-left bg-gray-800 hover:bg-gray-700 rounded-lg px-3 py-2 text-sm"
+                onClick={() => {
+                  setSelectedName(`Deposit - ${p.name}`);
+                  if (dep && dep > 0) setAmount(dep.toString());
+                  setQuery("");
+                }}
+              >
+                <span className="text-gray-200 truncate">{p.name}</span>
+                {dep && dep > 0 && <span className="text-burgundy-400 ml-2 shrink-0">€{dep.toFixed(2)}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <label className="text-gray-400 text-xs mb-1 block">Return description</label>
+      <input
+        type="text"
+        className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+        placeholder="e.g. Bottle return — Cola 330ml"
+        value={selectedName}
+        onChange={(e) => setSelectedName(e.target.value)}
+        data-testid="input-bottle-name"
+      />
+      <label className="text-gray-400 text-xs mb-1 block">Deposit amount (€)</label>
+      <input
+        type="number"
+        step="0.01"
+        className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+        placeholder="0.15"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        data-testid="input-bottle-amount"
+      />
+      <div className="flex gap-3">
+        <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm">Cancel</button>
+        <button
+          onClick={() => onConfirm(selectedName || "Bottle return", depositAmount)}
+          disabled={depositAmount <= 0}
+          className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold disabled:opacity-40"
+          data-testid="btn-confirm-bottle-return"
+        >
+          Add Refund Line
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ── Coupon entry inline content ────────────────────────────────────────────────
+
+function CouponEntryContent({
+  onApply,
+  onClose,
+}: {
+  onApply: (code: string) => Promise<{ success: boolean; message: string }>;
+  onClose: () => void;
+}) {
+  const [code, setCode] = useState("");
+  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function handleApply() {
+    if (!code.trim() || busy) return;
+    setBusy(true);
+    const r = await onApply(code.trim().toUpperCase());
+    setResult(r);
+    setBusy(false);
+    if (r.success) setTimeout(onClose, 1200);
+  }
+
+  return (
+    <>
+      <input
+        type="text"
+        value={code}
+        onChange={(e) => { setCode(e.target.value.toUpperCase()); setResult(null); }}
+        placeholder="Enter coupon code"
+        className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 text-sm font-mono uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-burgundy-500 placeholder:text-gray-600 mb-2"
+        data-testid="input-coupon-code"
+        onKeyDown={(e) => e.key === "Enter" && handleApply()}
+        autoFocus
+      />
+      {result && (
+        <p className={`text-sm mb-3 ${result.success ? "text-green-400" : "text-red-400"}`}>{result.message}</p>
+      )}
+      <div className="flex gap-3 mt-2">
+        <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm">Cancel</button>
+        <button
+          onClick={handleApply}
+          disabled={!code.trim() || busy}
+          className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold disabled:opacity-40"
+          data-testid="btn-apply-coupon"
+        >
+          {busy ? "Checking…" : "Apply"}
+        </button>
+      </div>
+    </>
   );
 }

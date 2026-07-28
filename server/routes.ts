@@ -9663,6 +9663,53 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // ── SCO lane monitoring ────────────────────────────────────────────────────
+
+  // Returns all SCO-type terminals with their last known peripheral / state.
+  // Authenticated cashier terminals can call this via X-Terminal-Code header.
+  // "SCO" terminals are those with hardwareType === "sco" OR whose code starts with "SCO".
+  app.get("/api/pos/sco/lanes", requireTerminal, async (req, res) => {
+    try {
+      const terminals = await storage.getPosTerminals();
+      const scoLanes = terminals
+        .filter((t: any) =>
+          t.hardwareType === "sco" ||
+          (t.code ?? "").toLowerCase().startsWith("sco")
+        )
+        .map((t: any) => {
+          const ps = (t.peripheralStatus ?? {}) as Record<string, unknown>;
+          return {
+            id:               t.id,
+            terminal_code:    t.code ?? "",
+            terminal_name:    t.name ?? t.code ?? "",
+            // sco_state fields written by the terminal via heartbeat peripheralStatus
+            mode:             (ps.sco_mode as string)  ?? "idle",
+            items:            (ps.sco_items as number) ?? 0,
+            total:            (ps.sco_total as number) ?? 0,
+            attendant_reason: (ps.sco_attendant_reason as string) ?? undefined,
+            last_seen_at:     t.lastSeenAt ? new Date(t.lastSeenAt).toISOString() : null,
+          };
+        });
+      res.json({ lanes: scoLanes });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // SCO attendant override acknowledgement — clears the attendant-call flag on a lane.
+  app.post("/api/pos/sco/lanes/:code/override", requireTerminal, async (req, res) => {
+    try {
+      const terminals = await storage.getPosTerminals();
+      const target = terminals.find((t: any) => (t.code ?? "") === req.params.code);
+      if (!target) return res.status(404).json({ message: "Lane not found" });
+      const ps = {
+        ...(target.peripheralStatus ?? {}),
+        sco_mode: "scanning",
+        sco_attendant_reason: null,
+      };
+      await storage.updatePosTerminal(target.id, { peripheralStatus: ps } as any);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // ── POS Phase 3: Promotions ────────────────────────────────────────────────
 
   // ── Expiration / Best-Before batch tracking ────────────────────────────────

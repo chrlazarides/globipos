@@ -27,6 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -400,10 +401,10 @@ function PeripheralConfigSheet({
   return (
     <Sheet open={open} onOpenChange={o => { if (!o) onClose(); }}>
       <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
-        <SheetHeader className="mb-6">
+        <SheetHeader className="mb-4">
           <SheetTitle className="flex items-center gap-2">
             <Settings2 className="w-5 h-5" />
-            {terminal.name} — Peripheral Settings
+            {terminal.name} — Hardware
           </SheetTitle>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span className={`w-2 h-2 rounded-full ${online ? "bg-green-500" : "bg-gray-400"}`} />
@@ -412,31 +413,63 @@ function PeripheralConfigSheet({
           </div>
         </SheetHeader>
 
-        {/* Current reported status (read-only) */}
-        {terminal.peripheralStatus && (
-          <div className="mb-6 p-3 rounded-lg bg-muted/50 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Live Status (reported by terminal)</p>
-            <div className="flex flex-wrap gap-1.5">
-              {buildPeripheralPills(terminal.peripheralConfig as PeripheralConfig, status).map(p => (
-                <PeripheralPill key={p.label} icon={p.icon} label={p.label} level={p.level} tooltip={p.tooltip} />
-              ))}
-            </div>
-            {status.cashier_name && (
-              <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1">
-                <User className="w-3 h-3" /> Cashier: {status.cashier_name}
-                {status.shift_open !== undefined && (
-                  <Badge variant={status.shift_open ? "default" : "secondary"} className="ml-1 text-[10px]">
-                    Shift {status.shift_open ? "Open" : "Closed"}
-                  </Badge>
-                )}
-              </p>
-            )}
-            {status.reported_at && (
-              <p className="text-[10px] text-muted-foreground/60">Last report: {formatDistanceToNow(new Date(status.reported_at), { addSuffix: true })}</p>
-            )}
-          </div>
-        )}
+        <Tabs defaultValue="configure">
+          <TabsList className="w-full mb-4">
+            <TabsTrigger value="configure" className="flex-1">Configure</TabsTrigger>
+            <TabsTrigger value="status" className="flex-1">Live Status</TabsTrigger>
+          </TabsList>
 
+          {/* ── Hardware Status tab (read-only) ─────────────────────── */}
+          <TabsContent value="status" className="space-y-4">
+            {terminal.peripheralStatus ? (
+              <>
+                <div className="p-3 rounded-lg bg-muted/50 space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Peripheral Health</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {buildPeripheralPills(terminal.peripheralConfig as PeripheralConfig, status).map(p => (
+                      <PeripheralPill key={p.label} icon={p.icon} label={p.label} level={p.level} tooltip={p.tooltip} />
+                    ))}
+                  </div>
+                  {status.cashier_name && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <User className="w-3 h-3" /> Cashier: {status.cashier_name}
+                      {status.shift_open !== undefined && (
+                        <Badge variant={status.shift_open ? "default" : "secondary"} className="ml-1 text-[10px]">
+                          Shift {status.shift_open ? "Open" : "Closed"}
+                        </Badge>
+                      )}
+                    </p>
+                  )}
+                  {status.reported_at && (
+                    <p className="text-[10px] text-muted-foreground/60">Last report: {formatDistanceToNow(new Date(status.reported_at), { addSuffix: true })}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Raw Status JSON</p>
+                  <pre className="text-[10px] leading-relaxed bg-muted rounded-lg p-3 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-all text-muted-foreground font-mono">
+                    {JSON.stringify(terminal.peripheralStatus, null, 2)}
+                  </pre>
+                </div>
+                {terminal.peripheralConfig && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Applied Config</p>
+                    <pre className="text-[10px] leading-relaxed bg-muted rounded-lg p-3 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-all text-muted-foreground font-mono">
+                      {JSON.stringify(terminal.peripheralConfig, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-12 text-muted-foreground text-sm">
+                <Settings2 className="w-8 h-8 mx-auto mb-3 opacity-30" />
+                <p>No status received yet.</p>
+                <p className="text-xs mt-1">Status is sent on each terminal heartbeat.</p>
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ── Configure tab (full editable form) ──────────────────── */}
+          <TabsContent value="configure">
         <div className="space-y-6">
 
           {/* Receipt Printer */}
@@ -844,6 +877,8 @@ function PeripheralConfigSheet({
             Save & Push to Terminal
           </Button>
         </div>
+          </TabsContent>
+        </Tabs>
       </SheetContent>
     </Sheet>
   );
@@ -1097,7 +1132,7 @@ function TerminalCard({
               data-testid={`button-configure-${terminal.id}`}
             >
               <Settings2 className="w-3.5 h-3.5 mr-1" />
-              Peripherals
+              Hardware
             </Button>
             <Button
               size="sm"

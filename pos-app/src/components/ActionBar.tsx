@@ -2,6 +2,7 @@ import {
   StickyNoteIcon, RepeatIcon,
   SmartphoneIcon, ShieldIcon, RotateCcwIcon,
   CalendarClock, MonitorSmartphone, BarcodeIcon, BookOpenIcon, ArrowLeftRightIcon, ReceiptTextIcon,
+  Leaf, RotateCw, Tag, ShoppingBag, Settings2,
 } from "lucide-react";
 import { HoldIcon, RecallIcon, VoidIcon, RefundIcon, DiscountIcon } from "./icons/PosIcons";
 import type { NumpadMode } from "../types";
@@ -28,6 +29,12 @@ interface ActionBarProps {
   onSco?: () => void;
   onManual?: () => void;
   onStockTransfer?: () => void;
+  onProduce?: () => void;
+  onBottleReturn?: () => void;
+  onCoupon?: () => void;
+  onClickCollect?: () => void;
+  onScoMonitor?: () => void;
+  onHardwareConfig?: () => void;
 }
 
 export function ActionBar({
@@ -51,6 +58,12 @@ export function ActionBar({
   onSco,
   onManual,
   onStockTransfer,
+  onProduce,
+  onBottleReturn,
+  onCoupon,
+  onClickCollect,
+  onScoMonitor,
+  onHardwareConfig,
 }: ActionBarProps) {
   const isLight = theme === "light";
   type Btn = {
@@ -204,6 +217,48 @@ export function ActionBar({
       onClick: onStockTransfer,
       enabled: true,
       testId: "action-stock-transfer",
+    }] : []),
+    ...(onProduce ? [{
+      label: "Produce",
+      icon: Leaf,
+      onClick: onProduce,
+      enabled: true,
+      testId: "action-produce",
+    }] : []),
+    ...(onBottleReturn ? [{
+      label: "Bottle Rtn",
+      icon: RotateCw,
+      onClick: onBottleReturn,
+      enabled: true,
+      testId: "action-bottle-return",
+    }] : []),
+    ...(onCoupon ? [{
+      label: "Coupon",
+      icon: Tag,
+      onClick: onCoupon,
+      enabled: true,
+      testId: "action-coupon",
+    }] : []),
+    ...(onClickCollect ? [{
+      label: "Click & Collect",
+      icon: ShoppingBag,
+      onClick: onClickCollect,
+      enabled: true,
+      testId: "action-click-collect",
+    }] : []),
+    ...(onScoMonitor ? [{
+      label: "SCO Monitor",
+      icon: MonitorSmartphone,
+      onClick: onScoMonitor,
+      enabled: true,
+      testId: "action-sco-monitor",
+    }] : []),
+    ...(onHardwareConfig ? [{
+      label: "HW Config",
+      icon: Settings2,
+      onClick: onHardwareConfig,
+      enabled: true,
+      testId: "action-hardware-config",
     }] : []),
   ];
 

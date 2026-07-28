@@ -23,6 +23,15 @@ import { saveOrder, nextOrderNumber, writeAudit } from "../lib/db";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+/** Minimal descriptor for a promo / coupon discount line to inject into the order. */
+export interface PromoLineInput {
+  promo_id: string;
+  description: string;
+  /** Positive amount (stored as a negative unit_price to reduce total) */
+  discount_amount: number;
+  vat_rate?: number;
+}
+
 export interface UseOrderReturn {
   order: Order;
   lines: OrderLine[];
@@ -75,6 +84,14 @@ export interface UseOrderReturn {
   pendingMultiplier: number | null;
   setPendingMultiplier: (qty: number) => void;
   clearPendingMultiplier: () => void;
+
+  /**
+   * Apply multi-buy / coupon discount lines to the order.
+   * Replaces all existing promo lines (id prefix "multibuy-") with fresh
+   * negative lines so that engine.order.total and PaymentDialog always
+   * reflect the discounted amount.
+   */
+  applyPromoLines: (promos: PromoLineInput[]) => void;
 
   // Payment
   completeOrder: (
@@ -146,24 +163,28 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
   const selectedLine = lines.find((l) => l.id === selectedLineId) ?? null;
 
   // ── #1 Add product ──────────────────────────────────────────────────────────
+  // Uses a functional setLines updater so multiple synchronous addProduct calls
+  // (e.g. product + deposit auto-line, age-check approve, click-collect import)
+  // each see the running accumulated state rather than a stale snapshot.
   const addProduct = useCallback((product: Product, qty = 1, overridePrice?: number) => {
-    // Consume any pending quantity multiplier (NUMPAD "×Qty before scan") unless
-    // the caller explicitly passed a qty (e.g. scale-barcode weight).
     const effectiveQty = qty === 1 && pendingMultiplier != null && pendingMultiplier > 0
       ? pendingMultiplier
       : qty;
     let line = createLine(product, order.price_level, effectiveQty, timedPricesRef.current);
-    // Apply scale-barcode embedded price (or any caller-supplied override)
     if (overridePrice != null && overridePrice > 0) {
       line = setLinePriceOverride(line, overridePrice);
     }
-    const newLine = { ...line, order_id: order.id };
-    const newLines = [...lines, newLine];
-    updateLines(newLines);
+    const newLine: OrderLine = { ...line, order_id: order.id };
+    setLines((prev) => {
+      const newLines = [...prev, newLine];
+      // Rebuild order totals in the same batch, keyed to the fresh lines
+      setOrder((o) => rebuildOrderTotals(o, newLines));
+      return newLines;
+    });
     setSelectedLineId(newLine.id);
     setLastLineId(newLine.id);
     if (pendingMultiplier != null) setPendingMultiplierState(null);
-  }, [lines, order.id, order.price_level, updateLines, pendingMultiplier]);
+  }, [order.id, order.price_level, pendingMultiplier]);
 
   // ── Quantity multiplier (NUMPAD action) ─────────────────────────────────────
   const setPendingMultiplier = useCallback((qty: number) => {
@@ -415,6 +436,34 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     writeAudit("line_surcharge_pct", "order_line", selectedLine.id, `Line surcharge set to ${pct}%`, cashierId, cashierName);
   }, [lines, selectedLine, updateLines, cashierId, cashierName]);
 
+  // ── Apply promo / coupon lines ───────────────────────────────────────────────
+  // Replaces all existing "multibuy-" lines with fresh negative lines so that
+  // engine.order.total is always the correct discounted amount.
+  const applyPromoLines = useCallback((promos: PromoLineInput[]) => {
+    const nonPromoLines = lines.filter((l) => !l.id.startsWith("multibuy-"));
+    if (promos.length === 0) {
+      if (nonPromoLines.length !== lines.length) updateLines(nonPromoLines);
+      return;
+    }
+    const promoLines: OrderLine[] = promos.map((p) => {
+      const partial: Omit<OrderLine, "line_total" | "vat_amount"> = {
+        id: `multibuy-${p.promo_id}`,
+        order_id: order.id,
+        description: p.description,
+        qty: 1,
+        unit_price: -Math.abs(p.discount_amount),
+        line_discount_pct: 0,
+        line_discount_fixed: 0,
+        line_surcharge_pct: 0,
+        vat_rate: p.vat_rate ?? 0,
+        voided: false,
+      };
+      const { lineTotal, vatAmount } = computeLineAmounts(partial);
+      return { ...partial, line_total: lineTotal, vat_amount: vatAmount };
+    });
+    updateLines([...nonPromoLines, ...promoLines]);
+  }, [lines, order.id, updateLines]);
+
   // ── Department-key sale — open amount against a category, no product ───────
   const addDepartmentLine = useCallback((category: Category, amount: number) => {
     if (amount <= 0) return;
@@ -522,6 +571,7 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
     setSurchargePct,
     setLineSurcharge,
     addDepartmentLine,
+    applyPromoLines,
     completeOrder,
     setNumpadMode,
   };

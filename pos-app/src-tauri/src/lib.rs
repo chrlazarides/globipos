@@ -1249,6 +1249,44 @@ async fn redeem_gift_voucher(
     Ok(row_to_json(updated))
 }
 
+// ── Phase 3: Payment config commands ─────────────────────────────────────────
+
+#[tauri::command]
+async fn get_payment_config(state: State<'_, AppState>) -> Result<PaymentConfig, String> {
+    let row = sqlx::query("SELECT value FROM schema_meta WHERE key = 'payment_config'")
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(row
+        .and_then(|r| r.try_get::<String, _>("value").ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+async fn save_payment_config(
+    state:  State<'_, AppState>,
+    config: PaymentConfig,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('payment_config', ?)")
+        .bind(json)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Returns unprocessed click_collect inbox items (pending pickup orders).
+#[tauri::command]
+async fn get_click_collect_orders(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query(
+        r#"SELECT * FROM pos_inbox WHERE processed = 0
+           AND message_type = 'click_collect'
+           ORDER BY created_at DESC LIMIT 50"#
+    )
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
 // ── Phase 3: Hardware commands ────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1488,6 +1526,9 @@ pub fn run() {
             find_gift_voucher,
             redeem_gift_voucher,
             // ── Phase 3: Hardware ────────────────────────────────────────────
+            get_payment_config,
+            save_payment_config,
+            get_click_collect_orders,
             get_hardware_config,
             save_hardware_config,
             get_barcode_config,
