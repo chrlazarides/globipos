@@ -16,6 +16,7 @@ import type {
   GiftVoucher,
   BarcodeConfig,
   PeripheralHealth,
+  ReceiptConfig,
 } from "../types";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -117,6 +118,14 @@ export const getBarcodeConfig = (): Promise<BarcodeConfig> =>
 
 export const saveBarcodeConfig = (config: BarcodeConfig): Promise<void> =>
   invoke<void>("save_barcode_config", { config });
+
+// ── Receipt design configuration ──────────────────────────────────────────────
+
+export const getReceiptConfig = (): Promise<ReceiptConfig> =>
+  invoke<ReceiptConfig>("get_receipt_config");
+
+export const saveReceiptConfig = (config: ReceiptConfig): Promise<void> =>
+  invoke<void>("save_receipt_config", { config });
 
 // ── Customers ─────────────────────────────────────────────────────────────────
 

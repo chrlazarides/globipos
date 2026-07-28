@@ -46,7 +46,9 @@ import RefundDialog from "../components/RefundDialog";
 import type { PaymentResult } from "../hooks/usePayment";
 import { FallbackRules } from "./FallbackRules";
 import { BarcodeConfig } from "./BarcodeConfig";
-import type { BarcodeConfig as BarcodeConfigType } from "../types";
+import { ReceiptDesigner } from "./ReceiptDesigner";
+import type { BarcodeConfig as BarcodeConfigType, ReceiptConfig as ReceiptConfigType } from "../types";
+import { DEFAULT_RECEIPT_CONFIG } from "../types";
 import ShiftManager from "./ShiftManager";
 import SelfCheckout from "./SelfCheckout";
 import type { UseSyncReturn } from "../hooks/useSync";
@@ -439,7 +441,7 @@ function RecallDialog({ onRecall, onClose }: {
 
 type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | null;
 type CashDialogMode = "cash_in" | "cash_out" | "petty_cash";
-type POSMode = "sell" | "sco" | "shift" | "fallback" | "barcode_config";
+type POSMode = "sell" | "sco" | "shift" | "fallback" | "barcode_config" | "receipt_design";
 
 interface PaymentSuccessState {
   total: number;
@@ -566,6 +568,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [paymentSuccess, setPaymentSuccess] = useState<PaymentSuccessState | null>(null);
   const lastReceiptPrinterCallback = useRef<(() => Promise<void>) | null>(null);
   const barcodeConfigRef = useRef<BarcodeConfigType | null>(null);
+  const receiptConfigRef = useRef<ReceiptConfigType | null>(null);
   const [receiptLanguage, setReceiptLanguage] = useState<"en" | "el">(
     () => (localStorage.getItem("pos_receipt_language") as "en" | "el") || "en"
   );
@@ -590,11 +593,12 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       .catch(() => {/* no-op: defaults apply */});
   }, [config.server_url, config.terminal_code]);
 
-  // Load barcode structure config once on mount (used to parse weight/price scale barcodes)
+  // Load barcode structure + receipt design configs once on mount
   useEffect(() => {
-    import("../lib/db").then(({ getBarcodeConfig }) =>
-      getBarcodeConfig().then((cfg) => { barcodeConfigRef.current = cfg; }).catch(() => {})
-    );
+    import("../lib/db").then(({ getBarcodeConfig, getReceiptConfig }) => {
+      getBarcodeConfig().then((cfg) => { barcodeConfigRef.current = cfg; }).catch(() => {});
+      getReceiptConfig().then((cfg) => { receiptConfigRef.current = cfg; }).catch(() => {});
+    });
   }, []);
 
   // Load local data on mount
@@ -767,6 +771,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "PRICE_LEVEL_5": engine.switchPriceLevel(5); break;
       case "FALLBACK_RULES": setMode("fallback"); break;
       case "BARCODE_CONFIG": setMode("barcode_config"); break;
+      case "RECEIPT_DESIGN": setMode("receipt_design"); break;
       case "PAY_CASH":
       case "PAY_CARD": setDialog("payment"); break;
       // ── Quantity multiplier before scan ──────────────────────────────────
@@ -898,12 +903,27 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         el: { terminal: "Ταμείο", cashier: "Ταμίας", order: "Παραγγελία", subtotal: "Υποσύνολο", vat: "ΦΠΑ", total: "ΣΥΝΟΛΟ", payment: "Πληρωμή", tendered: "Δόθηκε", change: "Ρέστα", cardRef: "Κωδ. Κάρτας", thankYou: "Ευχαριστούμε για την προτίμησή σας!" },
       } as const;
       const t = RECEIPT_LABELS[receiptLanguage];
+      const rc = receiptConfigRef.current ?? DEFAULT_RECEIPT_CONFIG;
+      const infoLine1 = [
+        rc.show_terminal ? `${t.terminal}: ${config.terminal_code}` : "",
+        rc.show_cashier ? `${t.cashier}: ${session.cashier_name}` : "",
+      ].filter(Boolean).join("  ");
+      const infoLine2 = [
+        rc.show_order_number ? `${t.order}: ${completedOrder.order_number}` : "",
+        rc.show_datetime ? new Date().toLocaleString() : "",
+      ].filter(Boolean).join("  ");
+      // Config not loaded → use the localized thank-you as footer instead of
+      // DEFAULT_RECEIPT_CONFIG's English footer text.
+      const footerLines = receiptConfigRef.current
+        ? rc.footer_lines.filter((l) => l.trim() !== "")
+        : [t.thankYou];
       const receiptLines = [
-        { text: config.terminal_code, align: "center" as const, bold: true, size: "big" as const },
+        { text: rc.header_title.trim() || config.terminal_code, align: "center" as const, bold: true, size: "big" as const },
+        ...rc.header_lines.filter((l) => l.trim() !== "").map((l) => ({ text: l, align: "center" as const })),
         { divider: true },
-        { text: `${t.terminal}: ${config.terminal_code}  ${t.cashier}: ${session.cashier_name}` },
-        { text: `${t.order}: ${completedOrder.order_number}  ${new Date().toLocaleString()}` },
-        { divider: true },
+        ...(infoLine1 ? [{ text: infoLine1 }] : []),
+        ...(infoLine2 ? [{ text: infoLine2 }] : []),
+        ...(infoLine1 || infoLine2 ? [{ divider: true }] : []),
         ...saleLines.map((l) => ({
           text: pad(
             l.description.substring(0, colW - 10),
@@ -911,18 +931,19 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           ),
         })),
         { divider: true },
-        { text: pad(t.subtotal, formatCurrency(saleOrder.subtotal)) },
-        { text: pad(t.vat, formatCurrency(saleOrder.vat_amount)) },
+        ...(rc.show_subtotal ? [{ text: pad(t.subtotal, formatCurrency(saleOrder.subtotal)) }] : []),
+        ...(rc.show_vat ? [{ text: pad(t.vat, formatCurrency(saleOrder.vat_amount)) }] : []),
         { text: pad(t.total, formatCurrency(completedOrder.total)), bold: true, size: "big" as const, align: "right" as const },
         { divider: true },
-        { text: `${t.payment}: ${method.replace("card_", "Card ").replace("_", " ").toUpperCase()}` },
-        ...(result.totalTendered > 0 ? [
+        ...(rc.show_payment_method ? [{ text: `${t.payment}: ${method.replace("card_", "Card ").replace("_", " ").toUpperCase()}` }] : []),
+        ...(rc.show_tendered_change && result.totalTendered > 0 ? [
           { text: pad(t.tendered, formatCurrency(result.totalTendered)) },
           { text: pad(t.change, formatCurrency(result.changeDue)) },
         ] : []),
-        ...(paymentRef ? [{ text: `${t.cardRef}: ${paymentRef}` }] : []),
-        { divider: true },
-        { text: t.thankYou, align: "center" as const },
+        ...(rc.show_card_ref && paymentRef ? [{ text: `${t.cardRef}: ${paymentRef}` }] : []),
+        ...(footerLines.length > 0
+          ? [{ divider: true }, ...footerLines.map((l) => ({ text: l, align: "center" as const }))]
+          : []),
       ];
 
       // Store for re-print from success overlay
@@ -980,6 +1001,20 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
 
   if (mode === "fallback") {
     return <FallbackRules onClose={() => setMode("sell")} />;
+  }
+
+  if (mode === "receipt_design") {
+    return (
+      <ReceiptDesigner
+        terminalCode={config.terminal_code}
+        onClose={() => {
+          import("../lib/db").then(({ getReceiptConfig }) =>
+            getReceiptConfig().then((cfg) => { receiptConfigRef.current = cfg; }).catch(() => {})
+          );
+          setMode("sell");
+        }}
+      />
+    );
   }
 
   if (mode === "barcode_config") {
@@ -1098,6 +1133,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         onPromoCode={() => setDialog("promo")}
         onFallbackRules={() => setMode("fallback")}
         onBarcodeConfig={() => setMode("barcode_config")}
+        onReceiptDesign={() => setMode("receipt_design")}
         onRemoveDiscount={engine.removeDiscount}
         onRefund={() => setDialog("refund")}
         onShift={() => setMode("shift")}

@@ -187,6 +187,38 @@ export interface BarcodeConfig {
   rules: BarcodeRule[];
 }
 
+// ── Receipt design configuration (header/footer text and section toggles) ─────
+
+export interface ReceiptConfig {
+  header_title: string;      // big bold centered title; empty → terminal code
+  header_lines: string[];    // address, phone, tax ID, ...
+  footer_lines: string[];    // thank-you message, return policy, ...
+  show_terminal: boolean;
+  show_cashier: boolean;
+  show_order_number: boolean;
+  show_datetime: boolean;
+  show_subtotal: boolean;
+  show_vat: boolean;
+  show_payment_method: boolean;
+  show_tendered_change: boolean;
+  show_card_ref: boolean;
+}
+
+export const DEFAULT_RECEIPT_CONFIG: ReceiptConfig = {
+  header_title: "",
+  header_lines: [],
+  footer_lines: ["Thank you for your purchase!"],
+  show_terminal: true,
+  show_cashier: true,
+  show_order_number: true,
+  show_datetime: true,
+  show_subtotal: true,
+  show_vat: true,
+  show_payment_method: true,
+  show_tendered_change: true,
+  show_card_ref: true,
+};
+
 // ── Numpad context ────────────────────────────────────────────────────────────
 
 export type NumpadMode =
@@ -237,6 +269,7 @@ export type ActionCode =
   | "END_SHIFT"
   | "FALLBACK_RULES"
   | "BARCODE_CONFIG"
+  | "RECEIPT_DESIGN"
   | "NUMPAD"
   | "NO_SALE"
   | "CASH_IN"

@@ -13,7 +13,7 @@ import {
   Trash2, Plus, Minus, CreditCard, Banknote, Users, Search,
   RotateCcw, AlertTriangle, CheckCircle2, Printer, BarChart2,
   TrendingDown, DoorOpen, X, ChevronLeft, Zap, Tag, Package,
-  Layers, Calculator, Loader2, Receipt, Clock,
+  Layers, Calculator, Loader2, Receipt, Clock, Barcode, ReceiptText,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton, Item, ItemVariant, Customer, PosPromotion } from "@shared/schema";
 
@@ -40,7 +40,8 @@ type DialogKind =
   | "cash" | "card" | "discount_pct" | "discount_fixed" | "order_discount"
   | "price_override" | "customer" | "qty" | "z_report" | "x_report"
   | "notes" | "cash_in" | "cash_out" | "hold" | "exchange"
-  | "category" | "variant" | null;
+  | "category" | "variant"
+  | "barcode" | "barcode_rules" | "receipt_design" | "receipt" | null;
 
 interface FeedbackMsg { text: string; ok: boolean; id: number }
 
@@ -71,6 +72,111 @@ function cartVat(cart: SimCartLine[]) {
     return s + gross - gross / (1 + l.vatRate / 100);
   }, 0);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scale/weight barcode rules — mirrors the POS terminal's configurable
+// barcode structure (prefix → weight/price/PLU) so the parsing behaviour can
+// be tested in the simulator. Persisted locally per browser.
+// ─────────────────────────────────────────────────────────────────────────────
+interface SimBarcodeRule {
+  id: string;
+  label: string;
+  prefix: string;
+  kind: "weight" | "price" | "plu";
+  plu_digits: number;
+  value_digits: number;
+  value_divisor: number;
+  check_digit: boolean;
+  enabled: boolean;
+}
+
+const DEFAULT_SIM_BARCODE_RULES: SimBarcodeRule[] = [
+  { id: "price-20",    label: "Scale price label (20xxx)",       prefix: "20", kind: "price",  plu_digits: 5, value_digits: 5, value_divisor: 100,  check_digit: true, enabled: true },
+  { id: "weight-21-24",label: "Scale weight (21-24xxx)",         prefix: "21", kind: "weight", plu_digits: 5, value_digits: 5, value_divisor: 1000, check_digit: true, enabled: true },
+  { id: "price-25-27", label: "Scale price (25-27xxx)",          prefix: "25", kind: "price",  plu_digits: 5, value_digits: 5, value_divisor: 100,  check_digit: true, enabled: true },
+  { id: "weight-28",   label: "Manufacturer weight PLU (28xxx)", prefix: "28", kind: "weight", plu_digits: 5, value_digits: 5, value_divisor: 1000, check_digit: true, enabled: true },
+  { id: "weight-29",   label: "Manufacturer weight PLU (29xxx)", prefix: "29", kind: "weight", plu_digits: 5, value_digits: 5, value_divisor: 1000, check_digit: true, enabled: true },
+];
+
+function validateEan13CheckDigit(code: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += parseInt(code[i], 10) * (i % 2 === 0 ? 1 : 3);
+  return (10 - (sum % 10)) % 10 === parseInt(code[12], 10);
+}
+
+interface SimScaleParse { kind: "weight" | "price" | "plu"; plu: string; value: number; ruleId: string; }
+
+function parseSimScaleBarcode(code: string, rules: SimBarcodeRule[]): SimScaleParse | null {
+  if (!/^\d{13}$/.test(code)) return null;
+  let rule: SimBarcodeRule | null = null;
+  for (const r of rules) {
+    if (!r.enabled || !code.startsWith(r.prefix)) continue;
+    if (!rule || r.prefix.length > rule.prefix.length) rule = r;
+  }
+  if (!rule) return null;
+  const expectedLen = rule.prefix.length + rule.plu_digits + rule.value_digits + (rule.check_digit ? 1 : 0);
+  if (expectedLen !== 13) return null;
+  if (rule.check_digit && !validateEan13CheckDigit(code)) return null;
+  const pluStart = rule.prefix.length;
+  const pluEnd = pluStart + rule.plu_digits;
+  const plu = code.slice(pluStart, pluEnd);
+  const raw = parseInt(code.slice(pluEnd, pluEnd + rule.value_digits), 10);
+  if (rule.kind === "plu") return { kind: "plu", plu, value: 0, ruleId: rule.id };
+  return { kind: rule.kind, plu, value: raw / rule.value_divisor, ruleId: rule.id };
+}
+
+function loadSimJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? { ...fallback, ...JSON.parse(raw) } : fallback;
+  } catch { return fallback; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Receipt design — mirrors the POS terminal's Receipt Design parameters so the
+// printed receipt layout can be previewed/tested in the simulator.
+// ─────────────────────────────────────────────────────────────────────────────
+interface SimReceiptConfig {
+  header_title: string;
+  header_lines: string[];
+  footer_lines: string[];
+  show_terminal: boolean;
+  show_cashier: boolean;
+  show_order_number: boolean;
+  show_datetime: boolean;
+  show_subtotal: boolean;
+  show_vat: boolean;
+  show_payment_method: boolean;
+  show_tendered_change: boolean;
+  show_card_ref: boolean;
+}
+
+const DEFAULT_SIM_RECEIPT_CONFIG: SimReceiptConfig = {
+  header_title: "",
+  header_lines: [],
+  footer_lines: ["Thank you for your purchase!"],
+  show_terminal: true,
+  show_cashier: true,
+  show_order_number: true,
+  show_datetime: true,
+  show_subtotal: true,
+  show_vat: true,
+  show_payment_method: true,
+  show_tendered_change: true,
+  show_card_ref: true,
+};
+
+const SIM_RECEIPT_TOGGLES: { key: keyof SimReceiptConfig; label: string }[] = [
+  { key: "show_terminal",        label: "Terminal code" },
+  { key: "show_cashier",         label: "Cashier name" },
+  { key: "show_order_number",    label: "Order number" },
+  { key: "show_datetime",        label: "Date & time" },
+  { key: "show_subtotal",        label: "Subtotal line" },
+  { key: "show_vat",             label: "VAT line" },
+  { key: "show_payment_method",  label: "Payment method" },
+  { key: "show_tendered_change", label: "Tendered / change" },
+  { key: "show_card_ref",        label: "Card reference" },
+];
 
 interface AppliedSimPromo { id: string; name: string; discount: number; description: string; }
 
@@ -345,6 +451,19 @@ export default function PosSimulate() {
   const [heldCart, setHeldCart] = useState<SimCartLine[] | null>(null);
   const feedbackCounter = useRef(0);
 
+  // ── Barcode rules + receipt design (mirrors POS terminal parameters) ──────
+  const [barcodeRules, setBarcodeRules] = useState<SimBarcodeRule[]>(
+    () => loadSimJson<{ rules: SimBarcodeRule[] }>("sim_barcode_config", { rules: DEFAULT_SIM_BARCODE_RULES }).rules
+  );
+  const [receiptConfig, setReceiptConfig] = useState<SimReceiptConfig>(
+    () => loadSimJson("sim_receipt_config", DEFAULT_SIM_RECEIPT_CONFIG)
+  );
+  useEffect(() => { localStorage.setItem("sim_barcode_config", JSON.stringify({ rules: barcodeRules })); }, [barcodeRules]);
+  useEffect(() => { localStorage.setItem("sim_receipt_config", JSON.stringify(receiptConfig)); }, [receiptConfig]);
+  const [barcodeValue, setBarcodeValue] = useState("");
+  const [priceCheckMode, setPriceCheckMode] = useState(false);
+  const [receiptKind, setReceiptKind] = useState<"receipt" | "gift">("receipt");
+
   // Reset layout stack when rootLayoutId changes
   useEffect(() => { setLayoutStack([rootLayoutId]); }, [rootLayoutId]);
 
@@ -478,7 +597,7 @@ export default function PosSimulate() {
         setNumpadVal(fmt(cart[idx2].unitPrice)); setDialog("price_override"); break;
       }
       case "PRICE_CHECK":
-        showFeedback("Scan or enter barcode to check price", true); break;
+        setBarcodeValue(""); setPriceCheckMode(true); setDialog("barcode"); break;
       case "QTY": {
         const idx3 = lineIdx ?? selectedLine ?? (cart.length ? cart.length - 1 : null);
         if (idx3 === null || !cart[idx3]) { showFeedback("No line selected", false); return; }
@@ -502,11 +621,13 @@ export default function PosSimulate() {
       case "CASH_OUT":
         setNumpadVal("0"); setDialog("cash_out"); break;
       case "PRINT_RECEIPT": case "REPRINT":
-        showFeedback("🖨 Receipt printed (simulation)", true); break;
+        if (!cart.length && !saleHistory.length) { showFeedback("Nothing to print yet", false); return; }
+        setReceiptKind("receipt"); setDialog("receipt"); break;
       case "EMAIL_RECEIPT":
         showFeedback("📧 Receipt emailed to customer (simulation)", true); break;
       case "GIFT_RECEIPT":
-        showFeedback("🎁 Gift receipt printed (simulation)", true); break;
+        if (!cart.length && !saleHistory.length) { showFeedback("Nothing to print yet", false); return; }
+        setReceiptKind("gift"); setDialog("receipt"); break;
       case "REPORT_X": setDialog("x_report"); break;
       case "REPORT_Z": setDialog("z_report"); break;
       case "CLOCK_IN":  showFeedback("🕐 Clocked IN (simulation)", true); break;
@@ -517,7 +638,7 @@ export default function PosSimulate() {
       case "LOCK_TERMINAL": showFeedback("🔒 Terminal locked (simulation)", true); break;
       case "CHANGE_CASHIER": showFeedback("Cashier change (simulation)", true); break;
       case "ITEM_SEARCH": case "BARCODE_SCAN": case "PLU":
-        showFeedback("🔍 Item search active (simulation)", true); break;
+        setBarcodeValue(""); setPriceCheckMode(false); setDialog("barcode"); break;
       case "REFUND":
         showFeedback("Refund — select items from a prior sale (simulation)", true); break;
       case "NOTES": setDialog("notes"); break;
@@ -605,7 +726,7 @@ export default function PosSimulate() {
       default:
         showFeedback(`${code} — executed (simulation)`, true);
     }
-  }, [cart, selectedLine, customer, heldCart, showFeedback, clearCart, voidLine, addGenericItem, netCartTotal]);
+  }, [cart, selectedLine, customer, heldCart, saleHistory, showFeedback, clearCart, voidLine, addGenericItem, netCartTotal]);
 
   // ── Button click dispatcher ────────────────────────────────────────────────
   const handleButtonClick = useCallback((btn: PosLayoutButton) => {
@@ -712,12 +833,78 @@ export default function PosSimulate() {
   };
 
   const confirmQty = () => {
-    const qty = parseInt(numpadVal || "1", 10);
-    if (qty <= 0) { setDialog(null); return; }
+    // parseFloat so fractional weight-line quantities (e.g. 0.350 kg) survive edits
+    const qty = parseFloat(numpadVal || "1");
+    if (!Number.isFinite(qty) || qty <= 0) { setDialog(null); return; }
     const idx = selectedLine ?? (cart.length ? cart.length - 1 : null);
     if (idx === null) { setDialog(null); return; }
     setCart(prev => prev.map((l, i) => i === idx ? { ...l, qty } : l));
     setDialog(null);
+  };
+
+  // ── Barcode scan (exact match + configurable scale/weight rules) ──────────
+  const confirmBarcodeScan = () => {
+    const code = barcodeValue.trim();
+    if (!code) return;
+
+    const findByPlu = (plu: string) => {
+      const stripped = String(parseInt(plu, 10));
+      return items.find(it =>
+        it.barcode === plu || it.barcode === stripped ||
+        (it as any).sku === plu || (it as any).sku === stripped
+      );
+    };
+
+    // 1. Scale/weight barcode via configurable rules — parsed FIRST, matching
+    //    the POS terminal's scan order (PLU lookup, then full-barcode fallback).
+    const scale = parseSimScaleBarcode(code, barcodeRules);
+    if (scale) {
+      const item = findByPlu(scale.plu) ?? items.find(it => it.barcode === code);
+      const rule = barcodeRules.find(r => r.id === scale.ruleId);
+      if (!item) {
+        showFeedback(`Rule "${rule?.label}" matched (PLU ${scale.plu}) but no item has that PLU as barcode/SKU`, false);
+        return;
+      }
+      const basePrice = parseFloat(String(item.price1 || "0"));
+      const vat = parseFloat(String(item.vatRate || "0"));
+      if (priceCheckMode) {
+        const detail = scale.kind === "weight"
+          ? `${scale.value.toFixed(3)} kg × €${fmt(basePrice)} = €${fmt(scale.value * basePrice)}`
+          : scale.kind === "price" ? `embedded price €${fmt(scale.value)}` : `€${fmt(basePrice)}`;
+        showFeedback(`💶 ${item.name} — ${detail}`, true);
+        setDialog(null); return;
+      }
+      if (scale.kind === "weight") {
+        setCart(prev => [...prev, { id: uid(), itemId: item.id, label: `${item.name} (${scale.value.toFixed(3)} kg)`, qty: scale.value, unitPrice: basePrice, vatRate: vat, discountPct: 0 }]);
+        showFeedback(`⚖ ${item.name}: ${scale.value.toFixed(3)} kg @ €${fmt(basePrice)}/kg`, true);
+      } else if (scale.kind === "price") {
+        setCart(prev => [...prev, { id: uid(), itemId: item.id, label: `${item.name} (scale)`, qty: 1, unitPrice: scale.value, vatRate: vat, discountPct: 0 }]);
+        showFeedback(`🏷 ${item.name}: embedded price €${fmt(scale.value)}`, true);
+      } else {
+        addItem(item);
+        showFeedback(`Added by PLU: ${item.name}`, true);
+      }
+      setDialog(null); return;
+    }
+
+    // 2. Plain exact barcode/SKU match (item or variant)
+    const exactVariant = allVariants.find(v => v.barcode === code && v.active);
+    const exactItem = exactVariant
+      ? items.find(it => it.id === exactVariant.itemId)
+      : items.find(it => it.barcode === code || (it as any).sku === code);
+
+    if (exactItem) {
+      const price = parseFloat(String(exactVariant?.price1 || exactItem.price1 || "0"));
+      if (priceCheckMode) {
+        showFeedback(`💶 ${exactItem.name}${exactVariant ? ` (${simVariantLabel(exactVariant)})` : ""} — €${fmt(price)}`, true);
+      } else {
+        addItem(exactItem, exactVariant ?? undefined);
+        showFeedback(`Added: ${exactItem.name}`, true);
+      }
+      setDialog(null); return;
+    }
+
+    showFeedback(`No item found for barcode ${code}`, false);
   };
 
   const appliedPromos = useMemo(() => evaluatePromotions(cart, promotions, items), [cart, promotions, items]);
@@ -778,6 +965,19 @@ export default function PosSimulate() {
         </div>
 
         {/* Sim controls */}
+        <Button variant="outline" size="sm" className="shrink-0 text-xs h-8"
+          onClick={() => { setBarcodeValue(""); setPriceCheckMode(false); setDialog("barcode"); }}
+          data-testid="btn-sim-scan">
+          <Barcode className="w-3 h-3 mr-1" /> Scan
+        </Button>
+        <Button variant="outline" size="sm" className="shrink-0 text-xs h-8"
+          onClick={() => setDialog("barcode_rules")} data-testid="btn-sim-barcode-rules">
+          <Barcode className="w-3 h-3 mr-1" /> Barcode Rules
+        </Button>
+        <Button variant="outline" size="sm" className="shrink-0 text-xs h-8"
+          onClick={() => setDialog("receipt_design")} data-testid="btn-sim-receipt-design">
+          <ReceiptText className="w-3 h-3 mr-1" /> Receipt Design
+        </Button>
         <Button variant="outline" size="sm" onClick={clearCart} className="shrink-0 text-xs h-8"
           data-testid="btn-sim-clear">
           <RotateCcw className="w-3 h-3 mr-1" /> Reset
@@ -1335,6 +1535,255 @@ export default function PosSimulate() {
             <Button className="flex-1" onClick={() => {
               setSaleHistory([]); showFeedback("Z Report — counters reset (simulation)", true); setDialog(null);
             }} data-testid="btn-z-report-reset">Reset Counters</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Barcode scan / price check */}
+      <Dialog open={dialog === "barcode"} onOpenChange={o => !o && setDialog(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Barcode className="w-5 h-5" />{priceCheckMode ? "Price Check" : "Scan Barcode"}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Enter a plain item barcode/SKU, or a 13-digit scale barcode (weight/price
+            embedded) matching the configured rules — e.g. <code>21</code> + 5-digit PLU +
+            5-digit grams + check digit.
+          </p>
+          <Input
+            autoFocus
+            value={barcodeValue}
+            onChange={e => setBarcodeValue(e.target.value.trim())}
+            onKeyDown={e => e.key === "Enter" && confirmBarcodeScan()}
+            placeholder="e.g. 2100123005007"
+            className="font-mono"
+            data-testid="input-sim-barcode"
+          />
+          {/^\d{13}$/.test(barcodeValue) && (() => {
+            const p = parseSimScaleBarcode(barcodeValue, barcodeRules);
+            const rule = p && barcodeRules.find(r => r.id === p.ruleId);
+            return (
+              <p className="text-xs font-mono rounded bg-muted px-2 py-1" data-testid="text-sim-barcode-parse">
+                {p
+                  ? `↳ ${rule?.label}: PLU ${p.plu}${p.kind === "weight" ? ` · ${p.value.toFixed(3)} kg` : p.kind === "price" ? ` · €${fmt(p.value)}` : ""}`
+                  : "↳ no scale rule matches (will try exact barcode lookup)"}
+              </p>
+            );
+          })()}
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={() => setDialog(null)}>Cancel</Button>
+            <Button className="flex-1" onClick={confirmBarcodeScan} data-testid="btn-sim-barcode-confirm">
+              {priceCheckMode ? "Check Price" : "Scan"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Barcode rules editor */}
+      <Dialog open={dialog === "barcode_rules"} onOpenChange={o => !o && setDialog(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Barcode className="w-5 h-5" />Barcode Structure (simulation)</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Mirrors the POS terminal's configurable weight/price/PLU barcode rules. Changes here
+            only affect this simulator (saved in your browser) — edit the real rules on the terminal.
+          </p>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {barcodeRules.map(rule => {
+              const len = rule.prefix.length + rule.plu_digits + rule.value_digits + (rule.check_digit ? 1 : 0);
+              return (
+                <div key={rule.id} className="rounded-lg border p-3 space-y-2" data-testid={`sim-barcode-rule-${rule.id}`}>
+                  <div className="flex items-center gap-2">
+                    <Input value={rule.label} className="h-7 text-xs flex-1"
+                      onChange={e => setBarcodeRules(rs => rs.map(r => r.id === rule.id ? { ...r, label: e.target.value } : r))} />
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-500"
+                      onClick={() => setBarcodeRules(rs => rs.filter(r => r.id !== rule.id))}>
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-5 gap-2 text-xs">
+                    <label className="space-y-0.5"><span className="text-muted-foreground">Prefix</span>
+                      <Input value={rule.prefix} className="h-7 text-xs font-mono"
+                        onChange={e => setBarcodeRules(rs => rs.map(r => r.id === rule.id ? { ...r, prefix: e.target.value.replace(/\D/g, "") } : r))} />
+                    </label>
+                    <label className="space-y-0.5"><span className="text-muted-foreground">PLU digits</span>
+                      <Input type="number" min={1} value={rule.plu_digits} className="h-7 text-xs"
+                        onChange={e => setBarcodeRules(rs => rs.map(r => r.id === rule.id ? { ...r, plu_digits: parseInt(e.target.value, 10) || 0 } : r))} />
+                    </label>
+                    <label className="space-y-0.5"><span className="text-muted-foreground">Value digits</span>
+                      <Input type="number" min={1} value={rule.value_digits} className="h-7 text-xs"
+                        onChange={e => setBarcodeRules(rs => rs.map(r => r.id === rule.id ? { ...r, value_digits: parseInt(e.target.value, 10) || 0 } : r))} />
+                    </label>
+                    <label className="space-y-0.5"><span className="text-muted-foreground">Divisor</span>
+                      <Input type="number" min={1} value={rule.value_divisor} className="h-7 text-xs"
+                        onChange={e => setBarcodeRules(rs => rs.map(r => r.id === rule.id ? { ...r, value_divisor: parseFloat(e.target.value) || 1 } : r))} />
+                    </label>
+                    <label className="space-y-0.5"><span className="text-muted-foreground">Kind</span>
+                      <select value={rule.kind} className="h-7 w-full rounded-md border bg-background text-xs px-1"
+                        onChange={e => setBarcodeRules(rs => rs.map(r => r.id === rule.id ? { ...r, kind: e.target.value as SimBarcodeRule["kind"] } : r))}>
+                        <option value="weight">Weight</option>
+                        <option value="price">Price</option>
+                        <option value="plu">PLU only</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs">
+                    <label className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={rule.check_digit}
+                        onChange={e => setBarcodeRules(rs => rs.map(r => r.id === rule.id ? { ...r, check_digit: e.target.checked } : r))} />
+                      Check digit
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={rule.enabled}
+                        onChange={e => setBarcodeRules(rs => rs.map(r => r.id === rule.id ? { ...r, enabled: e.target.checked } : r))} />
+                      Enabled
+                    </label>
+                    <span className={`ml-auto font-mono ${len === 13 ? "text-muted-foreground" : "text-red-500 font-semibold"}`}>
+                      {len} / 13 digits{len !== 13 ? " — must total 13" : ""}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1"
+              onClick={() => setBarcodeRules(rs => [...rs, { id: `rule-${Date.now()}`, label: "New rule", prefix: "", kind: "weight", plu_digits: 5, value_digits: 5, value_divisor: 1000, check_digit: true, enabled: true }])}
+              data-testid="btn-sim-barcode-add-rule">
+              <Plus className="w-3.5 h-3.5 mr-1" /> Add rule
+            </Button>
+            <Button variant="outline" className="flex-1" onClick={() => setBarcodeRules(DEFAULT_SIM_BARCODE_RULES)}>
+              Restore defaults
+            </Button>
+            <Button className="flex-1" onClick={() => setDialog(null)}>Done</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Receipt design editor */}
+      <Dialog open={dialog === "receipt_design"} onOpenChange={o => !o && setDialog(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><ReceiptText className="w-5 h-5" />Receipt Design (simulation)</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Mirrors the POS terminal's Receipt Design parameters. Print a receipt (Print Receipt
+            button or after a sale) to preview the result.
+          </p>
+          <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+            <label className="block text-xs space-y-1">
+              <span className="text-muted-foreground">Header title (empty → terminal code)</span>
+              <Input value={receiptConfig.header_title} maxLength={64}
+                onChange={e => setReceiptConfig(c => ({ ...c, header_title: e.target.value }))}
+                data-testid="input-sim-receipt-title" />
+            </label>
+            <label className="block text-xs space-y-1">
+              <span className="text-muted-foreground">Header lines (one per line — address, phone, tax ID…)</span>
+              <textarea rows={3} className="w-full rounded-md border bg-background px-2 py-1.5 text-xs"
+                value={receiptConfig.header_lines.join("\n")}
+                onChange={e => setReceiptConfig(c => ({ ...c, header_lines: e.target.value.split("\n").slice(0, 10) }))}
+                data-testid="input-sim-receipt-header-lines" />
+            </label>
+            <label className="block text-xs space-y-1">
+              <span className="text-muted-foreground">Footer lines (one per line — thank-you, return policy…)</span>
+              <textarea rows={3} className="w-full rounded-md border bg-background px-2 py-1.5 text-xs"
+                value={receiptConfig.footer_lines.join("\n")}
+                onChange={e => setReceiptConfig(c => ({ ...c, footer_lines: e.target.value.split("\n").slice(0, 10) }))}
+                data-testid="input-sim-receipt-footer-lines" />
+            </label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {SIM_RECEIPT_TOGGLES.map(t => (
+                <label key={t.key} className="flex items-center gap-1.5 text-xs">
+                  <input type="checkbox" checked={receiptConfig[t.key] as boolean}
+                    onChange={e => setReceiptConfig(c => ({ ...c, [t.key]: e.target.checked }))}
+                    data-testid={`checkbox-sim-receipt-${t.key}`} />
+                  {t.label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={() => setReceiptConfig(DEFAULT_SIM_RECEIPT_CONFIG)}>
+              Restore defaults
+            </Button>
+            <Button className="flex-1" onClick={() => { setDialog(null); if (cart.length || saleHistory.length) { setReceiptKind("receipt"); setDialog("receipt"); } }}
+              data-testid="btn-sim-receipt-preview">
+              Preview
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Receipt preview (uses the receipt design) */}
+      <Dialog open={dialog === "receipt"} onOpenChange={o => !o && setDialog(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Printer className="w-5 h-5" />{receiptKind === "gift" ? "Gift Receipt" : "Receipt"} Preview
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Layout preview using the Receipt Design settings — payment/tendered values are
+            simulated placeholders, not a real transaction.
+          </p>
+          {(() => {
+            const src = cart.length ? cart : saleHistory[saleHistory.length - 1]?.items ?? [];
+            const srcTotal = cart.length ? total : saleHistory[saleHistory.length - 1]?.total ?? 0;
+            const srcSubtotal = cartSubtotal(src);
+            const srcVat = cartVat(src);
+            const rc = receiptConfig;
+            const line = (l: string, r: string) => (
+              <p className="flex justify-between"><span>{l}</span><span>{r}</span></p>
+            );
+            return (
+              <div className="bg-white text-gray-900 rounded-lg p-4 font-mono text-xs space-y-0.5 max-h-96 overflow-y-auto border shadow-inner" data-testid="sim-receipt-preview">
+                <p className="text-center font-bold text-sm">{(rc.header_title.trim() || "SIM-01").toUpperCase()}</p>
+                {rc.header_lines.filter(l => l.trim()).map((l, i) => <p key={i} className="text-center">{l}</p>)}
+                <p className="border-t my-1" />
+                {(rc.show_terminal || rc.show_cashier) && (
+                  <p>{[rc.show_terminal ? "Terminal: SIM-01" : "", rc.show_cashier ? "Cashier: Simulator" : ""].filter(Boolean).join("  ")}</p>
+                )}
+                {(rc.show_order_number || rc.show_datetime) && (
+                  <p>{[rc.show_order_number ? `Order: SIM-${String(saleHistory.length + 1).padStart(4, "0")}` : "", rc.show_datetime ? new Date().toLocaleString() : ""].filter(Boolean).join("  ")}</p>
+                )}
+                <p className="border-t my-1" />
+                {src.map(l => line(
+                  `${l.label.substring(0, 22)} x${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(3)}`,
+                  receiptKind === "gift" ? "" : `€${fmt(lineTotal(l))}`
+                ))}
+                {src.length === 0 && <p className="text-center text-gray-400">(no items)</p>}
+                <p className="border-t my-1" />
+                {receiptKind !== "gift" && (
+                  <>
+                    {rc.show_subtotal && line("Subtotal", `€${fmt(srcSubtotal)}`)}
+                    {rc.show_vat && line("VAT", `€${fmt(srcVat)}`)}
+                    <p className="flex justify-between font-bold text-sm"><span>TOTAL</span><span>€{fmt(srcTotal)}</span></p>
+                    <p className="border-t my-1" />
+                    {rc.show_payment_method && <p>Payment: CASH (simulation)</p>}
+                    {rc.show_tendered_change && line("Tendered", `€${fmt(srcTotal)}`) }
+                    {rc.show_card_ref && <p className="text-gray-500">Card Ref: — (card payments only)</p>}
+                  </>
+                )}
+                {receiptKind === "gift" && <p className="text-center">*** GIFT RECEIPT — no prices ***</p>}
+                {rc.footer_lines.some(l => l.trim()) && (
+                  <>
+                    <p className="border-t my-1" />
+                    {rc.footer_lines.filter(l => l.trim()).map((l, i) => <p key={i} className="text-center">{l}</p>)}
+                  </>
+                )}
+              </div>
+            );
+          })()}
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={() => { setDialog("receipt_design"); }}>
+              Edit Design
+            </Button>
+            <Button className="flex-1" onClick={() => { setDialog(null); showFeedback("🖨 Receipt printed (simulation)", true); }}>
+              Print
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

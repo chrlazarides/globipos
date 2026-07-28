@@ -22,8 +22,9 @@ import AgeVerificationDialog from "../components/AgeVerificationDialog";
 import type { Product } from "../types";
 import type { OrderLine } from "../types";
 import { createLine, setLinePriceOverride, computeOrderTotals } from "../lib/pricing";
-import { parseScaleBarcode } from "../lib/scaleBarcode";
-import { nextOrderNumber, saveOrder } from "../lib/db";
+import { parseScaleBarcode, DEFAULT_BARCODE_CONFIG } from "../lib/scaleBarcode";
+import type { BarcodeConfig as BarcodeConfigType } from "../types";
+import { nextOrderNumber, saveOrder, getBarcodeConfig } from "../lib/db";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,12 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
   const [cardRef, setCardRef] = useState<string | null>(null);
   const barcodeRef = useRef<HTMLInputElement>(null);
+  const barcodeConfigRef = useRef<BarcodeConfigType | null>(null);
+
+  // Load admin-configured barcode rules (falls back to defaults if unavailable)
+  useEffect(() => {
+    getBarcodeConfig().then((cfg) => { barcodeConfigRef.current = cfg; }).catch(() => {});
+  }, []);
 
   const activeLines = lines.filter((l) => !l.voided);
   const totals = computeOrderTotals(activeLines, 0, 0);
@@ -91,7 +98,7 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
       const code = barcode.trim();
 
       // ── Scale barcode detection ───────────────────────────────────────────
-      const scale = parseScaleBarcode(code);
+      const scale = parseScaleBarcode(code, barcodeConfigRef.current ?? DEFAULT_BARCODE_CONFIG);
       let resolvedBarcode = code;
       let scaleQty: number | undefined;
       let scalePrice: number | undefined;

@@ -1,5 +1,6 @@
 mod auth;
 mod barcode_config;
+mod receipt_config;
 mod db;
 mod hardware;
 mod vfd;
@@ -11,6 +12,7 @@ mod sync;
 mod tests;
 
 use barcode_config::BarcodeConfig;
+use receipt_config::ReceiptConfig;
 use db::row_to_json;
 use hardware::{HardwareConfig, PaymentConfig, ScaleWeight};
 use models::*;
@@ -1277,6 +1279,21 @@ async fn save_barcode_config(
     barcode_config::save_barcode_config(&state.db, &config).await
 }
 
+// ── Receipt design configuration (header/footer text and section toggles) ─────
+
+#[tauri::command]
+async fn get_receipt_config(state: State<'_, AppState>) -> Result<ReceiptConfig, String> {
+    Ok(receipt_config::load_receipt_config(&state.db).await)
+}
+
+#[tauri::command]
+async fn save_receipt_config(
+    state:  State<'_, AppState>,
+    config: ReceiptConfig,
+) -> Result<(), String> {
+    receipt_config::save_receipt_config(&state.db, &config).await
+}
+
 #[tauri::command]
 async fn scale_read_weight(
     app:   AppHandle,
@@ -1475,6 +1492,8 @@ pub fn run() {
             save_hardware_config,
             get_barcode_config,
             save_barcode_config,
+            get_receipt_config,
+            save_receipt_config,
             scale_read_weight,
             scale_tare,
             print_receipt,
