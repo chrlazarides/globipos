@@ -50,6 +50,11 @@ interface PaymentConfig {
   viva_client_id?: string;
   viva_client_secret?: string;
   worldpay_entity?: string;
+  // Payabl
+  payabl_terminal_id?: string;
+  // PBT / Planet PAX
+  pbt_terminal_ip?: string;
+  pbt_terminal_port?: number;
 }
 
 const DEFAULT_HW: HardwareConfig = {
@@ -380,20 +385,29 @@ export default function HardwareConfigPage({ onClose }: HardwareConfigPageProps)
                 <option value="jcc">JCC (Cyprus)</option>
                 <option value="viva">Viva Wallet</option>
                 <option value="worldpay">Worldpay</option>
+                <option value="payabl">Payabl.</option>
+                <option value="pbt">PBT / Planet PAX (Cyprus)</option>
               </select>
             </div>
 
             {pay.provider !== "mock" && (
               <>
-                <div className="space-y-1">
-                  <Label>API endpoint URL</Label>
-                  <Input
-                    className="bg-gray-800 border-gray-700 text-white"
-                    placeholder="https://gateway.example.com"
-                    value={pay.endpoint}
-                    onChange={(e) => updatePay("endpoint", e.target.value)}
-                  />
-                </div>
+                {/* PBT uses a dedicated terminal-IP field — skip the generic URL */}
+                {pay.provider !== "pbt" && (
+                  <div className="space-y-1">
+                    <Label>API endpoint URL</Label>
+                    <Input
+                      className="bg-gray-800 border-gray-700 text-white"
+                      placeholder={
+                        pay.provider === "payabl"
+                          ? "https://pay4.sandbox.payabl.com  (or pay4.payabl.com)"
+                          : "https://gateway.example.com"
+                      }
+                      value={pay.endpoint}
+                      onChange={(e) => updatePay("endpoint", e.target.value)}
+                    />
+                  </div>
+                )}
                 <div className="space-y-1">
                   <Label>Merchant ID</Label>
                   <Input
@@ -402,15 +416,18 @@ export default function HardwareConfigPage({ onClose }: HardwareConfigPageProps)
                     onChange={(e) => updatePay("merchant_id", e.target.value)}
                   />
                 </div>
-                <div className="space-y-1">
-                  <Label>API key / token</Label>
-                  <Input
-                    type="password"
-                    className="bg-gray-800 border-gray-700 text-white"
-                    value={pay.api_key}
-                    onChange={(e) => updatePay("api_key", e.target.value)}
-                  />
-                </div>
+                {/* PBT: api_key is optional (local LAN); shown only for other providers */}
+                {pay.provider !== "pbt" && (
+                  <div className="space-y-1">
+                    <Label>API key / token</Label>
+                    <Input
+                      type="password"
+                      className="bg-gray-800 border-gray-700 text-white"
+                      value={pay.api_key}
+                      onChange={(e) => updatePay("api_key", e.target.value)}
+                    />
+                  </div>
+                )}
               </>
             )}
 
@@ -450,6 +467,56 @@ export default function HardwareConfigPage({ onClose }: HardwareConfigPageProps)
               <div className="space-y-1">
                 <Label>Entity ID</Label>
                 <Input className="bg-gray-800 border-gray-700 text-white" value={pay.worldpay_entity ?? ""} onChange={(e) => updatePay("worldpay_entity", e.target.value)} />
+              </div>
+            )}
+
+            {pay.provider === "payabl" && (
+              <div className="space-y-3">
+                <div className="text-xs text-gray-400 bg-gray-900 rounded-md px-3 py-2 border border-gray-700">
+                  <strong>Payabl.</strong> — Use <code>https://pay4.sandbox.payabl.com</code> for testing or{" "}
+                  <code>https://pay4.payabl.com</code> for production. API key and Merchant ID are provided in your Payabl merchant portal.
+                </div>
+                <div className="space-y-1">
+                  <Label>Terminal ID</Label>
+                  <Input
+                    className="bg-gray-800 border-gray-700 text-white"
+                    placeholder="01 (default)"
+                    value={pay.payabl_terminal_id ?? ""}
+                    onChange={(e) => updatePay("payabl_terminal_id", e.target.value)}
+                  />
+                  <p className="text-xs text-gray-500">Physical terminal identifier from your Payabl dashboard.</p>
+                </div>
+              </div>
+            )}
+
+            {pay.provider === "pbt" && (
+              <div className="space-y-3">
+                <div className="text-xs text-gray-400 bg-gray-900 rounded-md px-3 py-2 border border-gray-700">
+                  <strong>PBT / Planet PAX</strong> — The PAX terminal must be on the same local network as this POS.
+                  Leave API key blank (local LAN — no bearer auth required). Merchant ID is the reference
+                  printed on your PBT terminal configuration slip.
+                </div>
+                <div className="space-y-1">
+                  <Label>Terminal LAN IP address</Label>
+                  <Input
+                    className="bg-gray-800 border-gray-700 text-white font-mono"
+                    placeholder="192.168.1.100"
+                    value={pay.pbt_terminal_ip ?? ""}
+                    onChange={(e) => updatePay("pbt_terminal_ip", e.target.value)}
+                  />
+                  <p className="text-xs text-gray-500">Local IP of the PAX terminal (Planet Integra service).</p>
+                </div>
+                <div className="space-y-1">
+                  <Label>Terminal port</Label>
+                  <Input
+                    type="number"
+                    className="bg-gray-800 border-gray-700 text-white"
+                    placeholder="10009"
+                    value={pay.pbt_terminal_port ?? ""}
+                    onChange={(e) => updatePay("pbt_terminal_port", e.target.value ? parseInt(e.target.value) : undefined)}
+                  />
+                  <p className="text-xs text-gray-500">Default: 10009 (Planet Integra). Change only if your terminal is configured differently.</p>
+                </div>
               </div>
             )}
           </div>
