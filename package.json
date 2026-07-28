@@ -110,7 +110,7 @@
     "workbox-precaching": "^7.4.1",
     "wouter": "^3.3.5",
     "ws": "^8.21.0",
-    "xlsx": "^0.18.5",
+
     "zod": "^3.24.2",
     "zod-validation-error": "^3.4.0"
   },
@@ -143,7 +143,9 @@
     "drizzle-kit": {
       "@esbuild-kit/esm-loader": "npm:tsx@^4.20.4"
     },
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.0",
+    "form-data": "^4.0.6",
+    "tmp": "^0.2.7"
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"

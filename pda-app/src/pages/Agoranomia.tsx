@@ -163,14 +163,6 @@ function openPrintableLabels(labels: PrintedLabel[]) {
   win.document.close();
 }
 
-// formatDate used in template literal above, must be in scope
-function formatDate(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const [y, m, d] = iso.split("-");
-  if (!y || !m || !d) return iso;
-  return `${d}/${m}/${y}`;
-}
-
 export default function Agoranomia() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());

@@ -145,7 +145,7 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
     scanningRef.current = false;
     // Stop ZXing reader if active
     if (zxingReaderRef.current) {
-      try { zxingReaderRef.current.reset(); } catch {}
+      try { (zxingReaderRef.current as any).reset?.(); } catch {}
       zxingReaderRef.current = null;
     }
     if (streamRef.current) {

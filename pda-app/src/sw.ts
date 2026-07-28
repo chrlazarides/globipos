@@ -3,11 +3,11 @@
 /// <reference lib="webworker" />
 /// <reference lib="webworker.iterable" />
 
-declare const self: ServiceWorkerGlobalScope;
+declare const self: ServiceWorkerGlobalScope & {
+  __WB_MANIFEST: Array<{ url: string; revision: string | null } | string>;
+};
 
 const CACHE_VERSION = "globi-pda-static-v1";
-
-declare const __WB_MANIFEST: Array<{ url: string; revision: string | null } | string>;
 
 // URLs that MUST NOT be cached (auth-sensitive staff data / mutating endpoints)
 const NO_CACHE_PATTERNS = [
@@ -24,7 +24,7 @@ function isAuthSensitive(url: string): boolean {
 }
 
 self.addEventListener("install", (event: ExtendableEvent) => {
-  const urls = __WB_MANIFEST.map((entry) =>
+  const urls = self.__WB_MANIFEST.map((entry) =>
     typeof entry === "string" ? entry : entry.url
   ).filter((u) => !isAuthSensitive(u));
   event.waitUntil(

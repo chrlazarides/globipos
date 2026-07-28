@@ -3,8 +3,6 @@
 /// <reference lib="webworker" />
 /// <reference lib="webworker.iterable" />
 
-declare const self: ServiceWorkerGlobalScope;
-
 const CACHE_VERSION = "globi-static-v1";
 
 // Auth-scoped cache: keyed by token prefix so different customers never share entries
@@ -12,7 +10,9 @@ function authCacheKey(token: string) {
   return `globi-auth-${token.slice(-16)}-v1`;
 }
 
-declare const __WB_MANIFEST: Array<{ url: string; revision: string | null } | string>;
+declare const self: ServiceWorkerGlobalScope & {
+  __WB_MANIFEST: Array<{ url: string; revision: string | null } | string>;
+};
 
 // URLs that MUST NOT be cached (auth-sensitive account/order data)
 const NO_CACHE_PATTERNS = [
@@ -31,7 +31,7 @@ function isAuthSensitive(url: string): boolean {
 
 // ── Install: precache static assets only ─────────────────────────────────────
 self.addEventListener("install", (event: ExtendableEvent) => {
-  const urls = __WB_MANIFEST.map((entry) =>
+  const urls = self.__WB_MANIFEST.map((entry) =>
     typeof entry === "string" ? entry : entry.url
   ).filter((u) => !isAuthSensitive(u));
   event.waitUntil(
