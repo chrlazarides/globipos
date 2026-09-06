@@ -25,6 +25,7 @@ import QRCode from "qrcode";
 
 // ─── LOGO BASE64 (embedded so it shows in emails, print, and offline) ────────
 import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScaleBarcode, parseScaleBarcodeAfterVariantLookup, resolveScaleBarcodeExactFirst } from "./barcode-utils";
+import { isValidIanaTimeZone } from "@shared/quiet-hours";
 function getLogoDataUrl(): string {
   const candidates = [
     path.resolve(process.cwd(), "dist", "public", "logo.png"),
@@ -629,6 +630,7 @@ export async function registerRoutes(
     enabled: z.boolean(),
     startHour: z.number().int().min(0).max(23),
     endHour: z.number().int().min(0).max(23),
+    timezone: z.string().refine(isValidIanaTimeZone, "Timezone must be a valid IANA time zone").optional(),
     migrateLegacy: z.boolean().optional(),
   }).strict();
 
@@ -638,6 +640,7 @@ export async function registerRoutes(
         enabled: users.whatsappQuietHoursEnabled,
         startHour: users.whatsappQuietHoursStart,
         endHour: users.whatsappQuietHoursEnd,
+        timezone: users.whatsappQuietHoursTimezone,
         migrated: users.whatsappQuietHoursMigrated,
       }).from(users).where(eq(users.id, req.user!.id));
       if (!preference) return res.status(404).json({ message: "User not found" });
@@ -657,11 +660,13 @@ export async function registerRoutes(
         whatsappQuietHoursEnabled: preference.enabled,
         whatsappQuietHoursStart: preference.startHour,
         whatsappQuietHoursEnd: preference.endHour,
+        ...(preference.timezone ? { whatsappQuietHoursTimezone: preference.timezone } : {}),
         whatsappQuietHoursMigrated: true,
       }).where(updateCondition).returning({
         enabled: users.whatsappQuietHoursEnabled,
         startHour: users.whatsappQuietHoursStart,
         endHour: users.whatsappQuietHoursEnd,
+        timezone: users.whatsappQuietHoursTimezone,
         migrated: users.whatsappQuietHoursMigrated,
       });
       if (updated) return res.json(updated);
@@ -670,6 +675,7 @@ export async function registerRoutes(
         enabled: users.whatsappQuietHoursEnabled,
         startHour: users.whatsappQuietHoursStart,
         endHour: users.whatsappQuietHoursEnd,
+        timezone: users.whatsappQuietHoursTimezone,
         migrated: users.whatsappQuietHoursMigrated,
       }).from(users).where(eq(users.id, req.user!.id));
       if (!current) return res.status(404).json({ message: "User not found" });

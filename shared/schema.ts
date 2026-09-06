@@ -19,6 +19,7 @@ export const users = pgTable("users", {
   whatsappQuietHoursEnabled: boolean("whatsapp_quiet_hours_enabled").notNull().default(false),
   whatsappQuietHoursStart: integer("whatsapp_quiet_hours_start").notNull().default(22),
   whatsappQuietHoursEnd: integer("whatsapp_quiet_hours_end").notNull().default(8),
+  whatsappQuietHoursTimezone: text("whatsapp_quiet_hours_timezone").notNull().default("Europe/Nicosia"),
   whatsappQuietHoursMigrated: boolean("whatsapp_quiet_hours_migrated").notNull().default(false),
 });
 

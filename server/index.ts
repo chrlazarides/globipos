@@ -109,6 +109,7 @@ app.use((req, res, next) => {
         ADD COLUMN IF NOT EXISTS whatsapp_quiet_hours_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         ADD COLUMN IF NOT EXISTS whatsapp_quiet_hours_start INTEGER NOT NULL DEFAULT 22,
         ADD COLUMN IF NOT EXISTS whatsapp_quiet_hours_end INTEGER NOT NULL DEFAULT 8,
+        ADD COLUMN IF NOT EXISTS whatsapp_quiet_hours_timezone TEXT NOT NULL DEFAULT 'Europe/Nicosia',
         ADD COLUMN IF NOT EXISTS whatsapp_quiet_hours_migrated BOOLEAN NOT NULL DEFAULT FALSE;
     `);
   } catch (e) {
