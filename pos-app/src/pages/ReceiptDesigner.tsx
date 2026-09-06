@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
-  ReceiptTextIcon, Loader2Icon, ArrowLeftIcon, CheckIcon, PlusIcon, TrashIcon,
+  ReceiptTextIcon, Loader2Icon, ArrowLeftIcon, CheckIcon, PlusIcon, TrashIcon, PrinterIcon,
 } from "lucide-react";
+import type { PrintReceiptLine } from "../hooks/useHardware";
 import type { ReceiptConfig as ReceiptConfigType } from "../types";
 import { getReceiptConfig, saveReceiptConfig } from "../lib/db";
 
@@ -69,6 +71,7 @@ export function ReceiptDesigner({ terminalCode, onClose }: ReceiptDesignerProps)
   const [config, setConfig] = useState<ReceiptConfigType | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -95,6 +98,67 @@ export function ReceiptDesigner({ terminalCode, onClose }: ReceiptDesignerProps)
       setError(typeof e === "string" ? e : e?.message ?? "Failed to save receipt design");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleTestPrint() {
+    if (!config) return;
+    setError(null);
+    setPrinting(true);
+
+    const infoLine1 = [
+      config.show_terminal ? `Terminal: ${terminalCode}` : "",
+      config.show_cashier ? "Cashier: Test Cashier" : "",
+    ].filter(Boolean).join("  ");
+    const infoLine2 = [
+      config.show_order_number ? "Order: TEST-0001" : "",
+      config.show_datetime ? new Date().toLocaleString() : "",
+    ].filter(Boolean).join("  ");
+    const lines: PrintReceiptLine[] = [
+      {
+        text: config.header_title.trim() || terminalCode,
+        align: "center",
+        bold: true,
+        size: "big",
+      },
+      ...config.header_lines
+        .filter((line) => line.trim() !== "")
+        .map((text) => ({ text, align: "center" as const })),
+      { divider: true },
+      ...(infoLine1 ? [{ text: infoLine1 }] : []),
+      ...(infoLine2 ? [{ text: infoLine2 }] : []),
+      ...(infoLine1 || infoLine2 ? [{ divider: true }] : []),
+      { text: "Test Product A           x2   €7.80" },
+      { text: "Test Product B           x1  €10.50" },
+      { divider: true },
+      ...(config.show_subtotal ? [{ text: "Subtotal                     €18.30" }] : []),
+      ...(config.show_vat ? [{ text: "VAT                           €0.87" }] : []),
+      { text: "TOTAL                        €18.30", bold: true },
+      { divider: true },
+      ...(config.show_payment_method ? [{ text: "Payment: TEST CARD" }] : []),
+      ...(config.show_tendered_change ? [
+        { text: "Tendered                     €20.00" },
+        { text: "Change                        €1.70" },
+      ] : []),
+      ...(config.show_card_ref ? [{ text: "Card Ref: TEST-123456" }] : []),
+      ...(config.footer_lines.some((line) => line.trim() !== "")
+        ? [
+            { divider: true },
+            ...config.footer_lines
+              .filter((line) => line.trim() !== "")
+              .map((text) => ({ text, align: "center" as const })),
+          ]
+        : []),
+    ];
+
+    try {
+      await invoke("print_receipt", { lines });
+      setToast("Test receipt printed");
+      setTimeout(() => setToast(null), 2000);
+    } catch (e: any) {
+      setError(typeof e === "string" ? e : e?.message ?? "Failed to print test receipt");
+    } finally {
+      setPrinting(false);
     }
   }
 
@@ -146,17 +210,26 @@ export function ReceiptDesigner({ terminalCode, onClose }: ReceiptDesignerProps)
             {toast}
           </div>
         )}
-        {!toast && (
+        <div className={toast ? "flex items-center gap-2" : "ml-auto flex items-center gap-2"}>
+          <button
+            onClick={handleTestPrint}
+            disabled={printing || saving || loading || !config}
+            className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-gray-200 text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
+            data-testid="button-receipt-designer-test-print"
+          >
+            {printing ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <PrinterIcon className="w-4 h-4" />}
+            Test Print
+          </button>
           <button
             onClick={handleSave}
-            disabled={saving || loading || !config}
-            className="ml-auto flex items-center gap-1.5 bg-burgundy-700 hover:bg-burgundy-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
+            disabled={saving || printing || loading || !config}
+            className="flex items-center gap-1.5 bg-burgundy-700 hover:bg-burgundy-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
             data-testid="button-receipt-designer-save"
           >
             {saving ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <CheckIcon className="w-4 h-4" />}
             Save
           </button>
-        )}
+        </div>
       </div>
 
       {/* Body */}
