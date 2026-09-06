@@ -51,7 +51,7 @@ export default function InventoryInPage() {
   const [price1, setPrice1] = useState("0");
   const [vatRate, setVatRate] = useState("19");
   const [season, setSeason] = useState("");
-  const [codeMethod, setCodeMethod] = useState<"descriptive" | "sequential">("descriptive");
+  const [codeMethod, setCodeMethod] = useState<"descriptive" | "sequential" | "qr">("descriptive");
   const [locationId, setLocationId] = useState("");
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -267,13 +267,14 @@ export default function InventoryInPage() {
             </div>
             <div>
               <Label>Code synthesis method</Label>
-              <Select value={codeMethod} onValueChange={(v) => setCodeMethod(v as "descriptive" | "sequential")}>
+              <Select value={codeMethod} onValueChange={(v) => setCodeMethod(v as "descriptive" | "sequential" | "qr")}>
                 <SelectTrigger data-testid="select-inventoryin-code-method">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="descriptive">Descriptive (Code-39) — Dept+Style+Color+Size</SelectItem>
                   <SelectItem value="sequential">Sequential (EAN-8) — short running number</SelectItem>
+                  <SelectItem value="qr">QR Code — Dept+Style+Color+Size</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -412,7 +413,9 @@ export default function InventoryInPage() {
                       <TableCell className="text-sm">{line.sizeName}</TableCell>
                       <TableCell className="text-xs font-mono">
                         {line.barcode}
-                        <Badge variant="secondary" className="ml-2 text-[10px]">{line.codeMethod === "sequential" ? "EAN-8" : "Code-39"}</Badge>
+                        <Badge variant="secondary" className="ml-2 text-[10px]">
+                          {line.codeMethod === "sequential" ? "EAN-8" : line.codeMethod === "qr" ? "QR" : "Code-39"}
+                        </Badge>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {line.locationId ? (

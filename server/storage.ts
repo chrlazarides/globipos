@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
-import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeSequentialCode } from "./barcode-utils";
+import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeQrCode, synthesizeSequentialCode } from "./barcode-utils";
 import {
   users, categories, colors, sizes, items, itemVariants, itemBarcodes, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
@@ -619,6 +619,14 @@ export class DatabaseStorage implements IStorage {
         sku = String(nextSeq!).padStart(7, "0");
         barcode = synthesizeSequentialCode(nextSeq!);
         nextSeq!++;
+      } else if (header.codeMethod === "qr") {
+        barcode = synthesizeQrCode({
+          categoryName: category.name,
+          style: header.style,
+          colorName: cell.colorName,
+          sizeName: cell.sizeName,
+        });
+        sku = barcode.slice(3);
       } else {
         barcode = synthesizeDescriptiveCode({ categoryName: category.name, style: header.style, colorName: cell.colorName, sizeName: cell.sizeName });
         sku = barcode;
@@ -632,8 +640,22 @@ export class DatabaseStorage implements IStorage {
         (await db.select().from(itemVariants).where(eq(itemVariants.barcode, finalBarcode)).then(r => r.length > 0))
       ) {
         salt++;
-        finalBarcode = header.codeMethod === "sequential" ? synthesizeSequentialCode(nextSeq! + salt) : `${barcode}`.slice(0, 15) + salt;
-        finalSku = finalBarcode;
+        if (header.codeMethod === "sequential") {
+          finalBarcode = synthesizeSequentialCode(nextSeq! + salt);
+          finalSku = finalBarcode;
+        } else if (header.codeMethod === "qr") {
+          finalBarcode = synthesizeQrCode({
+            categoryName: category.name,
+            style: header.style,
+            colorName: cell.colorName,
+            sizeName: cell.sizeName,
+            salt,
+          });
+          finalSku = finalBarcode.slice(3);
+        } else {
+          finalBarcode = `${barcode}`.slice(0, 15) + salt;
+          finalSku = finalBarcode;
+        }
       }
 
       const [created] = await db.insert(inventoryInLines).values({

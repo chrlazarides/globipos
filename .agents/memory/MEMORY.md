@@ -32,3 +32,4 @@
 - [barcode endpoint variant merge](barcode-endpoint-variant-merge.md) — GET /api/items/barcode can return a variant-merged item; guard hasVariants/variantId in any scan handler feeding a variant-unaware model (a UI filter isn't enough)
 - [Client console.error kills dev server](vite-client-console-error-kills-server.md) — forwarded React warnings (e.g. div-in-p from Badge) hit the Vite error logger which process.exit(1)s; page open = silent server death
 - [Smart import dual paths](smart-import-dual-paths.md) — upsert/normalization changes must hit both the multipart routes AND /api/items/import/json (pre-parsed path)
+- [QR synthesis identifiers](qr-synthesis-identifiers.md) — synthesized QR inventory codes use a QR: prefix so scanners and label printing can identify the symbology without schema changes

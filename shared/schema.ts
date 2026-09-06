@@ -151,7 +151,7 @@ export const inventoryInLines = pgTable("inventory_in_lines", {
   price1: numeric("price_1", { precision: 10, scale: 2 }).notNull().default("0"),
   vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("19"),
   season: text("season"),
-  codeMethod: text("code_method").notNull().default("descriptive"), // "descriptive" (Code-39) | "sequential" (EAN-8)
+  codeMethod: text("code_method").notNull().default("descriptive"), // "descriptive" (Code-39) | "sequential" (EAN-8) | "qr"
   locationId: varchar("location_id"),
   colorId: varchar("color_id").notNull(),
   colorName: text("color_name").notNull(),

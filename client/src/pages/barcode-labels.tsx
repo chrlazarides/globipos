@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import JsBarcode from "jsbarcode";
+import QRCode from "qrcode";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,7 +50,22 @@ function detectFormat(code: string): string {
   return "CODE128";
 }
 
-function barcodeDataUrl(code: string, heightPx: number): string | null {
+function isQrCode(code: string): boolean {
+  return code.startsWith("QR:");
+}
+
+async function barcodeDataUrl(code: string, heightPx: number): Promise<string | null> {
+  if (isQrCode(code)) {
+    try {
+      return await QRCode.toDataURL(code, {
+        errorCorrectionLevel: "M",
+        width: Math.max(96, heightPx * 2),
+        margin: 0,
+      });
+    } catch {
+      return null;
+    }
+  }
   try {
     const canvas = document.createElement("canvas");
     JsBarcode(canvas, code, {
@@ -79,8 +95,16 @@ function variantLabel(v: ItemVariant, itemName: string): string {
 // ── Live preview of a single label ────────────────────────────────────────────
 function LabelPreview({ line, opts }: { line: QueueLine | undefined; opts: FieldOpts & { w: number; h: number } }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!ref.current || !line?.barcode) return;
+    if (isQrCode(line.barcode)) {
+      QRCode.toDataURL(line.barcode, { errorCorrectionLevel: "M", width: 160, margin: 0 })
+        .then(setQrDataUrl)
+        .catch(() => setQrDataUrl(null));
+      return;
+    }
+    setQrDataUrl(null);
     try {
       JsBarcode(ref.current, line.barcode, {
         format: detectFormat(line.barcode),
@@ -106,7 +130,11 @@ function LabelPreview({ line, opts }: { line: QueueLine | undefined; opts: Field
     >
       {opts.showName && <div className="text-[10px] font-semibold leading-tight text-center truncate w-full">{line.name}</div>}
       {opts.showSku && line.sku && <div className="text-[9px] leading-tight">{line.sku}</div>}
-      <canvas ref={ref} className="max-w-full" style={{ maxHeight: opts.h * scale * 0.45 }} />
+      {qrDataUrl ? (
+        <img src={qrDataUrl} alt="QR code" className="max-w-full object-contain" style={{ maxHeight: opts.h * scale * 0.55 }} />
+      ) : (
+        <canvas ref={ref} className="max-w-full" style={{ maxHeight: opts.h * scale * 0.45 }} />
+      )}
       {opts.showBarcodeText && <div className="text-[9px] tracking-wider leading-tight">{line.barcode}</div>}
       {opts.showPrice && <div className="text-[11px] font-bold leading-tight">€{Number(line.price || 0).toFixed(2)}</div>}
     </div>
@@ -198,7 +226,7 @@ export default function BarcodeLabelsPage() {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
-  function handlePrint() {
+  async function handlePrint() {
     if (queue.length === 0) {
       toast({ title: "Nothing to print", description: "Add items to the print queue first" });
       return;
@@ -206,7 +234,7 @@ export default function BarcodeLabelsPage() {
     const imgs = new Map<string, string>();
     for (const line of queue) {
       if (!imgs.has(line.barcode)) {
-        const url = barcodeDataUrl(line.barcode, 60);
+        const url = await barcodeDataUrl(line.barcode, 60);
         if (!url) {
           toast({ title: "Invalid barcode", description: `Cannot render "${line.barcode}" (${line.name})`, variant: "destructive" });
           return;

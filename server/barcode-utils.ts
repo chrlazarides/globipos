@@ -22,7 +22,8 @@ function seasonToDigit(season: string | null | undefined): string {
 
 // Legacy CPLPOS-style "Item Code Synthesizing" for the Inventory-In with Col/Size
 // screen. B.1 = descriptive Code-39 codes built from Department/Style/Color/Size;
-// B.2 = short sequential EAN-8 codes for when the descriptive parts don't fit.
+// B.2 = short sequential EAN-8 codes for when the descriptive parts don't fit;
+// QR = a self-describing QR payload derived from the same product attributes.
 function alnumCode(value: string, len: number): string {
   const cleaned = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
   return (cleaned.slice(0, len) || "X").padEnd(len, "X");
@@ -54,6 +55,17 @@ function computeEAN8CheckDigit(data7: string): string {
 export function synthesizeSequentialCode(nextSeq: number): string {
   const data7 = String(nextSeq % 10000000).padStart(7, "0");
   return data7 + computeEAN8CheckDigit(data7);
+}
+
+export function synthesizeQrCode(params: {
+  categoryName: string;
+  style: string;
+  colorName: string;
+  sizeName: string;
+  salt?: number;
+}): string {
+  const base = synthesizeDescriptiveCode(params);
+  return `QR:${base}${params.salt ? `-${params.salt}` : ""}`;
 }
 
 export function generateVariantBarcode(params: {

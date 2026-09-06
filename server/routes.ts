@@ -1299,6 +1299,10 @@ export async function registerRoutes(
       if (!Array.isArray(cells) || cells.length === 0) {
         return res.status(400).json({ message: "cells array is required" });
       }
+      const normalizedCodeMethod = codeMethod || "descriptive";
+      if (!["descriptive", "sequential", "qr"].includes(normalizedCodeMethod)) {
+        return res.status(400).json({ message: "Invalid code synthesis method" });
+      }
       const allColors = await storage.getColors();
       const allSizes = await storage.getSizes();
       const resolvedCells = cells
@@ -1312,7 +1316,7 @@ export async function registerRoutes(
         .filter((c): c is NonNullable<typeof c> => c !== null);
 
       const header = insertInventoryInLineSchema.omit({ colorId: true, colorName: true, sizeId: true, sizeName: true, quantity: true }).parse({
-        categoryId, style, description, costPrice, price1, vatRate, season: season || null, codeMethod: codeMethod || "descriptive",
+        categoryId, style, description, costPrice, price1, vatRate, season: season || null, codeMethod: normalizedCodeMethod,
         locationId: locationId || null,
       });
       const lines = await storage.appendInventoryInLines(header, resolvedCells);
