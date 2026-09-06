@@ -23,6 +23,11 @@ import type {
 } from "../types";
 import { getProducts, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher, getStockByLocation, getPosLocations, createStockTransfer } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
+import {
+  requestProductAddition,
+  resolveAgeCheck,
+  type PendingAgeCheck,
+} from "../lib/ageRestrictedSale";
 import { useOrder } from "../hooks/useOrder";
 import { useBarcode } from "../hooks/useBarcode";
 import { usePermissions } from "../hooks/usePermissions";
@@ -566,7 +571,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [maxButtonPos, setMaxButtonPos]   = useState(19); // default 4×5-1
 
   // ── Phase 3 wiring: age check, multi-buy, click-collect ───────────────────
-  const [ageCheckPending, setAgeCheckPending] = useState<{ product: Product; qty: number; priceOverride?: number } | null>(null);
+  const [ageCheckPending, setAgeCheckPending] = useState<PendingAgeCheck | null>(null);
   // Coupons applied manually or via barcode scan — persisted across re-evaluations
   const [appliedCoupons, setAppliedCoupons]   = useState<PromoLineInput[]>([]);
   // Stable keys to short-circuit the multi-buy useEffect and avoid infinite loops
@@ -688,29 +693,12 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
 
   // ── handleAddProduct — wraps engine.addProduct with age check + deposit ───
   const handleAddProduct = useCallback((product: Product, qty: number = 1, priceOverride?: number) => {
-    if ((product as any).age_restricted) {
-      setAgeCheckPending({ product, qty, priceOverride });
-      return;
-    }
-    engine.addProduct(product, qty, priceOverride);
-    // Auto-add container deposit line
-    const depositAmount = (product as any).deposit_amount as number | undefined;
-    if (depositAmount && depositAmount > 0) {
-      const depositProduct: Product = {
-        ...product,
-        id: `deposit-${product.id}`,
-        server_id: `deposit-${product.server_id ?? product.id}`,
-        name: `Deposit - ${product.name}`,
-        sku: `DEP-${product.sku ?? ""}`,
-        price1: depositAmount,
-        price2: depositAmount,
-        price3: depositAmount,
-        price4: depositAmount,
-        price5: depositAmount,
-      };
-      engine.addProduct(depositProduct, qty);
-    }
-  }, [engine]);
+    requestProductAddition(
+      { product, qty, priceOverride },
+      engine.addProduct,
+      setAgeCheckPending,
+    );
+  }, [engine.addProduct]);
 
   // Customer display: publish order state to shared Tauri store on every change.
   // The CustomerDisplay component (in its own window or same window) polls this store.
@@ -1451,33 +1439,21 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           productName={ageCheckPending.product.name}
           minAge={(ageCheckPending.product as any).min_age ?? 18}
           onApprove={() => {
-            engine.addProduct(ageCheckPending.product, ageCheckPending.qty, ageCheckPending.priceOverride);
-            const depositAmount = (ageCheckPending.product as any).deposit_amount as number | undefined;
-            if (depositAmount && depositAmount > 0) {
-              const dep: Product = {
-                ...ageCheckPending.product,
-                id: `deposit-${ageCheckPending.product.id}`,
-                server_id: `deposit-${ageCheckPending.product.server_id ?? ageCheckPending.product.id}`,
-                name: `Deposit - ${ageCheckPending.product.name}`,
-                sku: `DEP-${ageCheckPending.product.sku ?? ""}`,
-                price1: depositAmount, price2: depositAmount, price3: depositAmount,
-                price4: depositAmount, price5: depositAmount,
-              };
-              engine.addProduct(dep, ageCheckPending.qty);
-            }
-            invoke("write_audit", {
-              cashierId: session.cashier_id, cashierName: session.cashier_name,
-              action: "age_verify_passed", entity: "sale",
-              detail: ageCheckPending.product.name,
-            }).catch(() => {});
+            resolveAgeCheck(ageCheckPending, true, engine.addProduct, (action, product) => {
+              invoke("write_audit", {
+                cashierId: session.cashier_id, cashierName: session.cashier_name,
+                action, entity: "sale", detail: product.name,
+              }).catch(() => {});
+            });
             setAgeCheckPending(null);
           }}
           onReject={() => {
-            invoke("write_audit", {
-              cashierId: session.cashier_id, cashierName: session.cashier_name,
-              action: "age_verify_refused", entity: "sale",
-              detail: ageCheckPending.product.name,
-            }).catch(() => {});
+            resolveAgeCheck(ageCheckPending, false, engine.addProduct, (action, product) => {
+              invoke("write_audit", {
+                cashierId: session.cashier_id, cashierName: session.cashier_name,
+                action, entity: "sale", detail: product.name,
+              }).catch(() => {});
+            });
             setAgeCheckPending(null);
           }}
         />
