@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -247,7 +247,7 @@ export default function Categories() {
               </TableHeader>
               <TableBody>
                 {topLevel.map((cat) => (
-                  <>
+                  <Fragment key={cat.id}>
                     <TableRow key={cat.id} className="group" data-testid={`row-category-${cat.id}`}>
                       <TableCell>
                         <div className="flex items-center gap-2 font-medium">
@@ -318,7 +318,7 @@ export default function Categories() {
                         </TableCell>
                       </TableRow>
                     ))}
-                  </>
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>
