@@ -318,6 +318,11 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     if (!settings) return;
+    const loyaltyRate = Number(values["loyalty_points_per_euro"] ?? "1");
+    if (!Number.isFinite(loyaltyRate) || loyaltyRate < 0) {
+      toast({ title: "Invalid loyalty rate", description: "Loyalty points per €1 must be zero or greater.", variant: "destructive" });
+      return;
+    }
     setSaving(true);
     try {
       const payload = settings
@@ -687,6 +692,19 @@ export default function SettingsPage() {
             <SelectItem value="false">Disabled</SelectItem>
           </SelectContent>
         </Select>
+      );
+    }
+
+    if (setting.key === "loyalty_points_per_euro") {
+      return (
+        <Input
+          type="number"
+          min="0"
+          step="0.01"
+          value={val}
+          onChange={(e) => updateValue(setting.key, e.target.value)}
+          data-testid={`input-setting-${setting.key}`}
+        />
       );
     }
 

@@ -91,6 +91,13 @@ async function getAdminEmails(): Promise<string[]> {
   } catch { return []; }
 }
 
+async function getLoyaltyPointsPerEuro(): Promise<number> {
+  // Each client deployment represents one store, so system_settings provides
+  // the store-scoped value without coupling it to individual POS locations.
+  const setting = await storage.getSetting("loyalty_points_per_euro");
+  const rate = Number(setting?.value);
+  return Number.isFinite(rate) && rate >= 0 ? rate : 1;
+}
 function hashSettingsPassword(pw: string) {
   return crypto.createHash("sha256").update(pw).digest("hex");
 }
@@ -4038,6 +4045,7 @@ export async function registerRoutes(
         { key: "reorder_weeks_cover", value: "8", label: "Reorder Weeks of Cover", group: "inventory" },
         { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
         { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
+        { key: "loyalty_points_per_euro", value: "1", label: "Loyalty Points per €1 Spent", group: "portal" },
       ];
       const results = [];
       for (const d of defaults) {
@@ -6034,9 +6042,10 @@ export async function registerRoutes(
         }
       }
 
-      // Award loyalty points (1 pt per € of subtotal)
+      // Award loyalty points using this store's configured conversion rate.
       if (subtotal > 0) {
-        const pts = Math.floor(subtotal);
+        const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
+        const pts = Math.floor(subtotal * loyaltyPointsPerEuro);
         if (pts > 0) {
           await db.insert(customerLoyaltyPoints).values({
             customerId, points: pts, type: "earn",
@@ -6126,7 +6135,8 @@ export async function registerRoutes(
       const balance = totals?.balance || 0;
       const tier = balance >= 5000 ? "Gold" : balance >= 1000 ? "Silver" : "Bronze";
       const nextTier = tier === "Bronze" ? { name: "Silver", threshold: 1000 } : tier === "Silver" ? { name: "Gold", threshold: 5000 } : null;
-      res.json({ balance, earned: totals?.earned || 0, redeemed: Math.abs(totals?.redeemed || 0), tier, nextTier, history });
+      const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
+      res.json({ balance, earned: totals?.earned || 0, redeemed: Math.abs(totals?.redeemed || 0), tier, nextTier, loyaltyPointsPerEuro, history });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -6280,7 +6290,6 @@ export async function registerRoutes(
   // Separate JWT secret scope for customer tokens (uses SESSION_SECRET + suffix)
   const CUSTOMER_JWT_SECRET = (process.env.SESSION_SECRET || "fallback") + "_customer";
   const CUSTOMER_TOKEN_EXPIRY = "7d";
-  const LOYALTY_POINTS_PER_EURO = 1; // 1 point per €1 spent
 
   // VAPID setup for Web Push
   if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
@@ -6642,9 +6651,10 @@ export async function registerRoutes(
         } catch { /* email non-fatal */ }
       } catch { /* proforma creation non-fatal */ }
 
-      // Award loyalty points (1 pt per € subtotal)
+      // Award loyalty points using this store's configured conversion rate.
       if (subtotal > 0) {
-        const pts = Math.floor(subtotal * LOYALTY_POINTS_PER_EURO);
+        const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
+        const pts = Math.floor(subtotal * loyaltyPointsPerEuro);
         if (pts > 0) {
           await db.insert(customerLoyaltyPoints).values({
             customerId: auth.customerId, points: pts, type: "earn",
@@ -6728,6 +6738,7 @@ export async function registerRoutes(
 
       const customer = await storage.getCustomer(auth.customerId);
       const cashbackBalance = parseFloat(String(customer?.cashbackBalance || "0"));
+      const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
 
       res.json({
         balance,
@@ -6737,6 +6748,7 @@ export async function registerRoutes(
         nextTier,
         cashbackBalance,
         cashbackRate,
+        loyaltyPointsPerEuro,
         history: history.map((h) => ({
           id: h.id, points: h.points, type: h.type, reason: h.reason,
           sourceType: h.sourceType, createdAt: h.createdAt,

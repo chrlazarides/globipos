@@ -77,16 +77,17 @@ export default function Loyalty({ customer }: LoyaltyProps) {
 
   if (!data) return null;
 
-  const { balance, earned, redeemed, tier, nextTier, cashbackBalance = 0, cashbackRate = 0.01, history } = data;
+  const { balance, earned, redeemed, tier, nextTier, cashbackBalance = 0, cashbackRate = 0.01, loyaltyPointsPerEuro = 1, history } = data;
   const progressPct = nextTier ? Math.min(100, (balance / nextTier.threshold) * 100) : 100;
   const redeemableEuros = Math.floor(balance / REDEEM_RATE);
   const cashbackPct = (cashbackRate * 100).toFixed(1).replace(".0", "");
+  const pointLabel = Number(loyaltyPointsPerEuro) === 1 ? "point" : "points";
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">Loyalty Rewards</h1>
-        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Earn 1 point per €1 spent · {REDEEM_RATE} pts = €1 discount · {cashbackPct}% cashback</p>
+        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Earn {loyaltyPointsPerEuro} {pointLabel} per €1 spent · {REDEEM_RATE} pts = €1 discount · {cashbackPct}% cashback</p>
       </div>
 
       {/* Hero card */}
@@ -255,7 +256,7 @@ export default function Loyalty({ customer }: LoyaltyProps) {
         </div>
         <div className="divide-y divide-[hsl(var(--border))]">
           {[
-            { name: "Bronze", pts: 0,    benefit: "1 pt/€1 · redeem 100 pts = €1 · 1% cashback" },
+            { name: "Bronze", pts: 0,    benefit: `${loyaltyPointsPerEuro} ${pointLabel}/€1 · redeem 100 pts = €1 · 1% cashback` },
             { name: "Silver", pts: 1000, benefit: "Priority processing · 1.5% cashback" },
             { name: "Gold",   pts: 5000, benefit: "Dedicated manager · best pricing · 2% cashback" },
           ].map((t) => (

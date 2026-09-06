@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS = [
   { key: "reorder_weeks_cover", value: "8", label: "Reorder Weeks of Cover", group: "inventory" },
   { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
   { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
+  { key: "loyalty_points_per_euro", value: "1", label: "Loyalty Points per €1 Spent", group: "portal" },
   { key: "settings_password", value: "", label: "Settings Password Hash", group: "security" },
   { key: "backup_email", value: "", label: "Backup Email Address", group: "backup" },
   { key: "backup_auto", value: "true", label: "Automatic Daily Backup", group: "backup" },

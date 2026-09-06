@@ -39,14 +39,15 @@ export default function PortalLoyalty({ customer }: PortalLoyaltyProps) {
 
   if (!data) return null;
 
-  const { balance, earned, redeemed, tier, nextTier, history } = data;
+  const { balance, earned, redeemed, tier, nextTier, loyaltyPointsPerEuro = 1, history } = data;
   const progressPct = nextTier ? Math.min(100, (balance / nextTier.threshold) * 100) : 100;
+  const pointLabel = Number(loyaltyPointsPerEuro) === 1 ? "point" : "points";
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold" data-testid="text-portal-loyalty-title">Loyalty Rewards</h1>
-        <p className="text-sm text-muted-foreground mt-1">Earn 1 point for every €1 you spend on orders</p>
+        <p className="text-sm text-muted-foreground mt-1">Earn {loyaltyPointsPerEuro} {pointLabel} for every €1 you spend on orders</p>
       </div>
 
       <Card className="overflow-hidden">
@@ -156,7 +157,7 @@ export default function PortalLoyalty({ customer }: PortalLoyaltyProps) {
         <CardContent className="p-4 pt-0">
           <div className="space-y-3">
             {[
-              { name: "Bronze", threshold: 0,    benefit: "1 point per €1 spent on every order" },
+              { name: "Bronze", threshold: 0,    benefit: `${loyaltyPointsPerEuro} ${pointLabel} per €1 spent on every order` },
               { name: "Silver", threshold: 1000,  benefit: "Priority order processing + exclusive seasonal offers" },
               { name: "Gold",   threshold: 5000,  benefit: "Dedicated account manager + best pricing tier access" },
             ].map((t) => (
