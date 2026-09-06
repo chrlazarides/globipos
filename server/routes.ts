@@ -9746,7 +9746,22 @@ export async function registerRoutes(
       const { outboxQueueSize = 0, peripheralStatus } = req.body;
       const update: any = { lastSeenAt: new Date(), outboxQueueSize };
       if (peripheralStatus && typeof peripheralStatus === "object") {
-        update.peripheralStatus = peripheralStatus;
+        const nextPeripheralStatus = { ...peripheralStatus };
+        const previousPeripheralStatus = (terminal.peripheralStatus ?? {}) as Record<string, unknown>;
+        const incomingScoMode = nextPeripheralStatus.sco_mode;
+        const incomingNeedsAttendant = incomingScoMode === "attendant_needed" || incomingScoMode === "age_check";
+
+        // An attendant acknowledgement must survive heartbeats from a lane that
+        // is still showing the same local alert. Once the lane leaves its alert
+        // mode, clear the acknowledgement so a later alert is visible normally.
+        if (previousPeripheralStatus.sco_override_acknowledged === true && incomingNeedsAttendant) {
+          nextPeripheralStatus.sco_mode = "scanning";
+          nextPeripheralStatus.sco_attendant_reason = null;
+          nextPeripheralStatus.sco_override_acknowledged = true;
+        } else {
+          delete nextPeripheralStatus.sco_override_acknowledged;
+        }
+        update.peripheralStatus = nextPeripheralStatus;
       }
       await storage.updatePosTerminal(terminal.id, update);
       // Return the peripheral config so the terminal can apply it
@@ -9806,6 +9821,7 @@ export async function registerRoutes(
         ...(target.peripheralStatus ?? {}),
         sco_mode: "scanning",
         sco_attendant_reason: null,
+        sco_override_acknowledged: true,
       };
       await storage.updatePosTerminal(target.id, { peripheralStatus: ps } as any);
       res.json({ ok: true });

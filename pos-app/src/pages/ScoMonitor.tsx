@@ -87,11 +87,12 @@ export default function ScoMonitor({ config, onClose }: ScoMonitorProps) {
       if (session) {
         // Notify server that this lane's alert has been acknowledged
         const base = config.server_url.replace(/\/$/, "");
-        await fetch(`${base}/api/pos/sco/lanes/${overrideLane.terminal_code}/override`, {
+        const response = await fetch(`${base}/api/pos/sco/lanes/${overrideLane.terminal_code}/override`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Terminal-Code": config.terminal_code },
           body: JSON.stringify({ attendant_id: session.id, action: "override" }),
-        }).catch(() => {});
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         await invoke("write_audit", {
           cashierId: session.id,
           action: "sco_monitor_override",
@@ -100,12 +101,12 @@ export default function ScoMonitor({ config, onClose }: ScoMonitorProps) {
         }).catch(() => {});
         setOverrideLane(null);
         setPin("");
-        fetchLanes();
+        await fetchLanes();
       } else {
         setPinError("Invalid PIN");
       }
     } catch {
-      setPinError("PIN error");
+      setPinError("Could not clear lane alert");
     }
   }
 

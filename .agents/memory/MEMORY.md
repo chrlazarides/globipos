@@ -33,3 +33,4 @@
 - [Client console.error kills dev server](vite-client-console-error-kills-server.md) — forwarded React warnings (e.g. div-in-p from Badge) hit the Vite error logger which process.exit(1)s; page open = silent server death
 - [Smart import dual paths](smart-import-dual-paths.md) — upsert/normalization changes must hit both the multipart routes AND /api/items/import/json (pre-parsed path)
 - [Settings have two default paths](settings-default-paths.md) — audit both startup initialization and the Load Defaults endpoint; startup usually makes the UI endpoint unavailable
+- [Remote alert acknowledgements](remote-alert-acknowledgements.md) — server acknowledgements must survive stale device heartbeats until the device leaves its alert state

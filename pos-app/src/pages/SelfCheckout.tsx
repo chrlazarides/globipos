@@ -98,6 +98,26 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
   const activeLines = lines.filter((l) => !l.voided);
   const totals = computeOrderTotals(activeLines, 0, 0);
 
+  // Keep the heartbeat snapshot in sync with the lane after every basket or
+  // mode change. useSync sends this Tauri-managed snapshot to the server.
+  useEffect(() => {
+    invoke("set_sco_heartbeat_state", {
+      scoMode: mode,
+      scoItems: activeLines.length,
+      scoTotal: totals.total,
+      scoAttendantReason: attendantReason,
+    }).catch(() => {});
+  }, [mode, activeLines.length, totals.total, attendantReason]);
+
+  useEffect(() => () => {
+    invoke("set_sco_heartbeat_state", {
+      scoMode: "idle",
+      scoItems: 0,
+      scoTotal: 0,
+      scoAttendantReason: null,
+    }).catch(() => {});
+  }, []);
+
   // Focus barcode input in scanning mode
   useEffect(() => {
     if (mode === "scanning" || mode === "idle") {

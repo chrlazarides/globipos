@@ -157,6 +157,10 @@ export interface PeripheralHealth {
   shift_open?: boolean;
   app_version?: string;
   reported_at?: string;
+  sco_mode?: "idle" | "scanning" | "payment" | "attendant_needed" | "age_check" | "done";
+  sco_items?: number;
+  sco_total?: number;
+  sco_attendant_reason?: string | null;
 }
 
 export interface FallbackRule {

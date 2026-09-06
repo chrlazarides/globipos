@@ -636,6 +636,28 @@ async fn get_outbox_counts(state: State<'_, AppState>) -> Result<Value, String> 
 }
 
 #[tauri::command]
+async fn set_sco_heartbeat_state(
+    state: State<'_, AppState>,
+    sco_mode: String,
+    sco_items: i64,
+    sco_total: f64,
+    sco_attendant_reason: Option<String>,
+) -> Result<(), String> {
+    let value = serde_json::json!({
+        "sco_mode": sco_mode,
+        "sco_items": sco_items,
+        "sco_total": sco_total,
+        "sco_attendant_reason": sco_attendant_reason,
+    });
+    sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('sco_heartbeat_state', ?)")
+        .bind(value.to_string())
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn send_heartbeat(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     let (server_url, terminal_code, terminal_id) = {
         let cfg = state.config.lock().unwrap();
@@ -670,9 +692,19 @@ async fn send_heartbeat(app: AppHandle, state: State<'_, AppState>) -> Result<Va
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
-    let peripheral_status = hardware::build_peripheral_status(
+    let mut peripheral_status = hardware::build_peripheral_status(
         &app, &hw_cfg, &payment_cfg, cashier_name, shift_open,
     ).await;
+    if let Some(sco_state) = sqlx::query("SELECT value FROM schema_meta WHERE key = 'sco_heartbeat_state'")
+        .fetch_optional(&state.db).await.ok().flatten()
+        .and_then(|r| r.try_get::<String, _>("value").ok())
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+    {
+        if let Some(status) = peripheral_status.as_object_mut() {
+            status.extend(sco_state);
+        }
+    }
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -1541,6 +1573,7 @@ pub fn run() {
             mark_inbox_processed,
             write_audit,
             get_outbox_counts,
+            set_sco_heartbeat_state,
             send_heartbeat,
             // ── Phase 3: Shift management ────────────────────────────────────
             open_shift,
