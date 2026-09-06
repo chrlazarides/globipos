@@ -87,6 +87,7 @@ const PUBLIC_PATHS = [
   "/api/customer",
   "/api/pos/terminals/register", // bootstrap — no session cookie on first launch
   "/api/pos/sync/audit-logs", // terminal audit-log push — authenticated via X-Terminal-Code (requireTerminal)
+  "/api/orders", // Click & Collect lookup/collect — authenticated via X-Terminal-Code (requireTerminal)
   "/api/signage/play", // screen-facing player, keyed by pairing code, no session
   "/api/webhooks/whatsapp", // Meta webhook — no session; verified via hub.verify_token (GET) / X-Hub-Signature-256 (POST)
 ];
