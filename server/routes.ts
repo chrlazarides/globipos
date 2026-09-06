@@ -6520,7 +6520,8 @@ export async function registerRoutes(
         const unitPrice = parseFloat(String((item as any)[`price${pl}`] || item.price1));
         const lineTotal = unitPrice * oi.quantity;
         subtotal += lineTotal;
-        processedItems.push({ itemId: item.id, itemName: item.name, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+        const itemName = item.name.trim() || item.sku?.trim() || `Item ${item.id}`;
+        processedItems.push({ itemId: item.id, itemName, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
       }
 
       const vatAmount = subtotal * VAT_RATE;
@@ -6542,7 +6543,7 @@ export async function registerRoutes(
       let proforma: any = null;
       try {
         const proformaItems = processedItems.map((pi) => ({
-          itemId: pi.itemId, description: pi.itemName || "", quantity: String(pi.quantity),
+          itemId: pi.itemId, description: pi.itemName, quantity: String(pi.quantity),
           unitPrice: pi.unitPrice, vatRate: "19.00", discount: "0.00",
           total: pi.total, invoiceId: "TEMP", saleUnit: "bottle",
         }));
