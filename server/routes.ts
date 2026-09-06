@@ -7,7 +7,7 @@ import { z } from "zod";
 import multer from "multer";
 import ExcelJS from "exceljs";
 import { Readable } from "stream";
-import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail } from "./email";
+import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail, sendEmailWithContent } from "./email";
 import { db } from "./db";
 import { sql, and, or, eq, gte, lte, gt, desc, isNull, ilike, inArray } from "drizzle-orm";
 import crypto from "crypto";
@@ -6333,7 +6333,7 @@ export async function registerRoutes(
         const settings = await storage.getSettings();
         const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
         try {
-          await (sendTestEmail as any)(email, `Your ${companyName} login code`, `<p>Your one-time login code is: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>This code expires in 10 minutes.</p>`);
+          await sendEmailWithContent(email, `Your ${companyName} login code`, `<p>Your one-time login code is: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>This code expires in 10 minutes.</p>`);
         } catch { /* email failure non-fatal */ }
       }
       // Always return 200 with the same message — do not reveal whether email exists
@@ -6566,7 +6566,7 @@ export async function registerRoutes(
             const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
             const subject = `Order Confirmation — ${proforma.invoiceNumber}`;
             const html = `<p>Dear ${customer.name},</p><p>Thank you for your order. Your proforma reference is <strong>${proforma.invoiceNumber}</strong> for <strong>€${total.toFixed(2)}</strong>.</p><p>We will process your order shortly.</p><p>${companyName}</p>`;
-            await (sendTestEmail as any)(customer.email, subject, html);
+            await sendEmailWithContent(customer.email, subject, html);
           }
         } catch { /* email non-fatal */ }
       } catch { /* proforma creation non-fatal */ }

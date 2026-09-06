@@ -164,6 +164,30 @@ export async function sendTestEmail(
   }
 }
 
+export async function sendEmailWithContent(
+  toEmail: string,
+  subject: string,
+  htmlContent: string
+): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+  try {
+    const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: toEmail,
+      subject,
+      html: htmlContent,
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true, fromEmail };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to send email';
+    console.error('Email send error:', message);
+    return { success: false, fromEmail: '', error: message };
+  }
+}
+
 export async function sendInvoiceEmail(
   toEmail: string,
   subject: string,
