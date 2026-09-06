@@ -17,6 +17,8 @@ export interface BasketItem {
     packSize: number;
   };
   quantity: number;
+  /** Original scale barcode; the server re-validates this before pricing the order. */
+  barcode?: string;
 }
 
 interface BasketProps {
@@ -138,14 +140,14 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
 
   const fmt = (v: number) => `€${v.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`;
 
-  function add(id: string) {
-    setBasket((prev) => prev.map((b) => b.item.id === id ? { ...b, quantity: b.quantity + 1 } : b));
+  function add(index: number) {
+    setBasket((prev) => prev.map((b, i) => i === index ? { ...b, quantity: b.quantity + 1 } : b));
   }
-  function dec(id: string) {
-    setBasket((prev) => prev.map((b) => b.item.id === id ? { ...b, quantity: b.quantity - 1 } : b).filter((b) => b.quantity > 0));
+  function dec(index: number) {
+    setBasket((prev) => prev.map((b, i) => i === index ? { ...b, quantity: b.quantity - 1 } : b).filter((b) => b.quantity > 0));
   }
-  function remove(id: string) {
-    setBasket((prev) => prev.filter((b) => b.item.id !== id));
+  function remove(index: number) {
+    setBasket((prev) => prev.filter((_b, i) => i !== index));
   }
 
   async function handleManualSync() {
@@ -159,7 +161,7 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
     if (!basket.length) return;
     setSubmitting(true);
     const orderPayload = {
-      items: basket.map((b) => ({ itemId: b.item.id, quantity: b.quantity })),
+      items: basket.map((b) => ({ itemId: b.item.id, quantity: b.quantity, barcode: b.barcode })),
       notes,
       deliveryType,
       deliveryAddress: deliveryType === "delivery" ? deliveryAddress : undefined,
@@ -242,8 +244,8 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
       ) : (
         <>
           <div className="space-y-2">
-            {basket.map((b) => (
-              <div key={b.item.id} className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-3 flex items-center gap-3" data-testid={`basket-item-${b.item.id}`}>
+            {basket.map((b, index) => (
+              <div key={`${b.item.id}-${b.barcode || "standard"}-${index}`} className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-3 flex items-center gap-3" data-testid={`basket-item-${b.item.id}`}>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{b.item.name}</p>
                   <p className="text-xs text-[hsl(var(--muted-foreground))]">
@@ -251,10 +253,10 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <button onClick={() => dec(b.item.id)} className="w-7 h-7 rounded-full border border-[hsl(var(--border))] flex items-center justify-center text-sm" data-testid={`button-dec-${b.item.id}`}>−</button>
+                  {!b.barcode && <button onClick={() => dec(index)} className="w-7 h-7 rounded-full border border-[hsl(var(--border))] flex items-center justify-center text-sm" data-testid={`button-dec-${b.item.id}`}>−</button>}
                   <span className="w-5 text-center text-sm font-bold tabular-nums">{b.quantity}</span>
-                  <button onClick={() => add(b.item.id)} className="w-7 h-7 rounded-full flex items-center justify-center text-white text-sm" style={{ background: "hsl(var(--primary))" }} data-testid={`button-inc-${b.item.id}`}>+</button>
-                  <button onClick={() => remove(b.item.id)} className="w-7 h-7 rounded-full flex items-center justify-center text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))]" data-testid={`button-remove-${b.item.id}`}>
+                  {!b.barcode && <button onClick={() => add(index)} className="w-7 h-7 rounded-full flex items-center justify-center text-white text-sm" style={{ background: "hsl(var(--primary))" }} data-testid={`button-inc-${b.item.id}`}>+</button>}
+                  <button onClick={() => remove(index)} className="w-7 h-7 rounded-full flex items-center justify-center text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))]" data-testid={`button-remove-${b.item.id}`}>
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>

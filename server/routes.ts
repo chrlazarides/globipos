@@ -24,6 +24,7 @@ import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, v
 import QRCode from "qrcode";
 
 // ─── LOGO BASE64 (embedded so it shows in emails, print, and offline) ────────
+import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScaleBarcode, parseScaleBarcodeAfterVariantLookup, resolveScaleBarcodeExactFirst } from "./barcode-utils";
 function getLogoDataUrl(): string {
   const candidates = [
     path.resolve(process.cwd(), "dist", "public", "logo.png"),
@@ -1124,14 +1125,24 @@ export async function registerRoutes(
 
   app.get("/api/items/barcode/:barcode", async (req, res) => {
     const barcode = req.params.barcode as string;
-    const variant = await storage.getItemVariantByBarcode(barcode);
+    // Synthesized variants can legitimately use a configured scale prefix (notably
+    // "29"). An exact variant must therefore win before scale interpretation.
+    const exactVariant = await storage.getItemVariantByBarcode(barcode);
+    if (exactVariant) {
+      const item = await storage.getItem(exactVariant.itemId);
+      if (item) return res.json({ ...mergeVariantIntoItem(item, exactVariant), scaleBarcode: null });
+    }
+    const scaleBarcode = parseScaleBarcodeAfterVariantLookup(barcode, !!exactVariant);
+    const lookupBarcode = scaleBarcode?.plu || barcode;
+    let variant = await storage.getItemVariantByBarcode(lookupBarcode);
     if (variant) {
       const item = await storage.getItem(variant.itemId);
-      if (item) return res.json(mergeVariantIntoItem(item, variant));
+      if (item) return res.json({ ...mergeVariantIntoItem(item, variant), scaleBarcode });
     }
-    const item = await storage.getItemByAnyBarcode(barcode);
+    let item = await storage.getItemByAnyBarcode(lookupBarcode);
+    if (!item && lookupBarcode !== barcode) item = await storage.getItemByAnyBarcode(barcode);
     if (!item) return res.status(404).json({ message: "Item not found" });
-    res.json(item);
+    res.json({ ...item, scaleBarcode });
   });
 
   app.get("/api/items/:id/barcodes", async (req, res) => {
@@ -6520,10 +6531,42 @@ export async function registerRoutes(
     try {
       const customer = await storage.getCustomer(auth.customerId);
       const allItems = await storage.getAvailableItems();
-      const item = allItems.find((i: any) => i.barcode === (req.params.barcode as string));
+      const barcode = req.params.barcode as string;
+      const exactVariant = await storage.getItemVariantByBarcode(barcode);
+      if (exactVariant) {
+        const parent = await storage.getItem(exactVariant.itemId);
+        if (!parent || !parent.active || exactVariant.stockQuantity <= 0) {
+          return res.status(404).json({ message: "Item not found for this barcode" });
+        }
+        const merged = mergeVariantIntoItem(parent, exactVariant);
+        const pl = customer?.priceLevel || 1;
+        return res.json({
+          ...merged,
+          customerPrice: parseFloat(String((merged as any)[`price${pl}`] || merged.price1)),
+          scaleBarcode: null,
+        });
+      }
+      const scaleBarcode = parseScaleBarcode(barcode);
+      const pluVariant = scaleBarcode ? await storage.getItemVariantByBarcode(scaleBarcode.plu) : undefined;
+      const variantParent = pluVariant ? await storage.getItem(pluVariant.itemId) : undefined;
+      const item = (variantParent && variantParent.active && pluVariant!.stockQuantity > 0
+        ? mergeVariantIntoItem(variantParent, pluVariant)
+        : allItems.find((i: any) => i.barcode === scaleBarcode?.plu))
+        || allItems.find((i: any) => i.barcode === barcode);
       if (!item) return res.status(404).json({ message: "Item not found for this barcode" });
+      if (scaleBarcode?.type === "price") {
+        const registeredItem = await storage.getItemByAnyBarcode(barcode);
+        if (!isEmbeddedPriceLabelAuthorized(scaleBarcode, item.id, registeredItem?.id)) {
+          return res.status(404).json({ message: "Price label is not registered for this item" });
+        }
+      }
       const pl = customer?.priceLevel || 1;
-      res.json({ ...(item as any), customerPrice: parseFloat(String((item as any)[`price${pl}`] || (item as any).price1)) });
+      const normalPrice = parseFloat(String((item as any)[`price${pl}`] || (item as any).price1));
+      res.json({
+        ...(item as any),
+        customerPrice: scaleBarcode?.type === "price" && scaleBarcode.value > 0 ? scaleBarcode.value : normalPrice,
+        scaleBarcode,
+      });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -6597,11 +6640,47 @@ export async function registerRoutes(
         const item = await storage.getItem(oi.itemId);
         if (!item) continue;
         const pl = customer.priceLevel || 1;
-        const unitPrice = parseFloat(String((item as any)[`price${pl}`] || item.price1));
-        const lineTotal = unitPrice * oi.quantity;
+        let quantity = oi.quantity;
+        let resolvedVariant: any | undefined;
+        let scaleBarcode = null;
+        if (oi.barcode) {
+          const barcode = String(oi.barcode);
+          const exactVariant = await storage.getItemVariantByBarcode(barcode);
+          if (exactVariant) {
+            if (exactVariant.itemId !== item.id) {
+              return res.status(400).json({ message: "Scanned barcode does not match the ordered item" });
+            }
+            // Exact synthesized variants (including 29-prefix EANs) are ordinary
+            // unit lines and must never inherit scale semantics.
+            resolvedVariant = exactVariant;
+          }
+          const scale = parseScaleBarcodeAfterVariantLookup(barcode, !!exactVariant);
+          if (scale) {
+            const pluVariant = await storage.getItemVariantByBarcode(scale.plu);
+            const pluItem = pluVariant ? await storage.getItem(pluVariant.itemId) : await storage.getItemByAnyBarcode(scale.plu);
+            const fullItem = pluItem ? undefined : await storage.getItemByAnyBarcode(barcode);
+            const resolvedItemId = pluVariant?.itemId || pluItem?.id || fullItem?.id;
+            if (resolvedItemId !== item.id) {
+              return res.status(400).json({ message: "Scanned barcode does not match the ordered item" });
+            }
+            if (scale.type === "price") {
+              const registeredItem = await storage.getItemByAnyBarcode(barcode);
+              if (!isEmbeddedPriceLabelAuthorized(scale, item.id, registeredItem?.id)) {
+                return res.status(400).json({ message: "Price label is not registered for this item" });
+              }
+            }
+            resolvedVariant = pluVariant;
+            scaleBarcode = scale;
+          }
+        }
+        const priceSource = resolvedVariant ? mergeVariantIntoItem(item, resolvedVariant) : item;
+        const normalPrice = parseFloat(String((priceSource as any)[`price${pl}`] || priceSource.price1));
+        let unitPrice = normalPrice;
+        ({ quantity, unitPrice } = applyScaleBarcodeSaleValues(scaleBarcode, quantity, unitPrice));
+        const lineTotal = unitPrice * quantity;
         subtotal += lineTotal;
         const itemName = item.name.trim() || item.sku?.trim() || `Item ${item.id}`;
-        processedItems.push({ itemId: item.id, itemName, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+        processedItems.push({ itemId: item.id, itemName, quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
       }
 
       const vatAmount = subtotal * VAT_RATE;
@@ -9551,12 +9630,23 @@ export async function registerRoutes(
   });
   app.post("/api/pda/grv/:id/scan", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const { code, incrementBy } = req.body as { code: string; incrementBy?: number };
-      if (!code) return res.status(400).json({ message: "code required" });
-      const result = await storage.scanGoodsReceivedVoucherLine((req.params.id as string), code, incrementBy ?? 1);
+      const { code, eventKey, incrementBy } = req.body as { code: string; eventKey: string; incrementBy?: number };
+      if (!code || !eventKey) return res.status(400).json({ message: "code and eventKey required" });
+      const grvId = req.params.id as string;
+      // Exact match first protects synthesized 29-prefix codes. PLU fallback is
+      // internal to this one request and only runs after a definitive no-match,
+      // avoiding a second mutation after transport/auth/server failures.
+      const result = await resolveScaleBarcodeExactFirst(
+        code,
+        (candidate) => storage.scanGoodsReceivedVoucherLine(grvId, candidate, eventKey, incrementBy ?? 1),
+      );
       if (!result) return res.status(404).json({ message: "No matching line item found for this code" });
       res.json(result);
-    } catch (e: any) { res.status(400).json({ message: e.message }); }
+    } catch (e: any) {
+      // Storage/transaction failures are transient server errors. Returning 5xx
+      // keeps the PDA's persisted event queued for an idempotent replay.
+      res.status(500).json({ message: e.message || "Could not record scan" });
+    }
   });
   // Finalizing a GRV posts a real purchase invoice through the exact same `postPurchaseInvoice`
   // helper the manual /api/purchase-invoices route uses, so due-date derivation, stock updates,

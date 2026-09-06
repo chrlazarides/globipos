@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/queryClient";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { Search, Wine, AlertTriangle, Package } from "lucide-react";
+import { parseScaleBarcode, type ScaleBarcode } from "@/lib/scaleBarcode";
 
 interface ItemResult {
   id: string;
@@ -17,6 +18,7 @@ interface ItemResult {
   volume: string | null;
   brand: string | null;
   vintage: string | null;
+  scaleBarcode?: ScaleBarcode | null;
 }
 
 const PRICE_LABELS = ["Retail (1)", "Level 2", "Level 3", "Level 4", "Wholesale (5)"];
@@ -27,7 +29,11 @@ export default function PriceLookup() {
   const [notFound, setNotFound] = useState<string | null>(null);
 
   const lookupMutation = useMutation({
-    mutationFn: async (code: string) => apiFetch<ItemResult>(`/api/items/barcode/${encodeURIComponent(code)}`),
+    mutationFn: async (code: string) => {
+      const scale = parseScaleBarcode(code);
+      const item = await apiFetch<ItemResult>(`/api/items/barcode/${encodeURIComponent(code)}`);
+      return { ...item, scaleBarcode: item.scaleBarcode ?? (scale ? null : undefined) };
+    },
     onSuccess: (data) => { setItem(data); setNotFound(null); },
     onError: () => { setItem(null); setNotFound("No item found for that barcode."); },
   });

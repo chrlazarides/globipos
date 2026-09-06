@@ -1,0 +1,1 @@
+export { parseScaleBarcode, type ScaleBarcode } from "../../../customer-app/src/lib/scaleBarcode";

@@ -5,6 +5,7 @@ import { type CustomerSession } from "../lib/auth";
 import { cn } from "../lib/cn";
 import { Search, ScanBarcode, Plus, Minus, X, Package, ChevronDown } from "lucide-react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
+import { parseScaleBarcode, type ScaleBarcode } from "../lib/scaleBarcode";
 
 interface CatalogProps {
   customer: CustomerSession;
@@ -55,30 +56,37 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
   const total = data?.total || 0;
   const pageCount = Math.ceil(total / 48);
 
-  function getQty(id: string) { return basket.find((b) => b.item.id === id)?.quantity || 0; }
+  function getQty(id: string) { return basket.filter((b) => b.item.id === id).reduce((sum, b) => sum + b.quantity, 0); }
 
-  function add(item: CatalogItem) {
+  function add(item: CatalogItem, quantity = 1, barcode?: string) {
     setBasket((prev) => {
-      const ex = prev.find((b) => b.item.id === item.id);
-      if (ex) return prev.map((b) => b.item.id === item.id ? { ...b, quantity: b.quantity + 1 } : b);
-      return [...prev, { item, quantity: 1 }];
+      // A scale label is one immutable scan occurrence. Keeping each occurrence
+      // separate lets the server validate and total duplicate labels individually.
+      if (barcode) return [...prev, { item, quantity, barcode }];
+      const ex = prev.find((b) => b.item.id === item.id && b.barcode === barcode);
+      if (ex) return prev.map((b) => b === ex ? { ...b, quantity: b.quantity + quantity } : b);
+      return [...prev, { item, quantity, barcode }];
     });
   }
 
   function dec(id: string) {
-    setBasket((prev) => prev.map((b) => b.item.id === id ? { ...b, quantity: b.quantity - 1 } : b).filter((b) => b.quantity > 0));
+    setBasket((prev) => prev.map((b) => b.item.id === id && !b.barcode ? { ...b, quantity: b.quantity - 1 } : b).filter((b) => b.quantity > 0));
   }
 
   const zxingReaderRef = useRef<BrowserMultiFormatReader | null>(null);
 
   async function lookupBarcode(bc: string) {
     try {
-      const res = await fetch(`/api/customer/barcode/${encodeURIComponent(bc)}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("globi_customer_token")}` },
-      });
+      const parsed = parseScaleBarcode(bc);
+      const headers = { Authorization: `Bearer ${localStorage.getItem("globi_customer_token")}` };
+      const res = await fetch(`/api/customer/barcode/${encodeURIComponent(bc)}`, { headers });
       if (res.ok) {
-        const found = await res.json();
-        add(found);
+        const found: CatalogItem & { scaleBarcode?: ScaleBarcode | null } = await res.json();
+        const scale = found.scaleBarcode || null;
+        const item = scale?.type === "price" && scale.value > 0
+          ? { ...found, customerPrice: Number(scale.value.toFixed(2)) }
+          : found;
+        add(item, scale?.type === "weight" && scale.value > 0 ? Number(scale.value.toFixed(3)) : 1, scale ? bc : undefined);
         setSearch(found.name);
       } else {
         setScanError(`Barcode ${bc} not found in catalog`);

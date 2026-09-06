@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { parseScaleBarcode } from "@/lib/scaleBarcode";
+import { shouldRetryScanFailure } from "@/lib/scanRetry";
 import { apiFetch } from "@/lib/queryClient";
 import { getToken } from "@/lib/auth";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
@@ -9,17 +11,29 @@ function draftKey(grvId: string) {
   return `pda_grv_scan_draft_${grvId}`;
 }
 
-function loadScanDraft(grvId: string): string[] {
+interface PendingScan {
+  code: string;
+  eventKey: string;
+}
+
+function newPendingScan(code: string): PendingScan {
+  return { code, eventKey: crypto.randomUUID() };
+}
+
+function loadScanDraft(grvId: string): PendingScan[] {
   try {
     const raw = localStorage.getItem(draftKey(grvId));
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.map((entry) => typeof entry === "string" ? newPendingScan(entry) : entry)
+      : [];
   } catch {
     return [];
   }
 }
 
-function saveScanDraft(grvId: string, codes: string[]) {
-  localStorage.setItem(draftKey(grvId), JSON.stringify(codes));
+function saveScanDraft(grvId: string, scans: PendingScan[]) {
+  localStorage.setItem(draftKey(grvId), JSON.stringify(scans));
 }
 
 function clearScanDraft(grvId: string) {
@@ -93,11 +107,13 @@ async function uploadInvoiceImage(file: File): Promise<OcrResult> {
 export default function InvoiceImport() {
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inFlightScanKeys = useRef(new Set<string>());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [ocrResult, setOcrResult] = useState<OcrResult | null>(null);
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [pendingScans, setPendingScans] = useState<string[]>([]);
+  const [pendingScans, setPendingScans] = useState<PendingScan[]>([]);
+  const [scanRetryTick, setScanRetryTick] = useState(0);
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
@@ -158,47 +174,70 @@ export default function InvoiceImport() {
   // the code stays buffered in localStorage (keyed by GRV) and is retried
   // automatically once connectivity returns, so an in-progress receipt is never lost.
   const scanLine = useMutation({
-    mutationFn: async (code: string) => apiFetch(`/api/pda/grv/${activeId}/scan`, {
-      method: "POST",
-      body: JSON.stringify({ code, incrementBy: 1 }),
-    }),
-    onSuccess: (_data, code) => {
+    mutationFn: async (scan: PendingScan) => {
+      // Parse on-device for parity with the other scanner flows. Resolution stays
+      // in one server mutation so a lost response can never trigger a second increment.
+      parseScaleBarcode(scan.code);
+      return apiFetch(`/api/pda/grv/${activeId}/scan`, {
+        method: "POST",
+        body: JSON.stringify({ code: scan.code, eventKey: scan.eventKey, incrementBy: 1 }),
+      });
+    },
+    onSuccess: (_data, scan) => {
       qc.invalidateQueries({ queryKey: [`/api/pda/grv/${activeId}`] });
       if (!activeId) return;
       setPendingScans((prev) => {
-        const idx = prev.indexOf(code);
+        const idx = prev.findIndex((pending) => pending.eventKey === scan.eventKey);
         if (idx === -1) return prev;
         const next = [...prev.slice(0, idx), ...prev.slice(idx + 1)];
         saveScanDraft(activeId, next);
         return next;
       });
     },
-    onError: (e: any, code) => {
-      if (!isOnline && activeId) return;
+    onError: (e: any, scan) => {
+      if (shouldRetryScanFailure(e?.status)) {
+        window.setTimeout(() => setScanRetryTick((tick) => tick + 1), 1500);
+        return;
+      }
+      if (activeId) {
+        setPendingScans((prev) => {
+          const next = prev.filter((pending) => pending.eventKey !== scan.eventKey);
+          saveScanDraft(activeId, next);
+          return next;
+        });
+      }
       alert(e.message || "No matching item found for that code");
     },
   });
 
   function handleScan(code: string) {
     if (!activeId) return;
-    if (!isOnline) {
-      setPendingScans((prev) => {
-        const next = [...prev, code];
-        saveScanDraft(activeId, next);
-        return next;
-      });
-      return;
-    }
-    scanLine.mutate(code);
+    const scan = newPendingScan(code);
+    // Persist before the first request. A reload or lost response retains this
+    // exact event key, so the server can return its original exactly-once result.
+    setPendingScans((prev) => {
+      const next = [...prev, scan];
+      saveScanDraft(activeId, next);
+      return next;
+    });
   }
 
-  // Retry any buffered scans once we're back online.
+  // Dispatch persisted scans whenever the queue, connectivity, active GRV, or
+  // transient retry timer changes. The in-flight set prevents concurrent sends.
   useEffect(() => {
     if (isOnline && activeId && pendingScans.length > 0) {
-      pendingScans.forEach((code) => scanLine.mutate(code));
+      pendingScans.forEach((scan) => {
+        if (inFlightScanKeys.current.has(scan.eventKey)) return;
+        inFlightScanKeys.current.add(scan.eventKey);
+        scanLine.mutate(scan, {
+          onSettled: () => {
+            inFlightScanKeys.current.delete(scan.eventKey);
+          },
+        });
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline, activeId]);
+  }, [isOnline, activeId, pendingScans, scanRetryTick]);
 
   const finalizeGrv = useMutation({
     mutationFn: async () => apiFetch(`/api/pda/grv/${activeId}/finalize`, { method: "POST" }),

@@ -4,6 +4,7 @@ import { apiFetch } from "@/lib/queryClient";
 import { getStaff } from "@/lib/auth";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { ClipboardList, Plus, CheckCircle2, History, X, WifiOff } from "lucide-react";
+import { parseScaleBarcode, type ScaleBarcode } from "@/lib/scaleBarcode";
 
 interface StockTakeSession {
   id: string;
@@ -26,7 +27,7 @@ interface StockTakeLine {
   scannedAt: string;
 }
 
-interface ItemLite { id: string; name: string; sku: string; barcode: string | null; stockQuantity: number; }
+interface ItemLite { id: string; name: string; sku: string; barcode: string | null; stockQuantity: number; scaleBarcode?: ScaleBarcode | null; }
 
 type CountMode = "increment" | "enter-qty";
 
@@ -133,7 +134,11 @@ export default function StockTake() {
   });
 
   const lookupItem = useMutation({
-    mutationFn: async (code: string) => apiFetch<ItemLite>(`/api/items/barcode/${encodeURIComponent(code)}`),
+    mutationFn: async (code: string) => {
+      const scale = parseScaleBarcode(code);
+      const item = await apiFetch<ItemLite>(`/api/items/barcode/${encodeURIComponent(code)}`);
+      return { ...item, scaleBarcode: item.scaleBarcode ?? (scale ? null : undefined) };
+    },
     onSuccess: (item) => {
       if (mode === "increment" && activeSessionId) {
         const existingLine = activeSessionQuery.data?.lines.find((l) => l.itemId === item.id);

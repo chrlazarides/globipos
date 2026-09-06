@@ -337,7 +337,7 @@ export interface IStorage {
   createGoodsReceivedVoucher(data: import("@shared/schema").InsertGoodsReceivedVoucher, items: import("@shared/schema").InsertGoodsReceivedVoucherItem[]): Promise<import("@shared/schema").GoodsReceivedVoucher>;
   updateGoodsReceivedVoucher(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucher>): Promise<import("@shared/schema").GoodsReceivedVoucher | undefined>;
   updateGoodsReceivedVoucherItem(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucherItem>): Promise<import("@shared/schema").GoodsReceivedVoucherItem | undefined>;
-  scanGoodsReceivedVoucherLine(grvId: string, code: string, incrementBy?: number): Promise<{ line: import("@shared/schema").GoodsReceivedVoucherItem; matchedBy: "barcode" | "sku" | "none" } | undefined>;
+  scanGoodsReceivedVoucherLine(grvId: string, code: string, eventKey: string, incrementBy?: number): Promise<{ line: import("@shared/schema").GoodsReceivedVoucherItem; matchedBy: "barcode" | "sku" | "none" } | undefined>;
   prepareGrvFinalization(id: string): Promise<any>;
   completeGrvFinalization(id: string, purchaseInvoiceId: string, hasDiscrepancies: boolean): Promise<import("@shared/schema").GoodsReceivedVoucher | undefined>;
 }
@@ -3778,8 +3778,8 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db.update(goodsReceivedVoucherItems).set(data).where(eq(goodsReceivedVoucherItems.id, id)).returning();
     return updated;
   }
-  async scanGoodsReceivedVoucherLine(grvId: string, code: string, incrementBy: number = 1) {
-    const { goodsReceivedVoucherItems } = await import("@shared/schema");
+  async scanGoodsReceivedVoucherLine(grvId: string, code: string, eventKey: string, incrementBy: number = 1) {
+    const { goodsReceivedVoucherItems, goodsReceivedVoucherScanEvents } = await import("@shared/schema");
     const lineItems = await db.select().from(goodsReceivedVoucherItems).where(eq(goodsReceivedVoucherItems.grvId, grvId));
     let line = lineItems.find(i => i.barcode && i.barcode === code);
     let matchedBy: "barcode" | "sku" | "none" = line ? "barcode" : "none";
@@ -3788,11 +3788,29 @@ export class DatabaseStorage implements IStorage {
       if (line) matchedBy = "sku";
     }
     if (!line) return undefined;
-    const [updated] = await db.update(goodsReceivedVoucherItems)
-      .set({ receivedQuantity: line.receivedQuantity + incrementBy })
-      .where(eq(goodsReceivedVoucherItems.id, line.id))
-      .returning();
-    return { line: updated, matchedBy };
+    return db.transaction(async (tx) => {
+      const [claim] = await tx.insert(goodsReceivedVoucherScanEvents).values({
+        grvId,
+        eventKey,
+        lineId: line!.id,
+        matchedBy,
+      }).onConflictDoNothing().returning();
+      if (!claim) {
+        const [existingEvent] = await tx.select().from(goodsReceivedVoucherScanEvents)
+          .where(and(eq(goodsReceivedVoucherScanEvents.grvId, grvId), eq(goodsReceivedVoucherScanEvents.eventKey, eventKey)));
+        if (!existingEvent) return undefined;
+        const [existingLine] = await tx.select().from(goodsReceivedVoucherItems)
+          .where(eq(goodsReceivedVoucherItems.id, existingEvent.lineId));
+        return existingLine
+          ? { line: existingLine, matchedBy: existingEvent.matchedBy as "barcode" | "sku" | "none" }
+          : undefined;
+      }
+      const [updated] = await tx.update(goodsReceivedVoucherItems)
+        .set({ receivedQuantity: sql`${goodsReceivedVoucherItems.receivedQuantity} + ${incrementBy}` })
+        .where(eq(goodsReceivedVoucherItems.id, line!.id))
+        .returning();
+      return { line: updated, matchedBy };
+    });
   }
   // Validates a GRV and builds the purchase-invoice payload that would represent it, WITHOUT
   // creating anything yet. The caller (routes.ts) is responsible for posting the invoice through

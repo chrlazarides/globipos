@@ -224,7 +224,7 @@ export const portalOrderItems = pgTable("portal_order_items", {
   orderId: varchar("order_id").notNull(),
   itemId: varchar("item_id").notNull(),
   itemName: text("item_name").notNull(),
-  quantity: integer("quantity").notNull(),
+  quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
   unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
   total: numeric("total", { precision: 12, scale: 2 }).notNull(),
 });
@@ -1258,6 +1258,16 @@ export const goodsReceivedVoucherItems = pgTable("goods_received_voucher_items",
   matched: boolean("matched").notNull().default(false),
 });
 
+export const goodsReceivedVoucherScanEvents = pgTable("goods_received_voucher_scan_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  grvId: varchar("grv_id").notNull(),
+  eventKey: text("event_key").notNull(),
+  lineId: varchar("line_id").notNull(),
+  matchedBy: text("matched_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  grvEventUnique: uniqueIndex("goods_received_voucher_scan_events_grv_event_unique").on(table.grvId, table.eventKey),
+}));
 export const insertGoodsReceivedVoucherSchema = createInsertSchema(goodsReceivedVouchers).omit({ id: true, createdAt: true, completedAt: true });
 export type InsertGoodsReceivedVoucher = z.infer<typeof insertGoodsReceivedVoucherSchema>;
 export type GoodsReceivedVoucher = typeof goodsReceivedVouchers.$inferSelect;
