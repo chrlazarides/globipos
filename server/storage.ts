@@ -832,11 +832,21 @@ export class DatabaseStorage implements IStorage {
     return cust;
   }
   async getNextCustomerCode() {
+    const normalizedSuffix = sql<string>`COALESCE(
+      NULLIF(LTRIM(SUBSTRING(${customers.code} FROM 5), '0'), ''),
+      '0'
+    )`;
     const [result] = await db
-      .select({ maxNum: sql<string>`MAX(CAST(NULLIF(REGEXP_REPLACE(code, '[^0-9]', '', 'g'), '') AS INTEGER))` })
-      .from(customers);
-    const num = (parseInt(result?.maxNum || "0") || 0) + 1;
-    return `CUST${String(num).padStart(4, "0")}`;
+      .select({ code: customers.code })
+      .from(customers)
+      .where(sql`${customers.code} ~ '^CUST[0-9]+$'`)
+      .orderBy(
+        desc(sql`LENGTH(${normalizedSuffix})`),
+        desc(normalizedSuffix),
+      )
+      .limit(1);
+    const nextNumber = BigInt(result?.code.slice(4) || "0") + BigInt(1);
+    return `CUST${nextNumber.toString().padStart(4, "0")}`;
   }
 
   async findDuplicateCustomer(name: string, email?: string | null, taxId?: string | null, excludeId?: string) {
