@@ -643,7 +643,7 @@ function QuietHoursSettings() {
             The chime will stay silent automatically during this time window, even if it isn't manually muted.
           </p>
           <p className="text-xs text-muted-foreground italic" data-testid="text-quiet-hours-device-scope">
-            These scheduled hours follow your staff account on every device. Manual mute and tonight's override only affect this device.
+            Scheduled hours follow your staff account. Manual mute stays on this device; an urgent-order override is shared with all staff devices.
           </p>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">

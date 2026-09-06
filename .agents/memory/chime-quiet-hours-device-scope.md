@@ -4,14 +4,14 @@ description: Which WhatsApp order-alert preferences follow a staff account versu
 ---
 
 The scheduled quiet-hours preference (enabled/start/end) follows the signed-in staff account across
-devices. The manual chime mute remains local to the browser/device, and the temporary "override quiet
-hours for tonight" remains session-local.
+devices. Manual chime mute remains local to the browser/device. The temporary urgent-order override is
+shared store-wide and persisted with an absolute expiry timestamp.
 
 **Why:** The product owner explicitly confirmed that recurring quiet-hours schedules should follow the
-staff member, so a manager using both a shop computer and phone gets the same schedule. Manual mute and
-the temporary override are transient controls for the device currently making sound and must not affect
-other devices.
+staff member, so a manager using both a shop computer and phone gets the same schedule. Manual mute is
+specific to the device making sound, while an urgent-order override must reach every staff device.
+Server-side expiry prevents a closed originating device from leaving the override active indefinitely.
 
-**How to apply:** Keep recurring schedule reads/writes account-backed and refresh them when another
-device may have changed them. Do not move the manual mute or temporary override into account settings
-unless stakeholders make a separate explicit decision.
+**How to apply:** Keep recurring schedule reads/writes account-backed and manual mute device-local.
+Always read/write urgent overrides through shared server state and use the activating account's quiet
+window end as the expiry.

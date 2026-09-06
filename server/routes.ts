@@ -4027,6 +4027,63 @@ export async function registerRoutes(
     }
   });
 
+  // The quiet-hours schedule remains device-local, but an urgent-order override
+  // is shared store-wide so every staff device can sound its chime. Persist the
+  // window end rather than a boolean so a closed originating device cannot leave
+  // the override active indefinitely.
+  app.get("/api/staff/whatsapp/quiet-hours-override", requireStaff, async (_req, res) => {
+    try {
+      const [setting] = await db.select({ value: systemSettings.value })
+        .from(systemSettings)
+        .where(eq(systemSettings.key, "whatsapp_quiet_hours_override_until"));
+      const expiresAt = setting?.value || null;
+      const expiresAtMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+      const active = Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ active, expiresAt: active ? expiresAt : null });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.put("/api/staff/whatsapp/quiet-hours-override", requireStaff, async (req, res) => {
+    try {
+      const parsed = z.object({
+        active: z.boolean(),
+        expiresAt: z.string().datetime().nullable().optional(),
+      }).safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "A valid override state is required" });
+      }
+
+      let value = "";
+      if (parsed.data.active) {
+        if (!parsed.data.expiresAt) {
+          return res.status(400).json({ message: "Override expiry is required" });
+        }
+        const expiresAtMs = Date.parse(parsed.data.expiresAt);
+        if (expiresAtMs <= Date.now() || expiresAtMs > Date.now() + 24 * 60 * 60 * 1000) {
+          return res.status(400).json({ message: "Override expiry must be within the next 24 hours" });
+        }
+        value = new Date(expiresAtMs).toISOString();
+      }
+
+      await db.insert(systemSettings).values({
+        key: "whatsapp_quiet_hours_override_until",
+        value,
+        label: "WhatsApp Quiet Hours Override Until",
+        group: "whatsapp",
+      }).onConflictDoUpdate({
+        target: systemSettings.key,
+        set: { value },
+      });
+
+      res.json({ active: parsed.data.active, expiresAt: value || null });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/settings/seed-defaults", async (_req, res) => {
     try {
       const defaults = [
