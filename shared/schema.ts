@@ -503,7 +503,9 @@ export const insertPriceContractItemSchema = createInsertSchema(priceContractIte
 export const insertSeasonalOfferSchema = createInsertSchema(seasonalOffers).omit({ id: true });
 export const insertSeasonalOfferItemSchema = createInsertSchema(seasonalOfferItems).omit({ id: true });
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });
-export const insertInvoiceItemSchema = createInsertSchema(invoiceItems).omit({ id: true });
+export const insertInvoiceItemSchema = createInsertSchema(invoiceItems).omit({ id: true }).extend({
+  quantity: z.union([z.string(), z.number()]).transform(String),
+});
 export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true });
 export const insertPortalOrderSchema = createInsertSchema(portalOrders).omit({ id: true, createdAt: true });
 export const insertPortalOrderItemSchema = createInsertSchema(portalOrderItems).omit({ id: true });
