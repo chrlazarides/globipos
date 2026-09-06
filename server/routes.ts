@@ -2479,7 +2479,7 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
-      const companyName = settingsMap.company_name || "GlobiPOS LTD";
+      const companyName = settingsMap.company_name || "Company";
       const subject = `${typeLabel} ${inv.invoiceNumber} from ${companyName}`;
 
       const allCategories2 = await storage.getCategories();
@@ -3430,7 +3430,7 @@ export async function registerRoutes(
       const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
-      const companyName = settingsMap["company_name"] || "GlobiPOS LTD";
+      const companyName = settingsMap["company_name"] || "Company";
 
       const fromLabel = new Date((req.params.from as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
       const toLabel = new Date((req.params.to as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
@@ -3548,7 +3548,7 @@ export async function registerRoutes(
       const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
       const allSettings = await storage.getSettings();
       const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
-      const companyName = settingsMap["company_name"] || "GlobiPOS LTD";
+      const companyName = settingsMap["company_name"] || "Company";
 
       const fromLabel = new Date((req.params.from as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
       const toLabel = new Date((req.params.to as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
@@ -3888,7 +3888,7 @@ export async function registerRoutes(
       const settingsMap: Record<string, string> = {};
       allSettings.forEach(s => { settingsMap[s.key] = s.value; });
 
-      const companyName = settingsMap.company_name || "GlobiPOS LTD";
+      const companyName = settingsMap.company_name || "Company";
       const subject = `Account Statement from ${companyName}`;
       const html = generateStatementHtml(customer, st, false, settingsMap);
 
@@ -3947,12 +3947,12 @@ export async function registerRoutes(
   app.post("/api/settings/seed-defaults", async (_req, res) => {
     try {
       const defaults = [
-        { key: "company_name", value: "GlobiPOS LTD", label: "Company Name", group: "company" },
-        { key: "company_address", value: "Georgiou Pilatou 11, 5510, Famagusta, Cyprus", label: "Company Address", group: "company" },
+        { key: "company_name", value: "", label: "Company Name", group: "company" },
+        { key: "company_address", value: "", label: "Company Address", group: "company" },
         { key: "company_phone", value: "", label: "Company Phone", group: "company" },
-        { key: "company_email", value: "globi-pos@gmail.com", label: "Company Email", group: "company" },
-        { key: "company_tax_id", value: "CY60323722T", label: "Company Tax ID (TIN)", group: "company" },
-        { key: "company_reg_no", value: "HE 487597", label: "Company Registration No.", group: "company" },
+        { key: "company_email", value: "", label: "Company Email", group: "company" },
+        { key: "company_tax_id", value: "", label: "Company Tax ID (TIN)", group: "company" },
+        { key: "company_reg_no", value: "", label: "Company Registration No.", group: "company" },
         { key: "company_iban", value: "", label: "Bank IBAN", group: "company" },
         { key: "company_swift", value: "", label: "Bank SWIFT/BIC", group: "company" },
         { key: "company_bank_name", value: "", label: "Bank Name", group: "company" },
@@ -4103,7 +4103,7 @@ export async function registerRoutes(
   app.get("/api/backup/cpanel-package", requireSuperuser, async (_req, res) => {
     try {
       const companySetting = await storage.getSetting("company_name");
-      const companyName = companySetting?.value || "GlobiPOS LTD";
+      const companyName = companySetting?.value || "Company";
       const slug = fileSlug(companyName);
       const date = new Date().toISOString().split("T")[0];
       const dbUrl = process.env.DATABASE_URL;
@@ -4454,7 +4454,7 @@ export async function registerRoutes(
   app.get("/api/backup/compiled-package", requireSuperuser, async (_req, res) => {
     try {
       const companySetting = await storage.getSetting("company_name");
-      const companyName = companySetting?.value || "GlobiPOS LTD";
+      const companyName = companySetting?.value || "Company";
       const slug = fileSlug(companyName);
       const date = new Date().toISOString().split("T")[0];
       const dbUrl = process.env.DATABASE_URL;
@@ -4699,7 +4699,7 @@ export async function registerRoutes(
   app.get("/api/backup/synology-package", requireSuperuser, async (_req, res) => {
     try {
       const companySetting = await storage.getSetting("company_name");
-      const companyName = companySetting?.value || "GlobiPOS LTD";
+      const companyName = companySetting?.value || "Company";
       const slug = fileSlug(companyName);
       const date = new Date().toISOString().split("T")[0];
       const dbUrl = process.env.DATABASE_URL;
@@ -5011,7 +5011,7 @@ export async function registerRoutes(
       const companySetting = await storage.getSetting("company_name");
       const toEmail = req.body?.email || emailSetting?.value || "";
       if (!toEmail) return res.status(400).json({ message: "No backup email address configured" });
-      const companyName = companySetting?.value || "GlobiPOS LTD";
+      const companyName = companySetting?.value || "Company";
       const date = new Date().toISOString().split("T")[0];
       // Use differential if last backup date is known and within 8 days
       const lastSetting = await storage.getSetting("backup_last_date");
@@ -10861,7 +10861,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
   const hasBarcodes = items.some((li: any) => li.barcode);
   const overallDiscount = parseFloat(inv.discountAmount || "0");
 
-  const companyName = settings.company_name || "GlobiPOS LTD";
+  const companyName = settings.company_name || "Company";
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";
@@ -11116,7 +11116,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
     </div>` : ""}
 
     <div class="footer">
-      <p>${companyName} - Mediterranean Fine Foods</p>
+      <p>${companyName}</p>
       <p>${invoiceFooter}</p>
     </div>
   </div>
@@ -11127,7 +11127,7 @@ function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPri
 
 function generateStatementHtml(customer: any, statement: any, autoPrint: boolean = false, settings: Record<string, string> = {}) {
   const LOGO_DATA_URL = resolveLogoDataUrl(settings);
-  const companyName = settings.company_name || "GlobiPOS LTD";
+  const companyName = settings.company_name || "Company";
   const companyAddress = settings.company_address || "";
   const companyPhone = settings.company_phone || "";
   const companyEmail = settings.company_email || "";
