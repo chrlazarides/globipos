@@ -112,9 +112,11 @@ export default function SettingsPage() {
   const [restoreFile, setRestoreFile] = useState<any>(null);
   const [restoring, setRestoring] = useState(false);
   const [restoreInspecting, setRestoreInspecting] = useState(false);
+  const [restoreBackupSettings, setRestoreBackupSettings] = useState(false);
 
   // Data migration (dev → production)
   const [importing, setImporting] = useState(false);
+  const [restoreImportedSettings, setRestoreImportedSettings] = useState(false);
 
   // Email section
   const [testEmailAddr, setTestEmailAddr] = useState("");
@@ -376,7 +378,10 @@ export default function SettingsPage() {
   const handleImportData = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!confirm(`This will REPLACE ALL data in this system with the data from "${file.name}". Users/passwords are preserved. Are you sure?`)) {
+    const settingsWarning = restoreImportedSettings
+      ? "\n\nWARNING: This will also replace this deployment's company branding, tax details, backup configuration, and integration settings with values from the imported file."
+      : "\n\nThis deployment's company, tax, backup, and integration settings will be preserved.";
+    if (!confirm(`This will REPLACE ALL business data in this system with the data from "${file.name}". Users/passwords are preserved.${settingsWarning}\n\nAre you sure?`)) {
       e.target.value = "";
       return;
     }
@@ -384,8 +389,16 @@ export default function SettingsPage() {
     try {
       const text = await file.text();
       const json = JSON.parse(text);
-      await apiRequest("POST", "/api/admin/import", json);
-      toast({ title: "Import successful", description: "All data has been restored. Refreshing..." });
+      await apiRequest("POST", "/api/admin/import", {
+        backup: json,
+        restoreSystemSettings: restoreImportedSettings,
+      });
+      toast({
+        title: "Import successful",
+        description: restoreImportedSettings
+          ? "Business data and deployment settings have been restored. Refreshing..."
+          : "Business data has been restored; this deployment's settings were preserved. Refreshing...",
+      });
       setTimeout(() => window.location.reload(), 1500);
     } catch (err: any) {
       toast({ title: "Import failed", description: err.message, variant: "destructive" });
@@ -429,16 +442,23 @@ export default function SettingsPage() {
     if (!restoreFile || !restoreMeta) return;
     const label = restoreMeta.backupType === "differential" ? "differential merge" : "full restore";
     const warning = restoreMeta.backupType === "full"
-      ? "This will REPLACE ALL data with the backup. Users/passwords are preserved."
+      ? "This will REPLACE ALL business data with the backup. Users/passwords are preserved."
       : `This will MERGE ${restoreMeta.totalRecords} new records into the current database. Existing data is not removed.`;
-    if (!confirm(`${label.toUpperCase()}: ${warning}\n\nBackup taken: ${new Date(restoreMeta.exportedAt).toLocaleString()}\n\nContinue?`)) return;
+    const settingsWarning = restoreBackupSettings
+      ? "\n\nWARNING: This will also replace this deployment's company branding, tax details, backup configuration, and integration settings."
+      : "\n\nThis deployment's company, tax, backup, and integration settings will be preserved.";
+    if (!confirm(`${label.toUpperCase()}: ${warning}${settingsWarning}\n\nBackup taken: ${new Date(restoreMeta.exportedAt).toLocaleString()}\n\nContinue?`)) return;
     setRestoring(true);
     try {
-      const res = await apiRequest("POST", "/api/backup/restore", restoreFile);
+      const res = await apiRequest("POST", "/api/backup/restore", {
+        ...restoreFile,
+        restoreSystemSettings: restoreBackupSettings,
+      });
       const result = await res.json();
       toast({ title: "Restore successful", description: `${result.backupType === "differential" ? "Merged" : "Restored"} ${result.totalRecords} records. Refreshing...` });
       setRestoreMeta(null);
       setRestoreFile(null);
+      setRestoreBackupSettings(false);
       setTimeout(() => window.location.reload(), 1500);
     } catch (err: any) {
       toast({ title: "Restore failed", description: err.message, variant: "destructive" });
@@ -1108,7 +1128,7 @@ export default function SettingsPage() {
           <div className="border-t pt-4 space-y-3">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Restore from Backup</h4>
             <p className="text-xs text-muted-foreground">
-              Upload a backup file (.json) to inspect its contents before restoring. Full backups replace all data; differential backups merge new records without removing existing data.
+              Upload a backup file (.json) to inspect its contents before restoring. Full backups replace business data; differential backups merge new records. This deployment's own settings are preserved by default.
             </p>
 
             {!restoreMeta && (
@@ -1139,7 +1159,7 @@ export default function SettingsPage() {
                     )}
                     <p className="text-muted-foreground">Total records: <span className="font-medium text-foreground">{restoreMeta.totalRecords.toLocaleString()}</span></p>
                   </div>
-                  <Button variant="ghost" size="sm" className="text-xs h-6 shrink-0" onClick={() => { setRestoreMeta(null); setRestoreFile(null); }}>
+                  <Button variant="ghost" size="sm" className="text-xs h-6 shrink-0" onClick={() => { setRestoreMeta(null); setRestoreFile(null); setRestoreBackupSettings(false); }}>
                     Clear
                   </Button>
                 </div>
@@ -1151,11 +1171,27 @@ export default function SettingsPage() {
                     </div>
                   ))}
                 </div>
+                <label className="flex items-start gap-2 rounded-md border border-amber-300/70 bg-amber-50 p-3 text-xs dark:border-amber-700/70 dark:bg-amber-950/30">
+                  <input
+                    type="checkbox"
+                    checked={restoreBackupSettings}
+                    onChange={(e) => setRestoreBackupSettings(e.target.checked)}
+                    disabled={restoring}
+                    className="mt-0.5 h-4 w-4"
+                    data-testid="checkbox-restore-backup-settings"
+                  />
+                  <span>
+                    <strong>Replace this deployment's settings with settings from the backup.</strong>
+                    <span className="mt-1 block text-muted-foreground">
+                      Only select this for a complete migration. It can replace branding, tax ID, backup configuration, and integration settings.
+                    </span>
+                  </span>
+                </label>
                 <div className="flex items-center gap-2 pt-1">
                   {restoreMeta.backupType === "full" ? (
                     <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 flex-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      Full restore will replace all existing data (users preserved)
+                      Full restore will replace business data (users and deployment settings preserved)
                     </div>
                   ) : (
                     <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 flex-1">
@@ -1271,7 +1307,25 @@ export default function SettingsPage() {
           {/* Migrate to Production */}
           <div className="border-t pt-4 space-y-3">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Migrate to Production</h4>
-            <p className="text-xs text-muted-foreground">Export all your data here (dev), then import it into the live production app to sync everything.</p>
+            <p className="text-xs text-muted-foreground">
+              Export all your data here (dev), then import it into the live production app. By default, the live deployment's own company, tax, backup, and integration settings are preserved.
+            </p>
+            <label className="flex items-start gap-2 rounded-md border border-amber-300/70 bg-amber-50 p-3 text-xs dark:border-amber-700/70 dark:bg-amber-950/30">
+              <input
+                type="checkbox"
+                checked={restoreImportedSettings}
+                onChange={(e) => setRestoreImportedSettings(e.target.checked)}
+                disabled={importing}
+                className="mt-0.5 h-4 w-4"
+                data-testid="checkbox-restore-imported-settings"
+              />
+              <span>
+                <strong>Replace this deployment's settings with settings from the import file.</strong>
+                <span className="mt-1 block text-muted-foreground">
+                  Only select this for a complete migration. It can replace branding, tax ID, backup configuration, and integration settings.
+                </span>
+              </span>
+            </label>
             <div className="flex flex-wrap gap-3 items-center">
               <Button variant="outline" size="sm" onClick={handleExportData} data-testid="button-export-data">
                 <Upload className="w-4 h-4 mr-2" />

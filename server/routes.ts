@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema } from "@shared/schema";
+import { parseAdminImportRequest, shouldRestoreBackupSettings } from "./import-settings-policy";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
 import multer from "multer";
@@ -828,10 +829,10 @@ export async function registerRoutes(
 
   app.post("/api/admin/import", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const data = req.body;
+      const { data, restoreSystemSettings } = parseAdminImportRequest(req.body);
       if (!data || data.version !== 1) return res.status(400).json({ message: "Invalid export file" });
 
-      // Clear all data tables (preserve users)
+      // Clear all data tables (preserve users and, by default, deployment-specific settings)
       await db.delete(journalEntryLines);
       await db.delete(journalEntries);
       await db.delete(expenses);
@@ -851,11 +852,15 @@ export async function registerRoutes(
       await db.delete(items);
       await db.delete(categories);
       await db.delete(accounts);
-      await db.delete(systemSettings);
+      if (restoreSystemSettings) {
+        await db.delete(systemSettings);
+      }
 
       const ins = async (table: any, rows: any[]) => { if (rows?.length) await db.insert(table).values(rows); };
 
-      await ins(systemSettings, data.systemSettings);
+      if (restoreSystemSettings) {
+        await ins(systemSettings, data.systemSettings);
+      }
       await ins(categories, data.categories);
       await ins(items, data.items);
       await ins(customers, data.customers);
@@ -876,7 +881,10 @@ export async function registerRoutes(
       await ins(seasonalOffers, data.seasonalOffers);
       await ins(seasonalOfferItems, data.seasonalOfferItems);
 
-      res.json({ message: "Data imported successfully" });
+      res.json({
+        message: "Data imported successfully",
+        systemSettingsRestored: restoreSystemSettings,
+      });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -5096,6 +5104,7 @@ export async function registerRoutes(
 
       const d = payload.data;
       const isFull = payload.backupType !== "differential";
+      const restoreSystemSettings = shouldRestoreBackupSettings(payload);
 
       const upsert = async (table: any, rows: any[], conflictCol: string = "id") => {
         if (!rows?.length) return;
@@ -5154,10 +5163,12 @@ export async function registerRoutes(
         await ins(journalEntryLines, d.journalEntryLines);
         await ins(expenses, d.expenses);
 
-        // Settings: upsert (preserve passwords)
-        for (const s of (d.settings || [])) {
-          if (s.key === "settings_password") continue;
-          await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+        // Deployment-specific settings are preserved unless explicitly selected.
+        if (restoreSystemSettings) {
+          for (const s of (d.settings || [])) {
+            if (s.key === "settings_password") continue;
+            await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+          }
         }
       } else {
         // Differential restore: upsert config, insert-ignore transactions
@@ -5171,9 +5182,11 @@ export async function registerRoutes(
         await upsert(priceContractItems, d.priceContractItems || []);
         await upsert(seasonalOffers, d.seasonalOffers || []);
         await upsert(seasonalOfferItems, d.seasonalOfferItems || []);
-        for (const s of (d.settings || [])) {
-          if (s.key === "settings_password") continue;
-          await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+        if (restoreSystemSettings) {
+          for (const s of (d.settings || [])) {
+            if (s.key === "settings_password") continue;
+            await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+          }
         }
         // Transaction tables: insert new only
         await insertNew(invoices, d.invoices || []);
@@ -5205,6 +5218,7 @@ export async function registerRoutes(
         tableCounts: payload.tableCounts,
         totalRecords,
         restored: isFull ? "full" : "differential-merge",
+        systemSettingsRestored: restoreSystemSettings,
       });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
