@@ -105,3 +105,5 @@ timeoutMs = 20000
 [userenv.shared]
 VAPID_PUBLIC_KEY = "BFnKrtJ3HmjphoYmBI-EfxSyZ9SiXCB5R_0ICUmuksWFJO7cjrqT4UtSI49t1v8GXpWh4DPZvGOUjeRAYBqkQXk"
 VAPID_SUBJECT = "mailto:admin@globipos.com"
+
+[userenv.development]

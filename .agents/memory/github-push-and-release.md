@@ -5,7 +5,7 @@ description: How to push commits and cut a POS release build from the Replit san
 
 # GitHub push & POS release from the sandbox
 
-- The `GLOBISYNC` secret is the only working GitHub token (push access to chrlazarides/globipos); `GITHUB_PERSONAL_ACCESS_TOKEN`, `GLOBIGIT`, `2GITHUB_PERSONAL_ACCESS_TOKEN` are all dead ("Bad credentials"). Test with `GET /repos/...` permissions before use.
+- Multiple GitHub token secrets exist and some may be dead; always verify a token with a `GET /repos/...` call before using it (as of July 2026, `GLOBISYNC` was the working one).
 - Non-force `git push https://x-access-token:$TOK@github.com/... main:main` IS allowed by the sandbox, but `git fetch` is BLOCKED (writes to .git/objects triggers the destructive-git guard). So local refs of origin go stale after remote-side commits; expect local main to be behind after API commits.
 - Sandbox can't `git commit`; to add a commit remotely, use the GitHub Git Data API (blobs → tree → commit → PATCH refs/heads/main), then revert any matching local edits so the tree stays clean.
 - POS releases: `.github/workflows/build-pos.yml` triggers on `v*` tag push (or workflow_dispatch with tag input, but that builds default-branch HEAD). Version must be bumped in pos-app/package.json + src-tauri/tauri.conf.json + Cargo.toml + Cargo.lock before tagging or artifacts/updater carry the old version.

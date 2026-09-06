@@ -6,6 +6,14 @@ GlobiPOS is a comprehensive stock, invoicing, and point-of-sale system for whole
 ## User Preferences
 I prefer iterative development with clear communication on major changes. Please ask before implementing significant architectural shifts or feature additions. I like seeing high-level summaries of progress and potential next steps. I prefer detailed explanations for complex technical decisions.
 
+
+## Deployment Architecture (decided July 2026)
+- **Per-client deployments from one shared codebase**: this Repl is the shared development environment (common dev database); each client gets their own published deployment with its own production database and its own credentials.
+- **WhatsApp credentials** (`WHATSAPP_APP_SECRET`, verify token, etc.) live as **production environment secrets per deployment** — never in shared/dev secrets. The webhook signature check fails closed in production if `WHATSAPP_APP_SECRET` is unset; in development it is skipped so the simulator works unsigned.
+- **Version pinning**: clients may stay on a specific tagged release indefinitely; updates are opt-in per client, never automatic. Schema migrations must be per-release and replayable in order so a pinned client can upgrade later. The app should expose its running version for support.
+- **Central fleet control plane (decided)**: a fleet module inside this same codebase, deployed as our own central deployment (enabled via a FLEET_MODE-style flag) with its own database. Holds a deployments registry (client, URL, pinned version, last heartbeat, health, integration config status). Client deployments phone home with periodic heartbeats authenticated by per-client API keys; the control plane never holds inbound credentials to client systems — support actions are delivered as commands in heartbeat responses. Scope v1: monitoring + support actions (settings status visibility, update reminders). This is the implementation vehicle for super-admin support access.
+- Planned: super-admin support access across client deployment settings (via the fleet control plane); per-client release pipeline with tagging + pinning (follow-up tasks).
+
 ## System Architecture
 GlobiPOS is built with a modern web stack:
 - **Frontend**: React, TypeScript, Vite, utilizing Shadcn/ui for components, TanStack Query for data fetching, and Wouter for routing.

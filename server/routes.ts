@@ -10549,6 +10549,11 @@ export async function registerRoutes(
   // ── WhatsApp webhook: receive message ────────────────────────────────────
   app.post("/api/webhooks/whatsapp", async (req, res) => {
     const appSecret = process.env.WHATSAPP_APP_SECRET;
+    if (!appSecret && process.env.NODE_ENV === "production") {
+      // Fail closed in production: never accept unauthenticated webhook posts.
+      console.warn("[WhatsApp] Rejected webhook: WHATSAPP_APP_SECRET not configured in production");
+      return res.sendStatus(401);
+    }
     if (appSecret) {
       const signatureHeader = req.headers["x-hub-signature-256"];
       const rawBody = req.rawBody as Buffer | undefined;
