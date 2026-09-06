@@ -959,6 +959,9 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         t.method.startsWith("card_") && t.approved
       );
       const paymentRef = cardTender?.reference;
+      if (cardTender && !paymentRef?.trim()) {
+        throw new Error("Approved card payment has no terminal reference. Verify the payment before completing the order.");
+      }
 
       // Publish "payment" mode to customer display before completing
       if (hw.config?.customer_display_enabled && cdStoreRef.current) {

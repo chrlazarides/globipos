@@ -19,16 +19,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { v4 as uuidv4 } from "uuid";
 import AgeVerificationDialog from "../components/AgeVerificationDialog";
-import type { Product } from "../types";
-import type { OrderLine } from "../types";
+import type { Order, OrderLine, Product } from "../types";
 import { createLine, setLinePriceOverride, computeOrderTotals } from "../lib/pricing";
 import { parseScaleBarcode, DEFAULT_BARCODE_CONFIG } from "../lib/scaleBarcode";
 import type { BarcodeConfig as BarcodeConfigType } from "../types";
 import { nextOrderNumber, saveOrder, getBarcodeConfig } from "../lib/db";
+import { canGenericAttendantRelease, canStartSelfCheckoutPayment, resolveApprovedCardReference, resolveCardPaymentOutcome } from "../lib/cardPayment";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type SCOMode = "idle" | "scanning" | "payment" | "attendant_needed" | "age_check" | "done";
+type SCOMode = "idle" | "scanning" | "payment" | "payment_verification" | "attendant_needed" | "age_check" | "done";
 type AttendantReason = "age_check" | "weight_mismatch" | "help_requested" | "no_bag" | "item_not_found";
 
 interface SelfCheckoutProps {
@@ -42,11 +42,32 @@ interface SelfCheckoutProps {
 
 function fmt(n: number) { return `€${n.toFixed(2)}`; }
 
+const SCO_PAYMENT_LOCK_KEY = "sco_unresolved_card_payment";
+
+interface UnresolvedCardPayment {
+  lines: OrderLine[];
+  message: string;
+}
+
+function loadUnresolvedCardPayment(): UnresolvedCardPayment | null {
+  try {
+    const raw = localStorage.getItem(SCO_PAYMENT_LOCK_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as UnresolvedCardPayment;
+    return Array.isArray(parsed.lines) && parsed.lines.length > 0 && typeof parsed.message === "string"
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = "SCO", onExit }: SelfCheckoutProps) {
-  const [mode, setMode] = useState<SCOMode>("idle");
-  const [lines, setLines] = useState<OrderLine[]>([]);
+  const [recoveredPaymentLock] = useState(loadUnresolvedCardPayment);
+  const [mode, setMode] = useState<SCOMode>(recoveredPaymentLock ? "payment_verification" : "idle");
+  const [lines, setLines] = useState<OrderLine[]>(recoveredPaymentLock?.lines ?? []);
   const [barcodeInput, setBarcodeInput] = useState("");
   const [attendantReason, setAttendantReason] = useState<AttendantReason | null>(null);
   const [ageCheckProduct, setAgeCheckProduct] = useState<Product | null>(null);
@@ -56,6 +77,8 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
   const [processing, setProcessing] = useState(false);
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
   const [cardRef, setCardRef] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState(recoveredPaymentLock?.message ?? "");
+  const [verificationRef, setVerificationRef] = useState("");
   const barcodeRef = useRef<HTMLInputElement>(null);
   const barcodeConfigRef = useRef<BarcodeConfigType | null>(null);
 
@@ -63,6 +86,14 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
   useEffect(() => {
     getBarcodeConfig().then((cfg) => { barcodeConfigRef.current = cfg; }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (mode === "payment_verification") {
+      localStorage.setItem(SCO_PAYMENT_LOCK_KEY, JSON.stringify({ lines, message: paymentError }));
+    } else if (mode === "done") {
+      localStorage.removeItem(SCO_PAYMENT_LOCK_KEY);
+    }
+  }, [mode, lines, paymentError]);
 
   const activeLines = lines.filter((l) => !l.voided);
   const totals = computeOrderTotals(activeLines, 0, 0);
@@ -75,9 +106,12 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
   }, [mode]);
 
   const startSession = () => {
+    localStorage.removeItem(SCO_PAYMENT_LOCK_KEY);
     setLines([]);
     setOrderNumber(null);
     setCardRef(null);
+    setPaymentError("");
+    setVerificationRef("");
     setMode("scanning");
     invoke("write_audit", {
       cashierId,
@@ -201,15 +235,16 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
   }
 
   async function attendantOverride() {
+    if (!canGenericAttendantRelease(mode)) return;
     setPinError("");
     try {
-      const session = await invoke<{ id: string; role: string } | null>("validate_pin", { pin: attendantPIN });
+      const session = await invoke<{ cashier_id: string; role: string } | null>("validate_pin", { pin: attendantPIN });
       if (session) {
         setAttendantPIN("");
         setAttendantReason(null);
         setMode("scanning");
         invoke("write_audit", {
-          cashierId: session.id,
+          cashierId: session.cashier_id,
           action: "attendant_override",
           detail: attendantReason ?? "override",
         }).catch(() => {});
@@ -223,8 +258,46 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
 
   // ── Payment ─────────────────────────────────────────────────────────────────
 
+  async function persistCompletedCardOrder(paymentRef: string, reconciliationPin?: string) {
+    const orderNum = await nextOrderNumber(terminalPrefix);
+    const order: Order = {
+        id: uuidv4(),
+        order_number: orderNum,
+        status: "completed",
+        cashier_id: cashierId,
+        cashier_name: "Self-Checkout",
+        price_level: 1,
+        order_discount_pct: 0,
+        order_discount_fixed: 0,
+        surcharge_pct: 0,
+        surcharge_amount: 0,
+        subtotal: totals.subtotal,
+        discount_amount: totals.discountAmount,
+        vat_amount: totals.vatAmount,
+        total: totals.total,
+        payment_method: "card",
+        payment_ref: paymentRef,
+        amount_tendered: totals.total,
+        change_due: 0,
+        created_at: new Date().toISOString(),
+      };
+    if (reconciliationPin) {
+      await invoke("reconcile_card_payment", {
+        pin: reconciliationPin,
+        order,
+        lines: activeLines,
+      });
+    } else {
+      await saveOrder(order, activeLines);
+    }
+    setOrderNumber(orderNum);
+    setCardRef(paymentRef);
+    setMode("done");
+  }
+
   async function startPayment() {
-    if (activeLines.length === 0) return;
+    if (activeLines.length === 0 || !canStartSelfCheckoutPayment(mode)) return;
+    setPaymentError("");
     setMode("payment");
     // In SCO mode, payment is handled by card terminal directly
     // Simulate card tap → complete
@@ -232,46 +305,37 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
       const result = await invoke<{ approved: boolean; reference?: string; error?: string }>(
         "process_card_payment",
         { amount: totals.total, currency: "EUR" }
-      ).catch(() => ({ approved: false, error: "Terminal communication failed" }));
+      );
 
-      if (result === null || result === undefined || typeof result !== "object") {
+      const outcome = resolveCardPaymentOutcome(result);
+      if (outcome.kind === "complete") {
+        await persistCompletedCardOrder(outcome.reference);
+      } else if (outcome.kind === "declined") {
+        setPaymentError(outcome.message);
         setMode("scanning");
-        return;
-      }
-
-      if (result.approved === true) {
-        const orderNum = await nextOrderNumber(terminalPrefix);
-        await saveOrder(
-          {
-            id: uuidv4(),
-            order_number: orderNum,
-            status: "completed",
-            cashier_id: cashierId,
-            cashier_name: "Self-Checkout",
-            price_level: 1,
-            order_discount_pct: 0,
-            order_discount_fixed: 0,
-            surcharge_pct: 0,
-            surcharge_amount: 0,
-            subtotal: totals.subtotal,
-            discount_amount: totals.discountAmount,
-            vat_amount: totals.vatAmount,
-            total: totals.total,
-            payment_method: "card",
-            amount_tendered: totals.total,
-            change_due: 0,
-            created_at: new Date().toISOString(),
-          },
-          activeLines
-        );
-        setOrderNumber(orderNum);
-        setCardRef("reference" in result ? result.reference ?? null : null);
-        setMode("done");
       } else {
-        setMode("scanning"); // payment failed → try again
+        setPaymentError(outcome.message);
+        setMode("payment_verification");
       }
+    } catch (error) {
+      setPaymentError(error instanceof Error ? error.message : "Card payment could not be verified. Please ask an attendant.");
+      setMode("payment_verification");
+    }
+  }
+
+  async function resolvePaymentVerification() {
+    setPinError("");
+    const referenceResolution = resolveApprovedCardReference(verificationRef);
+    if (referenceResolution.kind === "verification_required") {
+      setPinError("Enter the verified terminal reference");
+      return;
+    }
+    try {
+      await persistCompletedCardOrder(referenceResolution.reference, attendantPIN);
+      setAttendantPIN("");
+      setVerificationRef("");
     } catch {
-      setMode("scanning");
+      setPinError("Could not save the verified payment. The lane remains locked.");
     }
   }
 
@@ -296,12 +360,13 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
             variant="outline"
             className="border-white/30 text-white hover:bg-white/10"
             onClick={() => callAttendant("help_requested")}
+            disabled={mode === "payment_verification"}
             data-testid="btn-call-attendant"
           >
             <Bell className="h-4 w-4 mr-1" /> Attendant
           </Button>
           {onExit && (
-            <Button size="sm" variant="ghost" className="text-white/60 hover:text-white" onClick={onExit}>
+            <Button size="sm" variant="ghost" className="text-white/60 hover:text-white" onClick={onExit} disabled={mode === "payment_verification"}>
               <X className="h-4 w-4" />
             </Button>
           )}
@@ -331,6 +396,11 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
 
           {(mode === "scanning") && (
             <div className="w-full max-w-sm space-y-6">
+              {paymentError && (
+                <div role="alert" className="rounded-lg border border-red-700 bg-red-950/60 px-4 py-3 text-sm text-red-100">
+                  {paymentError}
+                </div>
+              )}
               <div className="text-center">
                 <Scan className="h-12 w-12 mx-auto mb-3 text-[#c07090]" />
                 <p className="text-xl font-light">Scan item barcode</p>
@@ -378,6 +448,50 @@ export default function SelfCheckout({ cashierId, cashierName, terminalPrefix = 
               <CreditCard className="h-16 w-16 mx-auto text-green-400 animate-pulse" />
               <p className="text-2xl font-light">Please tap or insert your card</p>
               <p className="text-3xl font-bold">{fmt(totals.total)}</p>
+            </div>
+          )}
+
+          {mode === "payment_verification" && (
+            <div className="w-full max-w-md text-center space-y-5" data-testid="sco-payment-verification">
+              <div className="rounded-full bg-red-700 w-20 h-20 flex items-center justify-center mx-auto">
+                <AlertTriangle className="h-10 w-10 text-white" />
+              </div>
+              <p className="text-2xl font-light">Payment needs verification</p>
+              <p className="text-red-100" role="alert">{paymentError}</p>
+              <p className="font-semibold text-amber-300">
+                Do not tap or insert the card again. Please ask an attendant to verify the payment.
+              </p>
+              <div className="bg-gray-900 rounded-xl p-4 mx-auto space-y-3 text-left">
+                <label className="block text-sm text-gray-300">
+                  Verified terminal reference
+                  <input
+                    value={verificationRef}
+                    onChange={(event) => setVerificationRef(event.target.value)}
+                    className="mt-1 w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white"
+                    data-testid="input-sco-verification-ref"
+                  />
+                </label>
+                <label className="block text-sm text-gray-300">
+                  Attendant PIN
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={attendantPIN}
+                    onChange={(event) => setAttendantPIN(event.target.value)}
+                    className="mt-1 w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white"
+                    data-testid="input-sco-verification-pin"
+                  />
+                </label>
+                {pinError && <p className="text-xs text-red-400">{pinError}</p>}
+                <Button
+                  className="w-full bg-[#7c1d3f] hover:bg-[#6b1836]"
+                  onClick={resolvePaymentVerification}
+                  disabled={!attendantPIN || !verificationRef.trim()}
+                  data-testid="btn-sco-resolve-payment"
+                >
+                  Record Verified Payment
+                </Button>
+              </div>
             </div>
           )}
 

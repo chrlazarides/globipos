@@ -99,6 +99,46 @@ async fn validate_pin(state: State<'_, AppState>, pin: String) -> Result<Option<
 }
 
 #[tauri::command]
+async fn reconcile_card_payment(
+    state: State<'_, AppState>,
+    pin: String,
+    order: Order,
+    lines: Vec<OrderLine>,
+) -> Result<CashierSession, String> {
+    let session = auth::authorize_pin(&state.db, &pin, "reconcile_card_payment")
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Supervisor or manager PIN required".to_string())?;
+    let payment_ref = order.payment_ref.as_deref().map(str::trim).unwrap_or("");
+    if order.status != "completed"
+        || !order.payment_method.as_deref().unwrap_or("").starts_with("card")
+        || payment_ref.is_empty()
+    {
+        return Err("A completed card order with a terminal reference is required".to_string());
+    }
+    let (terminal_id, location_id) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.terminal_id.clone(), c.location_id.clone())
+    };
+    auth::audit(
+        &state.db,
+        Some(&session.cashier_id),
+        Some(&session.cashier_name),
+        "card_payment_reference_reconciled",
+        Some("order"),
+        Some(&order.id),
+        Some(payment_ref),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    orders::save_order(&state.db, &order, &lines, &terminal_id, &location_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(session)
+}
+
+#[tauri::command]
 async fn upsert_cashier(
     state: State<'_, AppState>,
     id: String, name: String, pin: String, role: String,
@@ -1475,6 +1515,7 @@ pub fn run() {
             get_config,
             register_terminal,
             validate_pin,
+            reconcile_card_payment,
             upsert_cashier,
             get_products,
             get_product_by_barcode,

@@ -3351,6 +3351,13 @@ export class DatabaseStorage implements IStorage {
     return { ...order, lines };
   }
   async createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder> {
+    if (
+      data.paymentMethod?.startsWith("card") &&
+      (data.status ?? "completed") === "completed" &&
+      !data.cardTerminalRef?.trim()
+    ) {
+      throw new Error("Completed card orders require a card terminal reference");
+    }
     const [order] = await db.insert(posOrders).values(data).returning();
     if (lines.length) {
       await db.insert(posOrderLines).values(lines.map(l => ({ ...l, orderId: order.id })));
@@ -3358,19 +3365,42 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
   async updatePosOrderStatus(id: string, status: string): Promise<void> {
+    if (status === "completed") {
+      const [order] = await db.select({
+        paymentMethod: posOrders.paymentMethod,
+        cardTerminalRef: posOrders.cardTerminalRef,
+      }).from(posOrders).where(eq(posOrders.id, id));
+      if (order?.paymentMethod.startsWith("card") && !order.cardTerminalRef?.trim()) {
+        throw new Error("Cannot complete a card order without a card terminal reference");
+      }
+    }
     await db.update(posOrders).set({ status }).where(eq(posOrders.id, id));
   }
   async updatePosOrderCardRef(id: string, cardTerminalRef: string): Promise<void> {
+    if (!cardTerminalRef.trim()) {
+      throw new Error("Card terminal reference cannot be empty");
+    }
     await db.update(posOrders).set({ cardTerminalRef }).where(eq(posOrders.id, id));
   }
   async completeCardPosOrder(id: string, cardTerminalRef: string, amountTendered: string): Promise<void> {
-    await db.update(posOrders).set({
+    const normalizedRef = cardTerminalRef.trim();
+    if (!normalizedRef) {
+      throw new Error("Cannot complete a card order without a card terminal reference");
+    }
+    const [completed] = await db.update(posOrders).set({
       status: "completed",
-      cardTerminalRef,
+      cardTerminalRef: normalizedRef,
       amountTendered,
       changeDue: "0",
       receiptPrinted: true,
-    }).where(eq(posOrders.id, id));
+    }).where(and(
+      eq(posOrders.id, id),
+      ilike(posOrders.paymentMethod, "card%"),
+      eq(posOrders.status, "held"),
+    )).returning({ id: posOrders.id });
+    if (!completed) {
+      throw new Error("Card order must exist, use card payment, and be held before completion");
+    }
   }
   async voidPosOrder(id: string): Promise<void> {
     await db.update(posOrders).set({ status: "voided" }).where(eq(posOrders.id, id));

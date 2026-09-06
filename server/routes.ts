@@ -7260,6 +7260,18 @@ export async function registerRoutes(
       const attemptedAt = (order as any).chargeAttemptedAt ? new Date((order as any).chargeAttemptedAt) : null;
       const ageMs = attemptedAt ? Date.now() - attemptedAt.getTime() : null;
       const inProgress = order.status === "held" && !!(order as any).idempotencyKey && ageMs !== null && ageMs < CHARGE_IN_PROGRESS_WINDOW_MS;
+      if (order.status === "completed" && order.paymentMethod.startsWith("card") && !order.cardTerminalRef?.trim()) {
+        console.error(`[card-terminal] Data integrity violation: completed card order ${order.id} has no terminal reference`);
+        return res.status(409).json({
+          success: false,
+          orderId: order.id,
+          status: order.status,
+          cardTerminalRef: null,
+          inProgress: false,
+          ageSeconds: ageMs !== null ? Math.round(ageMs / 1000) : null,
+          message: "Completed card order has no recorded terminal reference. Verify the payment before continuing.",
+        });
+      }
       return res.json({
         success: true,
         orderId: order.id,
@@ -8943,6 +8955,13 @@ export async function registerRoutes(
   app.post("/api/pos/orders", requireAdmin, async (req, res) => {
     try {
       const { lines = [], ...orderData } = req.body;
+      if (
+        orderData.paymentMethod?.startsWith("card") &&
+        (orderData.status ?? "completed") === "completed" &&
+        !orderData.cardTerminalRef?.trim()
+      ) {
+        return res.status(400).json({ message: "Completed card orders require a card terminal reference" });
+      }
       // Validate that the referenced terminal exists and belongs to the stated location
       const terminal = await storage.getPosTerminal(orderData.terminalId);
       if (!terminal) return res.status(400).json({ message: "Terminal not found" });
@@ -9592,10 +9611,17 @@ export async function registerRoutes(
       const results: any[] = [];
       for (const bill of bills) {
         try {
-          const { lines = [], terminalId: _tid, locationId: _lid, ...orderData } = bill;
+          const {
+            lines = [],
+            terminalId: _tid,
+            locationId: _lid,
+            paymentRef,
+            ...orderData
+          } = bill;
           // Enforce server-side context — ignore any payload terminal/location IDs
           const order = await storage.createPosOrder({
             ...orderData,
+            cardTerminalRef: paymentRef ?? orderData.cardTerminalRef,
             terminalId: terminal.id,
             locationId: terminal.locationId,
             syncedAt: new Date(),

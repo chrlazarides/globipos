@@ -58,6 +58,7 @@ interface ChargeStatusResult {
   cardTerminalRef: string | null;
   inProgress: boolean;
   ageSeconds: number | null;
+  message?: string;
 }
 
 interface CardTerminalStatus {
@@ -130,7 +131,7 @@ function CardPaymentDialog({
   onCancel: (voidOrder: boolean) => void;
 }) {
   const { toast } = useToast();
-  const [phase, setPhase] = useState<"idle" | "waiting" | "approved" | "declined" | "already_charged" | "verifying">("idle");
+  const [phase, setPhase] = useState<"idle" | "waiting" | "approved" | "declined" | "already_charged" | "verifying" | "verification_error">("idle");
   const [result, setResult] = useState<CardChargeResult | null>(null);
   // A fresh UUID per charge attempt — prevents duplicate charges if the cashier
   // double-taps "Charge" while the mutation is in flight. Rotated on every retry
@@ -147,8 +148,9 @@ function CardPaymentDialog({
     if (!orderId) return null;
     try {
       const res = await fetch(`/api/pos/card-terminal/charge-status/${orderId}`, { credentials: "include" });
-      if (!res.ok) return null;
-      return await res.json();
+      const data = await res.json() as ChargeStatusResult;
+      if (!res.ok && res.status !== 409) return null;
+      return data;
     } catch {
       return null;
     }
@@ -161,6 +163,11 @@ function CardPaymentDialog({
       if (!status) {
         // Server still unreachable — keep waiting rather than guessing.
         setTimeout(poll, 3000);
+        return;
+      }
+      if (!status.success) {
+        setResult({ success: false, message: status.message || "The completed payment could not be verified. Do not retry the charge." });
+        setPhase("verification_error");
         return;
       }
       if (status.status === "completed") {
@@ -252,7 +259,10 @@ function CardPaymentDialog({
     let cancelled = false;
     checkChargeStatus().then(status => {
       if (cancelled || !status) return;
-      if (status.status === "completed") {
+      if (!status.success) {
+        setResult({ success: false, message: status.message || "The completed payment could not be verified. Do not retry the charge." });
+        setPhase("verification_error");
+      } else if (status.status === "completed") {
         // Mirror the poll() logic below: a completed order is "already paid"
         // regardless of whether a ref was recorded, so this must not be
         // gated on a truthy cardTerminalRef.
@@ -272,7 +282,7 @@ function CardPaymentDialog({
         reset();
         // "approved" and "already_charged" must NOT void the order —
         // the order is either complete or was already complete.
-        onCancel(phase !== "approved" && phase !== "already_charged");
+        onCancel(phase !== "approved" && phase !== "already_charged" && phase !== "verification_error");
       }
     }}>
       <DialogContent className="max-w-sm">
@@ -410,6 +420,32 @@ function CardPaymentDialog({
                 className="w-full"
                 onClick={() => { reset(); onCancel(false); }}
                 data-testid="btn-already-charged-close"
+              >
+                Close — Do Not Retry
+              </Button>
+            </>
+          )}
+
+          {phase === "verification_error" && (
+            <>
+              <div className="rounded-full bg-red-100 dark:bg-red-900/30 p-6">
+                <AlertCircle className="w-10 h-10 text-red-600 dark:text-red-400" />
+              </div>
+              <div className="text-center space-y-2">
+                <p className="font-semibold text-red-700 dark:text-red-400" data-testid="text-card-verification-error-title">
+                  Payment reference missing
+                </p>
+                <p className="text-sm text-muted-foreground" data-testid="text-card-verification-error-body">
+                  {result?.message}
+                </p>
+                <p className="text-sm font-medium">
+                  Do not retry. Verify the payment with the customer and ask a manager to investigate.
+                </p>
+              </div>
+              <Button
+                className="w-full"
+                onClick={() => { reset(); onCancel(false); }}
+                data-testid="btn-card-verification-error-close"
               >
                 Close — Do Not Retry
               </Button>

@@ -115,6 +115,24 @@ test.describe.serial("Card Terminal — Duplicate Charge Prevention", () => {
     ctx.terminalId = termData.id;
     expect(ctx.terminalId, "terminal has id").toBeTruthy();
 
+    // A completed card order without a provider reference must be rejected at
+    // creation, preventing the broken state from entering the database.
+    const invalidCompletedRes = await apiRaw(request, "POST", "/api/pos/orders", {
+      orderNumber: `CTEST-MISSING-REF-${TS}`,
+      terminalId: ctx.terminalId,
+      locationId: ctx.locationId,
+      status: "completed",
+      paymentMethod: "card_jcc",
+      subtotal: "10.00",
+      discountAmount: "0.00",
+      vatAmount: "1.90",
+      total: "11.90",
+      amountTendered: "11.90",
+      changeDue: "0.00",
+    });
+    expect(invalidCompletedRes!.status(), "completed card order without a reference is rejected").toBe(400);
+    expect((await invalidCompletedRes!.json()).message).toMatch(/terminal reference/i);
+
     // Create an order with status "completed" to simulate an already-paid order
     const completedRes = await apiRaw(request, "POST", "/api/pos/orders", {
       orderNumber: `CTEST-COMPLETED-${TS}`,
