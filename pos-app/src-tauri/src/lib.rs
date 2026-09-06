@@ -1359,9 +1359,47 @@ async fn get_click_collect_orders(state: State<'_, AppState>) -> Result<Vec<Valu
     Ok(rows.into_iter().map(row_to_json).collect())
 }
 
-// ── Phase 3: Hardware commands ────────────────────────────────────────────────
-
-#[tauri::command]
+async fn find_click_collect_order(
+    state: State<'_, AppState>,
+    order_number: String,
+) -> Result<Value, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let encoded = order_number.trim().trim_start_matches('#');
+    let url = format!(
+        "{}/api/orders/{}",
+        server_url.trim_end_matches('/'),
+        encoded
+    );
+    let resp = client
+        .get(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .send()
+        .await
+        .map_err(|e| format!("Unable to reach the server: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let message = resp
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("message")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| format!("Server error {}", status));
+        return Err(message);
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
 async fn get_hardware_config(state: State<'_, AppState>) -> Result<HardwareConfig, String> {
     Ok(hardware::load_hardware_config(&state.db).await)
 }
@@ -1603,6 +1641,8 @@ pub fn run() {
             get_payment_config,
             save_payment_config,
             get_click_collect_orders,
+            find_click_collect_order,
+            mark_click_collect_order_collected,
             get_hardware_config,
             save_hardware_config,
             get_barcode_config,
@@ -1621,4 +1661,46 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+async fn mark_click_collect_order_collected(
+    state: State<'_, AppState>,
+    order_number: String,
+) -> Result<(), String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let encoded = order_number.trim().trim_start_matches('#');
+    let url = format!(
+        "{}/api/orders/{}/collect",
+        server_url.trim_end_matches('/'),
+        encoded
+    );
+    let resp = client
+        .post(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .send()
+        .await
+        .map_err(|e| format!("Unable to mark the order collected: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let message = resp
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("message")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| format!("Server error {}", status));
+        return Err(message);
+    }
+    Ok(())
 }

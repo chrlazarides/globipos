@@ -579,6 +579,9 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const prevCouponKeyRef = useRef<string>("");
   type CCOrder = { id: string; order_number?: string; payload: string; created_at?: string };
   const [ccOrders, setCcOrders] = useState<CCOrder[]>([]);
+  const [ccSearch, setCcSearch] = useState("");
+  const [ccSearchError, setCcSearchError] = useState("");
+  const [ccSearching, setCcSearching] = useState(false);
 
   // Derived — read from engine.lines so OrderTicket and PaymentDialog share one truth
   const promoLines = engine.lines.filter((l) => l.id.startsWith("multibuy-") || l.id.startsWith("coupon-"));
@@ -590,6 +593,31 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     affected_line_ids: [],
   }));
   const totalSavings = promoLines.reduce((s, l) => s + Math.abs(l.line_total), 0);
+
+  function loadClickCollectLines(lines: any[]) {
+    engine.clearOrder();
+    for (const l of lines) {
+      const p: Product = {
+        id: l.product_id ?? l.id ?? `cc-${Date.now()}`,
+        server_id: l.product_id ?? null,
+        name: l.description ?? l.name ?? "Item",
+        sku: l.sku ?? "",
+        barcode: null,
+        price1: l.unit_price ?? l.price1 ?? 0,
+        price2: l.unit_price ?? 0,
+        price3: l.unit_price ?? 0,
+        price4: l.unit_price ?? 0,
+        price5: l.unit_price ?? 0,
+        category_id: null,
+        vat_rate: l.vat_rate ?? 0,
+        active: true,
+        stock_quantity: 999,
+        unit: l.unit ?? "pcs",
+        has_variants: false,
+      } as unknown as Product;
+      engine.addProduct(p, l.qty ?? 1);
+    }
+  }
 
   // Responsive column count — recalculates live on window resize.
   // Depends on layoutConfig state so must be declared after it.
@@ -1566,6 +1594,58 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
               <h2 className="text-white font-semibold">Click & Collect Queue</h2>
               <button onClick={() => setDialog(null)} className="text-gray-400 hover:text-white">✕</button>
             </div>
+            <form
+              className="flex gap-2 mb-4"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const orderNumber = ccSearch.trim().replace(/^#/, "");
+                if (!orderNumber || ccSearching) return;
+                setCcSearching(true);
+                setCcSearchError("");
+                try {
+                  const found = await invoke<{ order_number: string; status: string; lines: any[] }>(
+                    "find_click_collect_order",
+                    { orderNumber }
+                  );
+                  if (found.status === "completed") {
+                    setCcSearchError("This order has already been collected.");
+                    return;
+                  }
+                  if (!found.lines?.length) {
+                    setCcSearchError("This order has no items to load.");
+                    return;
+                  }
+                  loadClickCollectLines(found.lines);
+                  await invoke("mark_click_collect_order_collected", {
+                    orderNumber: found.order_number || orderNumber,
+                  });
+                  setDialog(null);
+                  setCcSearch("");
+                } catch (error) {
+                  setCcSearchError(String(error));
+                } finally {
+                  setCcSearching(false);
+                }
+              }}
+            >
+              <input
+                value={ccSearch}
+                onChange={(e) => { setCcSearch(e.target.value); setCcSearchError(""); }}
+                placeholder="Search by order number"
+                aria-label="Search by order number"
+                className="flex-1 bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+                data-testid="input-click-collect-order-number"
+              />
+              <button
+                type="submit"
+                disabled={!ccSearch.trim() || ccSearching}
+                className="px-4 py-2 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold disabled:opacity-40"
+                data-testid="button-click-collect-search"
+              >
+                {ccSearching ? "Searching…" : "Search"}
+              </button>
+            </form>
+            {ccSearchError && <p className="text-red-400 text-sm mb-4" role="alert">{ccSearchError}</p>}
             {ccOrders.length === 0 ? (
               <div className="text-center text-gray-500 py-8">No pending pickup orders</div>
             ) : (
@@ -1594,28 +1674,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
                         <button
                           onClick={async () => {
                             // Load the click-collect order lines into the cart
-                            engine.clearOrder();
-                            for (const l of lines) {
-                              const p: Product = {
-                                id: l.product_id ?? l.id ?? `cc-${Date.now()}`,
-                                server_id: l.product_id ?? null,
-                                name: l.description ?? l.name ?? "Item",
-                                sku: l.sku ?? "",
-                                barcode: null,
-                                price1: l.unit_price ?? l.price1 ?? 0,
-                                price2: l.unit_price ?? 0,
-                                price3: l.unit_price ?? 0,
-                                price4: l.unit_price ?? 0,
-                                price5: l.unit_price ?? 0,
-                                category_id: null,
-                                vat_rate: l.vat_rate ?? 0,
-                                active: true,
-                                stock_quantity: 999,
-                                unit: l.unit ?? "pcs",
-                                has_variants: false,
-                              } as unknown as Product;
-                              engine.addProduct(p, l.qty ?? 1);
-                            }
+                            loadClickCollectLines(lines);
                             await invoke("mark_inbox_processed", { id: order.id }).catch(() => {});
                             setDialog(null);
                           }}

@@ -9341,6 +9341,53 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
+  // Direct Click & Collect fallback for orders whose inbox notification has expired.
+  // Customer receipts display the first 8 characters of the portal order UUID.
+  async function findPortalOrderByNumber(orderNumber: string) {
+    const normalized = orderNumber.trim().replace(/^#/, "").toLowerCase();
+    if (!normalized) return [];
+    return db.select().from(portalOrders)
+      .where(sql`lower(${portalOrders.id}) LIKE ${`${normalized}%`}`)
+      .limit(2);
+  }
+
+  app.get("/api/orders/:orderNumber", requireTerminal, async (req, res) => {
+    try {
+      const matches = await findPortalOrderByNumber(req.params.orderNumber as string);
+      if (matches.length === 0) return res.status(404).json({ message: "Order not found" });
+      if (matches.length > 1) return res.status(409).json({ message: "Order number is ambiguous. Enter more characters." });
+
+      const order = matches[0];
+      const [lineItems, customer] = await Promise.all([
+        db.select().from(portalOrderItems).where(eq(portalOrderItems.orderId, order.id)),
+        storage.getCustomer(order.customerId),
+      ]);
+      res.json({
+        id: order.id,
+        order_number: order.id.slice(0, 8).toUpperCase(),
+        customer_name: customer?.name ?? "Walk-in",
+        status: order.status,
+        lines: lineItems.map(line => ({
+          product_id: line.itemId,
+          description: line.itemName,
+          qty: line.quantity,
+          unit_price: Number(line.unitPrice),
+          line_total: Number(line.total),
+        })),
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/orders/:orderNumber/collect", requireTerminal, async (req, res) => {
+    try {
+      const matches = await findPortalOrderByNumber(req.params.orderNumber as string);
+      if (matches.length === 0) return res.status(404).json({ message: "Order not found" });
+      if (matches.length > 1) return res.status(409).json({ message: "Order number is ambiguous. Enter more characters." });
+      const updated = await storage.updatePortalOrderStatus(matches[0].id, "completed");
+      res.json({ ok: true, order: updated });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // Cashier CRUD (admin-only)
   app.get("/api/pos/cashiers", requireAdmin, async (req, res) => {
     try {
