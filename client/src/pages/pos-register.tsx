@@ -692,10 +692,10 @@ export default function PosRegister() {
                 className="text-left rounded-lg border bg-card hover:bg-accent hover:border-primary transition-colors p-3 space-y-1 cursor-pointer"
                 data-testid={`btn-item-${item.id}`}
               >
-                <p className="text-sm font-medium leading-tight line-clamp-2 flex items-center gap-1">
+                <div className="text-sm font-medium leading-tight line-clamp-2 flex items-center gap-1">
                   {item.name}
                   {item.hasVariants && <Badge variant="outline" className="text-[10px] px-1 py-0">variants</Badge>}
-                </p>
+                </div>
                 <p className="text-xs text-muted-foreground">{item.sku}</p>
                 <div className="flex items-center justify-between gap-1">
                   <p className="text-sm font-bold text-primary">€{parseFloat(item.price1 || "0").toFixed(2)}</p>

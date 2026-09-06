@@ -598,6 +598,9 @@ function QuietHoursSettings() {
     quietHoursStart,
     quietHoursEnd,
     setQuietHours,
+    quietHoursLoaded,
+    quietHoursSaving,
+    quietHoursSyncError,
     isQuietNow,
     quietHoursOverrideActive,
     overrideQuietHours,
@@ -632,6 +635,7 @@ function QuietHoursSettings() {
               id="quiet-hours-toggle"
               checked={quietHoursEnabled}
               onCheckedChange={setQuietHoursEnabled}
+              disabled={!quietHoursLoaded || quietHoursSaving}
               data-testid="switch-quiet-hours"
             />
           </div>
@@ -639,7 +643,7 @@ function QuietHoursSettings() {
             The chime will stay silent automatically during this time window, even if it isn't manually muted.
           </p>
           <p className="text-xs text-muted-foreground italic" data-testid="text-quiet-hours-device-scope">
-            This only applies to this computer/browser — it won't change settings on other devices or for other staff.
+            These scheduled hours follow your staff account on every device. Manual mute and tonight's override only affect this device.
           </p>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
@@ -647,6 +651,7 @@ function QuietHoursSettings() {
               <Select
                 value={String(quietHoursStart)}
                 onValueChange={(v) => setQuietHours(parseInt(v, 10), quietHoursEnd)}
+                disabled={!quietHoursLoaded || quietHoursSaving}
               >
                 <SelectTrigger data-testid="select-quiet-start">
                   <SelectValue />
@@ -663,6 +668,7 @@ function QuietHoursSettings() {
               <Select
                 value={String(quietHoursEnd)}
                 onValueChange={(v) => setQuietHours(quietHoursStart, parseInt(v, 10))}
+                disabled={!quietHoursLoaded || quietHoursSaving}
               >
                 <SelectTrigger data-testid="select-quiet-end">
                   <SelectValue />
@@ -682,6 +688,17 @@ function QuietHoursSettings() {
                 : quietHoursOverrideActive
                   ? "Override active until quiet hours end — chime is on."
                   : "Currently outside quiet hours — chime is active."}
+            </p>
+          )}
+          {!quietHoursLoaded && !quietHoursSyncError && (
+            <p className="text-xs text-muted-foreground">Loading your quiet-hours settings…</p>
+          )}
+          {quietHoursSaving && (
+            <p className="text-xs text-muted-foreground">Saving quiet hours…</p>
+          )}
+          {quietHoursSyncError && (
+            <p className="text-xs text-destructive" role="alert" data-testid="text-quiet-hours-sync-error">
+              {quietHoursSyncError}
             </p>
           )}
           {quietHoursEnabled && isQuietNow && (

@@ -616,6 +616,63 @@ export async function registerRoutes(
     res.json({ ...dbUser, permissions: JSON.parse(dbUser.permissions || "[]") });
   });
 
+  const whatsappQuietHoursSchema = z.object({
+    enabled: z.boolean(),
+    startHour: z.number().int().min(0).max(23),
+    endHour: z.number().int().min(0).max(23),
+    migrateLegacy: z.boolean().optional(),
+  }).strict();
+
+  app.get("/api/users/me/whatsapp-quiet-hours", requireStaff, async (req: Request, res: Response) => {
+    try {
+      const [preference] = await db.select({
+        enabled: users.whatsappQuietHoursEnabled,
+        startHour: users.whatsappQuietHoursStart,
+        endHour: users.whatsappQuietHoursEnd,
+        migrated: users.whatsappQuietHoursMigrated,
+      }).from(users).where(eq(users.id, req.user!.id));
+      if (!preference) return res.status(404).json({ message: "User not found" });
+      res.json(preference);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/users/me/whatsapp-quiet-hours", requireStaff, async (req: Request, res: Response) => {
+    try {
+      const preference = whatsappQuietHoursSchema.parse(req.body);
+      const updateCondition = preference.migrateLegacy
+        ? and(eq(users.id, req.user!.id), eq(users.whatsappQuietHoursMigrated, false))
+        : eq(users.id, req.user!.id);
+      const [updated] = await db.update(users).set({
+        whatsappQuietHoursEnabled: preference.enabled,
+        whatsappQuietHoursStart: preference.startHour,
+        whatsappQuietHoursEnd: preference.endHour,
+        whatsappQuietHoursMigrated: true,
+      }).where(updateCondition).returning({
+        enabled: users.whatsappQuietHoursEnabled,
+        startHour: users.whatsappQuietHoursStart,
+        endHour: users.whatsappQuietHoursEnd,
+        migrated: users.whatsappQuietHoursMigrated,
+      });
+      if (updated) return res.json(updated);
+
+      const [current] = await db.select({
+        enabled: users.whatsappQuietHoursEnabled,
+        startHour: users.whatsappQuietHoursStart,
+        endHour: users.whatsappQuietHoursEnd,
+        migrated: users.whatsappQuietHoursMigrated,
+      }).from(users).where(eq(users.id, req.user!.id));
+      if (!current) return res.status(404).json({ message: "User not found" });
+      res.json(current);
+    } catch (e: any) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ message: "Quiet hours must include enabled and start/end hours from 0 to 23" });
+      }
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   app.post("/api/auth/logout", async (req: Request, res: Response) => {
     if (req.user) {
       const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.ip || null;

@@ -101,6 +101,20 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // This migration must run before seeding because Drizzle selects the full users
+  // row shape while ensuring the default administrator exists.
+  try {
+    await db.execute(sql`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS whatsapp_quiet_hours_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS whatsapp_quiet_hours_start INTEGER NOT NULL DEFAULT 22,
+        ADD COLUMN IF NOT EXISTS whatsapp_quiet_hours_end INTEGER NOT NULL DEFAULT 8,
+        ADD COLUMN IF NOT EXISTS whatsapp_quiet_hours_migrated BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+  } catch (e) {
+    console.error("[migration] users WhatsApp quiet-hours columns error:", e);
+  }
+
   const { seedDatabase, ensureDefaultSettings } = await import("./seed");
   await seedDatabase().catch(e => console.error("Seed error:", e));
   await ensureDefaultSettings().catch(e => console.error("Settings init error:", e));

@@ -1,37 +1,18 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/App";
 
-// Chime mute + quiet hours are intentionally stored in localStorage (per-device/per-browser),
-// not synced server-side per user account. This is a deliberate design choice: the chime is a
-// physical sound played by whatever computer is open, so muting/quiet-hours should follow the
-// device (e.g. the shared front-desk PC) rather than the logged-in staff member. A staff member
-// muting the shared PC at night should NOT silence the chime on another staff member's laptop,
-// and vice versa. If product requirements change to want this to follow the person across
-// devices instead, move these settings to a server-side per-user preference.
+// Manual chime mute remains device-local and the temporary override remains session-local.
+// The scheduled quiet-hours preference is loaded from the signed-in staff account so it follows
+// that person across devices.
 const CHIME_MUTED_KEY = "whatsapp_alert_muted";
 const SEEN_IDS_KEY = "whatsapp_alert_seen_ids";
-const QUIET_HOURS_ENABLED_KEY = "whatsapp_alert_quiet_hours_enabled";
-const QUIET_HOURS_START_KEY = "whatsapp_alert_quiet_hours_start";
-const QUIET_HOURS_END_KEY = "whatsapp_alert_quiet_hours_end";
+const LEGACY_QUIET_HOURS_ENABLED_KEY = "whatsapp_alert_quiet_hours_enabled";
+const LEGACY_QUIET_HOURS_START_KEY = "whatsapp_alert_quiet_hours_start";
+const LEGACY_QUIET_HOURS_END_KEY = "whatsapp_alert_quiet_hours_end";
 const QUIET_HOURS_OVERRIDE_KEY = "whatsapp_alert_quiet_hours_override";
 
 const DEFAULT_QUIET_START = 22;
 const DEFAULT_QUIET_END = 8;
-
-function loadQuietHoursEnabled(): boolean {
-  try { return localStorage.getItem(QUIET_HOURS_ENABLED_KEY) === "true"; } catch { return false; }
-}
-
-function loadQuietHour(key: string, fallback: number): number {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw !== null) {
-      const parsed = parseInt(raw, 10);
-      if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 23) return parsed;
-    }
-  } catch {}
-  return fallback;
-}
 
 function isWithinQuietHours(startHour: number, endHour: number, now: Date = new Date()): boolean {
   const hour = now.getHours();
@@ -40,6 +21,32 @@ function isWithinQuietHours(startHour: number, endHour: number, now: Date = new 
     return hour >= startHour && hour < endHour;
   }
   return hour >= startHour || hour < endHour;
+}
+
+function loadLegacyQuietHours(): { enabled: boolean; startHour: number; endHour: number } | null {
+  try {
+    const enabledRaw = localStorage.getItem(LEGACY_QUIET_HOURS_ENABLED_KEY);
+    const startRaw = localStorage.getItem(LEGACY_QUIET_HOURS_START_KEY);
+    const endRaw = localStorage.getItem(LEGACY_QUIET_HOURS_END_KEY);
+    if (enabledRaw === null && startRaw === null && endRaw === null) return null;
+    const parsedStart = Number.parseInt(startRaw ?? "", 10);
+    const parsedEnd = Number.parseInt(endRaw ?? "", 10);
+    return {
+      enabled: enabledRaw === "true",
+      startHour: Number.isInteger(parsedStart) && parsedStart >= 0 && parsedStart <= 23 ? parsedStart : DEFAULT_QUIET_START,
+      endHour: Number.isInteger(parsedEnd) && parsedEnd >= 0 && parsedEnd <= 23 ? parsedEnd : DEFAULT_QUIET_END,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearLegacyQuietHours() {
+  try {
+    localStorage.removeItem(LEGACY_QUIET_HOURS_ENABLED_KEY);
+    localStorage.removeItem(LEGACY_QUIET_HOURS_START_KEY);
+    localStorage.removeItem(LEGACY_QUIET_HOURS_END_KEY);
+  } catch {}
 }
 
 function loadSeenIds(): Set<string> | null {
@@ -69,6 +76,9 @@ interface WhatsAppAlertContextValue {
   quietHoursStart: number;
   quietHoursEnd: number;
   setQuietHours: (startHour: number, endHour: number) => void;
+  quietHoursLoaded: boolean;
+  quietHoursSaving: boolean;
+  quietHoursSyncError: string | null;
   isQuietNow: boolean;
   quietHoursOverrideActive: boolean;
   overrideQuietHours: () => void;
@@ -85,6 +95,9 @@ const WhatsAppAlertContext = createContext<WhatsAppAlertContextValue>({
   quietHoursStart: DEFAULT_QUIET_START,
   quietHoursEnd: DEFAULT_QUIET_END,
   setQuietHours: () => {},
+  quietHoursLoaded: false,
+  quietHoursSaving: false,
+  quietHoursSyncError: null,
   isQuietNow: false,
   quietHoursOverrideActive: false,
   overrideQuietHours: () => {},
@@ -129,9 +142,12 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
   const [chimeMuted, setChimeMuted] = useState(() => {
     try { return localStorage.getItem(CHIME_MUTED_KEY) === "true"; } catch { return false; }
   });
-  const [quietHoursEnabled, setQuietHoursEnabledState] = useState(loadQuietHoursEnabled);
-  const [quietHoursStart, setQuietHoursStart] = useState(() => loadQuietHour(QUIET_HOURS_START_KEY, DEFAULT_QUIET_START));
-  const [quietHoursEnd, setQuietHoursEnd] = useState(() => loadQuietHour(QUIET_HOURS_END_KEY, DEFAULT_QUIET_END));
+  const [quietHoursEnabled, setQuietHoursEnabledState] = useState(false);
+  const [quietHoursStart, setQuietHoursStart] = useState(DEFAULT_QUIET_START);
+  const [quietHoursEnd, setQuietHoursEnd] = useState(DEFAULT_QUIET_END);
+  const [quietHoursLoaded, setQuietHoursLoaded] = useState(false);
+  const [quietHoursSaving, setQuietHoursSaving] = useState(false);
+  const [quietHoursSyncError, setQuietHoursSyncError] = useState<string | null>(null);
   const [quietHoursOverrideActive, setQuietHoursOverrideActive] = useState(() => {
     try { return sessionStorage.getItem(QUIET_HOURS_OVERRIDE_KEY) === "true"; } catch { return false; }
   });
@@ -142,6 +158,14 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
   const seenIdsRef = useRef<Set<string> | null>(loadSeenIds());
   const chimeMutedRef = useRef(chimeMuted);
   const quietHoursRef = useRef({ enabled: quietHoursEnabled, start: quietHoursStart, end: quietHoursEnd, overrideActive: quietHoursOverrideActive });
+  const quietHoursLoadedRef = useRef(false);
+  const quietHoursSavingRef = useRef(false);
+  const quietHoursEditVersionRef = useRef(0);
+  const quietHoursSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const quietHoursAccountGenerationRef = useRef(0);
+  const quietHoursFetchGenerationRef = useRef(0);
+  const currentUserIdRef = useRef(user?.id);
+  currentUserIdRef.current = user?.id;
 
   const persistOverride = useCallback((active: boolean) => {
     setQuietHoursOverrideActive(active);
@@ -154,6 +178,81 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     chimeMutedRef.current = chimeMuted;
   }, [chimeMuted]);
+
+  const loadQuietHours = useCallback(async () => {
+    if (!user || quietHoursSavingRef.current) return;
+    const accountGeneration = quietHoursAccountGenerationRef.current;
+    const fetchGeneration = ++quietHoursFetchGenerationRef.current;
+    const editVersion = quietHoursEditVersionRef.current;
+    try {
+      const res = await fetch("/api/users/me/whatsapp-quiet-hours", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load quiet hours");
+      let preference = await res.json() as { enabled: boolean; startHour: number; endHour: number; migrated: boolean };
+      if (
+        accountGeneration !== quietHoursAccountGenerationRef.current ||
+        fetchGeneration !== quietHoursFetchGenerationRef.current ||
+        quietHoursSavingRef.current ||
+        editVersion !== quietHoursEditVersionRef.current
+      ) return;
+
+      if (!preference.migrated) {
+        const legacy = loadLegacyQuietHours();
+        if (legacy) {
+          const migrationRes = await fetch("/api/users/me/whatsapp-quiet-hours", {
+            method: "PATCH",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...legacy, migrateLegacy: true }),
+          });
+          if (!migrationRes.ok) throw new Error("Failed to migrate quiet hours");
+          preference = await migrationRes.json();
+          clearLegacyQuietHours();
+          if (
+            accountGeneration !== quietHoursAccountGenerationRef.current ||
+            fetchGeneration !== quietHoursFetchGenerationRef.current
+          ) return;
+        }
+      }
+
+      setQuietHoursEnabledState(preference.enabled);
+      setQuietHoursStart(preference.startHour);
+      setQuietHoursEnd(preference.endHour);
+      quietHoursLoadedRef.current = true;
+      setQuietHoursLoaded(true);
+      setQuietHoursSyncError(null);
+    } catch {
+      setQuietHoursSyncError("Could not sync quiet hours. Check your connection and try again.");
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    quietHoursAccountGenerationRef.current++;
+    quietHoursFetchGenerationRef.current++;
+    quietHoursEditVersionRef.current++;
+    quietHoursSaveQueueRef.current = Promise.resolve();
+    quietHoursSavingRef.current = false;
+    setQuietHoursSaving(false);
+    quietHoursLoadedRef.current = false;
+    setQuietHoursLoaded(false);
+    setQuietHoursSyncError(null);
+    if (!user) return;
+
+    loadQuietHours();
+    const interval = window.setInterval(loadQuietHours, 30000);
+    const onFocus = () => loadQuietHours();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") loadQuietHours();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      quietHoursAccountGenerationRef.current++;
+      quietHoursFetchGenerationRef.current++;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [user?.id, loadQuietHours]);
 
   useEffect(() => {
     quietHoursRef.current = { enabled: quietHoursEnabled, start: quietHoursStart, end: quietHoursEnd, overrideActive: quietHoursOverrideActive };
@@ -179,7 +278,7 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
   }, [persistOverride]);
 
   const fetchPendingWhatsApp = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!isAdmin || !quietHoursLoadedRef.current) return;
     try {
       const res = await fetch("/api/admin/portal-orders?status=pending&source=whatsapp", {
         credentials: "include",
@@ -235,19 +334,58 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
     });
   }, []);
 
+  const saveQuietHours = useCallback((enabled: boolean, startHour: number, endHour: number) => {
+    const accountGeneration = quietHoursAccountGenerationRef.current;
+    const accountUserId = user?.id;
+    if (!accountUserId) return;
+    const editVersion = ++quietHoursEditVersionRef.current;
+    quietHoursSavingRef.current = true;
+    setQuietHoursSaving(true);
+    setQuietHoursSyncError(null);
+
+    quietHoursSaveQueueRef.current = quietHoursSaveQueueRef.current
+      .catch(() => {})
+      .then(async () => {
+        if (
+          accountGeneration !== quietHoursAccountGenerationRef.current ||
+          accountUserId !== currentUserIdRef.current
+        ) return;
+        const res = await fetch("/api/users/me/whatsapp-quiet-hours", {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled, startHour, endHour }),
+        });
+        if (!res.ok) throw new Error("Failed to save quiet hours");
+        const saved = await res.json() as { enabled: boolean; startHour: number; endHour: number };
+        if (editVersion === quietHoursEditVersionRef.current) {
+          setQuietHoursEnabledState(saved.enabled);
+          setQuietHoursStart(saved.startHour);
+          setQuietHoursEnd(saved.endHour);
+          setQuietHoursSyncError(null);
+        }
+      })
+      .catch(() => {
+        setQuietHoursSyncError("Quiet hours were not saved. Check your connection and try again.");
+      })
+      .finally(() => {
+        if (editVersion === quietHoursEditVersionRef.current) {
+          quietHoursSavingRef.current = false;
+          setQuietHoursSaving(false);
+        }
+      });
+  }, [user?.id]);
+
   const setQuietHoursEnabled = useCallback((enabled: boolean) => {
     setQuietHoursEnabledState(enabled);
-    try { localStorage.setItem(QUIET_HOURS_ENABLED_KEY, String(enabled)); } catch {}
-  }, []);
+    saveQuietHours(enabled, quietHoursStart, quietHoursEnd);
+  }, [quietHoursStart, quietHoursEnd, saveQuietHours]);
 
   const setQuietHours = useCallback((startHour: number, endHour: number) => {
     setQuietHoursStart(startHour);
     setQuietHoursEnd(endHour);
-    try {
-      localStorage.setItem(QUIET_HOURS_START_KEY, String(startHour));
-      localStorage.setItem(QUIET_HOURS_END_KEY, String(endHour));
-    } catch {}
-  }, []);
+    saveQuietHours(quietHoursEnabled, startHour, endHour);
+  }, [quietHoursEnabled, saveQuietHours]);
 
   const overrideQuietHours = useCallback(() => {
     persistOverride(true);
@@ -269,6 +407,9 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
         quietHoursStart,
         quietHoursEnd,
         setQuietHours,
+        quietHoursLoaded,
+        quietHoursSaving,
+        quietHoursSyncError,
         isQuietNow,
         quietHoursOverrideActive,
         overrideQuietHours,

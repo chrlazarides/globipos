@@ -16,6 +16,10 @@ export const users = pgTable("users", {
   totpSecret: text("totp_secret"),
   totpEnabled: boolean("totp_enabled").notNull().default(false),
   permissions: text("permissions").default("[]"),
+  whatsappQuietHoursEnabled: boolean("whatsapp_quiet_hours_enabled").notNull().default(false),
+  whatsappQuietHoursStart: integer("whatsapp_quiet_hours_start").notNull().default(22),
+  whatsappQuietHoursEnd: integer("whatsapp_quiet_hours_end").notNull().default(8),
+  whatsappQuietHoursMigrated: boolean("whatsapp_quiet_hours_migrated").notNull().default(false),
 });
 
 export const activityLogs = pgTable("activity_logs", {

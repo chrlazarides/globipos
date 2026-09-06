@@ -1,23 +1,17 @@
 ---
-name: Chime/quiet-hours device scope decision
-description: Whether the WhatsApp order-alert chime mute + quiet hours should be per-device or per-user
+name: WhatsApp chime preference scope
+description: Which WhatsApp order-alert preferences follow a staff account versus the current device
 ---
 
-The WhatsApp new-order chime's mute toggle and quiet-hours window (enabled/start/end) are stored in
-`localStorage`, scoped per browser/device, not synced to a user account server-side. The session-only
-"override quiet hours for tonight" uses `sessionStorage` similarly.
+The scheduled quiet-hours preference (enabled/start/end) follows the signed-in staff account across
+devices. The manual chime mute remains local to the browser/device, and the temporary "override quiet
+hours for tonight" remains session-local.
 
-This was a deliberate choice, not an oversight: the chime is a physical sound played by whichever
-computer/device currently has the admin panel open. Scoping it per-device means muting a shared
-front-desk PC at night doesn't silence the chime on another staff member's personal laptop, and vice
-versa — which matches how a physical alert bell would behave in a shop.
+**Why:** The product owner explicitly confirmed that recurring quiet-hours schedules should follow the
+staff member, so a manager using both a shop computer and phone gets the same schedule. Manual mute and
+the temporary override are transient controls for the device currently making sound and must not affect
+other devices.
 
-**Why:** When asked directly whether this should instead follow the staff member across devices
-(per-user, server-side), the product owner had no preference / declined to decide. Per-device was kept
-as the lower-risk default since it was already the existing, working behavior and requires no new
-server-side state or account-linked settings.
-
-**How to apply:** If a future task wants quiet hours to follow the person instead of the device, move
-`whatsapp_alert_quiet_hours_enabled` / `_start` / `_end` (and optionally the mute key) from localStorage
-into a per-user preference (new table/column keyed by user id) with API read/write endpoints. Keep the
-session-only override as device/session-local regardless, since it's meant to be transient.
+**How to apply:** Keep recurring schedule reads/writes account-backed and refresh them when another
+device may have changed them. Do not move the manual mute or temporary override into account settings
+unless stakeholders make a separate explicit decision.
