@@ -9440,7 +9440,26 @@ export async function registerRoutes(
       const matches = await findPortalOrderByNumber(req.params.orderNumber as string);
       if (matches.length === 0) return res.status(404).json({ message: "Order not found" });
       if (matches.length > 1) return res.status(409).json({ message: "Order number is ambiguous. Enter more characters." });
-      const updated = await storage.updatePortalOrderStatus(matches[0].id, "completed");
+
+      const [updated] = await db.update(portalOrders)
+        .set({ status: "completed" })
+        .where(and(
+          eq(portalOrders.id, matches[0].id),
+          inArray(portalOrders.status, ["pending", "confirmed"]),
+        ))
+        .returning();
+
+      if (!updated) {
+        const [current] = await db.select({ status: portalOrders.status })
+          .from(portalOrders)
+          .where(eq(portalOrders.id, matches[0].id))
+          .limit(1);
+        if (current?.status === "completed") {
+          return res.status(409).json({ message: "This order has already been collected." });
+        }
+        return res.status(409).json({ message: "This order is not eligible for collection." });
+      }
+
       res.json({ ok: true, order: updated });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

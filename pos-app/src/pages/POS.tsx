@@ -1615,10 +1615,10 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
                     setCcSearchError("This order has no items to load.");
                     return;
                   }
-                  loadClickCollectLines(found.lines);
                   await invoke("mark_click_collect_order_collected", {
                     orderNumber: found.order_number || orderNumber,
                   });
+                  loadClickCollectLines(found.lines);
                   setDialog(null);
                   setCcSearch("");
                 } catch (error) {
@@ -1673,10 +1673,18 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
                       <div className="flex gap-2 pt-1">
                         <button
                           onClick={async () => {
-                            // Load the click-collect order lines into the cart
-                            loadClickCollectLines(lines);
-                            await invoke("mark_inbox_processed", { id: order.id }).catch(() => {});
-                            setDialog(null);
+                            setCcSearchError("");
+                            try {
+                              const orderNumber = parsed.order_number ?? order.order_number;
+                              if (!orderNumber) throw new Error("This pickup has no order number.");
+                              await invoke("mark_click_collect_order_collected", { orderNumber });
+                              loadClickCollectLines(lines);
+                              await invoke("mark_inbox_processed", { id: order.id }).catch(() => {});
+                              setDialog(null);
+                            } catch (error) {
+                              setCcSearchError(String(error));
+                              setCcOrders((prev) => prev.filter((o) => o.id !== order.id));
+                            }
                           }}
                           className="flex-1 py-2 bg-green-700 hover:bg-green-600 text-white rounded-lg text-sm font-semibold"
                           data-testid={`cc-accept-${order.id}`}
