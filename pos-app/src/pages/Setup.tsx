@@ -2,6 +2,7 @@ import { useState } from "react";
 import { WifiIcon, ServerIcon, KeyIcon, CheckCircleIcon, AlertCircleIcon, Loader2Icon } from "lucide-react";
 import type { TerminalConfig } from "../types";
 import { registerTerminal } from "../lib/db";
+import { buildInfo } from "../lib/build-info";
 
 interface SetupProps {
   onComplete: (config: TerminalConfig) => void;
@@ -121,7 +122,7 @@ export function Setup({ onComplete }: SetupProps) {
         </div>
 
         <p className="text-center text-gray-600 text-xs mt-6">
-          GlobiPOS Terminal v1.0 — Offline-first POS
+          GlobiPOS Terminal v{buildInfo.version} — Offline-first POS
         </p>
       </div>
     </div>

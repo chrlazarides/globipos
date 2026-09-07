@@ -7,6 +7,10 @@ channel = "stable-24_05"
 packages = ["wget"]
 
 [[ports]]
+localPort = 3000
+externalPort = 4200
+
+[[ports]]
 localPort = 5000
 externalPort = 80
 
@@ -60,6 +64,10 @@ args = "Customer App"
 task = "workflow.run"
 args = "PDA App"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "POS Development Preview"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -89,6 +97,18 @@ author = "agent"
 task = "shell.exec"
 args = "cd pda-app && npx vite --port 6000"
 waitForPort = 6000
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "POS Development Preview"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd pos-app && npx vite --host 0.0.0.0 --port 3000"
+waitForPort = 3000
 
 [workflows.workflow.metadata]
 outputType = "console"

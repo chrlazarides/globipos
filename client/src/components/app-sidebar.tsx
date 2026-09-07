@@ -20,6 +20,7 @@ import {
 import { offlineStore } from "@/lib/offline-store";
 import { useAuth, hasModuleAccess } from "@/App";
 import type { SystemSetting } from "@shared/schema";
+import { buildInfo } from "@/lib/build-info";
 
 // Module keys used in the permissions system
 const mainNav = [
@@ -280,7 +281,10 @@ export function AppSidebar() {
         </a>
         <div className="flex items-center gap-2 text-xs text-sidebar-foreground/50">
           <Wine className="w-3 h-3" />
-          <span>{companyName} v1.0</span>
+          <span>
+            {companyName} v{buildInfo.version}
+            {buildInfo.isDevelopment ? ` · dev ${buildInfo.reference}` : ""}
+          </span>
         </div>
       </SidebarFooter>
     </Sidebar>

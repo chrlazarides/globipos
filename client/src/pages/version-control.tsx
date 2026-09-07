@@ -40,6 +40,7 @@ import {
   GitBranch,
   ShieldAlert,
 } from "lucide-react";
+import { buildInfo } from "@/lib/build-info";
 import { format, formatDistanceToNow } from "date-fns";
 
 type Snapshot = {
@@ -284,6 +285,10 @@ export default function VersionControlPage() {
           <div className="flex items-center gap-2 mb-1">
             <GitBranch className="w-5 h-5 text-primary" />
             <h1 className="text-2xl font-bold" data-testid="text-page-title">Version Control</h1>
+            <Badge variant="outline" data-testid="badge-backoffice-build">
+              Back Office v{buildInfo.version}
+              {buildInfo.isDevelopment ? ` · dev ${buildInfo.reference}` : ""}
+            </Badge>
           </div>
           <p className="text-sm text-muted-foreground">
             Named snapshots of your entire database. Roll back data to any checkpoint with one click.

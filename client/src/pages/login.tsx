@@ -12,6 +12,16 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Wine, Lock, Loader2, Eye, EyeOff, ShieldCheck, ArrowLeft, ScanLine } from "lucide-react";
+import { buildInfo } from "@/lib/build-info";
+
+function LoginBuildLabel() {
+  return (
+    <p className="mt-2 text-center text-[10px] text-muted-foreground/70" data-testid="login-build-version">
+      Back Office v{buildInfo.version}
+      {buildInfo.isDevelopment ? ` · dev ${buildInfo.reference}` : ""}
+    </p>
+  );
+}
 
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
@@ -211,6 +221,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
           <p className="text-center text-xs text-muted-foreground mt-6">
             Private system — unauthorised access is prohibited
           </p>
+          <LoginBuildLabel />
         </div>
       </div>
     );
@@ -275,6 +286,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
           <p className="text-center text-xs text-muted-foreground mt-6">
             Private system — unauthorised access is prohibited
           </p>
+          <LoginBuildLabel />
         </div>
       </div>
     );
@@ -358,6 +370,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         <p className="text-center text-xs text-muted-foreground mt-6">
           Private system — unauthorised access is prohibited
         </p>
+        <LoginBuildLabel />
       </div>
     </div>
   );
