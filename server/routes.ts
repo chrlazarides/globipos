@@ -8960,17 +8960,23 @@ export async function registerRoutes(
 
   // POS Locations
   // POS build downloads — live list of release assets from GitHub
-  let posBuildsCache: { data: any; fetchedAt: number } | null = null;
+  let posBuildsCache: { repoUrl: string; releases: any[]; fetchedAt: number } | null = null;
   app.get("/api/pos/builds", requireStaff, async (_req, res) => {
+    let requestedRepoUrl: string | null = null;
     try {
       const CACHE_MS = 5 * 60 * 1000;
-      if (posBuildsCache && Date.now() - posBuildsCache.fetchedAt < CACHE_MS) {
-        return res.json(posBuildsCache.data);
-      }
       const settings = await storage.getSettings();
       const repoUrl = settings.find((s) => s.key === "pos_github_repo")?.value
         || process.env.POS_GITHUB_REPO
         || "https://github.com/chrlazarides/globipos";
+      requestedRepoUrl = repoUrl;
+      if (
+        posBuildsCache
+        && posBuildsCache.repoUrl === repoUrl
+        && Date.now() - posBuildsCache.fetchedAt < CACHE_MS
+      ) {
+        return res.json({ releases: posBuildsCache.releases, stale: false });
+      }
       const m = repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
       if (!m) return res.status(400).json({ message: "pos_github_repo setting is not a valid GitHub URL" });
       const [, owner, repo] = m;
@@ -8978,7 +8984,14 @@ export async function registerRoutes(
       if (process.env.GLOBISYNC) headers.Authorization = `token ${process.env.GLOBISYNC}`;
       const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=5`, { headers });
       if (!ghRes.ok) {
-        return res.status(502).json({ message: `GitHub API error: ${ghRes.status}` });
+        if (posBuildsCache?.repoUrl === repoUrl) {
+          return res.json({
+            releases: posBuildsCache.releases,
+            stale: true,
+            warning: "GitHub is temporarily unavailable. Showing the last successfully verified release links.",
+          });
+        }
+        return res.status(502).json({ message: `GitHub API error: ${ghRes.status}. No verified release links are cached yet.` });
       }
       const releases: any[] = await ghRes.json();
       const data = releases
@@ -8998,9 +9011,16 @@ export async function registerRoutes(
               downloads: a.download_count,
             })),
         }));
-      posBuildsCache = { data, fetchedAt: Date.now() };
-      res.json(data);
+      posBuildsCache = { repoUrl, releases: data, fetchedAt: Date.now() };
+      res.json({ releases: data, stale: false });
     } catch (e: any) {
+      if (requestedRepoUrl && posBuildsCache?.repoUrl === requestedRepoUrl) {
+        return res.json({
+          releases: posBuildsCache.releases,
+          stale: true,
+          warning: "GitHub is temporarily unavailable. Showing the last successfully verified release links.",
+        });
+      }
       res.status(500).json({ message: e.message });
     }
   });

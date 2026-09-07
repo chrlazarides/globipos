@@ -42,6 +42,7 @@ const groupLabels: Record<string, string> = {
 
 const groupOrder = ["company", "tax", "invoicing", "pricing", "inventory", "portal"];
 const HIDDEN_GROUPS = ["security", "backup"];
+const RETIRED_SETTINGS = ["pos_app_version"];
 const SESSION_KEY = "globi-pos_settings_auth";
 
 export default function SettingsPage() {
@@ -326,7 +327,7 @@ export default function SettingsPage() {
     setSaving(true);
     try {
       const payload = settings
-        .filter(s => !HIDDEN_GROUPS.includes(s.group))
+        .filter(s => !HIDDEN_GROUPS.includes(s.group) && !RETIRED_SETTINGS.includes(s.key))
         .map((s) => ({
           key: s.key,
           value: values[s.key] ?? s.value,
@@ -634,13 +635,15 @@ export default function SettingsPage() {
   const grouped: Record<string, SystemSetting[]> = {};
   if (settings) {
     settings.forEach((s) => {
-      if (HIDDEN_GROUPS.includes(s.group)) return;
+      if (HIDDEN_GROUPS.includes(s.group) || RETIRED_SETTINGS.includes(s.key)) return;
       if (!grouped[s.group]) grouped[s.group] = [];
       grouped[s.group].push(s);
     });
   }
 
-  const noSettings = !settings || settings.filter(s => !HIDDEN_GROUPS.includes(s.group)).length === 0;
+  const noSettings = !settings || settings.filter(
+    s => !HIDDEN_GROUPS.includes(s.group) && !RETIRED_SETTINGS.includes(s.key),
+  ).length === 0;
 
   const lastBackupDate = values["backup_last_date"];
   const lastBackupDisplay = lastBackupDate

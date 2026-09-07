@@ -217,12 +217,6 @@ function detectPlatform(): PlatformId {
   return "windows";
 }
 
-function buildReleaseUrl(repo: string, version: string, suffix: string) {
-  const tag = version.startsWith("v") ? version : `v${version}`;
-  const ver = tag.replace("v", "");
-  return `${repo.replace(/\/$/, "")}/releases/download/${tag}/GlobiPOS.Terminal_${ver}${suffix}`;
-}
-
 // ── Live GitHub release builds ────────────────────────────────────────────────
 interface ReleaseAsset {
   name: string;
@@ -238,6 +232,12 @@ interface PosRelease {
   htmlUrl: string;
   assets: ReleaseAsset[];
 }
+interface PosBuildsResponse {
+  releases: PosRelease[];
+  stale: boolean;
+  warning?: string;
+}
+const NO_RELEASES: PosRelease[] = [];
 
 const ASSET_PLATFORM_MATCHERS: Record<PlatformId, (name: string) => boolean> = {
   windows: (n) => n.endsWith(".msi") || n.endsWith(".exe"),
@@ -280,18 +280,18 @@ export default function PosDownload() {
   const { data: settings = [] } = useQuery<SystemSetting[]>({ queryKey: ["/api/settings"] });
   const serverUrl = typeof window !== "undefined" ? window.location.origin : "";
   const githubRepo = settings.find(s => s.key === "pos_github_repo")?.value ?? "";
-  const settingsVersion = settings.find(s => s.key === "pos_app_version")?.value ?? "1.0.0";
 
-  const { data: releases = [], isLoading: buildsLoading, isError: buildsError } = useQuery<PosRelease[]>({
+  const { data: builds, isLoading: buildsLoading, isError: buildsError } = useQuery<PosBuildsResponse>({
     queryKey: ["/api/pos/builds"],
   });
+  const releases = builds?.releases ?? NO_RELEASES;
 
   const latestRelease = releases.find(r => !r.prerelease && r.assets.length > 0) ?? releases[0];
-  const appVersion = latestRelease ? latestRelease.tag.replace(/^v/, "") : settingsVersion;
+  const appVersion = latestRelease ? latestRelease.tag.replace(/^v/, "") : "1.0.0";
 
   const platform = PLATFORMS.find(p => p.id === selected)!;
   const platformAssets = (latestRelease?.assets ?? []).filter(a => ASSET_PLATFORM_MATCHERS[selected](a.name));
-  const hasNativeRelease = platformAssets.length > 0 || (!!githubRepo && platform.nativeFiles.length > 0);
+  const hasNativeRelease = platformAssets.length > 0;
 
   function copy(text: string, key: string) {
     navigator.clipboard.writeText(text).then(() => {
@@ -509,6 +509,12 @@ export default function PosDownload() {
                       </div>
                     ) : platformAssets.length > 0 ? (
                       <div className="space-y-2">
+                        {builds?.stale && (
+                          <div className="flex gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800" data-testid="text-builds-stale">
+                            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-amber-500" />
+                            <p>{builds.warning}</p>
+                          </div>
+                        )}
                         {latestRelease && (
                           <div className="flex items-center gap-2 text-xs text-muted-foreground pb-1" data-testid="text-latest-release-info">
                             <Tag className="w-3 h-3" />
@@ -534,28 +540,19 @@ export default function PosDownload() {
                           </a>
                         </Button>
                       </div>
-                    ) : hasNativeRelease ? (
+                    ) : buildsError ? (
                       <div className="space-y-2">
-                        {buildsError && (
-                          <div className="flex gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800" data-testid="text-builds-error">
-                            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-amber-500" />
-                            <p>Couldn't reach GitHub to list the latest builds — showing standard links which may not match the newest release.</p>
-                          </div>
-                        )}
-                        {platform.nativeFiles.map(f => (
-                          <Button key={f.suffix} asChild className="w-full justify-start" data-testid={`btn-download-${f.suffix}`}>
-                            <a href={buildReleaseUrl(githubRepo, appVersion, f.suffix)} target="_blank" rel="noopener noreferrer">
-                              <Download className="w-4 h-4 mr-2" />
-                              {f.label}
-                              <ExternalLink className="w-3 h-3 ml-auto opacity-60" />
+                        <div className="flex gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800" data-testid="text-builds-error">
+                          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-amber-500" />
+                          <p>Couldn't verify the latest release with GitHub, so no direct download link is shown. Try again shortly or review the releases on GitHub.</p>
+                        </div>
+                        {githubRepo && (
+                          <Button asChild variant="outline" size="sm" className="w-full justify-start">
+                            <a href={`${githubRepo.replace(/\/$/, "")}/releases`} target="_blank" rel="noopener noreferrer">
+                              <Github className="w-3 h-3 mr-1" /> Review releases on GitHub
                             </a>
                           </Button>
-                        ))}
-                        <Button asChild variant="ghost" size="sm" className="text-xs text-muted-foreground w-full justify-start">
-                          <a href={`${githubRepo}/releases`} target="_blank" rel="noopener noreferrer">
-                            <Github className="w-3 h-3 mr-1" /> All releases on GitHub
-                          </a>
-                        </Button>
+                        )}
                       </div>
                     ) : (
                       <div className="rounded-lg border border-dashed p-5 space-y-3">
@@ -677,12 +674,11 @@ git push -u origin main`}
                     <li className="flex gap-3">
                       <span className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground text-sm flex items-center justify-center font-bold">4</span>
                       <div className="flex-1 space-y-2">
-                        <p className="font-medium text-sm">Configure download links here</p>
-                        <p className="text-xs text-muted-foreground">Set these two values in <a href="/settings" className="text-primary underline">Settings</a> to make the Native Binary tab show real download buttons:</p>
+                        <p className="font-medium text-sm">Configure the release repository</p>
+                        <p className="text-xs text-muted-foreground">Set this value in <a href="/settings" className="text-primary underline">Settings</a>. Release versions and download links are discovered automatically from GitHub:</p>
                         <div className="space-y-2">
                           <div className="rounded border p-2 bg-muted/30 text-xs font-mono space-y-1">
                             <p><span className="text-muted-foreground">pos_github_repo</span> = https://github.com/YOUR_ORG/globipos</p>
-                            <p><span className="text-muted-foreground">pos_app_version</span> = v{appVersion}</p>
                           </div>
                         </div>
                       </div>
