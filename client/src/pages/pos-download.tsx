@@ -641,9 +641,9 @@ git push -u origin main`}
                         <p className="text-xs text-muted-foreground">This bumps the version, creates a git tag, and pushes it to GitHub to trigger the build:</p>
                         <div className="relative">
                           <code className="block px-3 py-2.5 rounded bg-muted border text-xs font-mono">
-                            chmod +x scripts/publish-release.sh && ./scripts/publish-release.sh 1.0.0
+                            chmod +x scripts/publish-release.sh && ./scripts/publish-release.sh {appVersion}
                           </code>
-                          <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-7 w-7" onClick={() => copy("chmod +x scripts/publish-release.sh && ./scripts/publish-release.sh 1.0.0", "step2")}>
+                          <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-7 w-7" onClick={() => copy(`chmod +x scripts/publish-release.sh && ./scripts/publish-release.sh ${appVersion}`, "step2")}>
                             {copied === "step2" ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
                           </Button>
                         </div>
@@ -682,7 +682,7 @@ git push -u origin main`}
                         <div className="space-y-2">
                           <div className="rounded border p-2 bg-muted/30 text-xs font-mono space-y-1">
                             <p><span className="text-muted-foreground">pos_github_repo</span> = https://github.com/YOUR_ORG/globipos</p>
-                            <p><span className="text-muted-foreground">pos_app_version</span> = 1.0.0</p>
+                            <p><span className="text-muted-foreground">pos_app_version</span> = v{appVersion}</p>
                           </div>
                         </div>
                       </div>

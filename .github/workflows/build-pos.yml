@@ -18,8 +18,25 @@ env:
   TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  validate-version:
+    name: Validate release version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
+          fetch-depth: 0
+      - name: Require checkout to match the release tag
+        shell: bash
+        run: |
+          git show-ref --verify --quiet "refs/tags/${TAG_NAME}"
+          test "$(git rev-list -n 1 "${TAG_NAME}")" = "$(git rev-parse HEAD)"
+      - name: Require package, Cargo, Tauri, and tag versions to match
+        run: node scripts/pos-version.mjs --check "${TAG_NAME}"
+
   # ── Desktop: Windows, macOS, Linux ─────────────────────────────────────────
   build-desktop:
+    needs: validate-version
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +57,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
@@ -112,10 +131,12 @@ jobs:
   build-android:
     name: Build Android APK
     runs-on: ubuntu-latest
-    needs: []
+    needs: validate-version
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4

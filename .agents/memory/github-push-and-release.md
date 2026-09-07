@@ -15,6 +15,10 @@ release artifacts.
 
 **How to apply:** Before creating any POS release tag, compare all version
 manifests, inspect lockfile registry URLs, and verify the resulting CI run.
+Treat a multi-file version bump as a recoverable transaction: keep the original
+contents until post-write validation succeeds, and retain recovery data if a
+rollback is incomplete. For manually dispatched CI, checkout and verify the
+actual tag commit rather than merely using the supplied tag as an artifact label.
 
 ## Android APK signing
 Release APKs are signed in CI: `apksigner` + `zipalign` from the newest
