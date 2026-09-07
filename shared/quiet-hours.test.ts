@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   getHourInTimeZone,
   getQuietHoursEndInTimeZone,
+  getTimeZoneRegionLabel,
   isValidIanaTimeZone,
   isWithinQuietHoursInTimeZone,
 } from "./quiet-hours";
@@ -51,4 +52,9 @@ test("a repeated fall-back hour stays quiet through both occurrences", () => {
 test("rejects values that are not IANA time zones", () => {
   assert.equal(isValidIanaTimeZone("Europe/Nicosia"), true);
   assert.equal(isValidIanaTimeZone("Not/AZone"), false);
+});
+
+test("formats a human-friendly region label", () => {
+  assert.equal(getTimeZoneRegionLabel("America/New_York"), "New York (America)");
+  assert.equal(getTimeZoneRegionLabel("Europe/Nicosia"), "Nicosia (Europe)");
 });

@@ -9,6 +9,14 @@ export function isValidIanaTimeZone(timeZone: string): boolean {
   }
 }
 
+export function getTimeZoneRegionLabel(timeZone: string): string {
+  const parts = timeZone.split("/");
+  if (parts.length < 2) return timeZone.replaceAll("_", " ");
+  const city = parts.at(-1)!.replaceAll("_", " ");
+  const region = parts.slice(0, -1).join(" / ").replaceAll("_", " ");
+  return `${city} (${region})`;
+}
+
 export function getHourInTimeZone(now: Date, timeZone: string): number {
   const hourPart = new Intl.DateTimeFormat("en-GB", {
     timeZone,

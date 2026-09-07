@@ -701,7 +701,7 @@ export async function registerRoutes(
   // ─── USERS (admin only) ──────────────────────────────────────────────────────
   app.get("/api/users", requireAdmin, async (_req: Request, res: Response) => {
     try {
-      const rows = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt, totpEnabled: users.totpEnabled, permissions: users.permissions }).from(users).orderBy(users.createdAt);
+      const rows = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt, totpEnabled: users.totpEnabled, permissions: users.permissions, whatsappQuietHoursTimezone: users.whatsappQuietHoursTimezone }).from(users).orderBy(users.createdAt);
       res.json(rows.map(r => ({ ...r, permissions: JSON.parse(r.permissions || "[]") })));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -731,7 +731,7 @@ export async function registerRoutes(
 
   app.put("/api/users/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { username, email, role, active, password, permissions } = req.body;
+      const { username, email, role, active, password, permissions, whatsappQuietHoursTimezone } = req.body;
       const allowedRoles = ["staff", "admin", "superuser"];
       if (role && !allowedRoles.includes(role)) return res.status(400).json({ message: "Invalid role" });
       const updates: any = {};
@@ -741,7 +741,13 @@ export async function registerRoutes(
       if (active !== undefined) updates.active = active;
       if (password) updates.password = hashPassword(password);
       if (permissions !== undefined) updates.permissions = JSON.stringify(Array.isArray(permissions) ? permissions : []);
-      const [updated] = await db.update(users).set(updates).where(eq(users.id, (req.params.id as string))).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, permissions: users.permissions });
+      if (whatsappQuietHoursTimezone !== undefined) {
+        if (typeof whatsappQuietHoursTimezone !== "string" || !isValidIanaTimeZone(whatsappQuietHoursTimezone)) {
+          return res.status(400).json({ message: "Quiet-hours time zone must be a valid IANA time zone" });
+        }
+        updates.whatsappQuietHoursTimezone = whatsappQuietHoursTimezone;
+      }
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, (req.params.id as string))).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, permissions: users.permissions, whatsappQuietHoursTimezone: users.whatsappQuietHoursTimezone });
       if (!updated) return res.status(404).json({ message: "User not found" });
       res.json({ ...updated, permissions: JSON.parse(updated.permissions || "[]") });
     } catch (e: any) { res.status(500).json({ message: e.message }); }

@@ -16,6 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Users, Plus, Pencil, Trash2, ShieldCheck, Shield, Clock, Loader2, Smartphone, KeyRound, CheckCircle2, XCircle, AlertTriangle, Crown, Lock } from "lucide-react";
 import { formatDateTime } from "@/lib/utils";
+import { getTimeZoneRegionLabel, isValidIanaTimeZone } from "@shared/quiet-hours";
 
 export interface User {
   id: string;
@@ -27,6 +28,7 @@ export interface User {
   lastLoginAt: string | null;
   totpEnabled?: boolean;
   permissions: string[];
+  whatsappQuietHoursTimezone: string;
 }
 
 // ─── Module definitions for permissions ──────────────────────────────────────
@@ -53,6 +55,13 @@ interface UserFormData {
   role: string;
   active: boolean;
   permissions: string[];
+  whatsappQuietHoursTimezone: string;
+}
+
+function supportedTimeZones(current: string): string[] {
+  const intl = Intl as typeof Intl & { supportedValuesOf?: (key: "timeZone") => string[] };
+  const zones = intl.supportedValuesOf?.("timeZone") ?? [];
+  return Array.from(new Set([...zones, current])).sort();
 }
 
 // ─── Permissions Selector ─────────────────────────────────────────────────────
@@ -116,11 +125,13 @@ function UserDialog({ open, onClose, user, currentUser }: { open: boolean; onClo
     role: user?.role || "staff",
     active: user?.active ?? true,
     permissions: user?.permissions || [],
+    whatsappQuietHoursTimezone: user?.whatsappQuietHoursTimezone || "Europe/Nicosia",
   });
 
   const mutation = useMutation({
     mutationFn: async (data: UserFormData) => {
       const payload: any = { username: data.username, email: data.email, role: data.role, active: data.active, permissions: data.permissions };
+      if (isEdit) payload.whatsappQuietHoursTimezone = data.whatsappQuietHoursTimezone;
       if (data.password) payload.password = data.password;
       const res = await apiRequest(isEdit ? "PUT" : "POST", isEdit ? `/api/users/${user!.id}` : "/api/users", payload);
       if (!res.ok) {
@@ -141,6 +152,14 @@ function UserDialog({ open, onClose, user, currentUser }: { open: boolean; onClo
     e.preventDefault();
     if (!form.username) return;
     if (!isEdit && !form.password) return;
+    if (isEdit && !isValidIanaTimeZone(form.whatsappQuietHoursTimezone)) {
+      toast({
+        title: "Invalid time zone",
+        description: "Choose a valid IANA time zone, such as Europe/Nicosia.",
+        variant: "destructive",
+      });
+      return;
+    }
     mutation.mutate(form);
   };
 
@@ -165,6 +184,34 @@ function UserDialog({ open, onClose, user, currentUser }: { open: boolean; onClo
             <Label htmlFor="password">{isEdit ? "New Password (leave blank to keep)" : "Password *"}</Label>
             <Input id="password" type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} data-testid="input-user-password" required={!isEdit} />
           </div>
+          {isEdit && (
+            <div className="space-y-2 rounded-md border p-3">
+              <Label htmlFor="quiet-hours-timezone">WhatsApp quiet-hours time zone</Label>
+              <Input
+                id="quiet-hours-timezone"
+                list="quiet-hours-timezones"
+                value={form.whatsappQuietHoursTimezone}
+                onChange={e => setForm(f => ({ ...f, whatsappQuietHoursTimezone: e.target.value }))}
+                aria-invalid={!isValidIanaTimeZone(form.whatsappQuietHoursTimezone)}
+                data-testid="input-user-quiet-hours-timezone"
+              />
+              <datalist id="quiet-hours-timezones">
+                {supportedTimeZones(form.whatsappQuietHoursTimezone).map(zone => (
+                  <option key={zone} value={zone}>{getTimeZoneRegionLabel(zone)}</option>
+                ))}
+              </datalist>
+              <p className="text-xs text-muted-foreground" data-testid="text-user-quiet-hours-timezone-region">
+                Current region: <span className="font-medium text-foreground">
+                  {isValidIanaTimeZone(form.whatsappQuietHoursTimezone)
+                    ? getTimeZoneRegionLabel(form.whatsappQuietHoursTimezone)
+                    : "Invalid time zone"}
+                </span>
+              </p>
+              <p className="text-xs text-muted-foreground">
+                This changes only this account's recurring quiet-hours region. Daylight-saving changes apply automatically.
+              </p>
+            </div>
+          )}
           <div className="space-y-2">
             <Label>Role</Label>
             <Select value={form.role} onValueChange={v => setForm(f => ({ ...f, role: v, permissions: v !== "staff" ? [] : f.permissions }))}>
