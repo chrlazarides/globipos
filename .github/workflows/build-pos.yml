@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - 'scripts/pos-version.mjs'
+      - 'scripts/pos-version.test.mjs'
+      - 'pos-app/package.json'
+      - 'pos-app/package-lock.json'
+      - 'pos-app/src-tauri/Cargo.toml'
+      - 'pos-app/src-tauri/Cargo.lock'
+      - 'pos-app/src-tauri/tauri.conf.json'
+      - '.github/workflows/build-pos.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -18,8 +28,20 @@ env:
   TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  test-version-helper:
+    name: Test POS version safety
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test updates, mismatch detection, and interrupted-update recovery
+        run: npm run test:pos-version
+
   validate-version:
     name: Validate release version
+    if: github.event_name != 'pull_request'
+    needs: test-version-helper
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
