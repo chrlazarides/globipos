@@ -1,12 +1,36 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  calculateServerClockOffset,
   getHourInTimeZone,
   getQuietHoursEndInTimeZone,
+  getServerCorrectedNow,
   getTimeZoneRegionLabel,
   isValidIanaTimeZone,
   isWithinQuietHoursInTimeZone,
 } from "./quiet-hours";
+
+test("corrects a device clock that is several hours ahead", () => {
+  const actualServerTime = Date.parse("2026-01-15T20:30:00Z");
+  const deviceSkew = 3 * 60 * 60 * 1000;
+  const requestStartedAt = actualServerTime + deviceSkew - 100;
+  const responseReceivedAt = actualServerTime + deviceSkew + 100;
+  const offset = calculateServerClockOffset(actualServerTime, requestStartedAt, responseReceivedAt);
+
+  assert.equal(getServerCorrectedNow(offset, actualServerTime + deviceSkew).toISOString(), "2026-01-15T20:30:00.000Z");
+  assert.equal(isWithinQuietHoursInTimeZone(22, 8, "Europe/Nicosia", getServerCorrectedNow(offset, actualServerTime + deviceSkew)), true);
+});
+
+test("corrects a device clock that is several minutes behind", () => {
+  const actualServerTime = Date.parse("2026-01-15T19:30:00Z");
+  const deviceSkew = -15 * 60 * 1000;
+  const requestStartedAt = actualServerTime + deviceSkew - 250;
+  const responseReceivedAt = actualServerTime + deviceSkew + 250;
+  const offset = calculateServerClockOffset(actualServerTime, requestStartedAt, responseReceivedAt);
+
+  assert.equal(getServerCorrectedNow(offset, actualServerTime + deviceSkew).toISOString(), "2026-01-15T19:30:00.000Z");
+  assert.equal(isWithinQuietHoursInTimeZone(22, 8, "Europe/Nicosia", getServerCorrectedNow(offset, actualServerTime + deviceSkew)), false);
+});
 
 test("uses the store time zone instead of the device time zone", () => {
   const instant = new Date("2026-01-15T20:30:00Z");

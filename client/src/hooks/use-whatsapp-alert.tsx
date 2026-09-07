@@ -1,6 +1,12 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/App";
-import { DEFAULT_STORE_TIME_ZONE, getQuietHoursEndInTimeZone, isWithinQuietHoursInTimeZone } from "@shared/quiet-hours";
+import {
+  calculateServerClockOffset,
+  DEFAULT_STORE_TIME_ZONE,
+  getQuietHoursEndInTimeZone,
+  getServerCorrectedNow,
+  isWithinQuietHoursInTimeZone,
+} from "@shared/quiet-hours";
 
 // Manual chime mute remains device-local. Scheduled quiet hours follow the signed-in staff
 // account, while the temporary urgent-order override is shared store-wide.
@@ -155,6 +161,7 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
   const quietHoursSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const quietHoursAccountGenerationRef = useRef(0);
   const quietHoursFetchGenerationRef = useRef(0);
+  const serverClockOffsetRef = useRef(0);
   const currentUserIdRef = useRef(user?.id);
   currentUserIdRef.current = user?.id;
 
@@ -204,16 +211,23 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
     const accountGeneration = quietHoursAccountGenerationRef.current;
     const fetchGeneration = ++quietHoursFetchGenerationRef.current;
     const editVersion = quietHoursEditVersionRef.current;
+    const requestStartedAt = Date.now();
     try {
       const res = await fetch("/api/users/me/whatsapp-quiet-hours", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load quiet hours");
-      let preference = await res.json() as { enabled: boolean; startHour: number; endHour: number; migrated: boolean; timezone: string };
+      const responseReceivedAt = Date.now();
+      let preference = await res.json() as { enabled: boolean; startHour: number; endHour: number; migrated: boolean; timezone: string; serverTime: string };
       if (
         accountGeneration !== quietHoursAccountGenerationRef.current ||
         fetchGeneration !== quietHoursFetchGenerationRef.current ||
         quietHoursSavingRef.current ||
         editVersion !== quietHoursEditVersionRef.current
       ) return;
+      serverClockOffsetRef.current = calculateServerClockOffset(
+        preference.serverTime,
+        requestStartedAt,
+        responseReceivedAt,
+      );
 
       if (!preference.migrated) {
         const legacy = loadLegacyQuietHours();
@@ -277,14 +291,24 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
 
   useEffect(() => {
     quietHoursRef.current = { enabled: quietHoursEnabled, start: quietHoursStart, end: quietHoursEnd, timeZone: quietHoursTimeZone, overrideActive: quietHoursOverrideActive };
-    const withinWindow = isWithinQuietHoursInTimeZone(quietHoursStart, quietHoursEnd, quietHoursTimeZone);
+    const withinWindow = isWithinQuietHoursInTimeZone(
+      quietHoursStart,
+      quietHoursEnd,
+      quietHoursTimeZone,
+      getServerCorrectedNow(serverClockOffsetRef.current),
+    );
     setIsQuietNow(quietHoursEnabled && !quietHoursOverrideActive && withinWindow);
   }, [quietHoursEnabled, quietHoursStart, quietHoursEnd, quietHoursTimeZone, quietHoursOverrideActive]);
 
   useEffect(() => {
     const interval = setInterval(() => {
       const { enabled, start, end, timeZone, overrideActive } = quietHoursRef.current;
-      const withinWindow = isWithinQuietHoursInTimeZone(start, end, timeZone);
+      const withinWindow = isWithinQuietHoursInTimeZone(
+        start,
+        end,
+        timeZone,
+        getServerCorrectedNow(serverClockOffsetRef.current),
+      );
       setIsQuietNow(enabled && !overrideActive && withinWindow);
     }, 60000);
     return () => clearInterval(interval);
@@ -318,7 +342,12 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
         setNewOrderCount(prev => prev + brandNew);
         const { enabled: quietEnabled, start: quietStart, end: quietEnd, timeZone, overrideActive } = quietHoursRef.current;
         const effectiveOverride = sharedOverride ?? overrideActive;
-        const withinQuietHours = quietEnabled && !effectiveOverride && isWithinQuietHoursInTimeZone(quietStart, quietEnd, timeZone);
+        const withinQuietHours = quietEnabled && !effectiveOverride && isWithinQuietHoursInTimeZone(
+          quietStart,
+          quietEnd,
+          timeZone,
+          getServerCorrectedNow(serverClockOffsetRef.current),
+        );
         if (!chimeMutedRef.current && !withinQuietHours) {
           playChime();
         }
@@ -403,7 +432,15 @@ export function WhatsAppAlertProvider({ children }: { children: React.ReactNode 
   }, [quietHoursEnabled, saveQuietHours]);
 
   const overrideQuietHours = useCallback(() => {
-    void persistOverride(true, getQuietHoursEndInTimeZone(quietHoursStart, quietHoursEnd, quietHoursTimeZone));
+    void persistOverride(
+      true,
+      getQuietHoursEndInTimeZone(
+        quietHoursStart,
+        quietHoursEnd,
+        quietHoursTimeZone,
+        getServerCorrectedNow(serverClockOffsetRef.current),
+      ),
+    );
   }, [persistOverride, quietHoursStart, quietHoursEnd, quietHoursTimeZone]);
 
   const cancelQuietHoursOverride = useCallback(() => {

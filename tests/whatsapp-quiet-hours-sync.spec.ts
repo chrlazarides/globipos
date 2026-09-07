@@ -13,6 +13,7 @@ type Preference = {
   startHour: number;
   endHour: number;
   migrated?: boolean;
+  serverTime?: string;
 };
 
 const accountA = {
@@ -113,7 +114,9 @@ test.describe.serial("staff WhatsApp quiet-hours synchronization", () => {
     try {
       const read = await quietHoursRequest(secondDevice, accountA.token, "GET");
       expect(read.status(), await read.text()).toBe(200);
-      expect(await read.json()).toMatchObject(saved);
+      const response = await read.json();
+      expect(response).toMatchObject(saved);
+      expect(Number.isFinite(Date.parse(response.serverTime))).toBe(true);
     } finally {
       await secondDevice.dispose();
     }
@@ -178,9 +181,9 @@ test.describe.serial("staff WhatsApp quiet-hours synchronization", () => {
       readCount++;
       if (readCount === 1) {
         await firstMayFinish;
-        return route.fulfill({ json: { enabled: false, startHour: 2, endHour: 4, migrated: true } });
+        return route.fulfill({ json: { enabled: false, startHour: 2, endHour: 4, migrated: true, serverTime: new Date().toISOString() } });
       }
-      return route.fulfill({ json: { enabled: true, startHour: 17, endHour: 9, migrated: true } });
+      return route.fulfill({ json: { enabled: true, startHour: 17, endHour: 9, migrated: true, serverTime: new Date().toISOString() } });
     });
 
     await page.goto("/whatsapp-orders");
@@ -206,8 +209,8 @@ test.describe.serial("staff WhatsApp quiet-hours synchronization", () => {
         const cookie = route.request().headers().cookie ?? "";
         return route.fulfill({
           json: cookie.includes(accountB.token)
-            ? { enabled: true, startHour: 3, endHour: 6, migrated: true }
-            : { enabled: true, startHour: 20, endHour: 5, migrated: true },
+            ? { enabled: true, startHour: 3, endHour: 6, migrated: true, serverTime: new Date().toISOString() }
+            : { enabled: true, startHour: 20, endHour: 5, migrated: true, serverTime: new Date().toISOString() },
         });
       }
       const body = route.request().postDataJSON() as Preference;
@@ -234,5 +237,31 @@ test.describe.serial("staff WhatsApp quiet-hours synchronization", () => {
     await page.waitForTimeout(100);
     await expect(page.getByTestId("select-quiet-start")).toContainText("3:00 AM");
     await expect(page.getByTestId("select-quiet-end")).toContainText("6:00 AM");
+  });
+
+  test("a device clock hours ahead still uses server time for quiet-hours status", async ({ page }) => {
+    await useAccount(page, accountA.token);
+    await page.addInitScript(() => {
+      const actualDateNow = Date.now.bind(Date);
+      Date.now = () => actualDateNow() + 4 * 60 * 60 * 1000;
+    });
+    await page.route("**/api/users/me/whatsapp-quiet-hours", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      return route.fulfill({
+        json: {
+          enabled: true,
+          startHour: 22,
+          endHour: 8,
+          timezone: "Europe/Nicosia",
+          migrated: true,
+          serverTime: "2026-01-15T20:30:00.000Z",
+        },
+      });
+    });
+
+    await page.goto("/whatsapp-orders");
+    await expect(page.getByTestId("btn-quiet-hours")).toContainText("Quiet Now");
+    await page.getByTestId("btn-quiet-hours").click();
+    await expect(page.getByTestId("text-quiet-hours-status")).toContainText("Currently in quiet hours");
   });
 });

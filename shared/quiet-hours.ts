@@ -1,5 +1,21 @@
 export const DEFAULT_STORE_TIME_ZONE = "Europe/Nicosia";
 
+export function calculateServerClockOffset(
+  serverTime: string | number | Date,
+  requestStartedAt: number,
+  responseReceivedAt: number,
+): number {
+  const serverTimeMs = new Date(serverTime).getTime();
+  if (
+    !Number.isFinite(serverTimeMs) ||
+    !Number.isFinite(requestStartedAt) ||
+    !Number.isFinite(responseReceivedAt) ||
+    responseReceivedAt < requestStartedAt
+  ) {
+    throw new Error("Could not calculate server clock offset");
+  }
+  return serverTimeMs - (requestStartedAt + responseReceivedAt) / 2;
+}
 export function isValidIanaTimeZone(timeZone: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone }).format();
@@ -64,4 +80,8 @@ export function isWithinQuietHoursInTimeZone(
     return hour >= startHour && hour < endHour;
   }
   return hour >= startHour || hour < endHour;
+}
+
+export function getServerCorrectedNow(serverClockOffsetMs: number, deviceNowMs: number = Date.now()): Date {
+  return new Date(deviceNowMs + serverClockOffsetMs);
 }

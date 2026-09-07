@@ -644,7 +644,7 @@ export async function registerRoutes(
         migrated: users.whatsappQuietHoursMigrated,
       }).from(users).where(eq(users.id, req.user!.id));
       if (!preference) return res.status(404).json({ message: "User not found" });
-      res.json(preference);
+      res.json({ ...preference, serverTime: new Date().toISOString() });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
@@ -669,7 +669,7 @@ export async function registerRoutes(
         timezone: users.whatsappQuietHoursTimezone,
         migrated: users.whatsappQuietHoursMigrated,
       });
-      if (updated) return res.json(updated);
+      if (updated) return res.json({ ...updated, serverTime: new Date().toISOString() });
 
       const [current] = await db.select({
         enabled: users.whatsappQuietHoursEnabled,
@@ -679,7 +679,7 @@ export async function registerRoutes(
         migrated: users.whatsappQuietHoursMigrated,
       }).from(users).where(eq(users.id, req.user!.id));
       if (!current) return res.status(404).json({ message: "User not found" });
-      res.json(current);
+      res.json({ ...current, serverTime: new Date().toISOString() });
     } catch (e: any) {
       if (e instanceof z.ZodError) {
         return res.status(400).json({ message: "Quiet hours must include enabled and start/end hours from 0 to 23" });
