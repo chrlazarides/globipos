@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus, ArrowLeftRight, CalendarClock } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus, ArrowLeftRight, CalendarClock, MonitorCog } from "lucide-react";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { LogoImg } from "@/components/logo-img";
@@ -80,6 +80,9 @@ const adminNav = [
   { title: "Activity Log", url: "/activity-logs", icon: Activity, module: "_admin" },
   { title: "Version Control", url: "/version-control", icon: GitBranch, module: "_admin" },
   { title: "PDA Operations", url: "/pda-operations", icon: Smartphone, module: "_admin" },
+];
+const superuserNav = [
+  { title: "Deployment Control", url: "/deployment-control", icon: MonitorCog, module: "_superuser" },
 ];
 
 const posNav = [
@@ -229,6 +232,7 @@ export function AppSidebar() {
         {isAdmin && <NavSection label="Digital Signage" items={signageNav} />}
         {isAdmin && <NavSection label="Chat & FAQ" items={chatNavWithBadge} />}
         {isAdmin && <NavSection label="Admin" items={adminNav} />}
+        {user?.role === "superuser" && <NavSection label="Superuser" items={superuserNav} />}
       </SidebarContent>
       <SidebarFooter className="p-4 space-y-2">
         {isInstallable && !isInstalled && (

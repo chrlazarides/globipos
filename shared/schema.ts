@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, uuid, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -34,6 +34,45 @@ export const activityLogs = pgTable("activity_logs", {
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const deploymentProfiles = pgTable("deployment_profiles", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  slug: text("slug").notNull().unique(),
+  clientName: text("client_name").notNull(),
+  status: text("status").notNull().default("draft"),
+  backOfficeUrl: text("back_office_url").notNull(),
+  posServerUrl: text("pos_server_url").notNull(),
+  branding: jsonb("branding").notNull().default({}),
+  enabledFeatures: jsonb("enabled_features").notNull().default([]),
+  paymentProvider: text("payment_provider").notNull().default("none"),
+  emailProvider: text("email_provider").notNull().default("none"),
+  whatsappProvider: text("whatsapp_provider").notNull().default("none"),
+  backOfficeVersion: text("back_office_version").notNull().default("unknown"),
+  posVersion: text("pos_version").notNull().default("unknown"),
+  targetBackOfficeVersion: text("target_back_office_version"),
+  targetPosVersion: text("target_pos_version"),
+  automationProvider: text("automation_provider").notNull().default("manual"),
+  externalProjectId: text("external_project_id"),
+  credentialHash: text("credential_hash"),
+  lastHeartbeatAt: timestamp("last_heartbeat_at"),
+  healthStatus: text("health_status").notNull().default("unknown"),
+  healthMessage: text("health_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export const deploymentRollouts = pgTable("deployment_rollouts", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  scope: text("scope").notNull(),
+  deploymentIds: jsonb("deployment_ids").notNull().default([]),
+  targetBackOfficeVersion: text("target_back_office_version"),
+  targetPosVersion: text("target_pos_version"),
+  status: text("status").notNull().default("queued"),
+  initiatedBy: varchar("initiated_by").notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
 export const systemSettings = pgTable("system_settings", {

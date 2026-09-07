@@ -49,6 +49,7 @@ import UsersPage from "@/pages/users";
 import ActivityLogsPage from "@/pages/activity-logs";
 import DeployGuide from "@/pages/deploy-guide";
 import VersionControl from "@/pages/version-control";
+import DeploymentControlPage from "@/pages/deployment-control";
 import PosLocations from "@/pages/pos-locations";
 import PosTerminals from "@/pages/pos-terminals";
 import PosLayouts from "@/pages/pos-layouts";
@@ -172,6 +173,7 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/users" component={UsersPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/activity-logs" component={ActivityLogsPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/version-control" component={VersionControl} />}
+      {user?.role === "superuser" && <Route path="/deployment-control" component={DeploymentControlPage} />}
       {/* ── POS routes ────────────────────────────────────────────────────────
            Staff (cashier) tier  : register + card-terminal only.
            Admin (management) tier: all other POS screens are admin/superuser.

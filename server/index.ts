@@ -74,6 +74,21 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+const SENSITIVE_LOG_KEY = /(?:password|secret|token|credential|api[_-]?key|authorization|cookie)/i;
+
+function redactResponseForLog(value: unknown, depth = 0): unknown {
+  if (depth > 8) return "[truncated]";
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(item => redactResponseForLog(item, depth + 1));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      SENSITIVE_LOG_KEY.test(key) ? "[REDACTED]" : redactResponseForLog(item, depth + 1),
+    ]),
+  );
+}
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -90,7 +105,7 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        logLine += ` :: ${JSON.stringify(redactResponseForLog(capturedJsonResponse))}`;
       }
 
       log(logLine);

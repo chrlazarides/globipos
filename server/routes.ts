@@ -26,6 +26,7 @@ import QRCode from "qrcode";
 // ─── LOGO BASE64 (embedded so it shows in emails, print, and offline) ────────
 import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScaleBarcode, parseScaleBarcodeAfterVariantLookup, resolveScaleBarcodeExactFirst } from "./barcode-utils";
 import { isValidIanaTimeZone } from "@shared/quiet-hours";
+import { registerDeploymentControlRoutes } from "./deployment-control";
 function getLogoDataUrl(): string {
   const candidates = [
     path.resolve(process.cwd(), "dist", "public", "logo.png"),
@@ -331,6 +332,7 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  registerDeploymentControlRoutes(app);
 
   // ── Boot-time reconciliation for card-terminal charges ──────────────────────
   // The in-memory chargeInflightKeys Set is always empty right after a restart, so

@@ -90,6 +90,7 @@ const PUBLIC_PATHS = [
   "/api/orders", // Click & Collect lookup/collect — authenticated via X-Terminal-Code (requireTerminal)
   "/api/signage/play", // screen-facing player, keyed by pairing code, no session
   "/api/webhooks/whatsapp", // Meta webhook — no session; verified via hub.verify_token (GET) / X-Hub-Signature-256 (POST)
+  "/api/control/heartbeat", // deployment agent authenticates with its own bearer credential
 ];
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
