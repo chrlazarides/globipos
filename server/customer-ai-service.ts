@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { eq } from "drizzle-orm";
 import { customerAiHealth } from "@shared/schema";
 import { db } from "./db";
+import { emitCustomerAiPersistenceAlert } from "./operator-alerting";
 
 export const CUSTOMER_AI_PROVIDERS = ["auto", "replit", "xai", "deterministic"] as const;
 export type CustomerAiProvider = typeof CUSTOMER_AI_PROVIDERS[number];
@@ -96,6 +97,7 @@ function reportHealthPersistenceFailure(operation: HealthPersistenceOperation) {
   if (now - lastHealthPersistenceSignalAt[operation] < CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS) return;
   lastHealthPersistenceSignalAt[operation] = now;
   console.warn(`[customer-ai] operational health persistence ${operation} failed`);
+  emitCustomerAiPersistenceAlert(operation);
 }
 
 function sanitizedCount(value: unknown): number {

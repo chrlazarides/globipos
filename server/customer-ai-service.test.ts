@@ -19,6 +19,7 @@ import {
   type CustomerAiConfig,
   type CustomerAiHealthPersistence,
 } from "./customer-ai-service";
+import { setCustomerAiPersistenceAlertTransportForTests } from "./operator-alerting";
 
 const ENV_KEYS = [
   "AI_INTEGRATIONS_OPENAI_BASE_URL",
@@ -537,6 +538,7 @@ test("restart hydration rejects malformed and sensitive persisted values", async
 test("persistence failures emit sanitized, rate-limited operational signals", async () => {
   const sensitive = "credential=secret-value prompt=private-customer-text provider-message";
   const warnings: unknown[][] = [];
+  const alerts: unknown[] = [];
   const originalWarn = console.warn;
   const originalNow = Date.now;
   let now = 1_000_000;
@@ -544,6 +546,9 @@ test("persistence failures emit sanitized, rate-limited operational signals", as
     warnings.push(args);
   };
   Date.now = () => now;
+  setCustomerAiPersistenceAlertTransportForTests(async alert => {
+    alerts.push(alert);
+  });
   resetCustomerAiHealthPersistenceSignalsForTests();
   await setCustomerAiHealthPersistenceForTests({
     async load() {
@@ -569,6 +574,10 @@ test("persistence failures emit sanitized, rate-limited operational signals", as
       ["[customer-ai] operational health persistence load failed"],
       ["[customer-ai] operational health persistence save failed"],
     ]);
+    assert.deepEqual(alerts, [
+      { event: "customer_ai_health_persistence_failed", operation: "load" },
+      { event: "customer_ai_health_persistence_failed", operation: "save" },
+    ]);
     assert.equal(JSON.stringify(warnings).includes("secret-value"), false);
     assert.equal(JSON.stringify(warnings).includes("private-customer-text"), false);
     assert.equal(JSON.stringify(warnings).includes("provider-message"), false);
@@ -586,11 +595,17 @@ test("persistence failures emit sanitized, rate-limited operational signals", as
       ["[customer-ai] operational health persistence load failed"],
       ["[customer-ai] operational health persistence save failed"],
     ]);
+    assert.deepEqual(alerts.slice(2), [
+      { event: "customer_ai_health_persistence_failed", operation: "load" },
+      { event: "customer_ai_health_persistence_failed", operation: "save" },
+    ]);
+    assert.equal(JSON.stringify(alerts).includes("secret-value"), false);
   } finally {
     console.warn = originalWarn;
     Date.now = originalNow;
     resetCustomerAiRuntimeHealth();
     resetCustomerAiHealthPersistenceSignalsForTests();
+    setCustomerAiPersistenceAlertTransportForTests();
     await setCustomerAiHealthPersistenceForTests();
   }
 });

@@ -199,6 +199,43 @@ export type DomainStatusNotification = {
   checkedAt: Date;
 };
 
+export async function sendCustomerAiPersistenceAlert(
+  operation: 'load' | 'save',
+): Promise<{ success: boolean; skipped?: boolean }> {
+  const supportEmail = await getSettingValue('resend_reply_to');
+  if (!supportEmail?.trim()) {
+    console.warn('[operator-alert] Customer AI persistence notification skipped: support recipient is not configured');
+    return { success: false, skipped: true };
+  }
+
+  try {
+    const fromEmail = await getFromEmail();
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: supportEmail.trim(),
+      subject: `[Service warning] Customer AI health history ${operation} failed`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:#b45309;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">Customer AI health history unavailable</h2>
+        </div>
+        <p style="color:#374151;">The deployment could not ${operation} its customer AI operational health history.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">Event</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">customer_ai_health_persistence_failed</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Operation</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${operation}</td></tr>
+        </table>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated GlobiPOS deployment-monitoring notification.</p>
+      </div>`,
+    };
+    const replyTo = await getReplyToEmail();
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true };
+  } catch {
+    console.error(`[operator-alert] customer_ai_health_persistence_failed ${operation} delivery failed`);
+    return { success: false };
+  }
+}
+
 export async function sendDomainStatusNotification(
   notification: DomainStatusNotification,
 ): Promise<{ success: boolean; skipped?: boolean; reason?: 'support_recipient_missing' | 'email_delivery_failed'; error?: string }> {
