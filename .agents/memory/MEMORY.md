@@ -43,3 +43,4 @@
 - [Domain incident lifecycle](domain-incident-lifecycle.md) — open outages close only after a successful probe; routing edits must never masquerade as recovery
 - [Checkout idempotency keys](checkout-idempotency-keys.md) — persist keys with checkout drafts; scope uniqueness by customer and resolve replays inside the balance lock
 - [Secure 2FA recovery](secure-2fa-recovery.md) — keep the old factor active until an email-verified, single-use replacement is atomically confirmed
+- [Safe catalog transfer](safe-catalog-transfer.md) — upsert by stable SKU, validate one barcode namespace, and replace stock only when no location allocations exist

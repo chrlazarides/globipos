@@ -61,6 +61,7 @@ export default function SettingsPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [catalogTransferring, setCatalogTransferring] = useState(false);
   const { toast } = useToast();
 
   // Logo upload
@@ -424,6 +425,29 @@ export default function SettingsPage() {
       toast({ title: "Export complete", description: "Import this file in the production app to migrate your data." });
     } catch (err: any) {
       toast({ title: "Export failed", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleExportCatalog = () => {
+    window.location.href = "/api/admin/catalog-transfer/export";
+  };
+
+  const handleImportCatalog = async (file: File) => {
+    if (!confirm(`Import ${file.name} into this deployment?\n\nCategories, products, prices, costs, development stock quantities, and barcodes will be upserted. Live sales, customers, users, settings, and payments will not be deleted.`)) return;
+    setCatalogTransferring(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/admin/catalog-transfer/import", { method: "POST", body: form, credentials: "include" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Catalog import failed");
+      toast({ title: "Catalog imported", description: `${data.categories.toLocaleString()} categories, ${data.items.toLocaleString()} items, and ${data.barcodes.toLocaleString()} barcodes imported.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/categories"] });
+    } catch (err: any) {
+      toast({ title: "Catalog import failed", description: err.message, variant: "destructive" });
+    } finally {
+      setCatalogTransferring(false);
     }
   };
 
@@ -1219,6 +1243,38 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Backup Card */}
+      {isSuperuser && (
+        <Card className="mt-6 border-blue-200 dark:border-blue-800">
+          <CardHeader className="flex flex-row items-center gap-2 p-4 pb-2">
+            <div className="flex items-center justify-center w-8 h-8 rounded-md bg-blue-100 dark:bg-blue-900/50">
+              <PackageOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold">Catalog Transfer</h3>
+              <p className="text-xs text-muted-foreground">Move categories, products, stock, prices, costs, and barcodes between deployments</p>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-2 space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Export from development, then import the compressed file in production. Existing live sales, customers, users, settings, and payments are preserved.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={handleExportCatalog} disabled={catalogTransferring} data-testid="button-export-catalog">
+                <Download className="w-4 h-4 mr-2" />Export Catalog
+              </Button>
+              <label>
+                <Button variant="default" size="sm" asChild disabled={catalogTransferring} data-testid="button-import-catalog">
+                  <span className="cursor-pointer"><Upload className="w-4 h-4 mr-2" />{catalogTransferring ? "Importing…" : "Import Catalog"}</span>
+                </Button>
+                <input type="file" accept=".gz,application/gzip" className="hidden" disabled={catalogTransferring}
+                  onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleImportCatalog(file); e.target.value = ""; }} />
+              </label>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Backup Card */}
       <Card className="mt-6 border-green-200 dark:border-green-800">

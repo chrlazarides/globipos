@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@shared/schema";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@shared/schema";
 import { customerPreferences, customerFeedback, customerNotifications } from "@shared/schema";
 import { parseAdminImportRequest, shouldRestoreBackupSettings } from "./import-settings-policy";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
@@ -23,6 +23,8 @@ import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken
 import jwt from "jsonwebtoken";
 import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
 import QRCode from "qrcode";
+import { gzipSync, gunzip } from "zlib";
+import { promisify } from "util";
 
 // ─── LOGO BASE64 (embedded so it shows in emails, print, and offline) ────────
 import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScaleBarcode, parseScaleBarcodeAfterVariantLookup, resolveScaleBarcodeExactFirst } from "./barcode-utils";
@@ -308,6 +310,8 @@ export async function generateBackupJson(since?: string): Promise<string> {
 }
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const catalogUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const gunzipCatalog = promisify(gunzip);
 
 async function autoCreateJournalEntry(opts: {
   sourceType: string;
@@ -1144,6 +1148,234 @@ export async function registerRoutes(
       res.json({
         message: "Data imported successfully",
         systemSettingsRestored: restoreSystemSettings,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/catalog-transfer/export", requireSuperuser, async (_req: Request, res: Response) => {
+    try {
+      if (process.env.NODE_ENV === "production") {
+        return res.status(403).json({ message: "Catalog export is disabled in production. Export from the development workspace." });
+      }
+      const [categoryResult, itemResult, variantResult, barcodeResult] = await Promise.all([
+        pool.query("SELECT * FROM categories"),
+        pool.query("SELECT * FROM items"),
+        pool.query(`
+          SELECT v.*, i.sku AS parent_sku
+          FROM item_variants v
+          JOIN items i ON i.id = v.item_id
+        `),
+        pool.query(`
+          SELECT b.barcode, i.sku AS item_sku, b.country, b.note, b.is_primary
+          FROM item_barcodes b
+          JOIN items i ON i.id = b.item_id
+        `),
+      ]);
+      const payload = {
+        type: "globipos-catalog-transfer",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        stockPolicy: "replace-with-exported",
+        categories: categoryResult.rows,
+        items: itemResult.rows,
+        variants: variantResult.rows,
+        barcodes: barcodeResult.rows,
+      };
+      const compressed = gzipSync(Buffer.from(JSON.stringify(payload)), { level: 9 });
+      res.setHeader("Content-Type", "application/gzip");
+      res.setHeader("Content-Disposition", `attachment; filename="globipos-catalog-${new Date().toISOString().slice(0, 10)}.json.gz"`);
+      res.setHeader("Content-Length", String(compressed.length));
+      res.send(compressed);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/catalog-transfer/import", requireSuperuser, catalogUpload.single("file"), async (req: Request, res: Response) => {
+    try {
+      if (!req.file?.buffer) return res.status(400).json({ message: "Catalog transfer file required" });
+      const decompressed = await gunzipCatalog(req.file.buffer, { maxOutputLength: 125 * 1024 * 1024 });
+      const payload = JSON.parse(decompressed.toString("utf8"));
+      if (payload?.type !== "globipos-catalog-transfer" || payload?.version !== 1) {
+        return res.status(400).json({ message: "Invalid catalog transfer file" });
+      }
+      if (!Array.isArray(payload.categories) || !Array.isArray(payload.items) || !Array.isArray(payload.variants) || !Array.isArray(payload.barcodes)) {
+        return res.status(400).json({ message: "Catalog transfer is incomplete" });
+      }
+      if (payload.items.length > 250_000 || payload.categories.length > 10_000 || payload.variants.length > 500_000 || payload.barcodes.length > 500_000) {
+        return res.status(400).json({ message: "Catalog transfer exceeds safety limits" });
+      }
+      const uniqueStrings = (rows: any[], key: string, label: string): Set<string> => {
+        const values = new Set<string>();
+        for (const row of rows) {
+          const value = row?.[key];
+          if (typeof value !== "string" || !value.trim()) throw new Error(`${label} contains a missing ${key}`);
+          if (values.has(value)) throw new Error(`${label} contains duplicate ${key}: ${value}`);
+          values.add(value);
+        }
+        return values;
+      };
+      uniqueStrings(payload.categories, "id", "Categories");
+      const itemSkus = uniqueStrings(payload.items, "sku", "Items");
+      const variantSkus = uniqueStrings(payload.variants, "sku", "Variants");
+      for (const sku of variantSkus) if (itemSkus.has(sku)) throw new Error(`SKU is used by both an item and variant: ${sku}`);
+      uniqueStrings(payload.barcodes, "barcode", "Barcodes");
+      const incomingBarcodeOwners = new Map<string, string>();
+      const claimBarcode = (barcode: unknown, owner: string) => {
+        if (barcode == null || barcode === "") return;
+        if (typeof barcode !== "string") throw new Error(`Invalid barcode for ${owner}`);
+        const existing = incomingBarcodeOwners.get(barcode);
+        if (existing && existing !== owner) {
+          throw new Error(`Barcode ${barcode} is assigned to both ${existing} and ${owner}`);
+        }
+        incomingBarcodeOwners.set(barcode, owner);
+      };
+      for (const row of payload.items) claimBarcode(row.barcode, `item:${row.sku}`);
+      for (const row of payload.variants) {
+        if (typeof row.parent_sku !== "string" || !itemSkus.has(row.parent_sku)) {
+          throw new Error(`Variant ${row.sku} refers to a missing parent SKU`);
+        }
+        claimBarcode(row.barcode, `variant:${row.sku}`);
+      }
+      for (const row of payload.barcodes) {
+        if (typeof row.item_sku !== "string" || !itemSkus.has(row.item_sku)) {
+          throw new Error(`Barcode ${row.barcode} refers to a missing item SKU`);
+        }
+        claimBarcode(row.barcode, `item:${row.item_sku}`);
+      }
+
+      const chunk = <T,>(rows: T[], size = 1000): T[][] => {
+        const batches: T[][] = [];
+        for (let i = 0; i < rows.length; i += size) batches.push(rows.slice(i, i + size));
+        return batches;
+      };
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('globipos-catalog-transfer'))");
+        await client.query("LOCK TABLE items, item_variants, item_barcodes IN SHARE ROW EXCLUSIVE MODE");
+        const locationStock = await client.query("SELECT 1 FROM item_location_stock LIMIT 1");
+        if (locationStock.rowCount) throw new Error("Catalog stock cannot be replaced while location-level stock allocations exist");
+        const targetBarcodeRows = await client.query(`
+          SELECT barcode, 'item:' || sku AS owner FROM items WHERE barcode IS NOT NULL AND barcode <> ''
+          UNION ALL
+          SELECT barcode, 'variant:' || sku AS owner FROM item_variants WHERE barcode IS NOT NULL AND barcode <> ''
+          UNION ALL
+          SELECT b.barcode, 'item:' || i.sku AS owner
+          FROM item_barcodes b JOIN items i ON i.id = b.item_id
+        `);
+        for (const row of targetBarcodeRows.rows) {
+          const incomingOwner = incomingBarcodeOwners.get(row.barcode);
+          if (incomingOwner && incomingOwner !== row.owner) {
+            throw new Error(`Barcode ${row.barcode} belongs to ${row.owner} in this deployment, not ${incomingOwner}`);
+          }
+        }
+        for (const batch of chunk(payload.barcodes)) {
+          const conflicts = await client.query(`
+            SELECT x.barcode, x.item_sku AS incoming_sku, i.sku AS existing_sku
+            FROM jsonb_to_recordset($1::jsonb) AS x(barcode text, item_sku text)
+            JOIN item_barcodes b ON b.barcode = x.barcode
+            JOIN items i ON i.id = b.item_id
+            WHERE i.sku <> x.item_sku
+            LIMIT 1
+          `, [JSON.stringify(batch)]);
+          if (conflicts.rowCount) {
+            const conflict = conflicts.rows[0];
+            throw new Error(`Barcode ${conflict.barcode} already belongs to ${conflict.existing_sku}, not ${conflict.incoming_sku}`);
+          }
+        }
+        for (const batch of chunk(payload.categories)) {
+          await client.query(`
+            INSERT INTO categories
+            SELECT * FROM jsonb_populate_recordset(NULL::categories, $1::jsonb)
+            ON CONFLICT (id) DO UPDATE SET
+              name = EXCLUDED.name, description = EXCLUDED.description,
+              parent_id = EXCLUDED.parent_id, vat_rate = EXCLUDED.vat_rate,
+              active = EXCLUDED.active, updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(batch)]);
+        }
+        for (const batch of chunk(payload.items)) {
+          await client.query(`
+            INSERT INTO items
+            SELECT * FROM jsonb_populate_recordset(NULL::items, $1::jsonb)
+            ON CONFLICT (sku) DO UPDATE SET
+              name = EXCLUDED.name, barcode = EXCLUDED.barcode, description = EXCLUDED.description,
+              category_id = EXCLUDED.category_id, unit_type = EXCLUDED.unit_type,
+              pack_size = EXCLUDED.pack_size, price_1 = EXCLUDED.price_1,
+              price_2 = EXCLUDED.price_2, price_3 = EXCLUDED.price_3,
+              price_4 = EXCLUDED.price_4, price_5 = EXCLUDED.price_5,
+              cost_price = EXCLUDED.cost_price, vat_rate = EXCLUDED.vat_rate,
+              stock_quantity = EXCLUDED.stock_quantity, reorder_level = EXCLUDED.reorder_level,
+              volume = EXCLUDED.volume, alcohol_percentage = EXCLUDED.alcohol_percentage,
+              brand = EXCLUDED.brand, origin = EXCLUDED.origin, vintage = EXCLUDED.vintage,
+              image_url = EXCLUDED.image_url, active = EXCLUDED.active,
+              has_variants = EXCLUDED.has_variants, season = EXCLUDED.season,
+              updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(batch)]);
+        }
+        for (const batch of chunk(payload.variants)) {
+          const result = await client.query(`
+            INSERT INTO item_variants (
+              id, item_id, sku, barcode, option1_name, option1_value,
+              option2_name, option2_value, option3_name, option3_value,
+              price_1, price_2, price_3, price_4, price_5, cost_price,
+              stock_quantity, reorder_level, image_url, active, updated_at
+            )
+            SELECT
+              x.id, i.id, x.sku, x.barcode, x.option1_name, x.option1_value,
+              x.option2_name, x.option2_value, x.option3_name, x.option3_value,
+              x.price_1, x.price_2, x.price_3, x.price_4, x.price_5, x.cost_price,
+              x.stock_quantity, x.reorder_level, x.image_url, x.active, x.updated_at
+            FROM jsonb_to_recordset($1::jsonb) AS x(
+              id varchar, parent_sku text, sku text, barcode text,
+              option1_name text, option1_value text, option2_name text, option2_value text,
+              option3_name text, option3_value text, price_1 numeric, price_2 numeric,
+              price_3 numeric, price_4 numeric, price_5 numeric, cost_price numeric,
+              stock_quantity integer, reorder_level integer, image_url text,
+              active boolean, updated_at timestamp
+            )
+            JOIN items i ON i.sku = x.parent_sku
+            ON CONFLICT (sku) DO UPDATE SET
+              item_id = EXCLUDED.item_id, barcode = EXCLUDED.barcode,
+              option1_name = EXCLUDED.option1_name, option1_value = EXCLUDED.option1_value,
+              option2_name = EXCLUDED.option2_name, option2_value = EXCLUDED.option2_value,
+              option3_name = EXCLUDED.option3_name, option3_value = EXCLUDED.option3_value,
+              price_1 = EXCLUDED.price_1, price_2 = EXCLUDED.price_2,
+              price_3 = EXCLUDED.price_3, price_4 = EXCLUDED.price_4,
+              price_5 = EXCLUDED.price_5, cost_price = EXCLUDED.cost_price,
+              stock_quantity = EXCLUDED.stock_quantity, reorder_level = EXCLUDED.reorder_level,
+              image_url = EXCLUDED.image_url, active = EXCLUDED.active, updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(batch)]);
+          if (result.rowCount !== batch.length) throw new Error("One or more variants refer to a missing parent SKU");
+        }
+        for (const batch of chunk(payload.barcodes)) {
+          const result = await client.query(`
+            INSERT INTO item_barcodes (item_id, barcode, country, note, is_primary)
+            SELECT i.id, x.barcode, x.country, x.note, x.is_primary
+            FROM jsonb_to_recordset($1::jsonb)
+              AS x(barcode text, item_sku text, country text, note text, is_primary boolean)
+            JOIN items i ON i.sku = x.item_sku
+            ON CONFLICT (barcode) DO UPDATE SET
+              item_id = EXCLUDED.item_id, country = EXCLUDED.country,
+              note = EXCLUDED.note, is_primary = EXCLUDED.is_primary
+          `, [JSON.stringify(batch)]);
+          if (result.rowCount !== batch.length) throw new Error("One or more barcodes could not be mapped to an item SKU");
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      logActivity(req.user!.id, req.user!.username, "import", "catalog", null,
+        `Catalog transfer imported: ${payload.categories.length} categories, ${payload.items.length} items, ${payload.barcodes.length} barcodes`, req.ip || null, String(req.headers["user-agent"] || ""));
+      res.json({
+        success: true,
+        categories: payload.categories.length,
+        items: payload.items.length,
+        variants: payload.variants.length,
+        barcodes: payload.barcodes.length,
+        stockPolicy: "development quantities applied",
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

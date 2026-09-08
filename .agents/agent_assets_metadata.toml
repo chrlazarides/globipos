@@ -6,27 +6,46 @@ id = "OyY5_H0-VBvvODBDtBW26"
 uri = "file://attached_assets/suppliers-for-production.json"
 type = "unspecified"
 title = "Suppliers backup — ready to restore on production"
+logical_id = "532f482d-c7ac-499e-a096-e4be4f29c1b0"
 
 [[outputs]]
 id = "MR-4baTcfP-baC7-OaujV"
 uri = "file://suppliers-for-production.json"
 type = "unspecified"
 title = "suppliers-for-production.json"
+logical_id = "66e5b049-5f12-4dab-9cc7-b6ca4efd38a8"
 
 [[outputs]]
 id = "35gm2ugyn_uY_sVhZtr5V"
 uri = "file://USER_MANUAL.md"
 type = "text"
 title = "GlobiPOS User Manual"
+logical_id = "6a178e34-7f52-448c-a980-1e8eb05baa75"
 
 [[outputs]]
 id = "FuZ_5h2ubkiHH5mcUMs4E"
 uri = "file://exports/items-restore.json"
 type = "unspecified"
 title = "Items restore file (216 items + 27 categories)"
+logical_id = "aa1a34e1-460b-47df-8e80-7fac7d80cc2b"
 
 [[outputs]]
 id = "V8zI-WKPVcfAp5fKdMJAo"
 uri = "file://exports/GlobiPOS-Export-Tool.zip"
 type = "unspecified"
 title = "GlobiPOS Export Tool (run on your SQL Server PC)"
+logical_id = "d6ec949d-a18f-4625-9491-05ae430f6370"
+
+[[outputs]]
+id = "YGxu7zR2xDo1iTpHaeY5f"
+uri = "file://attached_assets/globipos-catalog-live-import.json.gz"
+type = "unspecified"
+title = "GlobiPOS live catalog import"
+description = "Verified compressed catalog: 130 categories, 131,791 items, 10 variants, and 131,574 barcode aliases. Import applies development stock quantities while preserving unrelated live data."
+logical_id = "c9dbcfd6-f704-453a-9fb7-96e9359d21c8"
+content_hash = "sha256:54411bf9e75956438d21877212ae0523e926d4eaaddb00b88df8d114fb63e10b"
+size = 9928702
+mtime_ms = 1788889353095
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:c34615a6-7489-4dd2-a56b-6f3607de7cba/c9dbcfd6-f704-453a-9fb7-96e9359d21c8/2db99272-81cb-4f41-987e-b3c1270e212a"
+storage_version_token = "1788889648023301"
+content_type = "application/octet-stream"
