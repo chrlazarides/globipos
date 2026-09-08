@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   ArrowRight,
+  Building2,
   CheckCircle2,
   CircleAlert,
   CreditCard,
@@ -17,6 +19,7 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { SystemSetting } from "@shared/schema";
 
 type EmailStatus = {
@@ -52,6 +55,31 @@ type IntegrationCardProps = {
   href: string;
   action: string;
 };
+
+type ErpOption = {
+  id: "softone" | "sap-b1";
+  name: string;
+  description: string;
+  interfaceName: string;
+  requirements: string[];
+};
+
+const erpOptions: ErpOption[] = [
+  {
+    id: "softone",
+    name: "SoftOne",
+    description: "Synchronize customers, items, stock, invoices, and payments with SoftOne ERP.",
+    interfaceName: "SoftOne Web Services / REST API",
+    requirements: ["SoftOne service endpoint", "Company or installation identifier", "API-enabled integration account", "Data synchronization scope"],
+  },
+  {
+    id: "sap-b1",
+    name: "SAP Business One",
+    description: "Exchange master data and transactions with SAP Business One.",
+    interfaceName: "SAP Business One Service Layer",
+    requirements: ["Service Layer endpoint", "Company database identifier", "API-enabled integration account", "Data synchronization scope"],
+  },
+];
 
 function IntegrationCard({
   title,
@@ -99,6 +127,7 @@ function IntegrationCard({
 
 export default function IntegrationsPage() {
   const { user } = useAuth();
+  const [selectedErp, setSelectedErp] = useState<ErpOption | null>(null);
   const isSuperuser = user?.role === "superuser";
   const email = useQuery<EmailStatus>({ queryKey: ["/api/email-status"] });
   const whatsapp = useQuery<WhatsAppStatus>({ queryKey: ["/api/admin/whatsapp/status"] });
@@ -210,6 +239,76 @@ export default function IntegrationsPage() {
           />
         )}
       </div>
+
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight">ERP systems</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Connect GlobiPOS to an external ERP while keeping credentials in deployment secrets.
+          </p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {erpOptions.map(option => (
+            <Card key={option.id} className="flex h-full flex-col">
+              <CardHeader className="space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="rounded-lg bg-blue-50 p-2.5 text-blue-700">
+                    <Building2 className="h-5 w-5" />
+                  </div>
+                  <Badge variant="outline">Available</Badge>
+                </div>
+                <div>
+                  <CardTitle className="text-lg">{option.name}</CardTitle>
+                  <CardDescription className="mt-1.5 leading-5">{option.description}</CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent className="mt-auto space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Connection method: <span className="font-medium text-foreground">{option.interfaceName}</span>
+                </p>
+                <Button variant="outline" className="w-full justify-between" onClick={() => setSelectedErp(option)}>
+                  View setup requirements
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </section>
+
+      <Dialog open={Boolean(selectedErp)} onOpenChange={open => !open && setSelectedErp(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Connect {selectedErp?.name}</DialogTitle>
+            <DialogDescription>
+              {selectedErp?.name} is available as an ERP integration option but is not connected in this deployment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="rounded-lg border bg-muted/30 p-4">
+              <p className="text-sm font-medium">Connection method</p>
+              <p className="mt-1 text-sm text-muted-foreground">{selectedErp?.interfaceName}</p>
+            </div>
+            <div>
+              <p className="text-sm font-medium">Required for setup</p>
+              <ul className="mt-2 space-y-2 text-sm text-muted-foreground">
+                {selectedErp?.requirements.map(requirement => (
+                  <li key={requirement} className="flex gap-2">
+                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                    {requirement}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="text-xs leading-5 text-muted-foreground">
+              Connection passwords and API credentials must be stored as deployment secrets, not in the integration profile.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setSelectedErp(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
