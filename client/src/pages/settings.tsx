@@ -143,6 +143,15 @@ export default function SettingsPage() {
     fallback: boolean;
     configured: boolean;
     availability: { replit: boolean; xai: boolean; deterministic: boolean };
+    runtimeHealth: {
+      fallbackCount: number;
+      recommendationFallbackCount: number;
+      feedbackFallbackCount: number;
+      consecutiveFallbackCount: number;
+      lastFailureCategory: "configuration" | "authentication" | "rate_limit" | "timeout" | "model" | "invalid_response" | "provider" | null;
+      lastFailureAt: string | null;
+      degraded: boolean;
+    };
   }>({
     queryKey: ["/api/customer-ai/status"],
     enabled: isAdminOrHigher,
@@ -1016,6 +1025,25 @@ export default function SettingsPage() {
                         </Badge>
                         {customerAiStatus?.fallback && <Badge variant="secondary">Safe fallback active</Badge>}
                       </div>
+                      {customerAiStatus?.runtimeHealth.degraded ? (
+                        <div className="flex gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100" data-testid="alert-customer-ai-runtime-degraded">
+                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                          <div>
+                            <p className="font-medium">Configured AI is repeatedly falling back</p>
+                            <p>
+                              {customerAiStatus.runtimeHealth.consecutiveFallbackCount} consecutive failures; latest category:{" "}
+                              {customerAiStatus.runtimeHealth.lastFailureCategory?.replace("_", " ") || "unknown"}.
+                              Customer requests are still using the safe fallback.
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground" data-testid="status-customer-ai-runtime-healthy">
+                          Runtime health: {customerAiStatus?.runtimeHealth.fallbackCount
+                            ? `${customerAiStatus.runtimeHealth.fallbackCount} fallback(s) since the server started; no repeated failure is active.`
+                            : "No provider failures recorded since the server started."}
+                        </p>
+                      )}
                       <div className="text-xs text-muted-foreground space-y-1">
                         <p className="font-medium text-foreground">Provision xAI</p>
                         <ol className="list-decimal ml-4 space-y-0.5">

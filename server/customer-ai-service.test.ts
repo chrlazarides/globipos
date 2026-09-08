@@ -5,6 +5,7 @@ import {
   enhanceCustomerRecommendations,
   getCustomerAiEngine,
   getCustomerAiStatus,
+  resetCustomerAiRuntimeHealth,
   resolveCustomerAiConfig,
   type CustomerAiCompletionClient,
   type CustomerAiConfig,
@@ -232,6 +233,7 @@ test("sentiment accepts only validated classifications and otherwise requests he
 });
 
 test("status reports booleans and never exposes credential values", async () => {
+  resetCustomerAiRuntimeHealth();
   await withProviderEnvironment({
     AI_INTEGRATIONS_OPENAI_BASE_URL: "https://managed.example/v1/private",
     AI_INTEGRATIONS_OPENAI_API_KEY: "managed-super-secret",
@@ -243,5 +245,35 @@ test("status reports booleans and never exposes credential values", async () => 
     assert.equal(serialized.includes("managed-super-secret"), false);
     assert.equal(serialized.includes("xai-super-secret"), false);
     assert.equal(serialized.includes("/private"), false);
+  });
+});
+
+test("runtime health records only sanitized fallback categories and clears degradation after success", async () => {
+  resetCustomerAiRuntimeHealth();
+  await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
+    const candidates = [{ id: "a", name: "Apple", price: "1.25", reason: "In stock" }];
+    const sensitiveError = new Error("401 invalid API key secret-value prompt-content");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await enhanceCustomerRecommendations(config({ requestedProvider: "xai" }), candidates, {}, failingClient(sensitiveError));
+    }
+
+    const degraded = getCustomerAiStatus(config({ requestedProvider: "xai" })).runtimeHealth;
+    assert.equal(degraded.degraded, true);
+    assert.equal(degraded.fallbackCount, 3);
+    assert.equal(degraded.recommendationFallbackCount, 3);
+    assert.equal(degraded.lastFailureCategory, "authentication");
+    assert.equal(JSON.stringify(degraded).includes("secret-value"), false);
+    assert.equal(JSON.stringify(degraded).includes("prompt-content"), false);
+
+    await enhanceCustomerRecommendations(
+      config({ requestedProvider: "xai" }),
+      candidates,
+      {},
+      clientReturning('{"orderedIds":["a"],"reasons":{}}'),
+    );
+    const recovered = getCustomerAiStatus(config({ requestedProvider: "xai" })).runtimeHealth;
+    assert.equal(recovered.degraded, false);
+    assert.equal(recovered.consecutiveFallbackCount, 0);
+    assert.equal(recovered.fallbackCount, 3);
   });
 });

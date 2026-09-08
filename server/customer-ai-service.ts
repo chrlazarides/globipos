@@ -19,6 +19,72 @@ export interface CustomerAiEngine {
   configured: boolean;
 }
 
+export type CustomerAiFailureCategory =
+  | "configuration"
+  | "authentication"
+  | "rate_limit"
+  | "timeout"
+  | "model"
+  | "invalid_response"
+  | "provider";
+
+interface CustomerAiRuntimeHealth {
+  fallbackCount: number;
+  recommendationFallbackCount: number;
+  feedbackFallbackCount: number;
+  consecutiveFallbackCount: number;
+  lastFailureCategory: CustomerAiFailureCategory | null;
+  lastFailureAt: string | null;
+}
+
+const runtimeHealth: CustomerAiRuntimeHealth = {
+  fallbackCount: 0,
+  recommendationFallbackCount: 0,
+  feedbackFallbackCount: 0,
+  consecutiveFallbackCount: 0,
+  lastFailureCategory: null,
+  lastFailureAt: null,
+};
+
+function failureCategory(error: unknown): CustomerAiFailureCategory {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (message.includes("401") || message.includes("403") || message.includes("auth") || message.includes("api key")) return "authentication";
+  if (message.includes("429") || message.includes("rate") || message.includes("quota")) return "rate_limit";
+  if (message.includes("timeout") || message.includes("timed out") || message.includes("abort")) return "timeout";
+  if (message.includes("model")) return "model";
+  if (message.includes("json") || message.includes("invalid response") || message.includes("unexpected token")) return "invalid_response";
+  return "provider";
+}
+
+function recordFallback(feature: "recommendation" | "feedback", category: CustomerAiFailureCategory) {
+  try {
+    runtimeHealth.fallbackCount += 1;
+    runtimeHealth[feature === "recommendation" ? "recommendationFallbackCount" : "feedbackFallbackCount"] += 1;
+    runtimeHealth.consecutiveFallbackCount += 1;
+    runtimeHealth.lastFailureCategory = category;
+    runtimeHealth.lastFailureAt = new Date().toISOString();
+  } catch {
+    // Operational health must never affect a customer request.
+  }
+}
+
+function recordSuccess() {
+  try {
+    runtimeHealth.consecutiveFallbackCount = 0;
+  } catch {
+    // Operational health must never affect a customer request.
+  }
+}
+
+export function resetCustomerAiRuntimeHealth() {
+  runtimeHealth.fallbackCount = 0;
+  runtimeHealth.recommendationFallbackCount = 0;
+  runtimeHealth.feedbackFallbackCount = 0;
+  runtimeHealth.consecutiveFallbackCount = 0;
+  runtimeHealth.lastFailureCategory = null;
+  runtimeHealth.lastFailureAt = null;
+}
+
 type SettingValue = { key: string; value: string } | [string, string];
 
 export interface CustomerAiCompletionClient {
@@ -90,6 +156,10 @@ export function getCustomerAiStatus(config: CustomerAiConfig) {
       xai: xaiConfigured(),
       deterministic: true,
     },
+    runtimeHealth: {
+      ...runtimeHealth,
+      degraded: runtimeHealth.consecutiveFallbackCount >= 3,
+    },
   };
 }
 
@@ -116,7 +186,10 @@ export async function enhanceCustomerRecommendations(
 ): Promise<{ orderedIds: string[]; reasons: Record<string, string>; engine: CustomerAiEngine }> {
   const engine = getCustomerAiEngine(config, config.recommendationsEnabled);
   const client = engine.activeProvider === "deterministic" ? null : completionClient || clientFor(engine);
-  if (!client || !candidates.length) return { orderedIds: candidates.map(candidate => candidate.id), reasons: {}, engine };
+  if (!client || !candidates.length) {
+    if (engine.fallback && candidates.length) recordFallback("recommendation", "configuration");
+    return { orderedIds: candidates.map(candidate => candidate.id), reasons: {}, engine };
+  }
   try {
     const completion = await client.chat.completions.create({
       model: engine.model,
@@ -139,8 +212,10 @@ export async function enhanceCustomerRecommendations(
         if (ids.has(id) && typeof reason === "string" && reason.trim()) reasons[id] = reason.trim().slice(0, 160);
       }
     }
+    recordSuccess();
     return { orderedIds: uniqueIds, reasons, engine };
-  } catch {
+  } catch (error) {
+    recordFallback("recommendation", failureCategory(error));
     console.warn("[customer-ai] recommendation enhancement failed; using deterministic ranking");
     return { orderedIds: candidates.map(candidate => candidate.id), reasons: {}, engine: { ...engine, activeProvider: "deterministic", fallback: true } };
   }
@@ -153,7 +228,10 @@ export async function classifyCustomerFeedback(
 ): Promise<{ sentiment: "positive" | "neutral" | "negative"; score: number; engine: CustomerAiEngine } | null> {
   const engine = getCustomerAiEngine(config, config.sentimentEnabled);
   const client = engine.activeProvider === "deterministic" ? null : completionClient || clientFor(engine);
-  if (!client) return null;
+  if (!client) {
+    if (engine.fallback) recordFallback("feedback", "configuration");
+    return null;
+  }
   try {
     const completion = await client.chat.completions.create({
       model: engine.model,
@@ -167,8 +245,10 @@ export async function classifyCustomerFeedback(
     if (!["positive", "neutral", "negative"].includes(String(result.sentiment)) || typeof result.score !== "number" || !Number.isFinite(result.score) || result.score < -1 || result.score > 1) {
       throw new Error("invalid response");
     }
+    recordSuccess();
     return { sentiment: result.sentiment as "positive" | "neutral" | "negative", score: result.score, engine };
-  } catch {
+  } catch (error) {
+    recordFallback("feedback", failureCategory(error));
     console.warn("[customer-ai] sentiment classification failed; using heuristic");
     return null;
   }
