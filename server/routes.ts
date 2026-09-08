@@ -26,12 +26,15 @@ import QRCode from "qrcode";
 
 // ─── LOGO BASE64 (embedded so it shows in emails, print, and offline) ────────
 import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScaleBarcode, parseScaleBarcodeAfterVariantLookup, resolveScaleBarcodeExactFirst } from "./barcode-utils";
+import { CatalogImportBarcodeAllocator } from "./catalog-import-barcodes";
+import { pool } from "./db";
 import { isValidIanaTimeZone } from "@shared/quiet-hours";
 import { registerDeploymentControlRoutes } from "./deployment-control";
 import { createPosBuildsResolver } from "./pos-builds";
 import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "./customer-ai-service";
 import { createCustomerAiHealthPersistence } from "./customer-ai-health-persistence";
 import { registerErpIntegrationRoutes } from "./erp-integration";
+
 function getLogoDataUrl(): string {
   const candidates = [
     path.resolve(process.cwd(), "dist", "public", "logo.png"),
@@ -1209,6 +1212,7 @@ export async function registerRoutes(
   });
 
   app.post("/api/items/:id/barcodes", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
       const itemId = req.params.id as string;
       const item = await storage.getItem(itemId);
@@ -1221,9 +1225,12 @@ export async function registerRoutes(
         const check = (10 - (sum % 10)) % 10;
         if (check !== parseInt(bc[12])) return res.status(400).json({ message: `Invalid EAN-13 check digit — expected ${check}` });
       }
+      releaseBarcodeLock = await acquireCatalogImportLock();
+      await assertBarcodeAvailable(bc, `item:${itemId}`);
       const row = await storage.addItemBarcode({ ...data, barcode: bc });
       res.json(row);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
+    finally { await releaseBarcodeLock?.(); }
   });
 
   app.delete("/api/item-barcodes/:id", async (req, res) => {
@@ -1311,26 +1318,37 @@ export async function registerRoutes(
   });
 
   app.post("/api/items", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
       sanitizeItemNumericFields(req.body);
       const data = insertItemSchema.parse(req.body);
       if (data.categoryId === "") data.categoryId = null;
+      if (data.barcode) {
+        releaseBarcodeLock = await acquireCatalogImportLock();
+        await assertBarcodeAvailable(data.barcode);
+      }
       const item = await storage.createItem(data);
       res.json(item);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
-    }
+    } finally { await releaseBarcodeLock?.(); }
   });
 
   app.patch("/api/items/:id", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
       sanitizeItemNumericFields(req.body);
-      const item = await storage.updateItem((req.params.id as string), req.body);
+      const itemId = req.params.id as string;
+      if (req.body.barcode) {
+        releaseBarcodeLock = await acquireCatalogImportLock();
+        await assertBarcodeAvailable(req.body.barcode, `item:${itemId}`);
+      }
+      const item = await storage.updateItem(itemId, req.body);
       if (!item) return res.status(404).json({ message: "Item not found" });
       res.json(item);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
-    }
+    } finally { await releaseBarcodeLock?.(); }
   });
 
   // --- Item Variants (color/size/textile/quality etc.) ---
@@ -1361,18 +1379,24 @@ export async function registerRoutes(
   });
 
   app.post("/api/items/:id/variants", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
       const body = { ...req.body, itemId: (req.params.id as string) };
       sanitizeNumericFields(body, ["price1", "price2", "price3", "price4", "price5", "costPrice"], null as any);
       const data = insertItemVariantSchema.parse(body);
+      if (data.barcode) {
+        releaseBarcodeLock = await acquireCatalogImportLock();
+        await assertBarcodeAvailable(data.barcode);
+      }
       const variant = await storage.createItemVariant(data);
       res.json(variant);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
-    }
+    } finally { await releaseBarcodeLock?.(); }
   });
 
   app.post("/api/items/:id/variants/matrix", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
       const itemId = req.params.id as string;
       const { season, qualities, cells } = req.body as {
@@ -1410,11 +1434,12 @@ export async function registerRoutes(
         })
         .filter((c): c is NonNullable<typeof c> => c !== null);
 
+      releaseBarcodeLock = await acquireCatalogImportLock();
       const variants = await storage.bulkUpsertVariantMatrix(itemId, season || null, resolvedCells);
       res.json(variants);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
-    }
+    } finally { await releaseBarcodeLock?.(); }
   });
 
   app.get("/api/inventory-in", async (req, res) => {
@@ -1475,16 +1500,18 @@ export async function registerRoutes(
   });
 
   app.post("/api/inventory-in/post", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
       const { ids } = req.body as { ids: string[] };
       if (!Array.isArray(ids) || ids.length === 0) {
         return res.status(400).json({ message: "ids array is required" });
       }
+      releaseBarcodeLock = await acquireCatalogImportLock();
       const result = await storage.postInventoryInLines(ids);
       res.json(result);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
-    }
+    } finally { await releaseBarcodeLock?.(); }
   });
 
   app.get("/api/variant-templates", async (_req, res) => {
@@ -1516,14 +1543,20 @@ export async function registerRoutes(
   });
 
   app.patch("/api/item-variants/:id", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
       sanitizeNumericFields(req.body, ["price1", "price2", "price3", "price4", "price5", "costPrice"], null as any);
-      const variant = await storage.updateItemVariant((req.params.id as string), req.body);
+      const variantId = req.params.id as string;
+      if (req.body.barcode) {
+        releaseBarcodeLock = await acquireCatalogImportLock();
+        await assertBarcodeAvailable(req.body.barcode, `variant:${variantId}`);
+      }
+      const variant = await storage.updateItemVariant(variantId, req.body);
       if (!variant) return res.status(404).json({ message: "Variant not found" });
       res.json(variant);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
-    }
+    } finally { await releaseBarcodeLock?.(); }
   });
 
   app.delete("/api/item-variants/:id", async (req, res) => {
@@ -1548,6 +1581,7 @@ export async function registerRoutes(
   });
 
   app.post("/api/items/import", upload.single("file"), async (req, res) => {
+    let releaseImportLock: (() => Promise<void>) | undefined;
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
@@ -1559,13 +1593,31 @@ export async function registerRoutes(
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
       const upsert = req.body.mode === "upsert";
+      releaseImportLock = await acquireCatalogImportLock();
       const categories = await storage.getCategories();
       const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
-      const existingBySku = upsert
-        ? new Map((await storage.getItems()).map((it) => [it.sku.toLowerCase(), it]))
-        : new Map<string, any>();
+      const allExistingItems = await storage.getItems();
+      const existingBySku = new Map<string, any[]>();
+      if (upsert) {
+        for (const item of allExistingItems) {
+          const key = item.sku.toLowerCase();
+          existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
+        }
+      }
+      const [existingVariants, existingAliases] = await Promise.all([
+        storage.getAllItemVariantsIncludingInactive(),
+        storage.getAllItemBarcodes(),
+      ]);
+      const barcodeAllocator = new CatalogImportBarcodeAllocator([
+        ...allExistingItems.map((it) => ({ barcode: it.barcode, ownerKey: `item:${it.id}` })),
+        ...existingVariants.map((variant) => ({ barcode: variant.barcode, ownerKey: `variant:${variant.id}` })),
+        ...existingAliases.map((alias) => ({
+          barcode: alias.barcode,
+          ownerKey: `item:${alias.itemId}`,
+        })),
+      ]);
 
-      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
+      const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: any[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
 
       for (let i = 0; i < rows.length; i++) {
         try {
@@ -1594,10 +1646,25 @@ export async function registerRoutes(
             }
           }
 
+          const existingMatches = upsert ? existingBySku.get(sku.toLowerCase()) || [] : [];
+          if (existingMatches.length > 1) {
+            results.errors.push({ row: i + 2, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
+            continue;
+          }
+          const existing = existingMatches[0];
+          const sourceBarcode = getValue("barcode");
+          const provisionalOwnerKey = existing ? `item:${existing.id}` : `import-row:${i}`;
+          const barcodeAssignment = barcodeAllocator.assign(
+            sourceBarcode || existing?.barcode,
+            sku,
+            i + 2,
+            provisionalOwnerKey,
+          );
+          if (barcodeAssignment.issue) results.barcodeIssues.push(barcodeAssignment.issue);
           const itemData = {
             name,
             sku,
-            barcode: getValue("barcode") || null,
+            barcode: barcodeAssignment.barcode,
             description: getValue("description") || null,
             categoryId,
             unitType: getValue("unitType") || "pc",
@@ -1618,10 +1685,9 @@ export async function registerRoutes(
             active: true,
           };
 
-          const existing = upsert ? existingBySku.get(sku.toLowerCase()) : undefined;
           if (existing) {
             const updateData: Record<string, any> = { name };
-            if (getValue("barcode")) updateData.barcode = itemData.barcode;
+            updateData.barcode = itemData.barcode;
             if (getValue("description")) updateData.description = itemData.description;
             if (categoryId) updateData.categoryId = categoryId;
             if (getValue("unitType")) updateData.unitType = itemData.unitType;
@@ -1638,7 +1704,8 @@ export async function registerRoutes(
             results.updated++;
           } else {
             const created = await storage.createItem(itemData);
-            if (upsert) existingBySku.set(sku.toLowerCase(), created);
+            barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
+            if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
             results.success++;
           }
         } catch (e: any) {
@@ -1649,10 +1716,13 @@ export async function registerRoutes(
       res.json(results);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
+    } finally {
+      await releaseImportLock?.();
     }
   });
 
   app.post("/api/items/import/json", async (req, res) => {
+    let releaseImportLock: (() => Promise<void>) | undefined;
     try {
       const { rows } = req.body;
       if (!rows || !Array.isArray(rows) || rows.length === 0) {
@@ -1663,12 +1733,30 @@ export async function registerRoutes(
       }
 
       const upsert = req.body.mode === "upsert";
+      releaseImportLock = await acquireCatalogImportLock();
       const categories = await storage.getCategories();
       const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
-      const existingBySku = upsert
-        ? new Map((await storage.getItems()).map((it) => [it.sku.toLowerCase(), it]))
-        : new Map<string, any>();
-      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
+      const allExistingItems = await storage.getItems();
+      const existingBySku = new Map<string, any[]>();
+      if (upsert) {
+        for (const item of allExistingItems) {
+          const key = item.sku.toLowerCase();
+          existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
+        }
+      }
+      const [existingVariants, existingAliases] = await Promise.all([
+        storage.getAllItemVariantsIncludingInactive(),
+        storage.getAllItemBarcodes(),
+      ]);
+      const barcodeAllocator = new CatalogImportBarcodeAllocator([
+        ...allExistingItems.map((it) => ({ barcode: it.barcode, ownerKey: `item:${it.id}` })),
+        ...existingVariants.map((variant) => ({ barcode: variant.barcode, ownerKey: `variant:${variant.id}` })),
+        ...existingAliases.map((alias) => ({
+          barcode: alias.barcode,
+          ownerKey: `item:${alias.itemId}`,
+        })),
+      ]);
+      const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: any[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
 
       const clean = (v: any): string => {
         const s = v === null || v === undefined ? "" : String(v).trim();
@@ -1700,10 +1788,25 @@ export async function registerRoutes(
             }
           }
 
+          const existingMatches = upsert ? existingBySku.get(sku.toLowerCase()) || [] : [];
+          if (existingMatches.length > 1) {
+            results.errors.push({ row: i + 1, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
+            continue;
+          }
+          const existing = existingMatches[0];
+          const sourceBarcode = clean(row.barcode);
+          const provisionalOwnerKey = existing ? `item:${existing.id}` : `import-row:${i}`;
+          const barcodeAssignment = barcodeAllocator.assign(
+            sourceBarcode || existing?.barcode,
+            sku,
+            i + 1,
+            provisionalOwnerKey,
+          );
+          if (barcodeAssignment.issue) results.barcodeIssues.push(barcodeAssignment.issue);
           const itemData = {
             name,
             sku,
-            barcode: clean(row.barcode) || null,
+            barcode: barcodeAssignment.barcode,
             description: clean(row.description) || null,
             categoryId,
             unitType: clean(row.unitType) || "pc",
@@ -1724,10 +1827,9 @@ export async function registerRoutes(
             active: true,
           };
 
-          const existing = upsert ? existingBySku.get(sku.toLowerCase()) : undefined;
           if (existing) {
             const updateData: Record<string, any> = { name };
-            if (clean(row.barcode)) updateData.barcode = itemData.barcode;
+            updateData.barcode = itemData.barcode;
             if (clean(row.description)) updateData.description = itemData.description;
             if (categoryId) updateData.categoryId = categoryId;
             if (clean(row.unitType)) updateData.unitType = itemData.unitType;
@@ -1744,7 +1846,8 @@ export async function registerRoutes(
             results.updated++;
           } else {
             const created = await storage.createItem(itemData);
-            if (upsert) existingBySku.set(sku.toLowerCase(), created);
+            barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
+            if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
             results.success++;
           }
         } catch (e: any) {
@@ -1755,6 +1858,8 @@ export async function registerRoutes(
       res.json(results);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
+    } finally {
+      await releaseImportLock?.();
     }
   });
 
@@ -12113,4 +12218,37 @@ function generateStatementHtml(customer: any, statement: any, autoPrint: boolean
 ${printScript}
 </body>
 </html>`;
+}
+
+async function acquireCatalogImportLock(): Promise<() => Promise<void>> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<{ locked: boolean }>(
+        "SELECT pg_try_advisory_lock($1) AS locked",
+        [22_300_001],
+      );
+      if (result.rows[0]?.locked) {
+        return async () => {
+          try { await client.query("SELECT pg_advisory_unlock($1)", [22_300_001]); }
+          finally { client.release(); }
+        };
+      }
+    } catch (error) {
+      client.release();
+      throw error;
+    }
+    client.release();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Another catalog import is still running; please retry shortly");
+}
+
+async function assertBarcodeAvailable(barcode: unknown, allowedOwnerKey?: string): Promise<void> {
+  if (barcode === null || barcode === undefined || String(barcode).trim() === "") return;
+  const normalized = String(barcode).trim().replace(/\s+/g, "");
+  const owners = new Set(await storage.getBarcodeOwnerKeys(normalized));
+  if (allowedOwnerKey) owners.delete(allowedOwnerKey);
+  if (owners.size > 0) throw new Error(`Barcode ${normalized} is already assigned to another product`);
 }

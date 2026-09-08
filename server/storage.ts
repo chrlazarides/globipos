@@ -80,6 +80,8 @@ export interface IStorage {
   adjustLocationStock(itemId: string, variantId: string | null, locationId: string, delta: number): Promise<ItemLocationStock>;
 
   getItemBarcodes(itemId: string): Promise<ItemBarcode[]>;
+  getAllItemBarcodes(): Promise<ItemBarcode[]>;
+  getBarcodeOwnerKeys(barcode: string): Promise<string[]>;
   addItemBarcode(data: InsertItemBarcode): Promise<ItemBarcode>;
   deleteItemBarcode(id: string): Promise<void>;
   getItemByAnyBarcode(barcode: string): Promise<Item | undefined>;
@@ -92,6 +94,7 @@ export interface IStorage {
 
   getItemVariants(itemId: string): Promise<ItemVariant[]>;
   getAllItemVariants(): Promise<ItemVariant[]>;
+  getAllItemVariantsIncludingInactive(): Promise<ItemVariant[]>;
   getItemVariant(id: string): Promise<ItemVariant | undefined>;
   getItemVariantByBarcode(barcode: string): Promise<ItemVariant | undefined>;
   getItemVariantBySku(sku: string): Promise<ItemVariant | undefined>;
@@ -479,6 +482,21 @@ export class DatabaseStorage implements IStorage {
       .where(eq(itemBarcodes.itemId, itemId))
       .orderBy(itemBarcodes.isPrimary, itemBarcodes.createdAt);
   }
+  async getAllItemBarcodes() {
+    return db.select().from(itemBarcodes);
+  }
+  async getBarcodeOwnerKeys(barcode: string) {
+    const [matchingItems, matchingVariants, matchingAliases] = await Promise.all([
+      db.select({ id: items.id }).from(items).where(eq(items.barcode, barcode)),
+      db.select({ id: itemVariants.id }).from(itemVariants).where(eq(itemVariants.barcode, barcode)),
+      db.select({ itemId: itemBarcodes.itemId }).from(itemBarcodes).where(eq(itemBarcodes.barcode, barcode)),
+    ]);
+    return [
+      ...matchingItems.map((item) => `item:${item.id}`),
+      ...matchingVariants.map((variant) => `variant:${variant.id}`),
+      ...matchingAliases.map((alias) => `item:${alias.itemId}`),
+    ];
+  }
   async addItemBarcode(data: InsertItemBarcode) {
     const [row] = await db.insert(itemBarcodes).values(data).returning();
     return row;
@@ -512,6 +530,9 @@ export class DatabaseStorage implements IStorage {
   }
   async getAllItemVariants() {
     return db.select().from(itemVariants).where(eq(itemVariants.active, true));
+  }
+  async getAllItemVariantsIncludingInactive() {
+    return db.select().from(itemVariants);
   }
   async getItemVariant(id: string) {
     const [v] = await db.select().from(itemVariants).where(eq(itemVariants.id, id));
