@@ -27,6 +27,7 @@ import QRCode from "qrcode";
 import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScaleBarcode, parseScaleBarcodeAfterVariantLookup, resolveScaleBarcodeExactFirst } from "./barcode-utils";
 import { isValidIanaTimeZone } from "@shared/quiet-hours";
 import { registerDeploymentControlRoutes } from "./deployment-control";
+import { createPosBuildsResolver } from "./pos-builds";
 function getLogoDataUrl(): string {
   const candidates = [
     path.resolve(process.cwd(), "dist", "public", "logo.png"),
@@ -8960,69 +8961,14 @@ export async function registerRoutes(
 
   // POS Locations
   // POS build downloads — live list of release assets from GitHub
-  let posBuildsCache: { repoUrl: string; releases: any[]; fetchedAt: number } | null = null;
+  const resolvePosBuilds = createPosBuildsResolver({
+    getSettings: () => storage.getSettings(),
+    getGithubToken: () => process.env.GLOBISYNC,
+    getDefaultRepo: () => process.env.POS_GITHUB_REPO,
+  });
   app.get("/api/pos/builds", requireStaff, async (_req, res) => {
-    let requestedRepoUrl: string | null = null;
-    try {
-      const CACHE_MS = 5 * 60 * 1000;
-      const settings = await storage.getSettings();
-      const repoUrl = settings.find((s) => s.key === "pos_github_repo")?.value
-        || process.env.POS_GITHUB_REPO
-        || "https://github.com/chrlazarides/globipos";
-      requestedRepoUrl = repoUrl;
-      if (
-        posBuildsCache
-        && posBuildsCache.repoUrl === repoUrl
-        && Date.now() - posBuildsCache.fetchedAt < CACHE_MS
-      ) {
-        return res.json({ releases: posBuildsCache.releases, stale: false });
-      }
-      const m = repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
-      if (!m) return res.status(400).json({ message: "pos_github_repo setting is not a valid GitHub URL" });
-      const [, owner, repo] = m;
-      const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": "GlobiPOS" };
-      if (process.env.GLOBISYNC) headers.Authorization = `token ${process.env.GLOBISYNC}`;
-      const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=5`, { headers });
-      if (!ghRes.ok) {
-        if (posBuildsCache?.repoUrl === repoUrl) {
-          return res.json({
-            releases: posBuildsCache.releases,
-            stale: true,
-            warning: "GitHub is temporarily unavailable. Showing the last successfully verified release links.",
-          });
-        }
-        return res.status(502).json({ message: `GitHub API error: ${ghRes.status}. No verified release links are cached yet.` });
-      }
-      const releases: any[] = await ghRes.json();
-      const data = releases
-        .filter((r) => !r.draft)
-        .map((r) => ({
-          tag: r.tag_name,
-          name: r.name,
-          publishedAt: r.published_at,
-          prerelease: r.prerelease,
-          htmlUrl: r.html_url,
-          assets: (r.assets ?? [])
-            .filter((a: any) => !a.name.endsWith(".sig") && a.name !== "latest.json")
-            .map((a: any) => ({
-              name: a.name,
-              size: a.size,
-              downloadUrl: a.browser_download_url,
-              downloads: a.download_count,
-            })),
-        }));
-      posBuildsCache = { repoUrl, releases: data, fetchedAt: Date.now() };
-      res.json({ releases: data, stale: false });
-    } catch (e: any) {
-      if (requestedRepoUrl && posBuildsCache?.repoUrl === requestedRepoUrl) {
-        return res.json({
-          releases: posBuildsCache.releases,
-          stale: true,
-          warning: "GitHub is temporarily unavailable. Showing the last successfully verified release links.",
-        });
-      }
-      res.status(500).json({ message: e.message });
-    }
+    const result = await resolvePosBuilds();
+    res.status(result.status).json(result.body);
   });
 
   app.get("/api/pos/locations", requireStaff, async (req, res) => {
