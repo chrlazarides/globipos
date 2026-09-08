@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   ArrowRight,
@@ -20,6 +20,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { SystemSetting } from "@shared/schema";
 
 type EmailStatus = {
@@ -88,6 +92,24 @@ const erpOptions: ErpOption[] = [
   },
 ];
 
+type ErpBusinessRules = {
+  itemOwner: "globipos" | "erp";
+  itemSync: "manual" | "15_minutes" | "hourly" | "daily";
+  stockOwner: "globipos" | "erp";
+  pricingOwner: "globipos" | "erp";
+  offerOwner: "globipos" | "erp";
+  customerOwner: "globipos" | "erp";
+};
+
+const defaultErpRules: ErpBusinessRules = {
+  itemOwner: "erp",
+  itemSync: "manual",
+  stockOwner: "globipos",
+  pricingOwner: "erp",
+  offerOwner: "globipos",
+  customerOwner: "globipos",
+};
+
 function IntegrationCard({
   title,
   description,
@@ -134,7 +156,9 @@ function IntegrationCard({
 
 export default function IntegrationsPage() {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [selectedErp, setSelectedErp] = useState<ErpOption | null>(null);
+  const [erpRules, setErpRules] = useState<ErpBusinessRules>(defaultErpRules);
   const isSuperuser = user?.role === "superuser";
   const email = useQuery<EmailStatus>({ queryKey: ["/api/email-status"] });
   const whatsapp = useQuery<WhatsAppStatus>({ queryKey: ["/api/admin/whatsapp/status"] });
@@ -155,6 +179,46 @@ export default function IntegrationsPage() {
       : cardProvider === "worldpay"
         ? card.data?.worldpayConfigured
         : false;
+
+  const openErp = (option: ErpOption) => {
+    const saved = settings.data?.find(setting => setting.key === `erp_business_rules_${option.id}`)?.value;
+    if (saved) {
+      try {
+        setErpRules({ ...defaultErpRules, ...JSON.parse(saved) });
+      } catch {
+        setErpRules(defaultErpRules);
+      }
+    } else {
+      setErpRules(defaultErpRules);
+    }
+    setSelectedErp(option);
+  };
+
+  const saveErpRules = useMutation({
+    mutationFn: async () => {
+      if (!selectedErp) return;
+      await apiRequest("PUT", "/api/settings", {
+        settings: [{
+          key: `erp_business_rules_${selectedErp.id}`,
+          value: JSON.stringify(erpRules),
+          label: `${selectedErp.name} Business Rules`,
+          group: "integrations",
+        }],
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({ title: "ERP business rules saved" });
+      setSelectedErp(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Could not save ERP rules", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const setRule = <K extends keyof ErpBusinessRules>(key: K, value: ErpBusinessRules[K]) => {
+    setErpRules(current => ({ ...current, [key]: value }));
+  };
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6 lg:p-8">
@@ -273,8 +337,8 @@ export default function IntegrationsPage() {
                 <p className="text-sm text-muted-foreground">
                   Connection method: <span className="font-medium text-foreground">{option.interfaceName}</span>
                 </p>
-                <Button variant="outline" className="w-full justify-between" onClick={() => setSelectedErp(option)}>
-                  View setup requirements
+                <Button variant="outline" className="w-full justify-between" onClick={() => openErp(option)}>
+                  Configure integration
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               </CardContent>
@@ -284,7 +348,7 @@ export default function IntegrationsPage() {
       </section>
 
       <Dialog open={Boolean(selectedErp)} onOpenChange={open => !open && setSelectedErp(null)}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Connect {selectedErp?.name}</DialogTitle>
             <DialogDescription>
@@ -307,12 +371,65 @@ export default function IntegrationsPage() {
                 ))}
               </ul>
             </div>
+            <div className="space-y-4 border-t pt-4">
+              <div>
+                <h3 className="font-semibold">Business rules</h3>
+                <p className="text-sm text-muted-foreground">Choose the source of truth and when item data is synchronized.</p>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Who creates and maintains items?</Label>
+                  <Select value={erpRules.itemOwner} onValueChange={value => setRule("itemOwner", value as ErpBusinessRules["itemOwner"])}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="erp">{selectedErp?.name || "ERP"}</SelectItem>
+                      <SelectItem value="globipos">GlobiPOS</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Item synchronization</Label>
+                  <Select value={erpRules.itemSync} onValueChange={value => setRule("itemSync", value as ErpBusinessRules["itemSync"])}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="manual">Manual only</SelectItem>
+                      <SelectItem value="15_minutes">Every 15 minutes</SelectItem>
+                      <SelectItem value="hourly">Hourly</SelectItem>
+                      <SelectItem value="daily">Daily</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {([
+                  ["stockOwner", "Stock quantities"],
+                  ["pricingOwner", "Prices"],
+                  ["offerOwner", "Special offers"],
+                  ["customerOwner", "Customers"],
+                ] as const).map(([key, label]) => (
+                  <div className="space-y-2" key={key}>
+                    <Label>{label} source of truth</Label>
+                    <Select value={erpRules[key]} onValueChange={value => setRule(key, value as "globipos" | "erp")}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="erp">{selectedErp?.name || "ERP"}</SelectItem>
+                        <SelectItem value="globipos">GlobiPOS</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs leading-5 text-muted-foreground">
+                The selected source of truth wins when the same record changes in both systems. Automatic deletion is never enabled by these rules.
+              </p>
+            </div>
             <p className="text-xs leading-5 text-muted-foreground">
               Connection passwords and API credentials must be stored as deployment secrets, not in the integration profile.
             </p>
           </div>
           <DialogFooter>
-            <Button onClick={() => setSelectedErp(null)}>Close</Button>
+            <Button variant="outline" onClick={() => setSelectedErp(null)}>Cancel</Button>
+            <Button onClick={() => saveErpRules.mutate()} disabled={saveErpRules.isPending}>
+              {saveErpRules.isPending ? "Saving..." : "Save business rules"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
