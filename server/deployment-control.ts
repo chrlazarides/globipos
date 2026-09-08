@@ -5,7 +5,7 @@ import { db } from "./db";
 import { requireSuperuser } from "./auth";
 import { checkDomain, type DomainCheck } from "./domain-readiness";
 import { sendDomainStatusNotification } from "./email";
-import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { activityLogs, deploymentDomainIncidents, deploymentProfiles, deploymentRollouts } from "@shared/schema";
 
 const statusSchema = z.enum(["draft", "active", "suspended"]);
@@ -100,6 +100,47 @@ const rolloutSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "At least one target version is required" });
   }
 });
+
+const incidentHistoryQueryBaseSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  from: z.string().date().optional(),
+  to: z.string().date().optional(),
+  status: z.enum(["all", "ongoing", "recovered"]).default("all"),
+});
+
+function validateIncidentDateRange(value: { from?: string; to?: string }, ctx: z.RefinementCtx) {
+  if (value.from && value.to && value.from > value.to) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "End date must be on or after start date" });
+  }
+}
+
+const incidentHistoryQuerySchema = incidentHistoryQueryBaseSchema.superRefine(validateIncidentDateRange);
+const incidentExportQuerySchema = incidentHistoryQueryBaseSchema
+  .omit({ page: true, pageSize: true })
+  .superRefine(validateIncidentDateRange);
+
+export function csvCell(value: string | number | null) {
+  const text = value === null ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function incidentHistoryFilters(
+  deploymentId: string,
+  query: z.infer<typeof incidentHistoryQuerySchema>,
+) {
+  return and(
+    eq(deploymentDomainIncidents.deploymentId, deploymentId),
+    query.from ? gte(deploymentDomainIncidents.startedAt, new Date(`${query.from}T00:00:00.000Z`)) : undefined,
+    query.to ? lte(deploymentDomainIncidents.startedAt, new Date(`${query.to}T23:59:59.999Z`)) : undefined,
+    query.status === "ongoing" ? isNull(deploymentDomainIncidents.recoveredAt) : undefined,
+    query.status === "recovered" ? isNotNull(deploymentDomainIncidents.recoveredAt) : undefined,
+  );
+}
+
+function durationMinutes(startedAt: Date, recoveredAt: Date | null, now = new Date()) {
+  return Math.max(0, Math.floor(((recoveredAt ?? now).getTime() - startedAt.getTime()) / 60_000));
+}
 
 function withoutUndefined<T extends Record<string, unknown>>(values: T) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
@@ -452,6 +493,63 @@ export function registerDeploymentControlRoutes(app: Express) {
       ...safeProfile(profile),
       domainIncidents: recentByDeployment.get(profile.id) ?? [],
     })));
+  });
+
+  app.get("/api/control/deployments/:id/incidents", requireSuperuser, async (req, res) => {
+    const parsed = incidentHistoryQuerySchema.safeParse(req.query);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const deploymentId = String(req.params.id);
+    const [profile] = await db.select({ id: deploymentProfiles.id, clientName: deploymentProfiles.clientName, slug: deploymentProfiles.slug })
+      .from(deploymentProfiles).where(eq(deploymentProfiles.id, deploymentId));
+    if (!profile) return res.status(404).json({ message: "Deployment profile not found" });
+    const where = incidentHistoryFilters(deploymentId, parsed.data);
+    const [countRows, incidents] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(deploymentDomainIncidents).where(where),
+      db.select().from(deploymentDomainIncidents).where(where)
+        .orderBy(desc(deploymentDomainIncidents.startedAt), desc(deploymentDomainIncidents.id))
+        .limit(parsed.data.pageSize)
+        .offset((parsed.data.page - 1) * parsed.data.pageSize),
+    ]);
+    const count = countRows[0]?.count ?? 0;
+    res.json({
+      deployment: profile,
+      incidents,
+      pagination: {
+        page: parsed.data.page,
+        pageSize: parsed.data.pageSize,
+        total: count,
+        totalPages: Math.max(1, Math.ceil(count / parsed.data.pageSize)),
+      },
+    });
+  });
+
+  app.get("/api/control/deployments/:id/incidents/export", requireSuperuser, async (req, res) => {
+    const parsed = incidentExportQuerySchema.safeParse(req.query);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const deploymentId = String(req.params.id);
+    const [profile] = await db.select({ id: deploymentProfiles.id, clientName: deploymentProfiles.clientName, slug: deploymentProfiles.slug })
+      .from(deploymentProfiles).where(eq(deploymentProfiles.id, deploymentId));
+    if (!profile) return res.status(404).json({ message: "Deployment profile not found" });
+    const incidents = await db.select().from(deploymentDomainIncidents)
+      .where(incidentHistoryFilters(deploymentId, { ...parsed.data, page: 1, pageSize: 20 }))
+      .orderBy(asc(deploymentDomainIncidents.startedAt), asc(deploymentDomainIncidents.id));
+    const generatedAt = new Date();
+    const rows = incidents.map(incident => [
+      profile.clientName,
+      profile.slug,
+      incident.startedAt.toISOString(),
+      incident.recoveredAt?.toISOString() ?? null,
+      durationMinutes(incident.startedAt, incident.recoveredAt, generatedAt),
+      incident.recoveredAt ? "recovered" : "ongoing",
+      incident.reason,
+    ].map(csvCell).join(","));
+    const csv = [
+      "deployment,deployment_slug,started_at,recovered_at,duration_minutes,status,reason",
+      ...rows,
+    ].join("\r\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${profile.slug}-domain-incidents.csv"`);
+    res.send(`\uFEFF${csv}\r\n`);
   });
 
   app.post("/api/control/deployments", requireSuperuser, async (req, res) => {

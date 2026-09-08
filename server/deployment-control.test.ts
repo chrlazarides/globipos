@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  csvCell,
+  domainIncidentTransition,
   domainNotificationKind,
   isActiveDomainCheckDue,
   nextPendingDomainNotification,
   withDeadline,
 } from "./deployment-control";
-import { domainIncidentTransition, isActiveDomainCheckDue, withDeadline } from "./deployment-control";
 
 const now = Date.parse("2026-09-08T12:00:00.000Z");
 
@@ -85,4 +86,11 @@ test("domain incidents are created and recovered only on status transitions", ()
   assert.equal(domainIncidentTransition("connected", "connected"), "recover");
   assert.equal(domainIncidentTransition("pending", "connected"), "recover");
   assert.equal(domainIncidentTransition("failed", "connected"), "recover");
+});
+
+test("CSV export cells preserve commas, quotes, and newlines", () => {
+  assert.equal(csvCell("plain"), "plain");
+  assert.equal(csvCell("DNS, TLS"), '"DNS, TLS"');
+  assert.equal(csvCell('bad "certificate"\nretry'), '"bad ""certificate""\nretry"');
+  assert.equal(csvCell(null), "");
 });
