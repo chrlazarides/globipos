@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@shared/schema";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, customerPreferences, customerFeedback, customerNotifications, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@shared/schema";
 import { parseAdminImportRequest, shouldRestoreBackupSettings } from "./import-settings-policy";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
@@ -28,6 +28,7 @@ import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScale
 import { isValidIanaTimeZone } from "@shared/quiet-hours";
 import { registerDeploymentControlRoutes } from "./deployment-control";
 import { createPosBuildsResolver } from "./pos-builds";
+import { classifyCustomerFeedback, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "./customer-ai-service";
 function getLogoDataUrl(): string {
   const candidates = [
     path.resolve(process.cwd(), "dist", "public", "logo.png"),
@@ -4078,10 +4079,17 @@ export async function registerRoutes(
         loyalty_max_cashback_order_percent: [0, 100],
       };
       for (const setting of settings) {
-        if (setting.key === "loyalty_enabled" || setting.key === "cashback_enabled") {
+        if (setting.key === "loyalty_enabled" || setting.key === "cashback_enabled" ||
+          setting.key === "customer_ai_enabled" || setting.key === "customer_ai_recommendations_enabled" || setting.key === "customer_ai_sentiment_enabled") {
           if (!["true", "false"].includes(String(setting.value))) {
             return res.status(400).json({ message: `${setting.label || setting.key} must be enabled or disabled` });
           }
+        }
+        if (setting.key === "customer_ai_provider" && !["auto", "replit", "xai", "deterministic"].includes(String(setting.value))) {
+          return res.status(400).json({ message: "Customer AI provider must be auto, replit, xai, or deterministic" });
+        }
+        if (setting.key === "customer_ai_model" && (typeof setting.value !== "string" || !setting.value.trim() || setting.value.trim().length > 120)) {
+          return res.status(400).json({ message: "Customer AI model must be between 1 and 120 characters" });
         }
         const limits = loyaltyNumericLimits[setting.key];
         if (limits) {
@@ -4097,6 +4105,15 @@ export async function registerRoutes(
         results.push(result);
       }
       res.json(results);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/customer-ai/status", requireAdmin, async (_req, res) => {
+    try {
+      const settings = await storage.getSettings();
+      res.json(getCustomerAiStatus(resolveCustomerAiConfig(settings)));
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
@@ -4199,6 +4216,11 @@ export async function registerRoutes(
         { key: "loyalty_cashback_silver_percent", value: "1.5", label: "Silver Cashback (%)", group: "loyalty" },
         { key: "loyalty_cashback_gold_percent", value: "2", label: "Gold Cashback (%)", group: "loyalty" },
         { key: "loyalty_max_cashback_order_percent", value: "100", label: "Maximum Cashback per Order (%)", group: "loyalty" },
+        { key: "customer_ai_enabled", value: "true", label: "Customer AI Enabled", group: "customer_ai" },
+        { key: "customer_ai_provider", value: "auto", label: "Customer AI Provider", group: "customer_ai" },
+        { key: "customer_ai_model", value: "gpt-5-mini", label: "Customer AI Model", group: "customer_ai" },
+        { key: "customer_ai_recommendations_enabled", value: "true", label: "AI Recommendation Enhancement", group: "customer_ai" },
+        { key: "customer_ai_sentiment_enabled", value: "true", label: "AI Feedback Sentiment", group: "customer_ai" },
       ];
       const results = [];
       for (const d of defaults) {
@@ -6237,6 +6259,280 @@ export async function registerRoutes(
     return true;
   }
 
+  const customerPreferencesInput = z.object({
+    dietaryPreferences: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
+    dislikedIngredients: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
+    preferredCategories: z.array(z.string().trim().min(1).max(120)).max(30).optional(),
+    recommendationGoals: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
+    budgetPreference: z.string().trim().min(1).max(80).nullable().optional(),
+    notificationRecommendations: z.boolean().optional(),
+    notificationOrderUpdates: z.boolean().optional(),
+    notificationOffers: z.boolean().optional(),
+  }).strict();
+
+  const preferenceDefaults = {
+    dietaryPreferences: [] as string[],
+    dislikedIngredients: [] as string[],
+    preferredCategories: [] as string[],
+    recommendationGoals: [] as string[],
+    budgetPreference: null as string | null,
+    notificationRecommendations: true,
+    notificationOrderUpdates: true,
+    notificationOffers: true,
+  };
+
+  app.get("/api/customer/preferences", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const [preferences] = await db.select().from(customerPreferences)
+        .where(eq(customerPreferences.customerId, customerId)).limit(1);
+      res.json(preferences || { customerId, ...preferenceDefaults });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.put("/api/customer/preferences", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const data = customerPreferencesInput.parse(req.body);
+      const [existing] = await db.select().from(customerPreferences)
+        .where(eq(customerPreferences.customerId, customerId)).limit(1);
+      const values = { ...preferenceDefaults, ...(existing || {}), ...data, customerId, updatedAt: new Date() };
+      const [preferences] = await db.insert(customerPreferences).values(values)
+        .onConflictDoUpdate({
+          target: customerPreferences.customerId,
+          set: { ...data, updatedAt: new Date() },
+        }).returning();
+      res.json(preferences);
+    } catch (e: any) {
+      res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/customer/recommendations", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const query = z.object({
+        context: z.enum(["general", "basket", "budget", "favorites", "new", "restock"]).default("general"),
+        limit: z.coerce.number().int().min(1).max(12).default(12),
+      }).parse(req.query);
+      const [[customer], [preferences], catalog, categoryRows, priorLines, aiSettings] = await Promise.all([
+        db.select().from(customers).where(eq(customers.id, customerId)).limit(1),
+        db.select().from(customerPreferences).where(eq(customerPreferences.customerId, customerId)).limit(1),
+        db.select().from(items).where(and(eq(items.active, true), gt(items.stockQuantity, 0))),
+        db.select().from(categories).where(eq(categories.active, true)),
+        db.select({ itemId: portalOrderItems.itemId, quantity: portalOrderItems.quantity })
+          .from(portalOrderItems)
+          .innerJoin(portalOrders, eq(portalOrderItems.orderId, portalOrders.id))
+          .where(eq(portalOrders.customerId, customerId)),
+        storage.getSettings(),
+      ]);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const profile = preferences || preferenceDefaults;
+      const normalize = (value: string | null | undefined) => (value || "").toLocaleLowerCase();
+      const preferredCategories = new Set((profile.preferredCategories || []).map(normalize));
+      const disliked = (profile.dislikedIngredients || []).map(normalize).filter(Boolean);
+      const goals = (profile.recommendationGoals || []).map(normalize);
+      const categoryById = new Map(categoryRows.map(category => [category.id, category.name]));
+      const purchasedQty = new Map<string, number>();
+      for (const line of priorLines) purchasedQty.set(line.itemId, (purchasedQty.get(line.itemId) || 0) + Number(line.quantity || 0));
+      const priceKey = `price${Math.min(5, Math.max(1, customer.priceLevel || 1))}` as keyof typeof items.$inferSelect;
+      const prices = catalog.map(item => Number(item[priceKey] || item.price1 || 0)).filter(Number.isFinite);
+      const medianPrice = prices.sort((a, b) => a - b)[Math.floor(prices.length / 2)] || 0;
+      const budget = normalize(profile.budgetPreference);
+
+      const ranked = catalog
+        .filter(item => {
+          const searchable = normalize(`${item.name} ${item.description || ""} ${item.brand || ""}`);
+          // Free-text product copy is not an authoritative dietary/allergen
+          // source. Only explicit dislikes are used as a conservative exclusion.
+          return !disliked.some(term => searchable.includes(term));
+        })
+        .map(item => {
+          const categoryName = categoryById.get(item.categoryId || "") || "";
+          const price = Number(item[priceKey] || item.price1 || 0);
+          let score = 0;
+          const reasons: string[] = [];
+          if (preferredCategories.has(normalize(categoryName)) || preferredCategories.has(normalize(item.categoryId))) {
+            score += 30; reasons.push(`Matches your preferred ${categoryName || "category"} category`);
+          }
+          const priorQuantity = purchasedQty.get(item.id) || 0;
+          if (priorQuantity) { score += Math.min(25, 8 + priorQuantity); reasons.push("Based on your previous orders"); }
+          if (budget && (budget.includes("value") || budget.includes("budget") || budget.includes("low"))) {
+            if (price <= medianPrice) { score += 12; reasons.push("Fits your value preference"); }
+          } else if (budget && (budget.includes("premium") || budget.includes("high"))) {
+            if (price >= medianPrice) { score += 12; reasons.push("Fits your premium preference"); }
+          }
+          if (goals.some(goal => goal.includes("repeat")) && priorQuantity) score += 8;
+          if (goals.some(goal => goal.includes("new") || goal.includes("discover")) && !priorQuantity) {
+            score += 8;
+            reasons.push("Not present in your previous orders");
+          }
+          if (goals.some(goal => goal.includes("value") || goal.includes("save")) && price <= medianPrice) {
+            score += 6;
+          }
+          if (query.context === "basket" && priorQuantity) { score += 4; reasons.push("A reliable reorder for your basket"); }
+          if (query.context === "budget" && price <= medianPrice) {
+            score += 25;
+            reasons.push("Priced at or below the current available-catalog median");
+          }
+          if (query.context === "favorites" && (priorQuantity || preferredCategories.has(normalize(categoryName)))) {
+            score += 15;
+            reasons.push(priorQuantity ? "Previously ordered by you" : "Matches a preferred category");
+          }
+          if (query.context === "new" && !priorQuantity) {
+            score += 20;
+            reasons.push("Not present in your previous orders");
+          }
+          if (query.context === "restock" && priorQuantity) {
+            score += 25;
+            reasons.push("Previously ordered and currently in stock");
+          }
+          return {
+            ...item,
+            customerPrice: price.toFixed(2),
+            recommendationReason: reasons[0] || "Available and in stock",
+            recommendationScore: score,
+          };
+        })
+        .sort((a, b) => b.recommendationScore - a.recommendationScore || a.name.localeCompare(b.name))
+        .slice(0, query.limit);
+
+      const aiConfig = resolveCustomerAiConfig(aiSettings);
+      const enhancement = await enhanceCustomerRecommendations(
+        aiConfig,
+        ranked.map(item => ({
+          id: item.id,
+          name: item.name,
+          category: categoryById.get(item.categoryId || "") || undefined,
+          price: item.customerPrice,
+          reason: item.recommendationReason,
+        })),
+        {
+          preferredCategories: profile.preferredCategories || [],
+          recommendationGoals: profile.recommendationGoals || [],
+          budgetPreference: profile.budgetPreference,
+          context: query.context,
+          priorOrderQuantities: Object.fromEntries(purchasedQty),
+        },
+      );
+      const byId = new Map(ranked.map(item => [item.id, item]));
+      const enhancedRanked = enhancement.orderedIds
+        .map(id => byId.get(id))
+        .filter((item): item is typeof ranked[number] => Boolean(item))
+        .map(item => ({
+          ...item,
+          recommendationReason: enhancement.reasons[item.id] || item.recommendationReason,
+        }));
+      const profileComplete = Boolean(
+        (profile.preferredCategories || []).length || (profile.dietaryPreferences || []).length ||
+        (profile.dislikedIngredients || []).length || (profile.recommendationGoals || []).length || profile.budgetPreference
+      );
+      res.json({ items: enhancedRanked, profileComplete, generatedAt: new Date().toISOString(), engine: enhancement.engine });
+    } catch (e: any) {
+      res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/customer/feedback", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const input = z.object({
+        orderId: z.string().uuid().optional(),
+        context: z.enum(["general", "order", "product", "recommendation", "delivery", "support"]),
+        rating: z.number().int().min(1).max(5),
+        comment: z.string().trim().min(1).max(2000).optional(),
+      }).strict().parse(req.body);
+      if (input.orderId) {
+        const [order] = await db.select({ id: portalOrders.id }).from(portalOrders)
+          .where(and(eq(portalOrders.id, input.orderId), eq(portalOrders.customerId, customerId))).limit(1);
+        if (!order) return res.status(404).json({ message: "Order not found" });
+      }
+      const comment = (input.comment || "").toLocaleLowerCase();
+      const positives = ["great", "good", "excellent", "love", "perfect", "helpful", "fast", "happy"];
+      const negatives = ["bad", "poor", "terrible", "hate", "wrong", "late", "damaged", "awful"];
+      const wordDelta = positives.filter(word => comment.includes(word)).length - negatives.filter(word => comment.includes(word)).length;
+      const score = Math.max(-1, Math.min(1, (input.rating - 3) / 2 + wordDelta * 0.15));
+      let sentiment = score > 0.2 ? "positive" : score < -0.2 ? "negative" : "neutral";
+      let sentimentScore = score;
+      const aiConfig = resolveCustomerAiConfig(await storage.getSettings());
+      const aiClassification = await classifyCustomerFeedback(aiConfig, {
+        context: input.context,
+        rating: input.rating,
+        comment: input.comment || "",
+      });
+      if (aiClassification) {
+        sentiment = aiClassification.sentiment;
+        sentimentScore = aiClassification.score;
+      }
+      const [feedback] = await db.insert(customerFeedback).values({
+        ...input, customerId, sentiment, sentimentScore: sentimentScore.toFixed(2),
+      }).returning();
+      res.status(201).json({ ...feedback, sentimentExplanation: "Score combines the 1–5 rating with matching positive or negative comment words." });
+    } catch (e: any) { res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/notifications", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const unreadOnly = z.enum(["true", "false"]).optional().parse(req.query.unreadOnly) === "true";
+      const notifications = await db.select().from(customerNotifications)
+        .where(and(eq(customerNotifications.customerId, customerId), ...(unreadOnly ? [isNull(customerNotifications.readAt)] : [])))
+        .orderBy(desc(customerNotifications.createdAt));
+      res.json(notifications);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/notifications/:id/read", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const [notification] = await db.update(customerNotifications).set({ readAt: new Date() })
+        .where(and(eq(customerNotifications.id, req.params.id as string), eq(customerNotifications.customerId, customerId))).returning();
+      if (!notification) return res.status(404).json({ message: "Notification not found" });
+      res.json(notification);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/notifications/read-all", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const readAt = new Date();
+      const updated = await db.update(customerNotifications).set({ readAt })
+        .where(and(eq(customerNotifications.customerId, customerId), isNull(customerNotifications.readAt))).returning({ id: customerNotifications.id });
+      res.json({ updated: updated.length, readAt });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer-feedback", requireAdmin, async (_req, res) => {
+    try {
+      const [summary, recent] = await Promise.all([
+        db.select({
+          total: sql<number>`count(*)`,
+          averageRating: sql<number>`coalesce(avg(${customerFeedback.rating}), 0)`,
+          positive: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'positive')`,
+          neutral: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'neutral')`,
+          negative: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'negative')`,
+        }).from(customerFeedback),
+        db.select().from(customerFeedback).orderBy(desc(customerFeedback.createdAt)).limit(50),
+      ]);
+      res.json({ summary, recent });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // Portal push subscription — requires portal JWT
   app.post("/api/portal/customer/:id/push/subscribe", async (req, res) => {
     if (!requirePortalAuth(req, res, (req.params.id as string))) return;
@@ -6900,6 +7196,18 @@ export async function registerRoutes(
         const currentCb = parseFloat(String(customer.cashbackBalance || "0"));
         const newCb = Math.max(0, currentCb - cashbackApplied + earnedCashback);
         await storage.updateCustomer(auth.customerId, { cashbackBalance: newCb.toFixed(2) } as any);
+      }
+
+      const [preference] = await db.select({ notificationOrderUpdates: customerPreferences.notificationOrderUpdates })
+        .from(customerPreferences).where(eq(customerPreferences.customerId, auth.customerId)).limit(1);
+      if (preference?.notificationOrderUpdates !== false) {
+        await db.insert(customerNotifications).values({
+          customerId: auth.customerId,
+          title: "Order received",
+          body: `Your order #${order.id.slice(0, 8)} has been received.`,
+          type: "order",
+          actionUrl: "/orders",
+        }).catch(() => {/* inbox delivery is non-fatal */});
       }
 
       res.json({ ...order, proformaId: proforma?.id || null, proformaNumber: proforma?.invoiceNumber || null });

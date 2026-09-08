@@ -30,6 +30,7 @@ const groupIcons: Record<string, any> = {
   inventory: Package,
   portal: Settings2,
   loyalty: Users,
+  customer_ai: Settings2,
 };
 
 const groupLabels: Record<string, string> = {
@@ -40,9 +41,10 @@ const groupLabels: Record<string, string> = {
   inventory: "Inventory",
   portal: "Customer Portal",
   loyalty: "Loyalty & Cashback",
+  customer_ai: "AI & Customer Intelligence",
 };
 
-const groupOrder = ["company", "tax", "invoicing", "pricing", "inventory", "portal", "loyalty"];
+const groupOrder = ["company", "tax", "invoicing", "pricing", "inventory", "portal", "loyalty", "customer_ai"];
 const HIDDEN_GROUPS = ["security", "backup"];
 const RETIRED_SETTINGS = ["pos_app_version"];
 const SESSION_KEY = "globi-pos_settings_auth";
@@ -707,7 +709,22 @@ export default function SettingsPage() {
       );
     }
 
-    if (setting.key === "portal_enabled" || setting.key === "portal_allow_ordering" || setting.key === "loyalty_enabled" || setting.key === "cashback_enabled") {
+    if (setting.key === "customer_ai_provider") {
+      return (
+        <Select value={val} onValueChange={(v) => updateValue(setting.key, v)}>
+          <SelectTrigger data-testid={`select-setting-${setting.key}`}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="auto">Auto (Replit managed, then deterministic)</SelectItem>
+            <SelectItem value="replit">Replit managed AI</SelectItem>
+            <SelectItem value="xai">xAI</SelectItem>
+            <SelectItem value="deterministic">Deterministic only</SelectItem>
+          </SelectContent>
+        </Select>
+      );
+    }
+
+    if (setting.key === "portal_enabled" || setting.key === "portal_allow_ordering" || setting.key === "loyalty_enabled" || setting.key === "cashback_enabled" ||
+      setting.key === "customer_ai_enabled" || setting.key === "customer_ai_recommendations_enabled" || setting.key === "customer_ai_sentiment_enabled") {
       return (
         <Select value={val} onValueChange={(v) => updateValue(setting.key, v)}>
           <SelectTrigger data-testid={`select-setting-${setting.key}`}>
@@ -965,7 +982,12 @@ export default function SettingsPage() {
                   <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10">
                     <Icon className="w-4 h-4 text-primary" />
                   </div>
-                  <h3 className="text-sm font-semibold">{groupLabels[group] || group}</h3>
+                  <div>
+                    <h3 className="text-sm font-semibold">{groupLabels[group] || group}</h3>
+                    {group === "customer_ai" && (
+                      <p className="text-xs text-muted-foreground">Replit managed AI needs no customer-owned key when its AI integration is active. xAI requires an XAI_API_KEY or connected integration; credentials are never entered here.</p>
+                    )}
+                  </div>
                 </CardHeader>
                 <CardContent className="p-4 pt-0">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

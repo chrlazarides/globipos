@@ -6,8 +6,11 @@ import Basket, { type BasketItem } from "./Basket";
 import Orders from "./Orders";
 import Account from "./Account";
 import Loyalty from "./Loyalty";
+import Discover from "./Discover";
+import Notifications, { type CustomerNotification } from "./Notifications";
 import PushNotificationBanner from "../components/PushNotificationBanner";
-import { ShoppingCart, Package, Receipt, User, Trophy, LogOut } from "lucide-react";
+import { ShoppingCart, Package, Receipt, User, Sparkles, LogOut, Bell } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 
 interface LayoutProps {
   customer: CustomerSession;
@@ -18,16 +21,18 @@ interface LayoutProps {
 
 const navItems = [
   { label: "Shop",    path: "/",        icon: Package  },
+  { label: "For You", path: "/discover", icon: Sparkles },
   { label: "Basket",  path: "/basket",   icon: ShoppingCart },
   { label: "Orders",  path: "/orders",   icon: Receipt  },
   { label: "Account", path: "/account",  icon: User     },
-  { label: "Loyalty", path: "/loyalty",  icon: Trophy   },
 ];
 
 export default function Layout({ customer, onLogout, basket, setBasket }: LayoutProps) {
   const [location] = useLocation();
 
   const totalItems = basket.reduce((s, i) => s + i.quantity, 0);
+  const { data: notifications = [] } = useQuery<CustomerNotification[]>({ queryKey: ["/api/customer/notifications"] });
+  const unreadNotifications = notifications.filter((n) => !n.read && !n.readAt).length;
 
   function handleLogout() {
     clearToken();
@@ -50,14 +55,15 @@ export default function Layout({ customer, onLogout, basket, setBasket }: Layout
             </div>
             <span className="text-sm font-semibold truncate max-w-[160px]">{customer.name}</span>
           </div>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
-            data-testid="button-logout"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Sign out
-          </button>
+          <div className="flex items-center gap-3">
+            <Link href="/notifications" className="relative p-1 text-[hsl(var(--muted-foreground))]" aria-label="Notifications">
+              <Bell className="w-4 h-4" />
+              {unreadNotifications > 0 && <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full text-[9px] font-bold text-white flex items-center justify-center" style={{ background: "hsl(var(--primary))" }}>{unreadNotifications > 9 ? "9+" : unreadNotifications}</span>}
+            </Link>
+            <button onClick={handleLogout} className="flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors" data-testid="button-logout">
+              <LogOut className="w-3.5 h-3.5" /><span className="hidden sm:inline">Sign out</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -67,6 +73,8 @@ export default function Layout({ customer, onLogout, basket, setBasket }: Layout
           <Route path="/"        component={() => <Catalog customer={customer} basket={basket} setBasket={setBasket} />} />
           <Route path="/basket"  component={() => <Basket  customer={customer} basket={basket} setBasket={setBasket} />} />
           <Route path="/orders"  component={() => <Orders  customer={customer} />} />
+          <Route path="/discover" component={() => <Discover basket={basket} setBasket={setBasket} />} />
+          <Route path="/notifications" component={Notifications} />
           <Route path="/account" component={() => <Account customer={customer} />} />
           <Route path="/loyalty" component={() => <Loyalty customer={customer} />} />
         </Switch>

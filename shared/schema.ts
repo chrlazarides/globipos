@@ -284,6 +284,46 @@ export const customers = pgTable("customers", {
   cashbackBalance: numeric("cashback_balance", { precision: 10, scale: 2 }).default("0"),
 });
 
+// Customer-facing PWA profile, feedback, and inbox data. Preferences are kept
+// separate from the commercial customer record so they are strictly opt-in.
+export const customerPreferences = pgTable("customer_preferences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }).unique(),
+  dietaryPreferences: text("dietary_preferences").array().notNull().default(sql`'{}'::text[]`),
+  dislikedIngredients: text("disliked_ingredients").array().notNull().default(sql`'{}'::text[]`),
+  preferredCategories: text("preferred_categories").array().notNull().default(sql`'{}'::text[]`),
+  recommendationGoals: text("recommendation_goals").array().notNull().default(sql`'{}'::text[]`),
+  budgetPreference: text("budget_preference"),
+  notificationRecommendations: boolean("notification_recommendations").notNull().default(true),
+  notificationOrderUpdates: boolean("notification_order_updates").notNull().default(true),
+  notificationOffers: boolean("notification_offers").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export const customerFeedback = pgTable("customer_feedback", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  orderId: varchar("order_id").references(() => portalOrders.id, { onDelete: "set null" }),
+  context: text("context").notNull(),
+  rating: integer("rating").notNull(),
+  comment: text("comment"),
+  sentiment: text("sentiment").notNull(),
+  sentimentScore: numeric("sentiment_score", { precision: 3, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const customerNotifications = pgTable("customer_notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  type: text("type").notNull(),
+  actionUrl: text("action_url"),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const portalOrders = pgTable("portal_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   customerId: varchar("customer_id").notNull(),
@@ -580,6 +620,9 @@ export type InventoryInLine = typeof inventoryInLines.$inferSelect;
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true }).extend({
   code: z.string().optional().default(""),
 });
+export const insertCustomerPreferencesSchema = createInsertSchema(customerPreferences).omit({ id: true, customerId: true, createdAt: true, updatedAt: true });
+export const insertCustomerFeedbackSchema = createInsertSchema(customerFeedback).omit({ id: true, customerId: true, sentiment: true, sentimentScore: true, createdAt: true });
+export const insertCustomerNotificationSchema = createInsertSchema(customerNotifications).omit({ id: true, customerId: true, readAt: true, createdAt: true });
 export const insertPriceContractSchema = createInsertSchema(priceContracts).omit({ id: true });
 export const insertPriceContractRuleSchema = createInsertSchema(priceContractRules).omit({ id: true });
 export const insertPriceContractItemSchema = createInsertSchema(priceContractItems).omit({ id: true });
@@ -617,6 +660,12 @@ export type InsertItem = z.infer<typeof insertItemSchema>;
 export type Item = typeof items.$inferSelect;
 export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
 export type Customer = typeof customers.$inferSelect;
+export type InsertCustomerPreferences = z.infer<typeof insertCustomerPreferencesSchema>;
+export type CustomerPreferences = typeof customerPreferences.$inferSelect;
+export type InsertCustomerFeedback = z.infer<typeof insertCustomerFeedbackSchema>;
+export type CustomerFeedback = typeof customerFeedback.$inferSelect;
+export type InsertCustomerNotification = z.infer<typeof insertCustomerNotificationSchema>;
+export type CustomerNotification = typeof customerNotifications.$inferSelect;
 export type InsertPriceContract = z.infer<typeof insertPriceContractSchema>;
 export type PriceContract = typeof priceContracts.$inferSelect;
 export type InsertPriceContractRule = z.infer<typeof insertPriceContractRuleSchema>;

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type CustomerSession, getToken } from "../lib/auth";
 import { CreditCard, FileText, ExternalLink, AlertTriangle, RefreshCw } from "lucide-react";
+import { Link } from "wouter";
 
 const IOS_BANNER_DISMISSED_KEY = "globi_ios_banner_dismissed";
 
@@ -61,6 +62,7 @@ export default function Account({ customer }: AccountProps) {
       <div>
         <h1 className="text-xl font-semibold">My Account</h1>
         <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">{customer.name} · {customer.code}</p>
+        <Link href="/loyalty" className="inline-block mt-2 text-xs font-medium text-[hsl(var(--primary))]">View loyalty rewards</Link>
       </div>
 
       {/* Account summary */}

@@ -37,7 +37,8 @@ app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("X-XSS-Protection", "1; mode=block");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  // The customer PWA uses the same-origin camera for in-store barcode scanning.
+  res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=()");
   const isProd = process.env.NODE_ENV === "production";
   const cspDirectives = [
     "default-src 'self'",
@@ -75,6 +76,11 @@ export function log(message: string, source = "express") {
 }
 
 const SENSITIVE_LOG_KEY = /(?:password|secret|token|credential|api[_-]?key|authorization|cookie)/i;
+const SENSITIVE_RESPONSE_PATHS = new Set([
+  "/api/customer/preferences",
+  "/api/customer/feedback",
+  "/api/customer-feedback",
+]);
 
 function redactResponseForLog(value: unknown, depth = 0): unknown {
   if (depth > 8) return "[truncated]";
@@ -104,8 +110,10 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
+      if (capturedJsonResponse && !SENSITIVE_RESPONSE_PATHS.has(path)) {
         logLine += ` :: ${JSON.stringify(redactResponseForLog(capturedJsonResponse))}`;
+      } else if (capturedJsonResponse && SENSITIVE_RESPONSE_PATHS.has(path)) {
+        logLine += " :: [personal response omitted]";
       }
 
       log(logLine);
@@ -129,6 +137,57 @@ app.use((req, res, next) => {
     `);
   } catch (e) {
     console.error("[migration] users WhatsApp quiet-hours columns error:", e);
+  }
+
+  // Keep customer PWA features available on installations where file migrations
+  // have not yet been applied.
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS customer_preferences (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        customer_id VARCHAR NOT NULL UNIQUE REFERENCES customers(id) ON DELETE CASCADE,
+        dietary_preferences TEXT[] NOT NULL DEFAULT '{}',
+        disliked_ingredients TEXT[] NOT NULL DEFAULT '{}',
+        preferred_categories TEXT[] NOT NULL DEFAULT '{}',
+        recommendation_goals TEXT[] NOT NULL DEFAULT '{}',
+        budget_preference TEXT,
+        notification_recommendations BOOLEAN NOT NULL DEFAULT TRUE,
+        notification_order_updates BOOLEAN NOT NULL DEFAULT TRUE,
+        notification_offers BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      ALTER TABLE customer_preferences
+        ADD COLUMN IF NOT EXISTS notification_recommendations BOOLEAN NOT NULL DEFAULT TRUE,
+        ADD COLUMN IF NOT EXISTS notification_order_updates BOOLEAN NOT NULL DEFAULT TRUE,
+        ADD COLUMN IF NOT EXISTS notification_offers BOOLEAN NOT NULL DEFAULT TRUE;
+      CREATE TABLE IF NOT EXISTS customer_feedback (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        customer_id VARCHAR NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+        order_id VARCHAR REFERENCES portal_orders(id) ON DELETE SET NULL,
+        context TEXT NOT NULL,
+        rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+        comment TEXT,
+        sentiment TEXT NOT NULL,
+        sentiment_score NUMERIC(3,2) NOT NULL CHECK (sentiment_score BETWEEN -1 AND 1),
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS customer_notifications (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        customer_id VARCHAR NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        type TEXT NOT NULL,
+        action_url TEXT,
+        read_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS customer_feedback_customer_created_idx ON customer_feedback(customer_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS customer_notifications_customer_created_idx ON customer_notifications(customer_id, created_at DESC);
+    `);
+  } catch (e) {
+    console.error("[migration] customer PWA tables error:", e);
+    throw e;
   }
 
   const { seedDatabase, ensureDefaultSettings } = await import("./seed");

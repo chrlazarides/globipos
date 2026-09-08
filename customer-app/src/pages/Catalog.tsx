@@ -1,11 +1,12 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type BasketItem } from "./Basket";
 import { type CustomerSession } from "../lib/auth";
 import { cn } from "../lib/cn";
 import { Search, ScanBarcode, Plus, Minus, X, Package, ChevronDown } from "lucide-react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
-import { parseScaleBarcode, type ScaleBarcode } from "../lib/scaleBarcode";
+import { type ScaleBarcode } from "../lib/scaleBarcode";
+import { apiFetch } from "../lib/queryClient";
 
 interface CatalogProps {
   customer: CustomerSession;
@@ -37,6 +38,7 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
   const [page, setPage] = useState(1);
   const [scanMode, setScanMode] = useState(false);
   const [scanError, setScanError] = useState("");
+  const [manualBarcode, setManualBarcode] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectorRef = useRef<any>(null);
@@ -77,21 +79,17 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
 
   async function lookupBarcode(bc: string) {
     try {
-      const parsed = parseScaleBarcode(bc);
-      const headers = { Authorization: `Bearer ${localStorage.getItem("globi_customer_token")}` };
-      const res = await fetch(`/api/customer/barcode/${encodeURIComponent(bc)}`, { headers });
-      if (res.ok) {
-        const found: CatalogItem & { scaleBarcode?: ScaleBarcode | null } = await res.json();
-        const scale = found.scaleBarcode || null;
-        const item = scale?.type === "price" && scale.value > 0
-          ? { ...found, customerPrice: Number(scale.value.toFixed(2)) }
-          : found;
-        add(item, scale?.type === "weight" && scale.value > 0 ? Number(scale.value.toFixed(3)) : 1, scale ? bc : undefined);
-        setSearch(found.name);
-      } else {
-        setScanError(`Barcode ${bc} not found in catalog`);
-      }
-    } catch { setScanError("Failed to look up barcode"); }
+      const found = await apiFetch<CatalogItem & { scaleBarcode?: ScaleBarcode | null }>(`/api/customer/barcode/${encodeURIComponent(bc)}`);
+      const scale = found.scaleBarcode || null;
+      const item = scale?.type === "price" && scale.value > 0
+        ? { ...found, customerPrice: Number(scale.value.toFixed(2)) }
+        : found;
+      add(item, scale?.type === "weight" && scale.value > 0 ? Number(scale.value.toFixed(3)) : 1, scale ? bc : undefined);
+      setSearch(found.name);
+      setManualBarcode("");
+    } catch (error: any) {
+      setScanError(error?.status === 404 ? `Barcode ${bc} not found in catalog` : (error?.message || "Failed to look up barcode"));
+    }
   }
 
   const startScan = useCallback(async () => {
@@ -163,6 +161,12 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
     setScanMode(false);
   }
 
+  useEffect(() => () => {
+    scanningRef.current = false;
+    try { (zxingReaderRef.current as any)?.reset?.(); } catch {}
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
   const fmt = (v: number) => `€${v.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`;
 
   return (
@@ -202,22 +206,23 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
 
       {/* Camera preview for barcode scan */}
       {scanMode && (
-        <div className="relative rounded-xl overflow-hidden border border-[hsl(var(--border))] bg-black aspect-video">
-          <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="w-48 h-32 border-2 border-white rounded-lg opacity-60" />
+        <section className="rounded-xl overflow-hidden border border-[hsl(var(--border))]">
+          <div className="p-3 bg-[hsl(var(--card))]">
+            <h2 className="text-sm font-semibold">In-store scan mode</h2>
+            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Scan an item barcode to add it to your basket. Review your basket and use the usual checkout flow when you are ready.</p>
           </div>
-          <button
-            onClick={stopScan}
-            className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/60 flex items-center justify-center text-white"
-          >
-            <X className="w-4 h-4" />
-          </button>
-          <p className="absolute bottom-2 left-0 right-0 text-center text-xs text-white/80">
-            Point camera at barcode
-          </p>
-        </div>
+          <div className="relative bg-black aspect-video">
+            <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-48 h-32 border-2 border-white rounded-lg opacity-60" /></div>
+            <button onClick={stopScan} aria-label="Close scanner" className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/60 flex items-center justify-center text-white"><X className="w-4 h-4" /></button>
+            <p className="absolute bottom-2 left-0 right-0 text-center text-xs text-white/80">Point camera at barcode</p>
+          </div>
+        </section>
       )}
+      <form onSubmit={(e) => { e.preventDefault(); if (manualBarcode.trim()) lookupBarcode(manualBarcode.trim()); }} className="flex gap-2">
+        <input value={manualBarcode} onChange={(e) => setManualBarcode(e.target.value)} inputMode="numeric" placeholder="Enter barcode manually" aria-label="Manual barcode" className="flex-1 px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm" />
+        <button type="submit" disabled={!manualBarcode.trim()} className="px-3 py-2 rounded-lg border border-[hsl(var(--border))] text-xs font-medium disabled:opacity-40">Add code</button>
+      </form>
       {scanError && (
         <p className="text-xs text-red-500 bg-red-50 dark:bg-red-950/30 px-3 py-2 rounded-lg">{scanError}</p>
       )}

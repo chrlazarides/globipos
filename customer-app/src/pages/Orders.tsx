@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch, queryClient } from "../lib/queryClient";
 import { type CustomerSession } from "../lib/auth";
-import { Receipt, RefreshCw } from "lucide-react";
+import { Receipt, RefreshCw, Star } from "lucide-react";
 
 interface OrdersProps { customer: CustomerSession; }
 
@@ -28,6 +28,13 @@ function formatDate(d: string) {
 export default function Orders({ customer }: OrdersProps) {
   const { data: orders = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/customer/orders"] });
   const [reorderingId, setReorderingId] = useState<string | null>(null);
+  const [feedbackOrderId, setFeedbackOrderId] = useState<string | null>(null);
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState("");
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState<string[]>(() => {
+    try { return JSON.parse(sessionStorage.getItem("globi_feedback_submitted") || "[]"); } catch { return []; }
+  });
 
   async function handleReorder(id: string) {
     setReorderingId(id);
@@ -39,6 +46,17 @@ export default function Orders({ customer }: OrdersProps) {
     } catch (err: any) {
       alert(err.message || "Failed to reorder");
     } finally { setReorderingId(null); }
+  }
+  async function submitFeedback(orderId: string) {
+    if (!rating) return;
+    setSubmittingFeedback(true);
+    try {
+      await apiFetch("/api/customer/feedback", { method: "POST", body: JSON.stringify({ rating, comment: comment.trim() || undefined, context: "order", orderId }) });
+      const submitted = [...feedbackSubmitted, orderId];
+      setFeedbackSubmitted(submitted);
+      sessionStorage.setItem("globi_feedback_submitted", JSON.stringify(submitted));
+      setFeedbackOrderId(null); setRating(0); setComment("");
+    } catch (err: any) { alert(err.message || "Could not send feedback"); } finally { setSubmittingFeedback(false); }
   }
 
   return (
@@ -101,6 +119,16 @@ export default function Orders({ customer }: OrdersProps) {
                 <span className="font-bold" data-testid={`text-order-total-${order.id}`}>{fmt(order.total)}</span>
               </div>
               {order.notes && <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1 italic">{order.notes}</p>}
+               {order.status !== "cancelled" && !feedbackSubmitted.includes(order.id) && (
+                 feedbackOrderId === order.id ? (
+                   <form onSubmit={(e) => { e.preventDefault(); submitFeedback(order.id); }} className="mt-3 pt-3 border-t border-[hsl(var(--border))] space-y-2">
+                     <p className="text-xs font-medium">How was this order?</p>
+                     <div className="flex gap-1" aria-label="Order rating">{[1,2,3,4,5].map(value => <button type="button" key={value} onClick={() => setRating(value)} aria-label={`${value} star${value > 1 ? "s" : ""}`} className={value <= rating ? "text-amber-400" : "text-[hsl(var(--border))]"}><Star className="w-5 h-5" fill="currentColor" /></button>)}</div>
+                     <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="Tell us more (optional)" className="w-full px-2 py-1.5 text-xs rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))]" />
+                     <div className="flex gap-2"><button type="submit" disabled={!rating || submittingFeedback} className="px-3 py-1.5 rounded-lg text-xs text-white disabled:opacity-50" style={{ background: "hsl(var(--primary))" }}>{submittingFeedback ? "Sending…" : "Send feedback"}</button><button type="button" onClick={() => setFeedbackOrderId(null)} className="text-xs text-[hsl(var(--muted-foreground))]">Not now</button></div>
+                   </form>
+                 ) : <button onClick={() => { setFeedbackOrderId(order.id); setRating(0); setComment(""); }} className="mt-3 text-xs flex items-center gap-1 text-[hsl(var(--primary))]"><Star className="w-3.5 h-3.5" />Rate this order</button>
+               )}
             </div>
           ))}
         </div>
