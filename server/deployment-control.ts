@@ -139,6 +139,49 @@ function validationError(res: Response, error: z.ZodError) {
 
 const DOMAIN_CHECK_MAX_AGE_MS = 15 * 60 * 1000;
 
+type DeploymentWriteSnapshot = Pick<
+  typeof deploymentProfiles.$inferSelect,
+  "customerDomain" | "posDomain" | "status" | "domainStatus" | "domainCheckedAt"
+>;
+
+export type DeploymentWriteGuard = {
+  customerDomain: string | null;
+  posDomain: string | null;
+  status?: DeploymentWriteSnapshot["status"];
+  domainStatus?: DeploymentWriteSnapshot["domainStatus"];
+  domainCheckedAt?: Date | null;
+};
+
+export function deploymentWriteStillValid(
+  guard: DeploymentWriteGuard,
+  current: DeploymentWriteSnapshot,
+) {
+  return current.customerDomain === guard.customerDomain
+    && current.posDomain === guard.posDomain
+    && (guard.status === undefined || current.status === guard.status)
+    && (guard.domainStatus === undefined || current.domainStatus === guard.domainStatus)
+    && (guard.domainCheckedAt === undefined
+      || current.domainCheckedAt?.getTime() === guard.domainCheckedAt?.getTime());
+}
+
+function deploymentWritePredicate(guard: DeploymentWriteGuard) {
+  return and(
+    guard.customerDomain === null
+      ? isNull(deploymentProfiles.customerDomain)
+      : eq(deploymentProfiles.customerDomain, guard.customerDomain),
+    guard.posDomain === null
+      ? isNull(deploymentProfiles.posDomain)
+      : eq(deploymentProfiles.posDomain, guard.posDomain),
+    guard.status === undefined ? undefined : eq(deploymentProfiles.status, guard.status),
+    guard.domainStatus === undefined ? undefined : eq(deploymentProfiles.domainStatus, guard.domainStatus),
+    guard.domainCheckedAt === undefined
+      ? undefined
+      : guard.domainCheckedAt === null
+        ? isNull(deploymentProfiles.domainCheckedAt)
+        : eq(deploymentProfiles.domainCheckedAt, guard.domainCheckedAt),
+  );
+}
+
 function hasFreshConnectedDomains(profile: typeof deploymentProfiles.$inferSelect) {
   return profile.domainStatus === "connected"
     && profile.domainCheckedAt instanceof Date
@@ -207,28 +250,22 @@ export function registerDeploymentControlRoutes(app: Express) {
         domainMessage: currentProfile.domainMessage,
       });
     }
-    const stableCustomerDomain = currentProfile.customerDomain === null
-      ? isNull(deploymentProfiles.customerDomain)
-      : eq(deploymentProfiles.customerDomain, currentProfile.customerDomain);
-    const stablePosDomain = currentProfile.posDomain === null
-      ? isNull(deploymentProfiles.posDomain)
-      : eq(deploymentProfiles.posDomain, currentProfile.posDomain);
-    const stableRoutingPredicate = and(stableCustomerDomain, stablePosDomain);
-    const activationPredicate = needsActivationApproval && !overrideDomainWarning
-      ? and(
-          stableRoutingPredicate,
-          eq(deploymentProfiles.status, currentProfile.status),
-          eq(deploymentProfiles.domainStatus, currentProfile.domainStatus),
-          currentProfile.domainCheckedAt ? eq(deploymentProfiles.domainCheckedAt, currentProfile.domainCheckedAt) : isNull(deploymentProfiles.domainCheckedAt),
-        )
-      : and(stableRoutingPredicate, (routingChanged || updates.status !== undefined) ? eq(deploymentProfiles.status, currentProfile.status) : undefined);
+    const writeGuard: DeploymentWriteGuard = {
+      customerDomain: currentProfile.customerDomain,
+      posDomain: currentProfile.posDomain,
+      ...((routingChanged || updates.status !== undefined) ? { status: currentProfile.status } : {}),
+      ...(needsActivationApproval && !overrideDomainWarning ? {
+        domainStatus: currentProfile.domainStatus,
+        domainCheckedAt: currentProfile.domainCheckedAt,
+      } : {}),
+    };
     const [profile] = await db.update(deploymentProfiles)
       .set(withoutUndefined({
         ...updates,
         ...(routingChanged ? { domainStatus: "pending", domainMessage: "Hostname changed; run the domain check again.", domainChecks: [], domainCheckedAt: null } : {}),
         updatedAt: new Date(),
       }))
-      .where(and(eq(deploymentProfiles.id, id), activationPredicate))
+      .where(and(eq(deploymentProfiles.id, id), deploymentWritePredicate(writeGuard)))
       .returning();
     if (!profile) {
       return res.status(409).json({ message: "Deployment routing or domain readiness changed while saving. Review the latest profile and try again.", code: "DEPLOYMENT_CHANGED" });
@@ -254,9 +291,10 @@ export function registerDeploymentControlRoutes(app: Express) {
     const domainMessage = failures.length
       ? failures.map(check => `${check.hostname}: ${check.reason}`).join("; ")
       : `All ${checks.length} required hostname${checks.length === 1 ? "" : "s"} passed DNS and HTTPS checks.`;
-    const routingPredicate = currentProfile.posDomain === null
-      ? and(eq(deploymentProfiles.customerDomain, currentProfile.customerDomain!), isNull(deploymentProfiles.posDomain))
-      : and(eq(deploymentProfiles.customerDomain, currentProfile.customerDomain!), eq(deploymentProfiles.posDomain, currentProfile.posDomain));
+    const routingPredicate = deploymentWritePredicate({
+      customerDomain: currentProfile.customerDomain,
+      posDomain: currentProfile.posDomain,
+    });
     const [profile] = await db.update(deploymentProfiles).set({
       domainStatus,
       domainMessage,
