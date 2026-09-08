@@ -15,6 +15,7 @@ import {
   Database, Lock, Unlock, Shield, Download, Upload,
   Mail, Eye, EyeOff, CheckCircle2, AlertCircle, Send, Wifi, WifiOff, Users,
   RotateCcw, GitCommit, FileCheck, Info, Trash2, Server, Archive, BookOpen, PackageOpen,
+  Bot, ExternalLink,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +31,7 @@ const groupIcons: Record<string, any> = {
   inventory: Package,
   portal: Settings2,
   loyalty: Users,
-  customer_ai: Settings2,
+  customer_ai: Bot,
 };
 
 const groupLabels: Record<string, string> = {
@@ -134,6 +135,17 @@ export default function SettingsPage() {
 
   const { data: settings, isLoading } = useQuery<SystemSetting[]>({
     queryKey: ["/api/settings"],
+  });
+  const { data: customerAiStatus } = useQuery<{
+    requestedProvider: "auto" | "replit" | "xai" | "deterministic";
+    activeProvider: "replit" | "xai" | "deterministic";
+    model: string;
+    fallback: boolean;
+    configured: boolean;
+    availability: { replit: boolean; xai: boolean; deterministic: boolean };
+  }>({
+    queryKey: ["/api/customer-ai/status"],
+    enabled: isAdminOrHigher,
   });
 
   const { data: emailStatus, isLoading: emailStatusLoading } = useQuery<{
@@ -985,11 +997,51 @@ export default function SettingsPage() {
                   <div>
                     <h3 className="text-sm font-semibold">{groupLabels[group] || group}</h3>
                     {group === "customer_ai" && (
-                      <p className="text-xs text-muted-foreground">Replit managed AI needs no customer-owned key when its AI integration is active. xAI requires an XAI_API_KEY or connected integration; credentials are never entered here.</p>
+                      <p className="text-xs text-muted-foreground">Choose a managed provider or retain the always-available deterministic fallback. Credentials are never entered or displayed here.</p>
                     )}
                   </div>
                 </CardHeader>
                 <CardContent className="p-4 pt-0">
+                  {group === "customer_ai" && (
+                    <div className="mb-4 rounded-lg border bg-muted/20 p-3 space-y-3" data-testid="panel-customer-ai-provisioning">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={customerAiStatus?.availability.replit ? "default" : "secondary"}>
+                          Replit Managed: {customerAiStatus?.availability.replit ? "Available" : "Not configured"}
+                        </Badge>
+                        <Badge variant={customerAiStatus?.availability.xai ? "default" : "secondary"}>
+                          xAI: {customerAiStatus?.availability.xai ? "Available" : "Key required"}
+                        </Badge>
+                        <Badge variant="outline">
+                          Active: {customerAiStatus?.activeProvider || "Checking…"}
+                        </Badge>
+                        {customerAiStatus?.fallback && <Badge variant="secondary">Safe fallback active</Badge>}
+                      </div>
+                      <div className="text-xs text-muted-foreground space-y-1">
+                        <p className="font-medium text-foreground">Provision xAI</p>
+                        <ol className="list-decimal ml-4 space-y-0.5">
+                          <li>Create an xAI account and purchase API credits.</li>
+                          <li>Generate a key from the xAI Console API Keys page.</li>
+                          <li>Add it to Replit Secrets as <code className="font-mono text-foreground">XAI_API_KEY</code>. Never paste it into a setting or chat message.</li>
+                          <li>Select xAI below, enter an xAI model name, save, then confirm the xAI badge shows Available.</li>
+                        </ol>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button variant="outline" size="sm" asChild>
+                          <a href="https://console.x.ai/team/default/api-keys" target="_blank" rel="noreferrer">
+                            Create xAI API key <ExternalLink className="w-3.5 h-3.5 ml-1.5" />
+                          </a>
+                        </Button>
+                        <Button variant="outline" size="sm" asChild>
+                          <a href="https://console.x.ai/team/default/billing" target="_blank" rel="noreferrer">
+                            Add xAI credits <ExternalLink className="w-3.5 h-3.5 ml-1.5" />
+                          </a>
+                        </Button>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Official guide: <a className="underline" href="https://docs.x.ai/developers/quickstart" target="_blank" rel="noreferrer">xAI API Quickstart</a>. If xAI is selected without a valid key, customer recommendations continue in deterministic mode.
+                      </p>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {groupSettings.map((setting) => (
                       <div key={setting.key} className="space-y-1">
