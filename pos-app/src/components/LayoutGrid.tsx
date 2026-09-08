@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { CSSProperties, ComponentType, SVGProps } from "react";
-import { ChevronLeftIcon, LayersIcon } from "lucide-react";
+import { ChevronLeftIcon, LayersIcon, ReceiptTextIcon } from "lucide-react";
 import {
   CashIcon, CardIcon, VoidIcon, HoldIcon, RecallIcon, DiscountIcon, SubtotalIcon,
   VoucherIcon, RefundIcon, PayIcon,
@@ -41,6 +41,9 @@ const ACTION_COLORS: Record<string, string> = {
   DECLARE_CASH:        "bg-teal-700 hover:bg-teal-600 text-white",
   SURCHARGE_PCT:       "bg-purple-800 hover:bg-purple-700 text-white",
   DEPT_SALE:           "bg-indigo-700 hover:bg-indigo-600 text-white",
+  DEPT_SALE_VAT_19:    "bg-red-700 hover:bg-red-600 text-white",
+  DEPT_SALE_VAT_5:     "bg-blue-700 hover:bg-blue-600 text-white",
+  REVIEW_TRANSACTIONS: "bg-indigo-700 hover:bg-indigo-600 text-white",
   ISSUE_CREDIT_NOTE:   "bg-pink-800 hover:bg-pink-700 text-white",
   REDEEM_CREDIT_NOTE:  "bg-pink-800 hover:bg-pink-700 text-white",
   LINE_SURCHARGE_PCT:  "bg-purple-800 hover:bg-purple-700 text-white",
@@ -72,6 +75,9 @@ const ACTION_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   OPEN_DRAWER:         CashIcon,
   DECLARE_CASH:        CashIcon,
   DEPT_SALE:           PayIcon,
+  DEPT_SALE_VAT_19:    PayIcon,
+  DEPT_SALE_VAT_5:     PayIcon,
+  REVIEW_TRANSACTIONS: ReceiptTextIcon,
   ISSUE_CREDIT_NOTE:   VoucherIcon,
   REDEEM_CREDIT_NOTE:  RefundIcon,
   LINE_SURCHARGE_PCT:  DiscountIcon,
@@ -301,7 +307,7 @@ export function LayoutGrid({
             className={`ml-auto text-xs transition-colors ${isLight ? "text-gray-400 hover:text-gray-700" : "text-gray-600 hover:text-gray-400"}`}
             data-testid="grid-root"
           >
-            Root
+              Home
           </button>
         </div>
       )}

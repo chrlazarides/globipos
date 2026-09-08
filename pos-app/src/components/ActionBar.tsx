@@ -4,7 +4,7 @@ import {
   CalendarClock, MonitorSmartphone, BarcodeIcon, BookOpenIcon, ArrowLeftRightIcon, ReceiptTextIcon,
   Leaf, RotateCw, Tag, ShoppingBag, Settings2,
 } from "lucide-react";
-import { HoldIcon, RecallIcon, VoidIcon, RefundIcon, DiscountIcon } from "./icons/PosIcons";
+import { HoldIcon, RecallIcon, VoidIcon, RefundIcon, DiscountIcon, PayIcon } from "./icons/PosIcons";
 import type { NumpadMode } from "../types";
 import type { PosUiTheme } from "../hooks/usePosTheme";
 
@@ -28,6 +28,9 @@ interface ActionBarProps {
   onShift?: () => void;
   onSco?: () => void;
   onManual?: () => void;
+  onBarcodeEntry?: () => void;
+  onReviewTransactions?: () => void;
+  onVatSale?: (vatRate: number) => void;
   onStockTransfer?: () => void;
   onProduce?: () => void;
   onBottleReturn?: () => void;
@@ -57,6 +60,9 @@ export function ActionBar({
   onShift,
   onSco,
   onManual,
+  onBarcodeEntry,
+  onReviewTransactions,
+  onVatSale,
   onStockTransfer,
   onProduce,
   onBottleReturn,
@@ -211,6 +217,36 @@ export function ActionBar({
       enabled: true,
       testId: "action-manual",
     }] : []),
+    ...(onBarcodeEntry ? [{
+      label: "Barcode",
+      icon: BarcodeIcon,
+      onClick: onBarcodeEntry,
+      enabled: true,
+      testId: "action-manual-barcode",
+    }] : []),
+    ...(onReviewTransactions ? [{
+      label: "Transactions",
+      icon: ReceiptTextIcon,
+      onClick: onReviewTransactions,
+      enabled: true,
+      testId: "action-review-transactions",
+    }] : []),
+    ...(onVatSale ? [
+      {
+        label: "Misc. VAT 19%",
+        icon: PayIcon,
+        onClick: () => onVatSale(19),
+        enabled: true,
+        testId: "action-vat-19",
+      },
+      {
+        label: "Misc. VAT 5%",
+        icon: PayIcon,
+        onClick: () => onVatSale(5),
+        enabled: true,
+        testId: "action-vat-5",
+      },
+    ] : []),
     ...(onStockTransfer ? [{
       label: "Stock Transfer",
       icon: ArrowLeftRightIcon,

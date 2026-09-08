@@ -261,6 +261,23 @@ async fn get_order_lines(state: State<'_, AppState>, order_id: String) -> Result
 }
 
 #[tauri::command]
+async fn get_recent_orders(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<Value>, String> {
+    let safe_limit = limit.unwrap_or(100).clamp(1, 250);
+    let rows = sqlx::query(
+        "SELECT * FROM pos_orders
+         WHERE status IN ('completed', 'voided')
+         ORDER BY created_at DESC
+         LIMIT ?"
+    )
+    .bind(safe_limit)
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
 async fn next_order_number(state: State<'_, AppState>, prefix: String) -> Result<String, String> {
     orders::next_order_number(&state.db, &prefix)
         .await.map_err(|e| e.to_string())
@@ -1594,6 +1611,7 @@ pub fn run() {
             save_order,
             get_held_orders,
             get_order_lines,
+            get_recent_orders,
             next_order_number,
             sync_catalog,
             sync_inbox,

@@ -47,6 +47,7 @@ import { PriceCheckDialog } from "../components/PriceCheckDialog";
 import { StockTransferDialog } from "../components/StockTransferDialog";
 import { Numpad } from "../components/Numpad";
 import { ActionBar } from "../components/ActionBar";
+import { TransactionReviewDialog } from "../components/TransactionReviewDialog";
 import { PinPrompt } from "../components/PinPrompt";
 import ScaleBar from "../components/ScaleBar";
 import CustomerDisplay from "../components/CustomerDisplay";
@@ -144,6 +145,34 @@ function PromoDialog({
             data-testid="button-apply-promo">
             Apply
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ManualBarcodeDialog({ onSubmit, onClose }: { onSubmit: (barcode: string) => Promise<void>; onClose: () => void }) {
+  const [barcode, setBarcode] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    const value = barcode.trim();
+    if (!value || busy) return;
+    setBusy(true);
+    try { await onSubmit(value); onClose(); } finally { setBusy(false); }
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-5 shadow-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <div><h2 className="text-white font-semibold">Enter barcode</h2><p className="text-gray-500 text-xs mt-1">Use the same lookup as the scanner.</p></div>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-xl" aria-label="Close">×</button>
+        </div>
+        <input autoFocus value={barcode} onChange={(e) => setBarcode(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} inputMode="numeric" placeholder="Scan or type barcode"
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-xl px-4 py-3.5 text-lg font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="input-manual-barcode" />
+        <div className="flex gap-3 mt-4">
+          <button onClick={onClose} className="flex-1 min-h-12 rounded-xl bg-gray-800 text-gray-300">Cancel</button>
+          <button onClick={submit} disabled={!barcode.trim() || busy} className="flex-1 min-h-12 rounded-xl bg-burgundy-700 text-white font-semibold disabled:opacity-40" data-testid="button-submit-manual-barcode">{busy ? "Looking up…" : "Add item"}</button>
         </div>
       </div>
     </div>
@@ -453,7 +482,7 @@ function RecallDialog({ onRecall, onClose }: {
 
 // ── Main POS Screen ───────────────────────────────────────────────────────────
 
-type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | "age_check" | "produce" | "bottle_return" | "coupon" | "click_collect" | null;
+type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "manual_barcode" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "transaction_review" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | "age_check" | "produce" | "bottle_return" | "coupon" | "click_collect" | null;
 type CashDialogMode = "cash_in" | "cash_out" | "petty_cash";
 type POSMode = "sell" | "sco" | "shift" | "fallback" | "barcode_config" | "receipt_design" | "hardware_config" | "sco_monitor";
 
@@ -628,6 +657,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [dialog, setDialog]               = useState<Dialog>(null);
   const [numpadMode, setNumpadModeState]  = useState<NumpadMode>("qty");
   const [cashDialogMode, setCashDialogMode] = useState<CashDialogMode>("cash_in");
+  const [deptSaleVatRate, setDeptSaleVatRate] = useState<number | null>(null);
   const [mode, setMode]                   = useState<POSMode>(config.sco_mode ? "sco" : "sell");
   const [paymentSuccess, setPaymentSuccess] = useState<PaymentSuccessState | null>(null);
   const lastReceiptPrinterCallback = useRef<(() => Promise<void>) | null>(null);
@@ -815,10 +845,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hw.config?.scale_enabled, mode]);
 
-  // Barcode scanner — active only in sell mode with no dialog open
-  useBarcode({
-    enabled: mode === "sell" && dialog === null,
-    onScan: async (barcode) => {
+  // One barcode path for hardware scans and cashier-entered barcodes.
+  const processBarcode = useCallback(async (barcode: string) => {
       const { getProductByBarcode } = await import("../lib/db");
       const { parseScaleBarcode, DEFAULT_BARCODE_CONFIG } = await import("../lib/scaleBarcode");
 
@@ -880,7 +908,12 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         const product = await getProductByBarcode(barcode);
         if (product) handleAddProduct(product);
       }
-    },
+  }, [engine, multiBuy, session.cashier_id, session.cashier_name, handleAddProduct]);
+
+  // Barcode scanner — active only in sell mode with no dialog open
+  useBarcode({
+    enabled: mode === "sell" && dialog === null,
+    onScan: processBarcode,
   });
 
   // ── Action dispatcher ──────────────────────────────────────────────────────
@@ -926,6 +959,9 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "LINE_SURCHARGE_PCT": perms.requestAction("discount", () => { setNumpadModeState("line_surcharge_pct"); setDialog("numpad"); }); break;
       // ── Department-key sale ──────────────────────────────────────────────
       case "DEPT_SALE": setDialog("dept_sale"); break;
+      case "DEPT_SALE_VAT_19": setDeptSaleVatRate(19); setDialog("dept_sale"); break;
+      case "DEPT_SALE_VAT_5": setDeptSaleVatRate(5); setDialog("dept_sale"); break;
+      case "REVIEW_TRANSACTIONS": setDialog("transaction_review"); break;
       // ── Credit notes ──────────────────────────────────────────────────────
       case "ISSUE_CREDIT_NOTE": perms.requestAction("discount", () => { setDialog("issue_credit_note"); }); break;
       case "REDEEM_CREDIT_NOTE": setDialog("payment"); break;
@@ -1171,6 +1207,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         onToggleTheme={toggleTheme}
         onSyncCatalog={sync.triggerCatalogSync}
         onLogout={onLogout}
+        printerStatus={hw.printerStatus}
+        printerEnabled={!!hw.config?.printer_enabled}
       />
 
       {/* Category nav */}
@@ -1189,6 +1227,14 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onTare={hw.tare}
         />
       )}
+
+      <div className={`flex items-center gap-3 px-4 py-1.5 text-xs border-b flex-shrink-0 ${isLightTheme ? "bg-white border-slate-200 text-slate-600" : "bg-gray-900 border-gray-800 text-gray-400"}`} data-testid="pos-context-strip">
+        <span className="font-semibold text-burgundy-500">{engine.order.customer_id ? "Member" : "Walk-in"}</span>
+        {engine.order.customer_id && <span className="font-mono">{engine.order.customer_id}</span>}
+        <span className={isLightTheme ? "text-slate-300" : "text-gray-700"}>|</span>
+        <span>Price level <strong className={isLightTheme ? "text-slate-800" : "text-gray-200"}>{engine.order.price_level}</strong></span>
+        <span className="ml-auto hidden sm:inline">{config.location_name} · {config.terminal_name}</span>
+      </div>
 
       {/* Main content: journal + corrections/numpad panel + grid (journal → keypad → items) */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -1270,6 +1316,17 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
             window.open(`${base}/api/manual`, "_blank", "noopener,noreferrer");
           });
         }}
+        onBarcodeEntry={() => setDialog("manual_barcode")}
+        onReviewTransactions={() => setDialog("transaction_review")}
+        onVatSale={(vatRate) => {
+          const hasVatCategory = categories.some((category) => Math.abs(category.vat_rate - vatRate) < 0.01);
+          if (!hasVatCategory) {
+            alert(`No active ${vatRate}% VAT department is configured. Add or update a category before using this key.`);
+            return;
+          }
+          setDeptSaleVatRate(vatRate);
+          setDialog("dept_sale");
+        }}
         onProduce={() => setDialog("produce")}
         onBottleReturn={() => setDialog("bottle_return")}
         onCoupon={() => setDialog("coupon")}
@@ -1283,6 +1340,10 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       />
 
       {/* ── Dialogs ── */}
+
+      {dialog === "manual_barcode" && (
+        <ManualBarcodeDialog onSubmit={processBarcode} onClose={() => setDialog(null)} />
+      )}
 
       {/* Full PaymentDialog (Phase 3) — replaces the simple inline PayDialog */}
       <PaymentDialog
@@ -1394,11 +1455,18 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
 
       {dialog === "dept_sale" && (
         <DeptSaleDialog
-          categories={categories}
+          categories={deptSaleVatRate == null
+            ? categories
+            : categories.filter((category) => Math.abs(category.vat_rate - deptSaleVatRate) < 0.01)}
           onConfirm={(category, amount) => engine.addDepartmentLine(category, amount)}
-          onClose={() => setDialog(null)}
+          onClose={() => { setDeptSaleVatRate(null); setDialog(null); }}
         />
       )}
+
+      <TransactionReviewDialog
+        open={dialog === "transaction_review"}
+        onClose={() => setDialog(null)}
+      />
 
       {dialog === "issue_credit_note" && (
         <IssueCreditNoteDialog

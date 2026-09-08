@@ -59,6 +59,16 @@ export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light"
   const label  = MODE_LABELS[mode] ?? "Enter Value";
 
   function handleDigit(d: string) {
+    if (d === "C") {
+      setDisplay("");
+      return;
+    }
+    if (d === "00") {
+      if (!display || display === "0") return;
+      if (display.includes(".")) return;
+      setDisplay((p) => p + d);
+      return;
+    }
     if (d === "." && !hasDecimal) return;
     if (d === "." && display.includes(".")) return;
     // Limit decimal places
@@ -93,7 +103,7 @@ export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light"
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const keys = ["7","8","9","4","5","6","1","2","3",".",  "0","⌫"];
+  const keys = ["7","8","9","C","4","5","6","00","1","2","3",".","0","⌫"];
   const parsedVal = parseFloat(display || "0");
 
   const panelClass = isLight ? "bg-white border border-slate-200" : "bg-gray-900 border border-gray-700";
@@ -124,7 +134,7 @@ export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light"
         </div>
 
         {/* Numpad */}
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           {keys.map((k, i) => {
             if (k === "." && !hasDecimal) {
               return <div key={i} />;
@@ -145,7 +155,7 @@ export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light"
               <button
                 key={i}
                 onClick={() => handleDigit(k)}
-                className={`h-12 flex items-center justify-center rounded-xl font-semibold text-lg transition-colors active:scale-95 ${keyClass}`}
+                 className={`h-12 flex items-center justify-center rounded-xl font-semibold ${k === "C" ? "text-sm" : "text-lg"} transition-colors active:scale-95 ${keyClass}`}
                 data-testid={`numpad-${k}`}
               >
                 {k}

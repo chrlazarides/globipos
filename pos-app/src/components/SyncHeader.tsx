@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { WifiIcon, WifiOffIcon, Loader2Icon, ClockIcon, RefreshCwIcon, PackageIcon, SunIcon, MoonIcon } from "lucide-react";
+import { WifiIcon, WifiOffIcon, Loader2Icon, ClockIcon, RefreshCwIcon, PackageIcon, SunIcon, MoonIcon, PrinterIcon } from "lucide-react";
 import type { SyncStatus, TerminalConfig, CashierSession, PeripheralHealth } from "../types";
 import type { PosUiTheme } from "../hooks/usePosTheme";
 import { HeartbeatIndicator } from "./HeartbeatIndicator";
+import type { DeviceStatus } from "../hooks/useHardware";
 
 interface SyncHeaderProps {
   config: TerminalConfig;
@@ -14,6 +15,8 @@ interface SyncHeaderProps {
   onToggleTheme: () => void;
   onSyncCatalog: () => Promise<void>;
   onLogout: () => void;
+  printerStatus?: DeviceStatus;
+  printerEnabled?: boolean;
 }
 
 export function SyncHeader({
@@ -26,6 +29,8 @@ export function SyncHeader({
   onToggleTheme,
   onSyncCatalog,
   onLogout,
+  printerStatus = "unknown",
+  printerEnabled = false,
 }: SyncHeaderProps) {
   const [clock, setClock] = useState<string>(formatTime());
   const isLight = theme === "light";
@@ -112,6 +117,18 @@ export function SyncHeader({
 
       {/* Heartbeat / peripheral health indicator */}
       <HeartbeatIndicator online={online} peripheralHealth={peripheralHealth} isLight={isLight} />
+
+      {/* Receipt readiness is deliberately separate from network status. */}
+      <div
+        className={`flex items-center gap-1.5 text-xs font-medium ${
+          !printerEnabled ? mutedText : printerStatus === "online" ? (isLight ? "text-emerald-600" : "text-green-400") : printerStatus === "busy" ? "text-amber-500" : "text-red-500"
+        }`}
+        title={!printerEnabled ? "Receipt printer not enabled" : `Receipt printer ${printerStatus}`}
+        data-testid="status-receipt-printer"
+      >
+        <PrinterIcon className="w-3.5 h-3.5" />
+        <span>{!printerEnabled ? "Receipt off" : printerStatus === "online" ? "Receipt ready" : printerStatus === "busy" ? "Printing" : "Receipt offline"}</span>
+      </div>
 
       {/* Cashier */}
       <div className={`flex items-center gap-2 border-l pl-4 ${dividerClass}`}>

@@ -75,6 +75,9 @@ export const getHeldOrders = (): Promise<Order[]> =>
 export const getOrderLines = (orderId: string): Promise<OrderLine[]> =>
   invoke<OrderLine[]>("get_order_lines", { orderId });
 
+export const getRecentOrders = (limit = 100): Promise<Order[]> =>
+  invoke<Order[]>("get_recent_orders", { limit });
+
 export const nextOrderNumber = (prefix: string): Promise<string> =>
   invoke<string>("next_order_number", { prefix });
 
