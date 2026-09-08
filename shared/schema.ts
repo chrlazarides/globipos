@@ -327,6 +327,7 @@ export const customerNotifications = pgTable("customer_notifications", {
 export const portalOrders = pgTable("portal_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   customerId: varchar("customer_id").notNull(),
+  checkoutKey: varchar("checkout_key"),
   status: text("status").notNull().default("pending"),
   source: text("source").notNull().default("portal"), // portal | whatsapp
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
@@ -336,7 +337,11 @@ export const portalOrders = pgTable("portal_orders", {
   notes: text("notes"),
   invoiceId: varchar("invoice_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex("portal_orders_customer_checkout_key_unique")
+    .on(table.customerId, table.checkoutKey)
+    .where(sql`${table.checkoutKey} is not null`),
+]);
 
 export const portalOrderItems = pgTable("portal_order_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1051,7 +1056,11 @@ export const customerLoyaltyPoints = pgTable("customer_loyalty_points", {
   sourceType: text("source_type"), // invoice | portal_order | manual
   sourceId: varchar("source_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex("customer_loyalty_points_source_unique")
+    .on(table.sourceType, table.sourceId)
+    .where(sql`${table.sourceType} is not null and ${table.sourceId} is not null`),
+]);
 
 export const customerOtpTokens = pgTable("customer_otp_tokens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

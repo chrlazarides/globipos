@@ -40,3 +40,4 @@
 - [Fleet domain monitoring](fleet-domain-monitoring.md) — use DB leases, bounded probes, and per-target isolation so replicas or hung DNS cannot flood or freeze checks
 - [Concurrent migration numbering](concurrent-migration-numbering.md) — reconcile colliding migration prefixes with a later idempotent migration that repairs every partially applied state
 - [Domain incident lifecycle](domain-incident-lifecycle.md) — open outages close only after a successful probe; routing edits must never masquerade as recovery
+- [Checkout idempotency keys](checkout-idempotency-keys.md) — persist keys with checkout drafts; scope uniqueness by customer and resolve replays inside the balance lock

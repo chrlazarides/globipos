@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   applyDomainIncidentTransition,
@@ -209,19 +210,27 @@ test("deployment API grouping returns only the five newest incidents", async t =
   ]);
 });
 
-test("incident migration backfills a failed deployment without duplicating its open incident", async t => {
+test("reconciliation migration restores former 0008 and 0009 collision states", async t => {
   const slug = `backfill-${crypto.randomUUID()}`;
   const client = await pool.connect();
   t.after(() => client.release());
-  const backfill = `
-    INSERT INTO deployment_domain_incidents (deployment_id, started_at, reason)
-    SELECT id, COALESCE(domain_failure_started_at, domain_checked_at, now()), COALESCE(domain_message, 'Domain check failed')
-    FROM deployment_profiles
-    WHERE domain_status = 'failed'
-    ON CONFLICT (deployment_id) WHERE recovered_at IS NULL DO NOTHING
-  `;
+  const reconciliation = readFileSync(
+    new URL("../migrations/0010_deployment_domain_notification_delivery.sql", import.meta.url),
+    "utf8",
+  );
   await client.query("BEGIN");
   try {
+    await client.query("DROP TABLE IF EXISTS deployment_domain_incidents");
+    await client.query("DROP INDEX IF EXISTS portal_orders_customer_checkout_key_unique");
+    await client.query("ALTER TABLE portal_orders DROP COLUMN IF EXISTS checkout_key");
+    await client.query("DROP INDEX IF EXISTS customer_loyalty_points_source_unique");
+    await client.query(`
+      ALTER TABLE deployment_profiles
+        ADD COLUMN IF NOT EXISTS domain_status text NOT NULL DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS domain_message text,
+        ADD COLUMN IF NOT EXISTS domain_checked_at timestamp,
+        ADD COLUMN IF NOT EXISTS domain_failure_started_at timestamp
+    `);
     const inserted = await client.query<{ id: string }>(`
       INSERT INTO deployment_profiles (
         slug, client_name, back_office_url, pos_server_url, customer_domain,
@@ -235,8 +244,23 @@ test("incident migration backfills a failed deployment without duplicating its o
       `${slug}.example.com`,
       new Date("2026-09-08T09:00:00.000Z"),
     ]);
-    await client.query(backfill);
-    await client.query(backfill);
+    await client.query(reconciliation);
+    await client.query(reconciliation);
+    const checkoutColumn = await client.query(`
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_name = 'portal_orders' AND column_name = 'checkout_key'
+    `);
+    const checkoutIndexes = await client.query(`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE indexname IN (
+        'portal_orders_customer_checkout_key_unique',
+        'customer_loyalty_points_source_unique'
+      )
+    `);
+    assert.equal(checkoutColumn.rowCount, 1);
+    assert.equal(checkoutIndexes.rowCount, 2);
     const incidents = await client.query<{ started_at: Date; reason: string }>(`
       SELECT started_at, reason
       FROM deployment_domain_incidents

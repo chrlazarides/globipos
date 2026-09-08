@@ -4,7 +4,7 @@ import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeQrCode, sy
 import {
   users, categories, colors, sizes, items, itemVariants, itemBarcodes, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
-  portalOrders, portalOrderItems, systemSettings,
+  portalOrders, portalOrderItems, systemSettings, customerLoyaltyPoints,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
   emailLogs, accounts, journalEntries, journalEntryLines, expenses,
   posLocations, posTerminals, posLayoutSets, posLayoutButtons,
@@ -174,6 +174,23 @@ export interface IStorage {
   updatePortalOrderStatus(id: string, status: string): Promise<PortalOrder | undefined>;
   setPortalOrderInvoiceId(id: string, invoiceId: string): Promise<PortalOrder | undefined>;
   createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]): Promise<PortalOrder>;
+  getCustomerPortalOrderByCheckoutKey(customerId: string, checkoutKey: string): Promise<PortalOrder | undefined>;
+  createCustomerPortalOrderAtomic(
+    data: Omit<InsertPortalOrder, "total" | "cashbackApplied">,
+    lineItems: InsertPortalOrderItem[],
+    options: {
+      useCashback: boolean;
+      loyaltyEnabled: boolean;
+      cashbackEnabled: boolean;
+      pointsPerEuro: number;
+      silverThreshold: number;
+      goldThreshold: number;
+      bronzeCashbackPercent: number;
+      silverCashbackPercent: number;
+      goldCashbackPercent: number;
+      maxCashbackOrderPercent: number;
+    },
+  ): Promise<{ order: PortalOrder; replayed: boolean }>;
   getAvailableItems(): Promise<Item[]>;
 
   getSuppliers(): Promise<Supplier[]>;
@@ -2334,6 +2351,101 @@ export class DatabaseStorage implements IStorage {
       await db.insert(portalOrderItems).values(lineItems.map(li => ({ ...li, orderId: order.id })));
     }
     return order;
+  }
+
+  async getCustomerPortalOrderByCheckoutKey(customerId: string, checkoutKey: string) {
+    const [order] = await db.select().from(portalOrders).where(and(
+      eq(portalOrders.customerId, customerId),
+      eq(portalOrders.checkoutKey, checkoutKey),
+    ));
+    return order;
+  }
+
+  async createCustomerPortalOrderAtomic(
+    data: Omit<InsertPortalOrder, "total" | "cashbackApplied">,
+    lineItems: InsertPortalOrderItem[],
+    options: {
+      useCashback: boolean;
+      loyaltyEnabled: boolean;
+      cashbackEnabled: boolean;
+      pointsPerEuro: number;
+      silverThreshold: number;
+      goldThreshold: number;
+      bronzeCashbackPercent: number;
+      silverCashbackPercent: number;
+      goldCashbackPercent: number;
+      maxCashbackOrderPercent: number;
+    },
+  ) {
+    return db.transaction(async (tx) => {
+      const lockedCustomerResult = await tx.execute(
+        sql`select id, cashback_balance from ${customers} where ${customers.id} = ${data.customerId} for update`,
+      );
+      const lockedCustomer = lockedCustomerResult.rows[0] as { id: string; cashback_balance: string | null } | undefined;
+      if (!lockedCustomer) throw new Error("CUSTOMER_NOT_FOUND");
+
+      if (data.checkoutKey) {
+        const [existingOrder] = await tx.select().from(portalOrders).where(and(
+          eq(portalOrders.customerId, data.customerId),
+          eq(portalOrders.checkoutKey, data.checkoutKey),
+        ));
+        if (existingOrder) return { order: existingOrder, replayed: true };
+      }
+
+      const subtotal = Number(data.subtotal);
+      const grossTotal = subtotal + Number(data.vatAmount);
+      const availableCashback = Number(lockedCustomer.cashback_balance || 0);
+      const cashbackLimit = grossTotal * (options.maxCashbackOrderPercent / 100);
+      const cashbackApplied = options.useCashback && options.cashbackEnabled
+        ? Math.min(availableCashback, grossTotal, cashbackLimit)
+        : 0;
+      const total = Math.max(0, grossTotal - cashbackApplied);
+
+      const [order] = await tx.insert(portalOrders).values({
+        ...data,
+        total: total.toFixed(2),
+        cashbackApplied: cashbackApplied.toFixed(2),
+      }).returning();
+      if (lineItems.length) {
+        await tx.insert(portalOrderItems).values(lineItems.map((item) => ({ ...item, orderId: order.id })));
+      }
+
+      const [loyaltyTotals] = await tx.select({
+        balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}), 0)`,
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, data.customerId));
+      const priorPointsBalance = Number(loyaltyTotals?.balance || 0);
+      const requestedPoints = options.loyaltyEnabled ? Math.floor(subtotal * options.pointsPerEuro) : 0;
+      let awardedPoints = 0;
+      if (requestedPoints > 0) {
+        const [award] = await tx.insert(customerLoyaltyPoints).values({
+          customerId: data.customerId,
+          points: requestedPoints,
+          type: "earn",
+          reason: `Order #${order.id.slice(0, 8)}`,
+          sourceType: "portal_order",
+          sourceId: order.id,
+        }).onConflictDoNothing().returning({ points: customerLoyaltyPoints.points });
+        awardedPoints = award?.points || 0;
+      }
+
+      const pointsBalance = priorPointsBalance + awardedPoints;
+      const cashbackRate = pointsBalance >= options.goldThreshold
+        ? options.goldCashbackPercent
+        : pointsBalance >= options.silverThreshold
+          ? options.silverCashbackPercent
+          : options.bronzeCashbackPercent;
+      const earnedCashback = options.cashbackEnabled
+        ? Number((subtotal * cashbackRate / 100).toFixed(2))
+        : 0;
+      const newCashbackBalance = availableCashback - cashbackApplied + earnedCashback;
+      if (newCashbackBalance < 0) throw new Error("INSUFFICIENT_CASHBACK");
+
+      await tx.update(customers)
+        .set({ cashbackBalance: newCashbackBalance.toFixed(2) })
+        .where(eq(customers.id, data.customerId));
+
+      return { order, replayed: false };
+    });
   }
 
   async getAvailableItems() {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../lib/queryClient";
@@ -28,6 +28,17 @@ interface BasketProps {
 }
 
 const OFFLINE_QUEUE_KEY = "globi_offline_orders";
+const CHECKOUT_KEY_STORAGE = "globi_checkout_key";
+
+function loadCheckoutKey(): string {
+  try {
+    const saved = localStorage.getItem(CHECKOUT_KEY_STORAGE);
+    if (saved && /^[0-9a-f-]{36}$/i.test(saved)) return saved;
+  } catch {}
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(CHECKOUT_KEY_STORAGE, key); } catch {}
+  return key;
+}
 
 export function getOfflineQueueCount(): number {
   try {
@@ -48,6 +59,16 @@ export async function flushOfflineQueue(): Promise<number> {
   try {
     const queue: any[] = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || "[]");
     if (!queue.length) return 0;
+    let upgraded = false;
+    for (const item of queue) {
+      if (!item?.payload?.checkoutKey) {
+        item.payload = { ...item.payload, checkoutKey: crypto.randomUUID() };
+        upgraded = true;
+      }
+    }
+    if (upgraded) {
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+    }
     const remaining: any[] = [];
     for (const item of queue) {
       try {
@@ -88,6 +109,18 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
   const [pendingCount, setPendingCount] = useState(getOfflineQueueCount);
   const [syncing, setSyncing] = useState(false);
   const [useCashback, setUseCashback] = useState(false);
+  const [checkoutKey, setCheckoutKey] = useState(loadCheckoutKey);
+  const checkoutDraftMounted = useRef(false);
+
+  useEffect(() => {
+    if (!checkoutDraftMounted.current) {
+      checkoutDraftMounted.current = true;
+      return;
+    }
+    const key = crypto.randomUUID();
+    setCheckoutKey(key);
+    try { localStorage.setItem(CHECKOUT_KEY_STORAGE, key); } catch {}
+  }, [basket, notes, deliveryType, deliveryAddress, useCashback]);
 
   // Fetch loyalty/cashback data
   const { data: loyaltyData } = useQuery<any>({
@@ -166,6 +199,7 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
       deliveryType,
       deliveryAddress: deliveryType === "delivery" ? deliveryAddress : undefined,
       useCashback: useCashback && availableCashback > 0,
+      checkoutKey,
     };
     try {
       if (!navigator.onLine) {
