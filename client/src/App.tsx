@@ -50,6 +50,7 @@ import ActivityLogsPage from "@/pages/activity-logs";
 import DeployGuide from "@/pages/deploy-guide";
 import VersionControl from "@/pages/version-control";
 import DeploymentControlPage from "@/pages/deployment-control";
+import IntegrationsPage from "@/pages/integrations";
 import PosLocations from "@/pages/pos-locations";
 import PosTerminals from "@/pages/pos-terminals";
 import PosLayouts from "@/pages/pos-layouts";
@@ -173,6 +174,7 @@ function AdminRouter() {
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/users" component={UsersPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/activity-logs" component={ActivityLogsPage} />}
       {(user?.role === "admin" || user?.role === "superuser") && <Route path="/version-control" component={VersionControl} />}
+      {(user?.role === "admin" || user?.role === "superuser") && <Route path="/integrations" component={IntegrationsPage} />}
       {user?.role === "superuser" && <Route path="/deployment-control" component={DeploymentControlPage} />}
       {/* ── POS routes ────────────────────────────────────────────────────────
            Staff (cashier) tier  : register + card-terminal only.

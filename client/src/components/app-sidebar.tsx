@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus, ArrowLeftRight, CalendarClock, MonitorCog } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus, ArrowLeftRight, CalendarClock, MonitorCog, Plug } from "lucide-react";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { LogoImg } from "@/components/logo-img";
@@ -72,6 +72,7 @@ const reportNav = [
 ];
 
 const systemNav = [
+  { title: "Integrations", url: "/integrations", icon: Plug, module: "_admin" },
   { title: "Import Data", url: "/import", icon: Upload, module: "import" },
   { title: "Settings", url: "/settings", icon: Settings, module: "_settings" },
   { title: "Version Control", url: "/version-control", icon: GitBranch, module: "_admin" },
