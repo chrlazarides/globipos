@@ -131,6 +131,17 @@ export const systemSettings = pgTable("system_settings", {
   group: text("group").notNull().default("general"),
 });
 
+export const customerAiHealth = pgTable("customer_ai_health", {
+  scope: text("scope").primaryKey().default("local"),
+  fallbackCount: integer("fallback_count").notNull().default(0),
+  recommendationFallbackCount: integer("recommendation_fallback_count").notNull().default(0),
+  feedbackFallbackCount: integer("feedback_fallback_count").notNull().default(0),
+  consecutiveFallbackCount: integer("consecutive_fallback_count").notNull().default(0),
+  lastFailureCategory: text("last_failure_category"),
+  lastFailureAt: timestamp("last_failure_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
 // Last-known-good POS release metadata, keyed by the configured GitHub repository.
 // Asset URLs are copied only from a successful GitHub releases API response.
 export const posReleaseCaches = pgTable("pos_release_caches", {

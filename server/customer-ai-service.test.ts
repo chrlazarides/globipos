@@ -7,11 +7,15 @@ import {
   enhanceCustomerRecommendations,
   getCustomerAiEngine,
   getCustomerAiStatus,
+  initializeCustomerAiRuntimeHealth,
   resetCustomerAiRuntimeHealth,
   resolveCustomerAiConfig,
   resetCustomerAiCircuitBreakersForTests,
+  sanitizeCustomerAiRuntimeHealth,
+  setCustomerAiHealthPersistenceForTests,
   type CustomerAiCompletionClient,
   type CustomerAiConfig,
+  type CustomerAiHealthPersistence,
 } from "./customer-ai-service";
 
 const ENV_KEYS = [
@@ -414,4 +418,116 @@ test("runtime health records only sanitized fallback categories and clears degra
     assert.equal(recovered.consecutiveFallbackCount, 0);
     assert.equal(recovered.fallbackCount, 3);
   });
+});
+
+test("runtime health survives restart hydration and persists only sanitized fields", async () => {
+  let stored: unknown;
+  const writes: unknown[] = [];
+  const persistence: CustomerAiHealthPersistence = {
+    async load() {
+      return stored;
+    },
+    async save(health) {
+      stored = structuredClone(health);
+      writes.push(structuredClone(health));
+    },
+  };
+  await setCustomerAiHealthPersistenceForTests(persistence);
+  resetCustomerAiRuntimeHealth();
+  resetCustomerAiCircuitBreakersForTests();
+  try {
+    await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
+      const candidates = [{ id: "a", name: "Apple", price: "1.25", reason: "In stock" }];
+      const sensitiveError = new Error("429 quota token=secret prompt=private-customer-text");
+      for (let attempt = 0; attempt < 3; attempt++) {
+        resetCustomerAiCircuitBreakersForTests();
+        await enhanceCustomerRecommendations(config({ requestedProvider: "xai" }), candidates, {}, failingClient(sensitiveError));
+      }
+
+      assert.equal(writes.length, 3);
+      const serialized = JSON.stringify(stored);
+      assert.equal(serialized.includes("secret"), false);
+      assert.equal(serialized.includes("private-customer-text"), false);
+      assert.deepEqual(Object.keys(stored as object).sort(), [
+        "consecutiveFallbackCount",
+        "fallbackCount",
+        "feedbackFallbackCount",
+        "lastFailureAt",
+        "lastFailureCategory",
+        "recommendationFallbackCount",
+      ]);
+
+      resetCustomerAiRuntimeHealth();
+      assert.equal(getCustomerAiStatus(config()).runtimeHealth.degraded, false);
+      await initializeCustomerAiRuntimeHealth();
+      const restored = getCustomerAiStatus(config()).runtimeHealth;
+      assert.equal(restored.degraded, true);
+      assert.equal(restored.fallbackCount, 3);
+      assert.equal(restored.lastFailureCategory, "rate_limit");
+
+      await enhanceCustomerRecommendations(
+        config({ requestedProvider: "xai" }),
+        candidates,
+        {},
+        clientReturning('{"orderedIds":["a"],"reasons":{}}'),
+      );
+      resetCustomerAiRuntimeHealth();
+      await initializeCustomerAiRuntimeHealth();
+      const recovered = getCustomerAiStatus(config()).runtimeHealth;
+      assert.equal(recovered.degraded, false);
+      assert.equal(recovered.consecutiveFallbackCount, 0);
+      assert.equal(recovered.fallbackCount, 3);
+    });
+  } finally {
+    resetCustomerAiRuntimeHealth();
+    await setCustomerAiHealthPersistenceForTests();
+  }
+});
+
+test("restart hydration rejects malformed and sensitive persisted values", async () => {
+  const sanitized = sanitizeCustomerAiRuntimeHealth({
+    fallbackCount: -1,
+    recommendationFallbackCount: 2.5,
+    feedbackFallbackCount: Number.MAX_SAFE_INTEGER + 1,
+    consecutiveFallbackCount: "99",
+    lastFailureCategory: "401 secret API key prompt text",
+    lastFailureAt: "not-a-date",
+    errorMessage: "credential-value",
+    prompt: "private prompt",
+  });
+  assert.deepEqual(sanitized, {
+    fallbackCount: 0,
+    recommendationFallbackCount: 0,
+    feedbackFallbackCount: 0,
+    consecutiveFallbackCount: 0,
+    lastFailureCategory: null,
+    lastFailureAt: null,
+  });
+
+  await setCustomerAiHealthPersistenceForTests({
+    async load() {
+      return {
+        fallbackCount: 4,
+        recommendationFallbackCount: 3,
+        feedbackFallbackCount: 1,
+        consecutiveFallbackCount: 4,
+        lastFailureCategory: "timeout",
+        lastFailureAt: new Date("2026-09-08T10:00:00.000Z"),
+        providerError: "sensitive text that must be ignored",
+      };
+    },
+    async save() {},
+  });
+  resetCustomerAiRuntimeHealth();
+  try {
+    await initializeCustomerAiRuntimeHealth();
+    const restored = getCustomerAiStatus(config()).runtimeHealth;
+    assert.equal(restored.degraded, true);
+    assert.equal(restored.lastFailureCategory, "timeout");
+    assert.equal(restored.lastFailureAt, "2026-09-08T10:00:00.000Z");
+    assert.equal(JSON.stringify(restored).includes("sensitive text"), false);
+  } finally {
+    resetCustomerAiRuntimeHealth();
+    await setCustomerAiHealthPersistenceForTests();
+  }
 });

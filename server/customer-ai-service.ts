@@ -1,4 +1,7 @@
 import OpenAI from "openai";
+import { eq } from "drizzle-orm";
+import { customerAiHealth } from "@shared/schema";
+import { db } from "./db";
 
 export const CUSTOMER_AI_PROVIDERS = ["auto", "replit", "xai", "deterministic"] as const;
 export type CustomerAiProvider = typeof CUSTOMER_AI_PROVIDERS[number];
@@ -28,7 +31,7 @@ export type CustomerAiFailureCategory =
   | "invalid_response"
   | "provider";
 
-interface CustomerAiRuntimeHealth {
+export interface CustomerAiRuntimeHealth {
   fallbackCount: number;
   recommendationFallbackCount: number;
   feedbackFallbackCount: number;
@@ -46,6 +49,83 @@ const runtimeHealth: CustomerAiRuntimeHealth = {
   lastFailureAt: null,
 };
 
+export interface CustomerAiHealthPersistence {
+  load(): Promise<unknown>;
+  save(health: CustomerAiRuntimeHealth): Promise<void>;
+}
+
+const FAILURE_CATEGORIES = new Set<CustomerAiFailureCategory>([
+  "configuration", "authentication", "rate_limit", "timeout", "model", "invalid_response", "provider",
+]);
+
+const databaseHealthPersistence: CustomerAiHealthPersistence = {
+  async load() {
+    const [row] = await db.select().from(customerAiHealth).where(eq(customerAiHealth.scope, "local")).limit(1);
+    return row;
+  },
+  async save(health) {
+    const values = {
+      scope: "local",
+      fallbackCount: health.fallbackCount,
+      recommendationFallbackCount: health.recommendationFallbackCount,
+      feedbackFallbackCount: health.feedbackFallbackCount,
+      consecutiveFallbackCount: health.consecutiveFallbackCount,
+      lastFailureCategory: health.lastFailureCategory,
+      lastFailureAt: health.lastFailureAt ? new Date(health.lastFailureAt) : null,
+      updatedAt: new Date(),
+    };
+    await db.insert(customerAiHealth).values(values).onConflictDoUpdate({
+      target: customerAiHealth.scope,
+      set: values,
+    });
+  },
+};
+
+let healthPersistence = databaseHealthPersistence;
+let persistenceQueue = Promise.resolve();
+
+function sanitizedCount(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+export function sanitizeCustomerAiRuntimeHealth(value: unknown): CustomerAiRuntimeHealth {
+  const input = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const rawDate = input.lastFailureAt;
+  const parsedDate = rawDate instanceof Date ? rawDate : typeof rawDate === "string" ? new Date(rawDate) : null;
+  return {
+    fallbackCount: sanitizedCount(input.fallbackCount),
+    recommendationFallbackCount: sanitizedCount(input.recommendationFallbackCount),
+    feedbackFallbackCount: sanitizedCount(input.feedbackFallbackCount),
+    consecutiveFallbackCount: sanitizedCount(input.consecutiveFallbackCount),
+    lastFailureCategory: typeof input.lastFailureCategory === "string"
+      && FAILURE_CATEGORIES.has(input.lastFailureCategory as CustomerAiFailureCategory)
+      ? input.lastFailureCategory as CustomerAiFailureCategory
+      : null,
+    lastFailureAt: parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.toISOString() : null,
+  };
+}
+
+function applyRuntimeHealth(health: CustomerAiRuntimeHealth) {
+  Object.assign(runtimeHealth, health);
+}
+
+function persistRuntimeHealth(): Promise<void> {
+  const snapshot = { ...runtimeHealth };
+  persistenceQueue = persistenceQueue
+    .then(() => healthPersistence.save(snapshot))
+    .catch(() => undefined);
+  return persistenceQueue;
+}
+
+export async function initializeCustomerAiRuntimeHealth() {
+  try {
+    await persistenceQueue;
+    applyRuntimeHealth(sanitizeCustomerAiRuntimeHealth(await healthPersistence.load()));
+  } catch {
+    // Operational health must never prevent the server from starting.
+  }
+}
+
 function failureCategory(error: unknown): CustomerAiFailureCategory {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("401") || message.includes("403") || message.includes("auth") || message.includes("api key")) return "authentication";
@@ -56,21 +136,23 @@ function failureCategory(error: unknown): CustomerAiFailureCategory {
   return "provider";
 }
 
-function recordFallback(feature: "recommendation" | "feedback", category: CustomerAiFailureCategory) {
+async function recordFallback(feature: "recommendation" | "feedback", category: CustomerAiFailureCategory) {
   try {
     runtimeHealth.fallbackCount += 1;
     runtimeHealth[feature === "recommendation" ? "recommendationFallbackCount" : "feedbackFallbackCount"] += 1;
     runtimeHealth.consecutiveFallbackCount += 1;
     runtimeHealth.lastFailureCategory = category;
     runtimeHealth.lastFailureAt = new Date().toISOString();
+    await persistRuntimeHealth();
   } catch {
     // Operational health must never affect a customer request.
   }
 }
 
-function recordSuccess() {
+async function recordSuccess() {
   try {
     runtimeHealth.consecutiveFallbackCount = 0;
+    await persistRuntimeHealth();
   } catch {
     // Operational health must never affect a customer request.
   }
@@ -83,6 +165,12 @@ export function resetCustomerAiRuntimeHealth() {
   runtimeHealth.consecutiveFallbackCount = 0;
   runtimeHealth.lastFailureCategory = null;
   runtimeHealth.lastFailureAt = null;
+}
+
+export async function setCustomerAiHealthPersistenceForTests(persistence?: CustomerAiHealthPersistence) {
+  await persistenceQueue;
+  healthPersistence = persistence || databaseHealthPersistence;
+  persistenceQueue = Promise.resolve();
 }
 
 type SettingValue = { key: string; value: string } | [string, string];
@@ -188,7 +276,7 @@ export async function enhanceCustomerRecommendations(
   const engine = getCustomerAiEngine(config, config.recommendationsEnabled);
   const client = engine.activeProvider === "deterministic" ? null : completionClient || clientFor(engine);
   if (!client || !candidates.length) {
-    if (engine.fallback && candidates.length) recordFallback("recommendation", "configuration");
+    if (engine.fallback && candidates.length) await recordFallback("recommendation", "configuration");
     return { orderedIds: candidates.map(candidate => candidate.id), reasons: {}, engine };
   }
   try {
@@ -214,13 +302,13 @@ export async function enhanceCustomerRecommendations(
       }
     }
     recordProviderSuccess(engine.activeProvider as RemoteProvider);
-    recordSuccess();
+    await recordSuccess();
     return { orderedIds: uniqueIds, reasons, engine };
   } catch (error) {
     if (!(error instanceof CustomerAiCircuitOpenError)) {
       recordProviderFailure(engine.activeProvider as RemoteProvider);
     }
-    recordFallback(
+    await recordFallback(
       "recommendation",
       error instanceof CustomerAiCircuitOpenError
         ? runtimeHealth.lastFailureCategory || "provider"
@@ -239,7 +327,7 @@ export async function classifyCustomerFeedback(
   const engine = getCustomerAiEngine(config, config.sentimentEnabled);
   const client = engine.activeProvider === "deterministic" ? null : completionClient || clientFor(engine);
   if (!client) {
-    if (engine.fallback) recordFallback("feedback", "configuration");
+    if (engine.fallback) await recordFallback("feedback", "configuration");
     return null;
   }
   try {
@@ -256,13 +344,13 @@ export async function classifyCustomerFeedback(
       throw new Error("invalid response");
     }
     recordProviderSuccess(engine.activeProvider as RemoteProvider);
-    recordSuccess();
+    await recordSuccess();
     return { sentiment: result.sentiment as "positive" | "neutral" | "negative", score: result.score, engine };
   } catch (error) {
     if (!(error instanceof CustomerAiCircuitOpenError)) {
       recordProviderFailure(engine.activeProvider as RemoteProvider);
     }
-    recordFallback(
+    await recordFallback(
       "feedback",
       error instanceof CustomerAiCircuitOpenError
         ? runtimeHealth.lastFailureCategory || "provider"

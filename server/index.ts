@@ -184,6 +184,16 @@ app.use((req, res, next) => {
       );
       CREATE INDEX IF NOT EXISTS customer_feedback_customer_created_idx ON customer_feedback(customer_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS customer_notifications_customer_created_idx ON customer_notifications(customer_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS customer_ai_health (
+        scope TEXT PRIMARY KEY DEFAULT 'local',
+        fallback_count INTEGER NOT NULL DEFAULT 0,
+        recommendation_fallback_count INTEGER NOT NULL DEFAULT 0,
+        feedback_fallback_count INTEGER NOT NULL DEFAULT 0,
+        consecutive_fallback_count INTEGER NOT NULL DEFAULT 0,
+        last_failure_category TEXT,
+        last_failure_at TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
     `);
   } catch (e) {
     console.error("[migration] customer PWA tables error:", e);
@@ -193,6 +203,8 @@ app.use((req, res, next) => {
   const { seedDatabase, ensureDefaultSettings } = await import("./seed");
   await seedDatabase().catch(e => console.error("Seed error:", e));
   await ensureDefaultSettings().catch(e => console.error("Settings init error:", e));
+  const { initializeCustomerAiRuntimeHealth } = await import("./customer-ai-service");
+  await initializeCustomerAiRuntimeHealth();
 
   // Schema migration: add opening_balance column if it doesn't exist
   try {
