@@ -6,6 +6,8 @@ import {
 import type { PrintReceiptLine } from "../hooks/useHardware";
 import type { ReceiptConfig as ReceiptConfigType } from "../types";
 import { getReceiptConfig, saveReceiptConfig } from "../lib/db";
+import { buildReceiptLines } from "../lib/receipt";
+import { formatCurrency } from "../lib/pricing";
 
 interface ReceiptDesignerProps {
   terminalCode: string;
@@ -74,12 +76,19 @@ export function ReceiptDesigner({ terminalCode, onClose }: ReceiptDesignerProps)
   const [printing, setPrinting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [printerColumns, setPrinterColumns] = useState(42);
 
   useEffect(() => {
     getReceiptConfig()
       .then(setConfig)
       .catch((e) => setError(e?.message ?? "Failed to load receipt configuration"))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    invoke<{ printer_columns?: number }>("get_hardware_config")
+      .then((hardware) => setPrinterColumns(Math.max(24, hardware.printer_columns ?? 42)))
+      .catch(() => setPrinterColumns(42));
   }, []);
 
   async function handleSave() {
@@ -106,50 +115,23 @@ export function ReceiptDesigner({ terminalCode, onClose }: ReceiptDesignerProps)
     setError(null);
     setPrinting(true);
 
-    const infoLine1 = [
-      config.show_terminal ? `Terminal: ${terminalCode}` : "",
-      config.show_cashier ? "Cashier: Test Cashier" : "",
-    ].filter(Boolean).join("  ");
-    const infoLine2 = [
-      config.show_order_number ? "Order: TEST-0001" : "",
-      config.show_datetime ? new Date().toLocaleString() : "",
-    ].filter(Boolean).join("  ");
-    const lines: PrintReceiptLine[] = [
-      {
-        text: config.header_title.trim() || terminalCode,
-        align: "center",
-        bold: true,
-        size: "big",
-      },
-      ...config.header_lines
-        .filter((line) => line.trim() !== "")
-        .map((text) => ({ text, align: "center" as const })),
-      { divider: true },
-      ...(infoLine1 ? [{ text: infoLine1 }] : []),
-      ...(infoLine2 ? [{ text: infoLine2 }] : []),
-      ...(infoLine1 || infoLine2 ? [{ divider: true }] : []),
-      { text: "Test Product A           x2   €7.80" },
-      { text: "Test Product B           x1  €10.50" },
-      { divider: true },
-      ...(config.show_subtotal ? [{ text: "Subtotal                     €18.30" }] : []),
-      ...(config.show_vat ? [{ text: "VAT                           €0.87" }] : []),
-      { text: "TOTAL                        €18.30", bold: true },
-      { divider: true },
-      ...(config.show_payment_method ? [{ text: "Payment: TEST CARD" }] : []),
-      ...(config.show_tendered_change ? [
-        { text: "Tendered                     €20.00" },
-        { text: "Change                        €1.70" },
-      ] : []),
-      ...(config.show_card_ref ? [{ text: "Card Ref: TEST-123456" }] : []),
-      ...(config.footer_lines.some((line) => line.trim() !== "")
-        ? [
-            { divider: true },
-            ...config.footer_lines
-              .filter((line) => line.trim() !== "")
-              .map((text) => ({ text, align: "center" as const })),
-          ]
-        : []),
+    const now = new Date().toISOString();
+    const testOrder = {
+      id: "test", order_number: "TEST-0001", status: "completed" as const,
+      cashier_id: "test", cashier_name: "Test Cashier", price_level: 1,
+      order_discount_pct: 0, order_discount_fixed: 0, surcharge_pct: 0,
+      surcharge_amount: 0, subtotal: 18.30, discount_amount: 0, vat_amount: 0.87,
+      total: 18.30, created_at: now,
+    };
+    const testLines = [
+      { id: "test-a", order_id: "test", description: "Test Product A", qty: 2, unit_price: 3.90, line_discount_pct: 0, line_discount_fixed: 0, line_surcharge_pct: 0, vat_rate: 5, line_total: 7.80, vat_amount: 0.37, voided: false },
+      { id: "test-b", order_id: "test", description: "Test Product B", qty: 1, unit_price: 10.50, line_discount_pct: 0, line_discount_fixed: 0, line_surcharge_pct: 0, vat_rate: 5, line_total: 10.50, vat_amount: 0.50, voided: false },
     ];
+    const lines: PrintReceiptLine[] = buildReceiptLines(config, {
+      terminalCode, cashierName: "Test Cashier", order: testOrder, lines: testLines,
+      paymentMethod: "card_test", paymentRef: "TEST-123456", totalTendered: 20,
+      changeDue: 1.70, currency: formatCurrency, width: printerColumns,
+    });
 
     try {
       await invoke("print_receipt", { lines });
@@ -163,35 +145,14 @@ export function ReceiptDesigner({ terminalCode, onClose }: ReceiptDesignerProps)
   }
 
   // ── Live preview ────────────────────────────────────────────────────────────
-  const preview: string[] = [];
-  if (config) {
-    const div = "─".repeat(32);
-    preview.push((config.header_title.trim() || terminalCode).toUpperCase());
-    config.header_lines.forEach((l) => l.trim() && preview.push(l));
-    preview.push(div);
-    if (config.show_terminal || config.show_cashier) {
-      preview.push(
-        [config.show_terminal ? `Terminal: ${terminalCode}` : "", config.show_cashier ? "Cashier: Maria" : ""].filter(Boolean).join("  ")
-      );
-    }
-    if (config.show_order_number || config.show_datetime) {
-      preview.push(
-        [config.show_order_number ? "Order: 000123" : "", config.show_datetime ? new Date().toLocaleString() : ""].filter(Boolean).join("  ")
-      );
-    }
-    preview.push(div, "Halloumi 250g            x2   €7.80", "Olive oil 1L             x1  €10.50", div);
-    if (config.show_subtotal) preview.push("Subtotal                     €18.30");
-    if (config.show_vat) preview.push("VAT                           €0.87");
-    preview.push("TOTAL                        €18.30");
-    preview.push(div);
-    if (config.show_payment_method) preview.push("Payment: CASH");
-    if (config.show_tendered_change) preview.push("Tendered                     €20.00", "Change                        €1.70");
-    if (config.show_card_ref) preview.push("Card Ref: (card payments only)");
-    if (config.footer_lines.some((l) => l.trim())) {
-      preview.push(div);
-      config.footer_lines.forEach((l) => l.trim() && preview.push(l));
-    }
-  }
+  const preview = config ? buildReceiptLines(config, {
+    terminalCode, cashierName: "Test Cashier",
+    order: { id: "preview", order_number: "000123", status: "completed", cashier_id: "test", cashier_name: "Test Cashier", price_level: 1, order_discount_pct: 0, order_discount_fixed: 0, surcharge_pct: 0, surcharge_amount: 0, subtotal: 18.30, discount_amount: 0, vat_amount: 0.87, total: 18.30, created_at: new Date().toISOString() },
+    lines: [
+      { id: "p1", order_id: "preview", description: "Halloumi 250g", qty: 2, unit_price: 3.90, line_discount_pct: 0, line_discount_fixed: 0, line_surcharge_pct: 0, vat_rate: 5, line_total: 7.80, vat_amount: 0.37, voided: false },
+      { id: "p2", order_id: "preview", description: "Olive oil 1L", qty: 1, unit_price: 10.50, line_discount_pct: 0, line_discount_fixed: 0, line_surcharge_pct: 0, vat_rate: 5, line_total: 10.50, vat_amount: 0.50, voided: false },
+    ], paymentMethod: "cash", currency: formatCurrency, width: printerColumns,
+  }) : [];
 
   return (
     <div className="fixed inset-0 z-40 bg-gray-950 flex flex-col">
@@ -296,10 +257,14 @@ export function ReceiptDesigner({ terminalCode, onClose }: ReceiptDesignerProps)
             <div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 lg:sticky lg:top-0">
                 <h2 className="text-white text-sm font-medium mb-3">Preview</h2>
-                <div className="bg-white text-gray-900 rounded-lg p-4 font-mono text-xs whitespace-pre overflow-x-auto" data-testid="receipt-preview">
-                  {preview.map((l, i) => (
-                    <div key={i} className={i === 0 ? "text-center font-bold text-sm" : (config.header_lines.length && i <= config.header_lines.length ? "text-center" : "")}>
-                      {l || "\u00A0"}
+                <div
+                  className="bg-[#fffdf7] text-[#242321] rounded-lg px-3 py-5 font-mono text-[11px] leading-[1.45] whitespace-pre overflow-x-auto shadow-[0_10px_30px_rgba(0,0,0,0.22)] mx-auto"
+                  style={{ width: `${printerColumns}ch`, maxWidth: "100%", minWidth: "250px" }}
+                  data-testid="receipt-preview"
+                >
+                  {preview.map((line, i) => (
+                    <div key={i} className={`${line.align === "center" ? "text-center" : line.align === "right" ? "text-right" : ""} ${line.bold ? "font-bold" : ""} ${line.size === "big" ? "text-sm" : ""}`}>
+                      {line.divider ? line.text ?? "-".repeat(printerColumns) : line.text || "\u00A0"}
                     </div>
                   ))}
                 </div>

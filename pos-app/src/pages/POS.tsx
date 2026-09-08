@@ -65,6 +65,7 @@ import { DEFAULT_RECEIPT_CONFIG } from "../types";
 import ShiftManager from "./ShiftManager";
 import SelfCheckout from "./SelfCheckout";
 import type { UseSyncReturn } from "../hooks/useSync";
+import { buildReceiptLines } from "../lib/receipt";
 
 interface POSProps {
   config: TerminalConfig;
@@ -1045,59 +1046,20 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         await shift.recordSale(completedOrder.total, method).catch(() => {});
       }
 
-      // Build receipt lines (reused for both auto-print and manual re-print)
-      const colW = (hw.config?.printer_columns ?? 42) as number;
-      const pad = (left: string, right: string) => {
-        const gap = Math.max(1, colW - left.length - right.length);
-        return `${left}${" ".repeat(gap)}${right}`;
+      const rc = receiptConfigRef.current ?? {
+        ...DEFAULT_RECEIPT_CONFIG,
+        footer_lines: [
+          receiptLanguage === "el"
+            ? "Ευχαριστούμε για την προτίμησή σας!"
+            : "Thank you for your purchase!",
+        ],
       };
-      const RECEIPT_LABELS = {
-        en: { terminal: "Terminal", cashier: "Cashier", order: "Order", subtotal: "Subtotal", vat: "VAT", total: "TOTAL", payment: "Payment", tendered: "Tendered", change: "Change", cardRef: "Card Ref", thankYou: "Thank you for your purchase!" },
-        el: { terminal: "Ταμείο", cashier: "Ταμίας", order: "Παραγγελία", subtotal: "Υποσύνολο", vat: "ΦΠΑ", total: "ΣΥΝΟΛΟ", payment: "Πληρωμή", tendered: "Δόθηκε", change: "Ρέστα", cardRef: "Κωδ. Κάρτας", thankYou: "Ευχαριστούμε για την προτίμησή σας!" },
-      } as const;
-      const t = RECEIPT_LABELS[receiptLanguage];
-      const rc = receiptConfigRef.current ?? DEFAULT_RECEIPT_CONFIG;
-      const infoLine1 = [
-        rc.show_terminal ? `${t.terminal}: ${config.terminal_code}` : "",
-        rc.show_cashier ? `${t.cashier}: ${session.cashier_name}` : "",
-      ].filter(Boolean).join("  ");
-      const infoLine2 = [
-        rc.show_order_number ? `${t.order}: ${completedOrder.order_number}` : "",
-        rc.show_datetime ? new Date().toLocaleString() : "",
-      ].filter(Boolean).join("  ");
-      // Config not loaded → use the localized thank-you as footer instead of
-      // DEFAULT_RECEIPT_CONFIG's English footer text.
-      const footerLines = receiptConfigRef.current
-        ? rc.footer_lines.filter((l) => l.trim() !== "")
-        : [t.thankYou];
-      const receiptLines = [
-        { text: rc.header_title.trim() || config.terminal_code, align: "center" as const, bold: true, size: "big" as const },
-        ...rc.header_lines.filter((l) => l.trim() !== "").map((l) => ({ text: l, align: "center" as const })),
-        { divider: true },
-        ...(infoLine1 ? [{ text: infoLine1 }] : []),
-        ...(infoLine2 ? [{ text: infoLine2 }] : []),
-        ...(infoLine1 || infoLine2 ? [{ divider: true }] : []),
-        ...saleLines.map((l) => ({
-          text: pad(
-            l.description.substring(0, colW - 10),
-            `x${l.qty} ${formatCurrency(l.line_total)}`
-          ),
-        })),
-        { divider: true },
-        ...(rc.show_subtotal ? [{ text: pad(t.subtotal, formatCurrency(saleOrder.subtotal)) }] : []),
-        ...(rc.show_vat ? [{ text: pad(t.vat, formatCurrency(saleOrder.vat_amount)) }] : []),
-        { text: pad(t.total, formatCurrency(completedOrder.total)), bold: true, size: "big" as const, align: "right" as const },
-        { divider: true },
-        ...(rc.show_payment_method ? [{ text: `${t.payment}: ${method.replace("card_", "Card ").replace("_", " ").toUpperCase()}` }] : []),
-        ...(rc.show_tendered_change && result.totalTendered > 0 ? [
-          { text: pad(t.tendered, formatCurrency(result.totalTendered)) },
-          { text: pad(t.change, formatCurrency(result.changeDue)) },
-        ] : []),
-        ...(rc.show_card_ref && paymentRef ? [{ text: `${t.cardRef}: ${paymentRef}` }] : []),
-        ...(footerLines.length > 0
-          ? [{ divider: true }, ...footerLines.map((l) => ({ text: l, align: "center" as const }))]
-          : []),
-      ];
+      const receiptLines = buildReceiptLines(rc, {
+        terminalCode: config.terminal_code, cashierName: session.cashier_name,
+        order: completedOrder, lines: saleLines, paymentMethod: method, paymentRef,
+        totalTendered: result.totalTendered, changeDue: result.changeDue,
+        language: receiptLanguage, currency: formatCurrency, width: hw.config?.printer_columns,
+      });
 
       // Store for re-print from success overlay
       lastReceiptPrinterCallback.current = async () => { await hw.printReceipt(receiptLines); };
