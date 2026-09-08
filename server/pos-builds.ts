@@ -71,6 +71,40 @@ const CACHE_MS = 5 * 60 * 1000;
 const TEMPORARY_FAILURE_WARNING =
   "GitHub is temporarily unavailable. Showing the last successfully verified release links.";
 
+function isValidGithubReleaseAssetUrl(
+  downloadUrl: unknown,
+  owner: string,
+  repo: string,
+): downloadUrl is string {
+  if (typeof downloadUrl !== "string") return false;
+
+  try {
+    const url = new URL(downloadUrl);
+    if (
+      url.protocol !== "https:" ||
+      url.origin !== "https://github.com" ||
+      url.username ||
+      url.password ||
+      url.port ||
+      url.search ||
+      url.hash
+    ) {
+      return false;
+    }
+
+    const expectedPrefix = `/${owner}/${repo}/releases/download/`;
+    if (!url.pathname.toLowerCase().startsWith(expectedPrefix.toLowerCase())) {
+      return false;
+    }
+
+    const assetPath = url.pathname.slice(expectedPrefix.length);
+    const pathSegments = assetPath.split("/");
+    return pathSegments.length === 2 && pathSegments.every(Boolean);
+  } catch {
+    return false;
+  }
+}
+
 export function createPosBuildsResolver({
   getSettings,
   fetchFn = globalThis.fetch,
@@ -163,21 +197,10 @@ export function createPosBuildsResolver({
           prerelease: Boolean(release.prerelease),
           htmlUrl: release.html_url,
           assets: (release.assets ?? [])
-            .filter((asset) => {
-              if (
-                typeof asset.name !== "string"
-                || typeof asset.browser_download_url !== "string"
-                || asset.name.endsWith(".sig")
-                || asset.name === "latest.json"
-              ) return false;
-              try {
-                const assetUrl = new URL(asset.browser_download_url);
-                return assetUrl.origin === "https://github.com"
-                  && assetUrl.pathname.startsWith(`/${owner}/${repo}/releases/download/`);
-              } catch {
-                return false;
-              }
-            })
+            .filter((asset) => !asset.name.endsWith(".sig") && asset.name !== "latest.json")
+            .filter((asset) =>
+              isValidGithubReleaseAssetUrl(asset.browser_download_url, owner, repo),
+            )
             .map((asset) => ({
               name: asset.name,
               size: asset.size,

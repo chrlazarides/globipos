@@ -95,6 +95,44 @@ test("returns verified release assets from the configured GitHub repository", as
   ]);
 });
 
+test("omits malformed asset URLs before caching release metadata", async () => {
+  const release = githubRelease(repoA, "malformed");
+  release.assets.push(
+    {
+      name: "malicious.msi",
+      size: 1234,
+      browser_download_url: "https://downloads.example.com/malicious.msi",
+      download_count: 4,
+    },
+    {
+      name: "wrong-repository.msi",
+      size: 1234,
+      browser_download_url:
+        "https://github.com/example/other-repo/releases/download/v1.0.0-malformed/wrong-repository.msi",
+      download_count: 2,
+    },
+  );
+  const fake = createFakeFetch([{ ok: true, status: 200, body: [release] }]);
+  const resolve = createPosBuildsResolver({
+    getSettings: async () => settingsFor(repoA),
+    fetchFn: fake.fetchFn,
+  });
+
+  const result = releasesFrom(await resolve());
+  assert.deepEqual(result.releases[0].assets, [
+    {
+      name: "GlobiPOS-malformed.msi",
+      size: 1234,
+      downloadUrl: `${repoA}/releases/download/v1.0.0-malformed/GlobiPOS-malformed.msi`,
+      downloads: 7,
+    },
+  ]);
+
+  const cachedResult = releasesFrom(await resolve());
+  assert.deepEqual(cachedResult.releases, result.releases);
+  assert.equal(fake.requests.length, 1);
+});
+
 test("returns only the last-known-good assets during a temporary GitHub failure", async () => {
   let currentTime = 100;
   const fake = createFakeFetch([
