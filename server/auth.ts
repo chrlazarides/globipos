@@ -42,22 +42,53 @@ export function signToken(user: AuthUser): string {
 export function verifyToken(token: string): AuthUser | null {
   try {
     const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
-    if (payload.temp) return null;
+    if (payload.temp || payload.recovery2fa || payload.recoverySetup2fa) return null;
+    if (!payload.id || !payload.username || !payload.role) return null;
     return { ...payload, permissions: payload.permissions || [] } as AuthUser;
   } catch {
     return null;
   }
 }
 
-export function signTempToken(userId: string): string {
-  return jwt.sign({ temp: true, id: userId }, JWT_SECRET_SAFE, { expiresIn: "5m" });
+type TempTokenPurpose = "2fa-login" | "2fa-setup";
+
+export function signTempToken(userId: string, purpose: TempTokenPurpose): string {
+  return jwt.sign({ temp: true, id: userId, purpose }, JWT_SECRET_SAFE, { expiresIn: "5m" });
 }
 
-export function verifyTempToken(token: string): string | null {
+export function verifyTempToken(token: string, purpose: TempTokenPurpose): string | null {
   try {
     const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
-    if (!payload.temp || !payload.id) return null;
+    if (!payload.temp || !payload.id || payload.purpose !== purpose) return null;
     return payload.id as string;
+  } catch {
+    return null;
+  }
+}
+
+export function sign2faRecoveryToken(userId: string, challengeId: string): string {
+  return jwt.sign({ recovery2fa: true, id: userId, challengeId }, JWT_SECRET_SAFE, { expiresIn: "10m" });
+}
+
+export function verify2faRecoveryToken(token: string): { userId: string; challengeId: string } | null {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
+    if (!payload.recovery2fa || !payload.id || !payload.challengeId) return null;
+    return { userId: payload.id as string, challengeId: payload.challengeId as string };
+  } catch {
+    return null;
+  }
+}
+
+export function sign2faRecoverySetupToken(userId: string, grantId: string, secret: string): string {
+  return jwt.sign({ recoverySetup2fa: true, id: userId, grantId, secret }, JWT_SECRET_SAFE, { expiresIn: "5m" });
+}
+
+export function verify2faRecoverySetupToken(token: string): { userId: string; grantId: string; secret: string } | null {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
+    if (!payload.recoverySetup2fa || !payload.id || !payload.grantId || !payload.secret) return null;
+    return { userId: payload.id as string, grantId: payload.grantId as string, secret: payload.secret as string };
   } catch {
     return null;
   }
@@ -80,6 +111,7 @@ const PUBLIC_PATHS = [
   "/api/auth/login",
   "/api/auth/2fa/verify",
   "/api/auth/2fa/setup-initial",
+  "/api/auth/2fa/recovery",
   "/portal",
   "/api/portal",
   "/api/manual",

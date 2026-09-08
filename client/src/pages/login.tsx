@@ -43,6 +43,8 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [tempToken, setTempToken] = useState<string | null>(null);
   const [pendingUsername, setPendingUsername] = useState("");
   const [totpCode, setTotpCode] = useState("");
+  const [recoveryToken, setRecoveryToken] = useState<string | null>(null);
+  const [recoveryCode, setRecoveryCode] = useState("");
 
   // 2FA forced setup state (first login — user has no 2FA yet)
   const [setupToken, setSetupToken] = useState<string | null>(null);
@@ -50,6 +52,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [setupSecret, setSetupSecret] = useState<string | null>(null);
   const [setupCode, setSetupCode] = useState("");
   const [loadingQr, setLoadingQr] = useState(false);
+  const [setupMode, setSetupMode] = useState<"initial" | "recovery">("initial");
 
   const loginForm = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
@@ -59,9 +62,18 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   // Fetch the QR code as soon as we enter setup mode
   useEffect(() => {
     if (!setupToken) return;
+    if (setupMode === "recovery") return;
     setLoadingQr(true);
-    fetch(`/api/auth/2fa/setup-initial?token=${setupToken}`)
-      .then(r => r.json())
+    fetch("/api/auth/2fa/setup-initial/details", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tempToken: setupToken }),
+    })
+      .then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.message || "Could not generate QR code");
+        return data;
+      })
       .then(data => {
         if (data.qrDataUrl) {
           setSetupQr(data.qrDataUrl);
@@ -76,7 +88,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         setSetupToken(null);
       })
       .finally(() => setLoadingQr(false));
-  }, [setupToken]);
+  }, [setupToken, setupMode]);
 
   const loginMutation = useMutation({
     mutationFn: async (data: LoginForm) => {
@@ -90,6 +102,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         setTotpCode("");
       } else if (data.requires2faSetup) {
         setPendingUsername(loginForm.getValues("username"));
+        setSetupMode("initial");
         setSetupToken(data.tempToken);
         setSetupCode("");
       } else {
@@ -120,9 +133,44 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     },
   });
 
+  const requestRecoveryMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/2fa/recovery/request", { tempToken });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setRecoveryToken(data.recoveryToken);
+      setRecoveryCode("");
+      toast({ title: "Recovery email sent", description: data.message });
+    },
+    onError: (err: Error) => toast({ title: "Recovery failed", description: err.message, variant: "destructive" }),
+  });
+
+  const confirmRecoveryMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/2fa/recovery/confirm", { recoveryToken, code: recoveryCode });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setTempToken(null);
+      setRecoveryToken(null);
+      setSetupMode("recovery");
+      setSetupToken(data.tempToken);
+      setSetupQr(data.qrDataUrl);
+      setSetupSecret(data.secret);
+      setSetupCode("");
+      toast({ title: "Authenticator reset", description: "Scan the new QR code to finish securing your account." });
+    },
+    onError: (err: Error) => {
+      setRecoveryCode("");
+      toast({ title: "Recovery failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const setupMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/auth/2fa/setup-initial", {
+      const endpoint = setupMode === "recovery" ? "/api/auth/2fa/recovery/complete" : "/api/auth/2fa/setup-initial";
+      const res = await apiRequest("POST", endpoint, {
         tempToken: setupToken,
         code: setupCode.replace(/\s/g, ""),
       });
@@ -244,7 +292,21 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-4">
-              <form onSubmit={e => { e.preventDefault(); totpMutation.mutate(); }} className="space-y-4">
+              <form onSubmit={e => { e.preventDefault(); recoveryToken ? confirmRecoveryMutation.mutate() : totpMutation.mutate(); }} className="space-y-4">
+                {recoveryToken ? (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium" htmlFor="recovery-code">Email recovery code</label>
+                    <Input
+                      id="recovery-code"
+                      value={recoveryCode}
+                      onChange={e => setRecoveryCode(e.target.value.replace(/\D/g, ""))}
+                      autoFocus autoComplete="one-time-code" inputMode="numeric" maxLength={8}
+                      placeholder="00000000" className="text-center text-2xl tracking-widest font-mono"
+                      data-testid="input-2fa-recovery-code"
+                    />
+                    <p className="text-xs text-muted-foreground">Enter the 8-digit code sent to your account email.</p>
+                  </div>
+                ) : (
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="totp-login-code">Authentication Code</label>
                   <Input
@@ -260,16 +322,27 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                     data-testid="input-totp-code"
                   />
                 </div>
+                )}
                 <Button
                   type="submit"
                   className="w-full"
-                  disabled={totpCode.length !== 6 || totpMutation.isPending}
+                  disabled={recoveryToken ? recoveryCode.length !== 8 || confirmRecoveryMutation.isPending : totpCode.length !== 6 || totpMutation.isPending}
                   data-testid="button-verify-2fa"
                 >
-                  {totpMutation.isPending ? (
+                  {(totpMutation.isPending || confirmRecoveryMutation.isPending) ? (
                     <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying...</>
-                  ) : "Verify"}
+                  ) : recoveryToken ? "Reset authenticator" : "Verify"}
                 </Button>
+                {!recoveryToken && (
+                  <Button
+                    type="button" variant="outline" className="w-full"
+                    onClick={() => requestRecoveryMutation.mutate()}
+                    disabled={requestRecoveryMutation.isPending}
+                    data-testid="button-2fa-recovery"
+                  >
+                    {requestRecoveryMutation.isPending ? "Sending..." : "Authenticator not working?"}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="ghost"

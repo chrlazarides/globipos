@@ -19,7 +19,7 @@ import webpush from "web-push";
 import { execSync } from "child_process";
 // @ts-ignore — no bundled types for adm-zip; runtime types are sufficient
 import AdmZip from "adm-zip";
-import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser, requireStaff, requireModule } from "./auth";
+import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, sign2faRecoveryToken, verify2faRecoveryToken, sign2faRecoverySetupToken, verify2faRecoverySetupToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser, requireStaff, requireModule } from "./auth";
 import jwt from "jsonwebtoken";
 import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
 import QRCode from "qrcode";
@@ -92,6 +92,10 @@ function recordFailedAttempt(ip: string): number {
 
 function clearFailedAttempts(ip: string) {
   failedAttempts.delete(ip);
+}
+
+function twoFactorFailureKey(userId: string): string {
+  return `2fa-fail:${userId}`;
 }
 
 async function getAdminEmails(): Promise<string[]> {
@@ -442,6 +446,7 @@ export async function registerRoutes(
 
   // ─── AUTH ───────────────────────────────────────────────────────────────────
   async function completeLogin(res: Response, user: any, ip: string, ua: string, timestamp: string): Promise<string> {
+    clearFailedAttempts(ip);
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
     const permissions: string[] = JSON.parse(user.permissions || "[]");
     const token = signToken({ id: user.id, username: user.username, email: user.email, role: user.role, permissions });
@@ -508,17 +513,23 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
-      // Successful password check — clear any failed attempt counter
-      clearFailedAttempts(ip);
-
       // If 2FA is enabled, issue a temp token and require TOTP verification
       if (user.totpEnabled && user.totpSecret) {
-        const tempToken = signTempToken(user.id);
+        const failureKey = twoFactorFailureKey(user.id);
+        const recentFailures = await db.select({ id: customerOtpTokens.id }).from(customerOtpTokens).where(and(
+          eq(customerOtpTokens.customerId, failureKey),
+          eq(customerOtpTokens.used, false),
+          gte(customerOtpTokens.expiresAt, new Date()),
+        )).limit(5);
+        if (recentFailures.length >= 5) {
+          return res.status(429).json({ message: "Too many authentication-code attempts. Please try again in 15 minutes." });
+        }
+        const tempToken = signTempToken(user.id, "2fa-login");
         return res.json({ requires2fa: true, tempToken });
       }
 
       // No 2FA configured — force setup before completing login
-      const tempToken = signTempToken(user.id);
+      const tempToken = signTempToken(user.id, "2fa-setup");
       return res.json({ requires2faSetup: true, tempToken });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -529,23 +540,190 @@ export async function registerRoutes(
       const { tempToken, code } = req.body;
       if (!tempToken || !code) return res.status(400).json({ message: "Token and code required" });
 
-      const userId = verifyTempToken(tempToken);
+      const userId = verifyTempToken(tempToken, "2fa-login");
       if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
 
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user || !user.active || !user.totpSecret) return res.status(401).json({ message: "Invalid session" });
 
-      const cleanToken2fa = code.replace(/\s/g, "");
-      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
-      const result = (totpVerify as any)({ token: cleanToken2fa, secret: user.totpSecret, window: 1 });
-      // [2FA login] result logged without exposing token
-      if (!result.valid) return res.status(401).json({ message: "Invalid authentication code" });
-
       const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
       const ua = req.headers["user-agent"] || "unknown";
       const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+      const failureKey = twoFactorFailureKey(user.id);
+      const verification = await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${failureKey}))`);
+        const failures = await tx.select({ id: customerOtpTokens.id }).from(customerOtpTokens).where(and(
+          eq(customerOtpTokens.customerId, failureKey),
+          eq(customerOtpTokens.used, false),
+          gte(customerOtpTokens.expiresAt, new Date()),
+        )).limit(5);
+        if (failures.length >= 5) return "locked" as const;
+        const cleanToken2fa = String(code).replace(/\s/g, "");
+        // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+        const result = (totpVerify as any)({ token: cleanToken2fa, secret: user.totpSecret, window: 1 });
+        if (!result.valid) {
+          await tx.insert(customerOtpTokens).values({
+            customerId: failureKey,
+            email: user.email || "",
+            code: "failed",
+            expiresAt: new Date(Date.now() + 15 * 60_000),
+            used: false,
+          });
+          return "invalid" as const;
+        }
+        await tx.update(customerOtpTokens).set({ used: true }).where(and(
+          eq(customerOtpTokens.customerId, failureKey),
+          eq(customerOtpTokens.used, false),
+        ));
+        return "valid" as const;
+      });
+      if (verification === "locked") {
+        return res.status(429).json({ message: "Too many authentication-code attempts. Please try again in 15 minutes." });
+      }
+      if (verification === "invalid") return res.status(401).json({ message: "Invalid authentication code" });
 
       const token = await completeLogin(res, user, ip, ua, timestamp);
+      res.json({ id: user.id, username: user.username, email: user.email, role: user.role, token });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/auth/2fa/recovery/request", async (req: Request, res: Response) => {
+    try {
+      const userId = verifyTempToken(req.body?.tempToken, "2fa-login");
+      if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.active || !user.totpEnabled || !user.email) {
+        return res.status(400).json({ message: "Authenticator recovery is not available for this account." });
+      }
+      const code = crypto.randomInt(0, 100_000_000).toString().padStart(8, "0");
+      const staffChallengeId = `2fa:${userId}`;
+      const challenge = await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${staffChallengeId}))`);
+        const [recent] = await tx.select({ id: customerOtpTokens.id }).from(customerOtpTokens).where(and(
+          eq(customerOtpTokens.customerId, staffChallengeId),
+          gt(customerOtpTokens.createdAt, new Date(Date.now() - 60_000)),
+        )).limit(1);
+        if (recent) throw new Error("RECOVERY_RATE_LIMIT");
+        await tx.update(customerOtpTokens).set({ used: true }).where(and(
+          eq(customerOtpTokens.customerId, staffChallengeId),
+          eq(customerOtpTokens.used, false),
+        ));
+        const [created] = await tx.insert(customerOtpTokens).values({
+          customerId: staffChallengeId,
+          email: user.email!.toLowerCase().trim(),
+          code: hashPassword(code),
+          expiresAt: new Date(Date.now() + 10 * 60_000),
+          used: false,
+        }).returning({ id: customerOtpTokens.id });
+        return created;
+      }).catch((error: unknown) => {
+        if (error instanceof Error && error.message === "RECOVERY_RATE_LIMIT") return null;
+        throw error;
+      });
+      if (!challenge) {
+        return res.status(429).json({ message: "A recovery code was already sent. Please wait one minute before requesting another." });
+      }
+      const recoveryToken = sign2faRecoveryToken(userId, challenge.id);
+      const sent = await sendEmailWithContent(
+        user.email,
+        "Your GlobiPOS authenticator recovery code",
+        `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px">
+          <h2>Authenticator recovery</h2>
+          <p>Enter this code to reset two-factor authentication for <strong>${escHtml(user.username)}</strong>:</p>
+          <p style="font-size:28px;letter-spacing:6px;font-weight:bold">${code}</p>
+          <p>This code expires in 10 minutes. If you did not request this, do not share the code.</p>
+        </div>`,
+      );
+      if (!sent.success) {
+        await db.update(customerOtpTokens).set({ used: true }).where(eq(customerOtpTokens.id, challenge.id));
+        return res.status(503).json({ message: "The recovery email could not be sent. Please contact an administrator." });
+      }
+      logActivity(user.id, user.username, "request", "user", user.id, "Requested email-verified 2FA recovery", null, null);
+      res.json({ recoveryToken, message: "Recovery code sent to your account email." });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/auth/2fa/recovery/confirm", async (req: Request, res: Response) => {
+    try {
+      const code = String(req.body?.code || "").replace(/\D/g, "");
+      const recovery = verify2faRecoveryToken(String(req.body?.recoveryToken || ""));
+      if (!recovery) return res.status(401).json({ message: "Invalid or expired recovery code." });
+      const [challenge] = await db.update(customerOtpTokens).set({ used: true }).where(and(
+        eq(customerOtpTokens.id, recovery.challengeId),
+        eq(customerOtpTokens.customerId, `2fa:${recovery.userId}`),
+        eq(customerOtpTokens.used, false),
+        gte(customerOtpTokens.expiresAt, new Date()),
+      )).returning({ code: customerOtpTokens.code });
+      if (!challenge || !verifyPassword(code, challenge.code)) {
+        return res.status(401).json({ message: "Invalid or expired recovery code. Request a new code and try again." });
+      }
+      const userId = recovery.userId;
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.active || !user.totpEnabled) {
+        return res.status(400).json({ message: "Authenticator recovery is no longer required." });
+      }
+      const replacementSecret = totpGenerateSecret();
+      const otpauth = totpGenerateURI({ secret: replacementSecret, label: user.username, issuer: "GlobiPOS" });
+      const qrDataUrl = await QRCode.toDataURL(String(otpauth));
+      const replacementKey = `2fa-replace:${userId}`;
+      const [replacementGrant] = await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${replacementKey}))`);
+        await tx.update(customerOtpTokens).set({ used: true }).where(and(
+          eq(customerOtpTokens.customerId, replacementKey),
+          eq(customerOtpTokens.used, false),
+        ));
+        return tx.insert(customerOtpTokens).values({
+          customerId: replacementKey,
+          email: user.email || "",
+          code: crypto.createHash("sha256").update(user.totpSecret!).digest("hex"),
+          expiresAt: new Date(Date.now() + 5 * 60_000),
+          used: false,
+        }).returning({ id: customerOtpTokens.id });
+      });
+      logActivity(user.id, user.username, "update", "user", user.id, "Reset 2FA using verified recovery email", null, null);
+      res.json({
+        tempToken: sign2faRecoverySetupToken(user.id, replacementGrant.id, replacementSecret),
+        qrDataUrl,
+        secret: replacementSecret,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/auth/2fa/recovery/complete", async (req: Request, res: Response) => {
+    try {
+      const setup = verify2faRecoverySetupToken(String(req.body?.tempToken || ""));
+      if (!setup) return res.status(401).json({ message: "Recovery setup expired. Please request a new recovery code." });
+      const code = String(req.body?.code || "").replace(/\D/g, "");
+      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+      const result = (totpVerify as any)({ token: code, secret: setup.secret, window: 1 });
+      if (!result.valid) return res.status(400).json({ message: "Invalid code — please scan the new QR code and try again." });
+      const user = await db.transaction(async (tx) => {
+        const replacementKey = `2fa-replace:${setup.userId}`;
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${replacementKey}))`);
+        const [grant] = await tx.update(customerOtpTokens).set({ used: true }).where(and(
+          eq(customerOtpTokens.id, setup.grantId),
+          eq(customerOtpTokens.customerId, replacementKey),
+          eq(customerOtpTokens.used, false),
+          gte(customerOtpTokens.expiresAt, new Date()),
+        )).returning({ authenticatorFingerprint: customerOtpTokens.code });
+        if (!grant) return null;
+        const [current] = await tx.select().from(users).where(eq(users.id, setup.userId));
+        if (!current || !current.active || !current.totpEnabled || !current.totpSecret) return null;
+        const currentFingerprint = crypto.createHash("sha256").update(current.totpSecret).digest("hex");
+        if (currentFingerprint !== grant.authenticatorFingerprint) return null;
+        const [updated] = await tx.update(users).set({ totpSecret: setup.secret }).where(and(
+          eq(users.id, setup.userId),
+          eq(users.totpEnabled, true),
+          eq(users.totpSecret, current.totpSecret),
+        )).returning({ id: users.id });
+        return updated ? current : null;
+      });
+      if (!user) return res.status(409).json({ message: "Recovery setup was already used, expired, or became stale. Please start again." });
+      const ip = req.ip || "unknown";
+      const ua = req.headers["user-agent"] || "unknown";
+      const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+      logActivity(user.id, user.username, "update", "user", user.id, "Completed email-verified 2FA replacement", ip, ua);
+      const token = await completeLogin(res, user, ip, String(ua), timestamp);
       res.json({ id: user.id, username: user.username, email: user.email, role: user.role, token });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -611,18 +789,29 @@ export async function registerRoutes(
   // Pending secret is stored in the DB (totpSecret, totpEnabled=false) so it
   // survives server restarts. No in-memory state needed.
 
-  app.get("/api/auth/2fa/setup-initial", async (req: Request, res: Response) => {
+  app.post("/api/auth/2fa/setup-initial/details", async (req: Request, res: Response) => {
     try {
-      const { token } = req.query as { token: string };
-      const userId = verifyTempToken(token);
+      const userId = verifyTempToken(req.body?.tempToken, "2fa-setup");
       if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
       const [user] = await db.select({ username: users.username, totpSecret: users.totpSecret, totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, userId));
       if (!user) return res.status(401).json({ message: "User not found" });
+      if (user.totpEnabled) return res.status(409).json({ message: "Two-factor authentication is already enabled. Please log in again." });
       // Reuse any already-pending secret (not yet enabled) so repeated calls return the same QR
-      let secret = (!user.totpEnabled && user.totpSecret) ? user.totpSecret : null;
+      let secret = user.totpSecret;
       if (!secret) {
         secret = totpGenerateSecret();
-        await db.update(users).set({ totpSecret: secret, totpEnabled: false }).where(eq(users.id, userId));
+        const [updated] = await db.update(users).set({ totpSecret: secret }).where(and(
+          eq(users.id, userId),
+          eq(users.totpEnabled, false),
+          isNull(users.totpSecret),
+        )).returning({ totpSecret: users.totpSecret });
+        if (!updated) {
+          const [current] = await db.select({ totpSecret: users.totpSecret, totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, userId));
+          if (current?.totpEnabled || !current?.totpSecret) {
+            return res.status(409).json({ message: "Two-factor setup state changed. Please log in again." });
+          }
+          secret = current.totpSecret;
+        }
       }
       const otpauth = totpGenerateURI({ secret, label: user.username, issuer: "GlobiPOS" });
       const qrDataUrl = await QRCode.toDataURL(String(otpauth));
@@ -634,7 +823,7 @@ export async function registerRoutes(
     try {
       const { tempToken, code } = req.body;
       if (!tempToken || !code) return res.status(400).json({ message: "Token and code required" });
-      const userId = verifyTempToken(tempToken);
+      const userId = verifyTempToken(tempToken, "2fa-setup");
       if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
       const [user] = await db.select().from(users).where(eq(users.id, userId));
       if (!user || !user.active) return res.status(401).json({ message: "Invalid session" });
@@ -642,7 +831,11 @@ export async function registerRoutes(
       // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
       const result = (totpVerify as any)({ token: code.replace(/\s/g, ""), secret: user.totpSecret, window: 1 });
       if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
-      await db.update(users).set({ totpEnabled: true }).where(eq(users.id, userId));
+      const [enabled] = await db.update(users).set({ totpEnabled: true }).where(and(
+        eq(users.id, userId),
+        eq(users.totpEnabled, false),
+      )).returning({ id: users.id });
+      if (!enabled) return res.status(409).json({ message: "Two-factor setup state changed. Please log in again." });
       logActivity(userId, user.username, "update", "user", userId, "Two-factor authentication enabled (forced setup)", null, null);
       const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
       const ua = req.headers["user-agent"] || "unknown";
