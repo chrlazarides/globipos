@@ -1,8 +1,9 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@shared/schema";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, itemLocationStock, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@shared/schema";
 import { customerPreferences, customerFeedback, customerNotifications } from "@shared/schema";
+import { productFamilies, insertProductFamilySchema } from "@shared/schema";
 import { parseAdminImportRequest, shouldRestoreBackupSettings } from "./import-settings-policy";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
@@ -11,7 +12,7 @@ import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail, sendEmailWithContent } from "./email";
 import { db } from "./db";
-import { sql, and, or, eq, gte, lte, gt, desc, isNull, ilike, inArray, count } from "drizzle-orm";
+import { sql, and, or, eq, gte, lte, lt, gt, desc, isNull, ilike, inArray, count } from "drizzle-orm";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -301,7 +302,7 @@ export async function generateBackupJson(since?: string): Promise<string> {
 
   return JSON.stringify({
     exportedAt: new Date().toISOString(),
-    version: 2,
+    version: 1,
     backupType: sinceDate ? "differential" : "full",
     sinceDate: sinceDate ? sinceDate.toISOString() : null,
     tableCounts,
@@ -1157,8 +1158,9 @@ export async function registerRoutes(
       if (process.env.NODE_ENV === "production") {
         return res.status(403).json({ message: "Catalog export is disabled in production. Export from the development workspace." });
       }
-      const [categoryResult, itemResult, variantResult, barcodeResult] = await Promise.all([
+      const [categoryResult, familyResult, itemResult, variantResult, barcodeResult] = await Promise.all([
         pool.query("SELECT * FROM categories"),
+        pool.query("SELECT * FROM product_families"),
         pool.query("SELECT * FROM items"),
         pool.query(`
           SELECT v.*, i.sku AS parent_sku
@@ -1173,10 +1175,11 @@ export async function registerRoutes(
       ]);
       const payload = {
         type: "globipos-catalog-transfer",
-        version: 1,
+        version: 2,
         exportedAt: new Date().toISOString(),
         stockPolicy: "replace-with-exported",
         categories: categoryResult.rows,
+        families: familyResult.rows,
         items: itemResult.rows,
         variants: variantResult.rows,
         barcodes: barcodeResult.rows,
@@ -1194,12 +1197,14 @@ export async function registerRoutes(
       if (!req.file?.buffer) return res.status(400).json({ message: "Catalog transfer file required" });
       const decompressed = await gunzipCatalog(req.file.buffer, { maxOutputLength: 125 * 1024 * 1024 });
       const payload = JSON.parse(decompressed.toString("utf8"));
-      if (payload?.type !== "globipos-catalog-transfer" || payload?.version !== 1) {
+      if (payload?.type !== "globipos-catalog-transfer" || ![1, 2].includes(payload?.version)) {
         return res.status(400).json({ message: "Invalid catalog transfer file" });
       }
       if (!Array.isArray(payload.categories) || !Array.isArray(payload.items) || !Array.isArray(payload.variants) || !Array.isArray(payload.barcodes)) {
         return res.status(400).json({ message: "Catalog transfer is incomplete" });
       }
+      payload.families = Array.isArray(payload.families) ? payload.families : [];
+      const transfersFamilies = payload.version >= 2;
       if (payload.items.length > 250_000 || payload.categories.length > 10_000 || payload.variants.length > 500_000 || payload.barcodes.length > 500_000) {
         return res.status(400).json({ message: "Catalog transfer exceeds safety limits" });
       }
@@ -1214,6 +1219,7 @@ export async function registerRoutes(
         return values;
       };
       uniqueStrings(payload.categories, "id", "Categories");
+      uniqueStrings(payload.families, "id", "Product families");
       const itemSkus = uniqueStrings(payload.items, "sku", "Items");
       const variantSkus = uniqueStrings(payload.variants, "sku", "Variants");
       for (const sku of variantSkus) if (itemSkus.has(sku)) throw new Error(`SKU is used by both an item and variant: ${sku}`);
@@ -1252,7 +1258,7 @@ export async function registerRoutes(
       try {
         await client.query("BEGIN");
         await client.query("SELECT pg_advisory_xact_lock(hashtext('globipos-catalog-transfer'))");
-        await client.query("LOCK TABLE items, item_variants, item_barcodes IN SHARE ROW EXCLUSIVE MODE");
+        await client.query("LOCK TABLE product_families, items, item_variants, item_barcodes IN SHARE ROW EXCLUSIVE MODE");
         const locationStock = await client.query("SELECT 1 FROM item_location_stock LIMIT 1");
         if (locationStock.rowCount) throw new Error("Catalog stock cannot be replaced while location-level stock allocations exist");
         const targetBarcodeRows = await client.query(`
@@ -1293,13 +1299,46 @@ export async function registerRoutes(
               active = EXCLUDED.active, updated_at = EXCLUDED.updated_at
           `, [JSON.stringify(batch)]);
         }
+        const sourceFamilyCodeById = new Map<string, string | null>(
+          payload.families.map((family: any) => [family.id, family.code || null]),
+        );
+        for (const batch of chunk(payload.families.filter((family: any) => family.code))) {
+          await client.query(`
+            INSERT INTO product_families
+            SELECT * FROM jsonb_populate_recordset(NULL::product_families, $1::jsonb)
+            ON CONFLICT (code) DO UPDATE SET
+              name = EXCLUDED.name,
+              active = EXCLUDED.active, updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(batch)]);
+        }
+        for (const batch of chunk(payload.families.filter((family: any) => !family.code))) {
+          await client.query(`
+            INSERT INTO product_families
+            SELECT * FROM jsonb_populate_recordset(NULL::product_families, $1::jsonb)
+            ON CONFLICT (id) DO UPDATE SET
+              name = EXCLUDED.name, active = EXCLUDED.active, updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(batch)]);
+        }
+        const targetFamilyRows = await client.query("SELECT id, code FROM product_families");
+        const targetFamilyByCode = new Map(targetFamilyRows.rows.filter((row: any) => row.code).map((row: any) => [row.code, row.id]));
+        const targetFamilyIds = new Set(targetFamilyRows.rows.map((row: any) => row.id));
+        const mapFamilyId = (sourceId: unknown) => {
+          if (!sourceId) return null;
+          const source = String(sourceId);
+          const code = sourceFamilyCodeById.get(source);
+          if (code) return targetFamilyByCode.get(code) || null;
+          return targetFamilyIds.has(source) ? source : null;
+        };
         for (const batch of chunk(payload.items)) {
+          const mappedBatch = transfersFamilies
+            ? batch.map((item: any) => ({ ...item, family_id: mapFamilyId(item.family_id) }))
+            : batch;
           await client.query(`
             INSERT INTO items
             SELECT * FROM jsonb_populate_recordset(NULL::items, $1::jsonb)
             ON CONFLICT (sku) DO UPDATE SET
               name = EXCLUDED.name, barcode = EXCLUDED.barcode, description = EXCLUDED.description,
-              category_id = EXCLUDED.category_id, unit_type = EXCLUDED.unit_type,
+              category_id = EXCLUDED.category_id, ${transfersFamilies ? "family_id = EXCLUDED.family_id," : ""} unit_type = EXCLUDED.unit_type,
               pack_size = EXCLUDED.pack_size, price_1 = EXCLUDED.price_1,
               price_2 = EXCLUDED.price_2, price_3 = EXCLUDED.price_3,
               price_4 = EXCLUDED.price_4, price_5 = EXCLUDED.price_5,
@@ -1310,7 +1349,7 @@ export async function registerRoutes(
               image_url = EXCLUDED.image_url, active = EXCLUDED.active,
               has_variants = EXCLUDED.has_variants, season = EXCLUDED.season,
               updated_at = EXCLUDED.updated_at
-          `, [JSON.stringify(batch)]);
+          `, [JSON.stringify(mappedBatch)]);
         }
         for (const batch of chunk(payload.variants)) {
           const result = await client.query(`
@@ -1372,6 +1411,7 @@ export async function registerRoutes(
       res.json({
         success: true,
         categories: payload.categories.length,
+        families: payload.families.length,
         items: payload.items.length,
         variants: payload.variants.length,
         barcodes: payload.barcodes.length,
@@ -1431,6 +1471,29 @@ export async function registerRoutes(
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     }
+  });
+
+  // Product families — optional horizontal grouping across categories
+  app.get("/api/product-families", async (_req, res) => {
+    const rows = await db.select().from(productFamilies).where(eq(productFamilies.active, true)).orderBy(productFamilies.name);
+    res.json(rows);
+  });
+
+  app.post("/api/product-families", requireAdmin, async (req, res) => {
+    try {
+      const data = insertProductFamilySchema.parse(req.body);
+      const [row] = await db.insert(productFamilies).values(data).returning();
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.patch("/api/product-families/:id", requireAdmin, async (req, res) => {
+    try {
+      const data = insertProductFamilySchema.partial().parse(req.body);
+      const [row] = await db.update(productFamilies).set(data).where(eq(productFamilies.id, req.params.id as string)).returning();
+      if (!row) return res.status(404).json({ message: "Product family not found" });
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
 
   // Colors (textile/shoes/apparel master list)
@@ -1519,6 +1582,18 @@ export async function registerRoutes(
       res.status(400).json({ message: e.message });
     }
   });
+  app.get("/api/location-stock/batch", requireStaff, async (req, res) => {
+    try {
+      const locationId = String(req.query.locationId || "");
+      const itemIds = String(req.query.itemIds || "").split(",").map(id => id.trim()).filter(Boolean);
+      if (!locationId || itemIds.length === 0) return res.json([]);
+      if (itemIds.length > 200) return res.status(400).json({ message: "At most 200 item IDs are allowed" });
+      res.json(await db.select().from(itemLocationStock).where(and(
+        eq(itemLocationStock.locationId, locationId),
+        inArray(itemLocationStock.itemId, itemIds),
+      )));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
   app.get("/api/location-stock/item/:itemId", async (req, res) => {
     try {
       const rows = await storage.getStockForItemAcrossLocations(req.params.itemId as string);
@@ -1581,12 +1656,14 @@ export async function registerRoutes(
     const pageSize = Math.min(200, Math.max(1, Number.parseInt(String(req.query.limit || "100"), 10) || 100));
     const search = String(req.query.search || "").trim();
     const categoryId = String(req.query.categoryId || "").trim();
+    const familyId = String(req.query.familyId || "").trim();
     const filters = [];
     if (search) {
       const term = `%${search.replace(/[%_]/g, "\\$&")}%`;
-      filters.push(or(ilike(items.name, term), ilike(items.sku, term), ilike(items.brand, term)));
+      filters.push(or(ilike(items.name, term), ilike(items.sku, term), ilike(items.barcode, term), ilike(items.brand, term)));
     }
     if (categoryId && categoryId !== "all") filters.push(eq(items.categoryId, categoryId));
+    if (familyId && familyId !== "all") filters.push(familyId === "none" ? isNull(items.familyId) : eq(items.familyId, familyId));
     const where = filters.length ? and(...filters) : undefined;
     const [[totalRow], rows] = await Promise.all([
       db.select({ count: count() }).from(items).where(where),
@@ -8055,7 +8132,8 @@ export async function registerRoutes(
 
   // Card terminal charge — initiates a payment on the physical terminal and polls for result
   app.post("/api/pos/card-terminal/charge", requireStaff, async (req, res) => {
-    const { amount, orderId, currency = "EUR", idempotencyKey } = req.body;
+    const { orderId, idempotencyKey } = req.body;
+    const currency = "EUR";
 
     // ── Idempotency guard (synchronous, before any await) ──────────────────────
     // Node.js is single-threaded: this check+add runs atomically before any I/O yield.
@@ -8073,18 +8151,29 @@ export async function registerRoutes(
     }
 
     try {
-      if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-        return res.status(400).json({ success: false, message: "Invalid amount" });
+      if (!orderId || !idempotencyKey) {
+        return res.status(400).json({ success: false, message: "Order and idempotency key are required" });
       }
-      const amountCents = Math.round(Number(amount) * 100);
+      const preCheckOrder = await storage.getPosOrder(orderId);
+      if (!preCheckOrder) return res.status(404).json({ success: false, message: "Order not found" });
+      if (
+        preCheckOrder.cashierId !== req.user!.id ||
+        !preCheckOrder.paymentMethod.startsWith("card")
+      ) {
+        return res.status(403).json({ success: false, message: "This card order does not belong to the current cashier" });
+      }
+      const authoritativeAmount = Number(preCheckOrder.total);
+      if (!Number.isFinite(authoritativeAmount) || authoritativeAmount <= 0) {
+        return res.status(400).json({ success: false, message: "Stored order total is invalid" });
+      }
+      const amountCents = Math.round(authoritativeAmount * 100);
 
       // ── Pre-charge order status guard ─────────────────────────────────────────
       // Check the order BEFORE calling the payment provider. If the order is already
       // in a non-'held' state it means a previous charge succeeded — reject immediately
       // without wasting an API call to the terminal provider.
       if (orderId) {
-        const preCheckOrder = await storage.getPosOrder(orderId);
-        if (preCheckOrder && preCheckOrder.status !== "held") {
+        if (preCheckOrder.status !== "held") {
           return res.status(409).json({
             success: false,
             // "already_paid" means the order is genuinely done (completed/voided) —
@@ -8344,7 +8433,7 @@ export async function registerRoutes(
             existingRef: (existing as any).cardTerminalRef || null,
           });
         }
-        await storage.completeCardPosOrder(orderId, transactionRef, String(Number(amount).toFixed(2)));
+        await storage.completeCardPosOrder(orderId, transactionRef, authoritativeAmount.toFixed(2));
       }
 
       return res.json({ success: true, transactionRef, provider, message: `Payment approved. Reference: ${transactionRef}` });
@@ -8367,6 +8456,9 @@ export async function registerRoutes(
       const order = await storage.getPosOrder((req.params.orderId as string));
       if (!order) {
         return res.status(404).json({ success: false, message: "Order not found" });
+      }
+      if (order.cashierId !== req.user!.id) {
+        return res.status(403).json({ success: false, message: "This order does not belong to the current cashier" });
       }
       const attemptedAt = (order as any).chargeAttemptedAt ? new Date((order as any).chargeAttemptedAt) : null;
       const ageMs = attemptedAt ? Date.now() - attemptedAt.getTime() : null;
@@ -10029,6 +10121,161 @@ export async function registerRoutes(
   app.get("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
     try { res.json(await storage.getPosLayoutButtons((req.params.id as string))); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
+
+  app.get("/api/pos/register/layout", requireStaff, async (req, res) => {
+    try {
+      const terminalId = String(req.query.terminalId || "");
+      if (!terminalId) return res.status(400).json({ message: "terminalId is required" });
+      const terminal = await storage.getPosTerminal(terminalId);
+      if (!terminal) return res.status(404).json({ message: "Terminal not found" });
+      if (!terminal.layoutSetId) return res.json({ terminalId, rootLayoutId: null, layouts: [], buttons: [], items: [] });
+
+      const layouts: any[] = [];
+      const buttons: any[] = [];
+      const itemIds = new Set<string>();
+      const pending = [terminal.layoutSetId];
+      const visited = new Set<string>();
+      while (pending.length && visited.size < 20) {
+        const layoutId = pending.shift()!;
+        if (visited.has(layoutId)) continue;
+        visited.add(layoutId);
+        const layout = await storage.getPosLayoutSet(layoutId);
+        if (!layout?.active) continue;
+        layouts.push(layout);
+        const rows = await storage.getPosLayoutButtons(layoutId);
+        buttons.push(...rows);
+        for (const button of rows) {
+          if (button.itemId) itemIds.add(button.itemId);
+          if (button.buttonType === "sublayout" && button.sublayoutId && !visited.has(button.sublayoutId)) pending.push(button.sublayoutId);
+        }
+      }
+      const layoutItems = itemIds.size
+        ? await db.select().from(items).where(inArray(items.id, [...itemIds]))
+        : [];
+      res.json({ terminalId, rootLayoutId: terminal.layoutSetId, layouts, buttons, items: layoutItems });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/register/terminals", requireStaff, async (req, res) => {
+    try {
+      const rows = await storage.getPosTerminals(req.query.locationId as string | undefined);
+      res.json(rows.map(({ id, locationId, name, hardwareType, layoutSetId, active }) => ({
+        id, locationId, name, hardwareType, layoutSetId, active,
+      })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/register/locations", requireStaff, async (_req, res) => {
+    try {
+      const rows = await storage.getPosLocations();
+      res.json(rows.map(({ id, name, code, active }) => ({ id, name, code, active })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/register/sales", requireStaff, async (req, res) => {
+    try {
+      const terminalId = String(req.body?.terminalId || "");
+      const locationId = String(req.body?.locationId || "");
+      const paymentMethod = String(req.body?.paymentMethod || "");
+      const expectedTotal = Number(req.body?.expectedTotal);
+      const requestedLines = Array.isArray(req.body?.lines) ? req.body.lines : [];
+      if (!["cash", "card"].includes(paymentMethod)) return res.status(400).json({ message: "Payment method must be cash or card" });
+      if (!terminalId || !locationId || requestedLines.length === 0 || requestedLines.length > 200) {
+        return res.status(400).json({ message: "A terminal, location, and 1–200 sale lines are required" });
+      }
+      const [terminal, location] = await Promise.all([
+        storage.getPosTerminal(terminalId),
+        storage.getPosLocation(locationId),
+      ]);
+      if (!terminal?.active || terminal.locationId !== locationId) return res.status(400).json({ message: "Invalid active terminal for this location" });
+      if (!location?.active) return res.status(400).json({ message: "Location is inactive" });
+
+      const saleLines: any[] = [];
+      let subtotal = 0;
+      let vatAmount = 0;
+      for (const requested of requestedLines) {
+        const itemId = String(requested?.itemId || "");
+        const variantId = requested?.variantId ? String(requested.variantId) : null;
+        const quantity = Number(requested?.quantity);
+        if (!itemId || !Number.isInteger(quantity) || quantity < 1 || quantity > 1000) {
+          return res.status(400).json({ message: "Each line requires a valid item and quantity from 1 to 1000" });
+        }
+        const item = await storage.getItem(itemId);
+        if (!item?.active) return res.status(400).json({ message: "A selected item is inactive or missing" });
+        const variant = variantId ? await storage.getItemVariant(variantId) : undefined;
+        if (variantId && (!variant?.active || variant.itemId !== itemId)) {
+          return res.status(400).json({ message: "A selected variant is inactive or does not belong to its item" });
+        }
+        if (item.hasVariants && !variant) return res.status(400).json({ message: `${item.name} requires a variant` });
+        const unitPrice = Number(variant?.price1 ?? item.price1 ?? 0);
+        const vatRate = Number((item as any).vatRate ?? 0);
+        if (!Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isFinite(vatRate) || vatRate < 0) {
+          return res.status(400).json({ message: "Item pricing is invalid" });
+        }
+        subtotal += unitPrice * quantity;
+        vatAmount += unitPrice * quantity * (vatRate / 100);
+        saleLines.push({
+          itemId,
+          variantId,
+          description: variant
+            ? `${item.name} (${[variant.option1Value, variant.option2Value, variant.option3Value].filter(Boolean).join(" / ")})`
+            : item.name,
+          sku: variant?.sku || item.sku || "",
+          quantity: String(quantity),
+          unitPrice: unitPrice.toFixed(2),
+          vatRate: vatRate.toFixed(2),
+          discountPercent: "0",
+          total: (unitPrice * quantity).toFixed(2),
+        });
+      }
+      const total = subtotal + vatAmount;
+      if (!Number.isFinite(expectedTotal) || Math.round(expectedTotal * 100) !== Math.round(total * 100)) {
+        return res.status(409).json({
+          message: "Prices changed after items were added. Review the refreshed prices before taking payment.",
+          authoritativeTotal: total.toFixed(2),
+        });
+      }
+      const order = await storage.createPosOrder({
+        orderNumber: `WEB-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`,
+        terminalId,
+        locationId,
+        cashierId: req.user!.id,
+        cashierName: req.user!.username,
+        paymentMethod,
+        subtotal: subtotal.toFixed(2),
+        vatAmount: vatAmount.toFixed(2),
+        discountAmount: "0",
+        total: total.toFixed(2),
+        amountTendered: paymentMethod === "cash" ? total.toFixed(2) : "0",
+        changeDue: "0",
+        status: paymentMethod === "cash" ? "completed" : "held",
+        receiptPrinted: false,
+        syncedAt: new Date(),
+      } as any, saleLines);
+      res.status(201).json(order);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/register/orders/:id/cancel-held", requireStaff, async (req, res) => {
+    try {
+      const cutoff = new Date(Date.now() - CHARGE_IN_PROGRESS_WINDOW_MS);
+      const [cancelled] = await db.update(posOrders)
+        .set({ status: "voided", idempotencyKey: null, chargeAttemptedAt: null })
+        .where(and(
+          eq(posOrders.id, req.params.id as string),
+          eq(posOrders.status, "held"),
+          ilike(posOrders.paymentMethod, "card%"),
+          eq(posOrders.cashierId, req.user!.id),
+          eq(posOrders.terminalId, String(req.body?.terminalId || "")),
+          isNull(posOrders.cardTerminalRef),
+          or(
+            isNull(posOrders.idempotencyKey),
+            lt(posOrders.chargeAttemptedAt, cutoff),
+          ),
+        ))
+        .returning({ id: posOrders.id });
+      if (!cancelled) return res.status(409).json({ message: "This held order cannot be cancelled while a card charge may be in progress" });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
   app.put("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
     try {
       const { buttons } = req.body;
@@ -10059,6 +10306,7 @@ export async function registerRoutes(
       // Validate that the referenced terminal exists and belongs to the stated location
       const terminal = await storage.getPosTerminal(orderData.terminalId);
       if (!terminal) return res.status(400).json({ message: "Terminal not found" });
+      if (terminal.locationId !== orderData.locationId) return res.status(400).json({ message: "Terminal does not belong to this location" });
       const order = await storage.createPosOrder({ ...orderData, syncedAt: new Date() }, lines);
       res.status(201).json(order);
     } catch (e: any) { res.status(500).json({ message: e.message }); }

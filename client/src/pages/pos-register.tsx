@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Item, ItemVariant, PosLocation, PosTerminal, ItemLocationStock } from "@shared/schema";
+import type { Item, ItemVariant, PosLocation, PosTerminal, ItemLocationStock, PosLayoutSet, PosLayoutButton } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -468,21 +468,56 @@ export default function PosRegister() {
   const [heldOrderId, setHeldOrderId] = useState<string | undefined>();
   const [heldOrderTotal, setHeldOrderTotal] = useState(0);
   const [lastApproval, setLastApproval] = useState<{ ref: string; provider: string } | null>(null);
+  const [layoutStack, setLayoutStack] = useState<string[]>([]);
+  const [layoutCategoryId, setLayoutCategoryId] = useState<string | null>(null);
+  const [itemPageNumber, setItemPageNumber] = useState(1);
+  const submitLockRef = useRef(false);
 
-  const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"], staleTime: 60000 });
-  const { data: allVariants = [] } = useQuery<ItemVariant[]>({ queryKey: ["/api/item-variants"], staleTime: 60000 });
-  const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"], staleTime: 60000 });
-  const { data: terminals = [] } = useQuery<PosTerminal[]>({ queryKey: ["/api/pos/terminals"], staleTime: 60000 });
-  const { data: locationStock = [] } = useQuery<ItemLocationStock[]>({
-    queryKey: ["/api/location-stock", locationId],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/location-stock?locationId=${locationId}`);
-      return res.json();
-    },
-    enabled: !!locationId,
-    staleTime: 15000,
+  const itemParams = new URLSearchParams({ page: String(itemPageNumber), limit: "40", search, categoryId: layoutCategoryId || "all" });
+  const { data: itemPage } = useQuery<{ items: Item[]; total: number; page: number; pageSize: number }>({
+    queryKey: ["/api/items", "register", search, layoutCategoryId, itemPageNumber],
+    queryFn: async () => (await apiRequest("GET", `/api/items?${itemParams}`)).json(),
+    staleTime: 30000,
+  });
+  const items = itemPage?.items || [];
+  const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/register/locations"], staleTime: 60000 });
+  const { data: terminals = [] } = useQuery<PosTerminal[]>({ queryKey: ["/api/pos/register/terminals"], staleTime: 60000 });
+  const { data: terminalStatus } = useQuery<CardTerminalStatus>({
+    queryKey: ["/api/pos/card-terminal/status"],
+    staleTime: 30000,
+  });
+  const [variantPickerItem, setVariantPickerItem] = useState<Item | null>(null);
+  const { data: allVariants = [] } = useQuery<ItemVariant[]>({
+    queryKey: ["/api/items", variantPickerItem?.id, "variants"],
+    queryFn: async () => (await apiRequest("GET", `/api/items/${variantPickerItem!.id}/variants`)).json(),
+    enabled: !!variantPickerItem,
+    staleTime: 60000,
   });
 
+  const activeLocations = locations.filter(location => location.active);
+  const activeTerminals = terminals.filter(terminal => terminal.active);
+  const filteredTerminals = locationId ? activeTerminals.filter(t => t.locationId === locationId) : activeTerminals;
+  const selectedTerminal = activeTerminals.find(t => t.id === terminalId);
+  const { data: registerLayout } = useQuery<{
+    rootLayoutId: string | null;
+    layouts: PosLayoutSet[];
+    buttons: PosLayoutButton[];
+    items: Item[];
+  }>({
+    queryKey: ["/api/pos/register/layout", terminalId],
+    queryFn: async () => (await apiRequest("GET", `/api/pos/register/layout?terminalId=${encodeURIComponent(terminalId)}`)).json(),
+    enabled: !!terminalId,
+  });
+  const visibleItemIds = items.map(item => item.id);
+  const { data: locationStock = [] } = useQuery<ItemLocationStock[]>({
+    queryKey: ["/api/location-stock/batch", locationId, visibleItemIds],
+    queryFn: async () => {
+      const params = new URLSearchParams({ locationId, itemIds: visibleItemIds.join(",") });
+      return (await apiRequest("GET", `/api/location-stock/batch?${params}`)).json();
+    },
+    enabled: !!locationId && visibleItemIds.length > 0,
+    staleTime: 15000,
+  });
   const stockAt = useCallback(
     (itemId: string, variantId?: string | null) => {
       const row = locationStock.find(s => s.itemId === itemId && (s.variantId || null) === (variantId || null));
@@ -490,15 +525,7 @@ export default function PosRegister() {
     },
     [locationStock]
   );
-  const { data: terminalStatus } = useQuery<CardTerminalStatus>({
-    queryKey: ["/api/pos/card-terminal/status"],
-    staleTime: 30000,
-  });
-  const [variantPickerItem, setVariantPickerItem] = useState<Item | null>(null);
-
-  const activeLocations = locations.filter(location => location.active);
-  const activeTerminals = terminals.filter(terminal => terminal.active);
-  const filteredTerminals = locationId ? activeTerminals.filter(t => t.locationId === locationId) : activeTerminals;
+  const [viewportWidth, setViewportWidth] = useState(() => typeof window === "undefined" ? 1280 : window.innerWidth);
   const cardConfigured = !!(terminalStatus?.activeProvider);
 
   useEffect(() => {
@@ -519,26 +546,27 @@ export default function PosRegister() {
     setTerminalId(terminalsAtLocation[0]?.id || "");
   }, [activeTerminals, locationId, terminalId]);
 
+  useEffect(() => {
+    setLayoutStack(registerLayout?.rootLayoutId ? [registerLayout.rootLayoutId] : []);
+    setLayoutCategoryId(null);
+  }, [terminalId, registerLayout?.rootLayoutId]);
+
+  useEffect(() => {
+    const updateWidth = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", updateWidth);
+    return () => window.removeEventListener("resize", updateWidth);
+  }, []);
+
+  useEffect(() => {
+    setItemPageNumber(1);
+  }, [search, layoutCategoryId]);
+
   const variantsForItem = useCallback(
     (itemId: string) => allVariants.filter(v => v.itemId === itemId && v.active),
     [allVariants]
   );
 
-  const filteredItems = items.filter(i =>
-    !search ||
-    i.name.toLowerCase().includes(search.toLowerCase()) ||
-    (i.sku || "").toLowerCase().includes(search.toLowerCase()) ||
-    (i.barcode || "").includes(search)
-  ).slice(0, 40);
-
-  // If the search text matches a variant's own SKU/barcode directly, add that variant to
-  // the cart immediately rather than making the cashier pick it from a dialog.
-  const matchedVariant = search
-    ? allVariants.find(v =>
-        (v.sku && v.sku.toLowerCase() === search.toLowerCase()) ||
-        (v.barcode && v.barcode === search)
-      )
-    : undefined;
+  const filteredItems = items;
 
   const addToCart = useCallback((item: Item, variant?: ItemVariant) => {
     if (item.hasVariants && !variant) {
@@ -584,7 +612,7 @@ export default function PosRegister() {
 
   const voidOrderMutation = useMutation({
     mutationFn: (orderId: string) =>
-      apiRequest("PATCH", `/api/pos/orders/${orderId}/void`, {}),
+      apiRequest("POST", `/api/pos/register/orders/${orderId}/cancel-held`, { terminalId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/pos/orders"] });
     },
@@ -594,31 +622,15 @@ export default function PosRegister() {
   const createOrderMutation = useMutation({
     mutationFn: async (paymentMethod: "cash" | "card") => {
       if (!locationId || !terminalId) throw new Error("Select a location and terminal first.");
-      const res = await apiRequest("POST", "/api/pos/orders", {
-        orderNumber: `WEB-${Date.now()}`,
+      const res = await apiRequest("POST", "/api/pos/register/sales", {
         terminalId,
         locationId,
-        cashierName,
         paymentMethod,
-        subtotal: fmt(subtotal),
-        vatAmount: fmt(vatAmount),
-        discountAmount: "0",
-        total: fmt(total),
-        // Card orders start as held/unpaid — the terminal charge endpoint marks them completed
-        amountTendered: paymentMethod === "cash" ? fmt(total) : "0",
-        changeDue: "0",
-        status: paymentMethod === "cash" ? "completed" : "held",
-        receiptPrinted: false,
+        expectedTotal: total,
         lines: cart.map(l => ({
           itemId: l.itemId,
           variantId: l.variantId || null,
-          description: l.variantLabel ? `${l.description} (${l.variantLabel})` : l.description,
-          sku: l.sku,
-          quantity: String(l.quantity),
-          unitPrice: fmt(l.unitPrice),
-          vatRate: fmt(l.vatRate),
-          discountPercent: "0",
-          total: fmt(l.unitPrice * l.quantity),
+          quantity: l.quantity,
         })),
       });
       const data = await res.json();
@@ -634,15 +646,27 @@ export default function PosRegister() {
       } else {
         // Open card dialog with the held order ready for terminal charge
         setHeldOrderId(order.id);
-        setHeldOrderTotal(total);
+        setHeldOrderTotal(Number(order.total));
         setCardDialogOpen(true);
       }
     },
-    onError: (e: any) => toast({ variant: "destructive", title: "Order error", description: e.message }),
+    onError: (e: any) => {
+      if (String(e.message).includes("Prices changed")) {
+        setCart([]);
+        queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/pos/register/layout"] });
+      }
+      toast({ variant: "destructive", title: "Order error", description: e.message });
+    },
+    onSettled: () => {
+      submitLockRef.current = false;
+    },
   });
 
   const handleCashPay = () => {
     if (cart.length === 0) return toast({ variant: "destructive", title: "Cart is empty" });
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
     createOrderMutation.mutate("cash");
   };
 
@@ -651,6 +675,8 @@ export default function PosRegister() {
     if (!cardConfigured) {
       return toast({ variant: "destructive", title: "No terminal configured", description: "Go to POS → Card Terminal to set up a payment provider." });
     }
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
     createOrderMutation.mutate("card");
   };
 
@@ -668,6 +694,85 @@ export default function PosRegister() {
     setCart([]);
     queryClient.invalidateQueries({ queryKey: ["/api/pos/orders"] });
     toast({ title: "Card payment approved", description: `Ref: ${ref} (${provider.toUpperCase()})` });
+  };
+  const currentLayoutId = layoutStack[layoutStack.length - 1] || registerLayout?.rootLayoutId || null;
+  const currentLayout = registerLayout?.layouts.find(layout => layout.id === currentLayoutId);
+  const layoutColumns = currentLayout
+    ? viewportWidth >= 2560 ? (currentLayout.colsTV || currentLayout.columns)
+      : viewportWidth >= 1920 ? (currentLayout.colsLarge || currentLayout.columns)
+      : viewportWidth < 640 ? (currentLayout.colsMobile || currentLayout.columns)
+      : viewportWidth < 1024 ? (currentLayout.colsTablet || currentLayout.columns)
+      : currentLayout.columns
+    : 4;
+  const currentLayoutButtons = (registerLayout?.buttons || [])
+    .filter(button => button.layoutSetId === currentLayoutId && button.buttonType !== "empty")
+    .sort((a, b) => a.position - b.position);
+  const layoutItems = registerLayout?.items || [];
+  const hasAssignedLayout = !!currentLayout && currentLayoutButtons.length > 0;
+  const supportedLayoutActions = new Set(["PAY_CASH", "PAY_CARD", "VOID_SALE", "CANCEL_BILL", "CLEAR_CART"]);
+  const isLayoutButtonSupported = (button: PosLayoutButton) =>
+    button.buttonType !== "action" || (!!button.actionCode && supportedLayoutActions.has(button.actionCode.toUpperCase()));
+
+  const handleLayoutButton = (button: PosLayoutButton) => {
+    if (button.buttonType === "item" && button.itemId) {
+      const item = layoutItems.find(row => row.id === button.itemId);
+      if (item) addToCart(item);
+      else toast({ variant: "destructive", title: "Layout item unavailable" });
+      return;
+    }
+    if (button.buttonType === "category" && button.categoryId) {
+      setLayoutCategoryId(button.categoryId);
+      setSearch("");
+      return;
+    }
+    if (button.buttonType === "sublayout" && button.sublayoutId) {
+      if (layoutStack.includes(button.sublayoutId) || layoutStack.length >= 20) {
+        toast({ variant: "destructive", title: "Cannot open circular sublayout" });
+      } else if (registerLayout?.layouts.some(layout => layout.id === button.sublayoutId)) {
+        setLayoutStack(stack => [...stack, button.sublayoutId!]);
+        setLayoutCategoryId(null);
+      }
+      return;
+    }
+    if (button.buttonType === "action" && button.actionCode) {
+      switch (button.actionCode.toUpperCase()) {
+        case "PAY_CASH": handleCashPay(); break;
+        case "PAY_CARD": handleCardPay(); break;
+        case "VOID_SALE":
+        case "CANCEL_BILL":
+        case "CLEAR_CART":
+          setCart([]);
+          break;
+        default:
+          toast({ title: "Action unavailable in Quick Sale", description: button.label });
+      }
+    }
+  };
+
+  const handleSearchEnter = async () => {
+    const exact = search.trim();
+    if (!exact) return;
+    try {
+      const res = await apiRequest("GET", `/api/items/barcode/${encodeURIComponent(exact)}`);
+      if (!res.ok) return;
+      const found = await res.json();
+      if (found.variantId) {
+        addToCart(found, {
+          id: found.variantId,
+          itemId: found.id,
+          sku: found.variantSku,
+          barcode: found.barcode,
+          price1: found.price1,
+          option1Value: found.variantLabel,
+          active: true,
+        } as ItemVariant);
+      } else {
+        addToCart(found);
+      }
+      setSearch("");
+    } catch {
+      // Keep the search results visible when there is no exact barcode match.
+    }
   };
 
   return (
@@ -716,6 +821,47 @@ export default function PosRegister() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Item catalogue */}
         <div className="lg:col-span-2 space-y-3">
+          {currentLayout && !search && !layoutCategoryId && (
+            <Card>
+              <CardHeader className="py-3 px-4">
+                <CardTitle className="text-sm flex items-center justify-between">
+                  <span>{currentLayout.name} · {selectedTerminal?.name}</span>
+                  {layoutStack.length > 1 && (
+                    <Button size="sm" variant="outline" onClick={() => setLayoutStack(stack => stack.slice(0, -1))}>Back</Button>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3 pt-0">
+                <div
+                  className="grid gap-2"
+                  style={{ gridTemplateColumns: `repeat(${Math.max(1, layoutColumns)}, minmax(0, 1fr))` }}
+                  data-testid="quick-sale-layout"
+                >
+                  {currentLayoutButtons.map(button => (
+                    <button
+                      key={button.id}
+                      onClick={() => handleLayoutButton(button)}
+                      disabled={!isLayoutButtonSupported(button) || createOrderMutation.isPending}
+                      aria-disabled={!isLayoutButtonSupported(button) || createOrderMutation.isPending}
+                      title={!isLayoutButtonSupported(button) ? "This action is not available in Quick Sale" : undefined}
+                      className="min-h-16 px-2 py-3 text-sm font-semibold text-white shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{
+                        backgroundColor: button.color || "#6b7280",
+                        gridColumnStart: (button.position % Math.max(1, layoutColumns)) + 1,
+                        gridColumnEnd: `span ${button.colspan || 1}`,
+                        gridRowStart: Math.floor(button.position / Math.max(1, layoutColumns)) + 1,
+                        gridRowEnd: `span ${button.rowspan || 1}`,
+                        borderRadius: currentLayout.buttonRadius === "square" ? 0 : currentLayout.buttonRadius === "round" ? "9999px" : "0.5rem",
+                      }}
+                      data-testid={`quick-sale-layout-button-${button.id}`}
+                    >
+                      {button.label}
+                    </button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
           <div className="relative">
             <Search className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground" />
             <Input
@@ -723,13 +869,7 @@ export default function PosRegister() {
               value={search}
               onChange={e => setSearch(e.target.value)}
               onKeyDown={e => {
-                if (e.key === "Enter" && matchedVariant) {
-                  const parentItem = items.find(i => i.id === matchedVariant.itemId);
-                  if (parentItem) {
-                    addToCart(parentItem, matchedVariant);
-                    setSearch("");
-                  }
-                }
+                if (e.key === "Enter") void handleSearchEnter();
               }}
               className="pl-9 h-9"
               data-testid="input-item-search"
@@ -740,8 +880,15 @@ export default function PosRegister() {
               </button>
             )}
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
-            {filteredItems.map(item => (
+          {layoutCategoryId && (
+            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              <span>Showing products from layout category</span>
+              <Button size="sm" variant="ghost" onClick={() => setLayoutCategoryId(null)}>Back to layout</Button>
+            </div>
+          )}
+          {(!hasAssignedLayout || !!search || !!layoutCategoryId) && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
+              {filteredItems.map(item => (
               <button
                 key={item.id}
                 onClick={() => addToCart(item)}
@@ -769,13 +916,21 @@ export default function PosRegister() {
                   })()}
                 </div>
               </button>
-            ))}
-            {filteredItems.length === 0 && (
-              <div className="col-span-full text-center py-8 text-muted-foreground text-sm">
-                No items found
-              </div>
-            )}
-          </div>
+              ))}
+              {filteredItems.length === 0 && (
+                <div className="col-span-full text-center py-8 text-muted-foreground text-sm">
+                  No items found
+                </div>
+              )}
+            </div>
+          )}
+          {(!hasAssignedLayout || !!search || !!layoutCategoryId) && (itemPage?.total || 0) > 40 && (
+            <div className="flex items-center justify-between">
+              <Button variant="outline" size="sm" disabled={itemPageNumber <= 1} onClick={() => setItemPageNumber(page => page - 1)}>Previous</Button>
+              <span className="text-xs text-muted-foreground">Page {itemPageNumber} of {Math.ceil((itemPage?.total || 0) / 40)}</span>
+              <Button variant="outline" size="sm" disabled={itemPageNumber * 40 >= (itemPage?.total || 0)} onClick={() => setItemPageNumber(page => page + 1)}>Next</Button>
+            </div>
+          )}
         </div>
 
         {/* Cart & payment */}

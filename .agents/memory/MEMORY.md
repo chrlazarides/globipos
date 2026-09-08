@@ -45,3 +45,5 @@
 - [Secure 2FA recovery](secure-2fa-recovery.md) — keep the old factor active until an email-verified, single-use replacement is atomically confirmed
 - [Safe catalog transfer](safe-catalog-transfer.md) — upsert by stable SKU, validate one barcode namespace, and replace stock only when no location allocations exist
 - [Large catalog loading](large-catalog-loading.md) — never fetch or log the full item catalog globally; use bounded server-side pages and searches
+- [Optional product families](optional-product-families.md) — families group products horizontally across categories; transfer them by stable code, not database ID
+- [Cashier-safe web register](cashier-safe-web-register.md) — inherit terminal layouts, but keep reads minimal and derive checkout/card amounts from server-owned order data

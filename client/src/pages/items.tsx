@@ -18,7 +18,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Search, Package, Upload, History, Download, RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Pencil, Trash2, Layers, Barcode, Globe, Star } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { insertItemSchema, insertItemVariantSchema, insertCategorySchema, type Item, type ItemVariant, type Category, type Color, type Size, type ItemBarcode } from "@shared/schema";
+import { insertItemSchema, insertItemVariantSchema, insertCategorySchema, type Item, type ItemVariant, type Category, type ProductFamily, type Color, type Size, type ItemBarcode } from "@shared/schema";
 import { ImportDialog } from "@/components/import-dialog";
 import { usePriceLevels } from "@/hooks/use-price-levels";
 import { z } from "zod";
@@ -50,6 +50,7 @@ const itemFormSchema = insertItemSchema.extend({
   name: z.string().min(1, "Name is required"),
   sku: z.string().min(1, "SKU is required"),
   price1: z.string().min(1),
+  familyId: z.preprocess((value) => value === "" ? null : value, z.string().nullable().optional()),
 });
 
 const CY_VAT_RATES = [
@@ -68,6 +69,7 @@ export default function Items() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [familyFilter, setFamilyFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
   const [itemDialogOpen, setItemDialogOpen] = useState(false);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
@@ -81,15 +83,16 @@ export default function Items() {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [search]);
-  useEffect(() => { setPage(1); }, [debouncedSearch, categoryFilter]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, categoryFilter, familyFilter]);
   const itemParams = new URLSearchParams({
     page: String(page),
     limit: "100",
     search: debouncedSearch,
     categoryId: categoryFilter,
+    familyId: familyFilter,
   });
   const { data: itemPage, isLoading: itemsLoading } = useQuery<{ items: Item[]; total: number; page: number; pageSize: number }>({
-    queryKey: ["/api/items", "paged", page, debouncedSearch, categoryFilter],
+    queryKey: ["/api/items", "paged", page, debouncedSearch, categoryFilter, familyFilter],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/items?${itemParams.toString()}`);
       return res.json();
@@ -100,6 +103,15 @@ export default function Items() {
   const totalItems = itemPage?.total || 0;
   const totalPages = Math.max(1, Math.ceil(totalItems / 100));
   const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
+  const { data: families = [] } = useQuery<ProductFamily[]>({ queryKey: ["/api/product-families"] });
+  const createFamily = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await apiRequest("POST", "/api/product-families", { name, active: true });
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/product-families"] }),
+    onError: (e: Error) => toast({ title: "Could not create family", description: e.message, variant: "destructive" }),
+  });
   const { data: stockSuggestions = [] } = useQuery<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; packSize: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>({
     queryKey: ["/api/items/stock-suggestions"],
     enabled: stockSuggestionsOpen,
@@ -316,7 +328,7 @@ export default function Items() {
                 <DialogHeader>
                   <DialogTitle>New Item</DialogTitle>
                 </DialogHeader>
-                <ItemForm onSubmit={(d) => createItem.mutate(d)} isPending={createItem.isPending} categories={categories} priceLevelNames={priceLevelNames} />
+                <ItemForm onSubmit={(d) => createItem.mutate(d)} isPending={createItem.isPending} categories={categories} families={families} priceLevelNames={priceLevelNames} />
               </DialogContent>
             </Dialog>
           </div>
@@ -347,6 +359,20 @@ export default function Items() {
                 ))}
               </SelectContent>
             </Select>
+            <Select value={familyFilter} onValueChange={setFamilyFilter}>
+              <SelectTrigger className="w-[180px]" data-testid="select-family-filter">
+                <SelectValue placeholder="All Families" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Families</SelectItem>
+                <SelectItem value="none">No Family</SelectItem>
+                {families.map((family) => <SelectItem key={family.id} value={family.id}>{family.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={() => {
+              const name = window.prompt("Product family name");
+              if (name?.trim()) createFamily.mutate(name.trim());
+            }}>+ Family</Button>
           </div>
           <DataTable columns={columns} data={items} isLoading={itemsLoading} emptyMessage="No items found" onRowClick={handleRowClick} />
           <div className="flex items-center justify-between gap-3 pt-4">
@@ -512,10 +538,11 @@ export default function Items() {
             <DialogTitle>Edit Item</DialogTitle>
           </DialogHeader>
           {editingItem && (
-            <ItemForm
+              <ItemForm
               onSubmit={(d) => updateItem.mutate(d)}
               isPending={updateItem.isPending}
               categories={categories}
+                families={families}
               priceLevelNames={priceLevelNames}
               itemId={editingItem.id}
               defaultValues={{
@@ -524,6 +551,7 @@ export default function Items() {
                 barcode: editingItem.barcode || "",
                 description: editingItem.description || "",
                 categoryId: editingItem.categoryId || "",
+                familyId: editingItem.familyId || "",
                 unitType: editingItem.unitType,
                 packSize: editingItem.packSize,
                 price1: editingItem.price1,
@@ -1132,12 +1160,12 @@ function BarcodesTab({ itemId }: { itemId: string }) {
   );
 }
 
-function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNames, itemId }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; defaultValues?: any; priceLevelNames: string[]; itemId?: string }) {
+function ItemForm({ onSubmit, isPending, categories, families, defaultValues, priceLevelNames, itemId }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; families: ProductFamily[]; defaultValues?: any; priceLevelNames: string[]; itemId?: string }) {
   const isEditing = !!defaultValues;
   const form = useForm({
     resolver: zodResolver(itemFormSchema),
     defaultValues: defaultValues || {
-      name: "", sku: "", barcode: "", description: "", categoryId: "", unitType: "pc", packSize: 1,
+      name: "", sku: "", barcode: "", description: "", categoryId: "", familyId: "", unitType: "pc", packSize: 1,
       price1: "0", price2: "0", price3: "0", price4: "0", price5: "0", costPrice: "0", vatRate: null,
       stockQuantity: 0, reorderLevel: 10, volume: "", alcoholPercentage: "", brand: "", origin: "", vintage: "", active: true,
     },
@@ -1221,6 +1249,20 @@ function ItemForm({ onSubmit, isPending, categories, defaultValues, priceLevelNa
                 </FormItem>
               )} />
             </div>
+            <FormField control={form.control} name="familyId" render={({ field }) => (
+              <FormItem>
+                <FormLabel>Product Family <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                <Select value={field.value || "none"} onValueChange={(value) => field.onChange(value === "none" ? null : value)}>
+                  <FormControl><SelectTrigger data-testid="select-item-family"><SelectValue placeholder="No family" /></SelectTrigger></FormControl>
+                  <SelectContent>
+                    <SelectItem value="none">No family</SelectItem>
+                    {families.map((family) => <SelectItem key={family.id} value={family.id}>{family.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <FormDescription>Groups products horizontally across different categories.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )} />
             <div className="grid grid-cols-2 gap-4">
               <FormField control={form.control} name="barcode" render={({ field }) => (
                 <FormItem>

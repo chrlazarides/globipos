@@ -186,6 +186,14 @@ export const categories = pgTable("categories", {
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
 
+export const productFamilies = pgTable("product_families", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").unique(),
+  name: text("name").notNull(),
+  active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
 export const items = pgTable("items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -193,6 +201,7 @@ export const items = pgTable("items", {
   barcode: text("barcode"),
   description: text("description"),
   categoryId: varchar("category_id"),
+  familyId: varchar("family_id").references(() => productFamilies.id, { onDelete: "set null" }),
   unitType: text("unit_type").notNull().default("pc"),
   packSize: integer("pack_size").notNull().default(1),
   price1: numeric("price_1", { precision: 10, scale: 2 }).notNull().default("0"),
@@ -658,6 +667,7 @@ export type AccountingSnapshot = typeof accountingSnapshots.$inferSelect;
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, lastLoginAt: true });
 export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
 export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });
+export const insertProductFamilySchema = createInsertSchema(productFamilies).omit({ id: true });
 export const insertColorSchema = createInsertSchema(colors).omit({ id: true, updatedAt: true });
 export const insertSizeSchema = createInsertSchema(sizes).omit({ id: true, updatedAt: true });
 export const insertItemSchema = createInsertSchema(items).omit({ id: true, sequenceNo: true });
@@ -712,6 +722,8 @@ export type InsertSystemSetting = z.infer<typeof insertSystemSettingSchema>;
 export type SystemSetting = typeof systemSettings.$inferSelect;
 export type InsertCategory = z.infer<typeof insertCategorySchema>;
 export type Category = typeof categories.$inferSelect;
+export type InsertProductFamily = z.infer<typeof insertProductFamilySchema>;
+export type ProductFamily = typeof productFamilies.$inferSelect;
 export type InsertColor = z.infer<typeof insertColorSchema>;
 export type Color = typeof colors.$inferSelect;
 export type InsertSize = z.infer<typeof insertSizeSchema>;
