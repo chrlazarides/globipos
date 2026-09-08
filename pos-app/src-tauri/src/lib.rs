@@ -155,35 +155,67 @@ async fn get_products(
     search: Option<String>,
 ) -> Result<Vec<Value>, String> {
     let rows = if let Some(q) = &search {
-        let like = format!("%{}%", q);
+        let exact = q.trim();
+        let fts_query = exact
+            .split_whitespace()
+            .map(|token| {
+                let escaped = token.replace('"', "\"\"");
+                format!("\"{}\"*", escaped)
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        if exact.is_empty() || fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
         sqlx::query(
-            r#"SELECT p.*, po.override_price as timed_price
+            r#"WITH matches AS (
+                 SELECT rowid, 0 AS priority FROM local_products WHERE barcode = ?
+                 UNION
+                 SELECT rowid, 1 AS priority FROM local_products WHERE sku = ?
+                 UNION
+                 SELECT rowid, 2 AS priority FROM (
+                   SELECT rowid FROM local_products_fts
+                   WHERE local_products_fts MATCH ? LIMIT 100
+                 )
+               )
+               SELECT p.*,
+                 (SELECT po.override_price FROM price_overrides po
+                  WHERE po.product_id = p.server_id
+                    AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                    AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+                  ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
                FROM local_products p
-               LEFT JOIN price_overrides po ON po.product_id = p.server_id
-                   AND (po.valid_until IS NULL OR po.valid_until > datetime('now'))
-               WHERE p.active = 1 AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)
-               ORDER BY p.name LIMIT 50"#
+               JOIN (SELECT rowid, min(priority) AS priority FROM matches GROUP BY rowid) m
+                 ON m.rowid = p.rowid
+               WHERE p.active = 1
+               ORDER BY m.priority, p.name LIMIT 50"#
         )
-        .bind(&like).bind(&like).bind(&like)
+        .bind(exact).bind(exact).bind(&fts_query)
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?
     } else if let Some(cat) = &category_id {
         sqlx::query(
-            r#"SELECT p.*, po.override_price as timed_price
+            r#"SELECT p.*,
+                 (SELECT po.override_price FROM price_overrides po
+                  WHERE po.product_id = p.server_id
+                    AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                    AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+                  ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
                FROM local_products p
-               LEFT JOIN price_overrides po ON po.product_id = p.server_id
-                   AND (po.valid_until IS NULL OR po.valid_until > datetime('now'))
                WHERE p.active = 1 AND p.category_id = ?
-               ORDER BY p.name"#
+               ORDER BY p.name LIMIT 250"#
         )
         .bind(cat)
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?
     } else {
         sqlx::query(
-            r#"SELECT p.*, po.override_price as timed_price
+            r#"SELECT p.*,
+                 (SELECT po.override_price FROM price_overrides po
+                  WHERE po.product_id = p.server_id
+                    AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                    AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+                  ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
                FROM local_products p
-               LEFT JOIN price_overrides po ON po.product_id = p.server_id
-                   AND (po.valid_until IS NULL OR po.valid_until > datetime('now'))
-               WHERE p.active = 1 ORDER BY p.name"#
+               WHERE p.active = 1 ORDER BY p.name LIMIT 250"#
         )
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?
     };
@@ -192,17 +224,67 @@ async fn get_products(
 }
 
 #[tauri::command]
+async fn get_products_by_ids(
+    state: State<'_, AppState>,
+    item_ids: Vec<String>,
+) -> Result<Vec<Value>, String> {
+    if item_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        r#"SELECT p.*,
+             (SELECT po.override_price FROM price_overrides po
+              WHERE po.product_id = p.server_id
+                AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+              ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
+           FROM local_products p
+           WHERE p.active = 1 AND p.server_id IN ("#,
+    );
+    {
+        let mut separated = query.separated(", ");
+        for id in item_ids.iter().take(1000) {
+            separated.push_bind(id);
+        }
+    }
+    query.push(") ORDER BY p.name");
+    let rows = query
+        .build()
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_active_products_count(state: State<'_, AppState>) -> Result<i64, String> {
+    sqlx::query_scalar("SELECT count(*) FROM local_products WHERE active = 1")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_product_by_barcode(
     state: State<'_, AppState>,
     barcode: String,
 ) -> Result<Option<Value>, String> {
     let row = sqlx::query(
-        r#"SELECT p.*, po.override_price as timed_price
+        r#"WITH match AS (
+             SELECT rowid, 0 AS priority FROM local_products WHERE barcode = ?
+             UNION ALL
+             SELECT rowid, 1 AS priority FROM local_products WHERE sku = ?
+           )
+           SELECT p.*,
+             (SELECT po.override_price FROM price_overrides po
+              WHERE po.product_id = p.server_id
+                AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+              ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
            FROM local_products p
-           LEFT JOIN price_overrides po ON po.product_id = p.server_id
-               AND (po.valid_until IS NULL OR po.valid_until > datetime('now'))
-           WHERE p.active = 1 AND (p.barcode = ? OR p.sku = ?)
-           LIMIT 1"#
+           JOIN match m ON m.rowid = p.rowid
+           WHERE p.active = 1
+           ORDER BY m.priority LIMIT 1"#
     )
     .bind(&barcode).bind(&barcode)
     .fetch_optional(&state.db)
@@ -244,7 +326,7 @@ async fn save_order(
 #[tauri::command]
 async fn get_held_orders(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     let rows = sqlx::query(
-        "SELECT * FROM pos_orders WHERE status = 'held' ORDER BY created_at DESC"
+        "SELECT * FROM pos_orders WHERE status = 'held' ORDER BY created_at DESC LIMIT 250"
     )
     .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(row_to_json).collect())
@@ -588,7 +670,16 @@ async fn create_stock_transfer(
 #[tauri::command]
 async fn get_active_price_overrides(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     let rows = sqlx::query(
-        "SELECT * FROM price_overrides WHERE valid_until IS NULL OR valid_until > datetime('now')"
+        r#"SELECT po.* FROM price_overrides po
+           WHERE (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+             AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+             AND po.rowid = (
+               SELECT current.rowid FROM price_overrides current
+               WHERE current.product_id = po.product_id
+                 AND (current.valid_from IS NULL OR datetime(current.valid_from) <= datetime('now'))
+                 AND (current.valid_until IS NULL OR datetime(current.valid_until) > datetime('now'))
+               ORDER BY datetime(current.valid_from) DESC, datetime(current.created_at) DESC, current.rowid DESC LIMIT 1
+             )"#
     )
     .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(row_to_json).collect())
@@ -1043,7 +1134,7 @@ async fn get_produce_items(state: State<'_, AppState>) -> Result<Vec<Value>, Str
     let rows = sqlx::query(
         r#"SELECT * FROM local_products
            WHERE active = 1 AND (weight_based = 1 OR plu_code IS NOT NULL)
-           ORDER BY name"#
+           ORDER BY name LIMIT 250"#
     )
     .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(row_to_json).collect())
@@ -1605,6 +1696,8 @@ pub fn run() {
             reconcile_card_payment,
             upsert_cashier,
             get_products,
+            get_products_by_ids,
+            get_active_products_count,
             get_product_by_barcode,
             get_layout,
             get_categories,

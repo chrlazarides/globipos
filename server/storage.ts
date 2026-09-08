@@ -2,7 +2,7 @@ import { db } from "./db";
 import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeQrCode, synthesizeSequentialCode } from "./barcode-utils";
 import {
-  users, categories, colors, sizes, items, itemVariants, itemBarcodes, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
+  users, categories, colors, sizes, items, itemShelfPriceHistory, itemVariants, itemBarcodes, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
   portalOrders, portalOrderItems, systemSettings, customerLoyaltyPoints,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
@@ -517,12 +517,50 @@ export class DatabaseStorage implements IStorage {
     return item;
   }
   async createItem(data: InsertItem) {
-    const [item] = await db.insert(items).values(data).returning();
-    return item;
+    if (data.shelfLabelDiscountEnabled) {
+      throw new Error("A promotional shelf label can only be enabled while reducing an existing item's price");
+    }
+    return db.transaction(async (tx) => {
+      const [item] = await tx.insert(items).values(data).returning();
+      await tx.insert(itemShelfPriceHistory).values({ itemId: item.id, price: item.price1, source: "item_create" });
+      return item;
+    });
   }
   async updateItem(id: string, data: Partial<InsertItem>) {
-    const [item] = await db.update(items).set(data).where(eq(items.id, id)).returning();
-    return item;
+    return db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(items).where(eq(items.id, id));
+      if (!existing) return undefined;
+      const oldPrice = Number(existing.price1);
+      const newPrice = data.price1 === undefined ? oldPrice : Number(data.price1);
+      if (!existing.shelfLabelDiscountEnabled && data.shelfLabelDiscountEnabled === true) {
+        if (!(newPrice < oldPrice)) {
+          throw new Error("Enable a promotional shelf label in the same update that reduces Price Level 1");
+        }
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const recent = await tx.select({ price: itemShelfPriceHistory.price, source: itemShelfPriceHistory.source })
+          .from(itemShelfPriceHistory)
+          .where(and(eq(itemShelfPriceHistory.itemId, id), gte(itemShelfPriceHistory.effectiveAt, since)));
+        const statutoryPrior = Math.min(oldPrice, ...recent.map((row) => Number(row.price)));
+        const legacyHistoryIncomplete = recent.some((row) => row.source === "migration_baseline");
+        if (!legacyHistoryIncomplete && Number(data.shelfLabelPreviousPrice) !== statutoryPrior) {
+          throw new Error(`The statutory prior price is €${statutoryPrior.toFixed(2)}, calculated from the recorded 30-day shelf-price history`);
+        }
+        data.shelfLabelPreviousPriceProvenance = legacyHistoryIncomplete
+          ? "staff_attested_legacy_period"
+          : "recorded_30_day_low";
+      } else if (existing.shelfLabelDiscountEnabled && data.shelfLabelDiscountEnabled !== false) {
+        if (data.shelfLabelPreviousPrice !== undefined && Number(data.shelfLabelPreviousPrice) !== Number(existing.shelfLabelPreviousPrice)) {
+          throw new Error("Disable the current promotional campaign before establishing a different statutory prior price");
+        }
+        data.shelfLabelPreviousPrice = existing.shelfLabelPreviousPrice;
+        data.shelfLabelPreviousPriceProvenance = existing.shelfLabelPreviousPriceProvenance;
+      }
+      const [item] = await tx.update(items).set(data).where(eq(items.id, id)).returning();
+      if (newPrice !== oldPrice) {
+        await tx.insert(itemShelfPriceHistory).values({ itemId: id, price: newPrice.toFixed(2), source: "item_update" });
+      }
+      return item;
+    });
   }
 
   async getItemVariants(itemId: string) {
@@ -3847,28 +3885,23 @@ export class DatabaseStorage implements IStorage {
   // ─── PDA: Agoranomia label compliance ────────────────────────────────────────
   async getAgoranomiaLabelPrint(itemId: string) {
     const { agoranomiaLabelPrints } = await import("@shared/schema");
-    const [row] = await db.select().from(agoranomiaLabelPrints).where(eq(agoranomiaLabelPrints.itemId, itemId));
+    const [row] = await db.select().from(agoranomiaLabelPrints)
+      .where(eq(agoranomiaLabelPrints.itemId, itemId))
+      .orderBy(desc(agoranomiaLabelPrints.printedAt), desc(agoranomiaLabelPrints.id))
+      .limit(1);
     return row;
   }
   async getAllAgoranomiaLabelPrints() {
     const { agoranomiaLabelPrints } = await import("@shared/schema");
-    return db.select().from(agoranomiaLabelPrints);
+    return db.select().from(agoranomiaLabelPrints)
+      .orderBy(agoranomiaLabelPrints.printedAt, agoranomiaLabelPrints.id);
   }
   async recordAgoranomiaLabelPrints(records: import("@shared/schema").InsertAgoranomiaLabelPrint[]) {
     const { agoranomiaLabelPrints } = await import("@shared/schema");
     const results: import("@shared/schema").AgoranomiaLabelPrint[] = [];
     for (const rec of records) {
-      const [existing] = await db.select().from(agoranomiaLabelPrints).where(eq(agoranomiaLabelPrints.itemId, rec.itemId));
-      if (existing) {
-        const [updated] = await db.update(agoranomiaLabelPrints)
-          .set({ ...rec, printedAt: new Date() })
-          .where(eq(agoranomiaLabelPrints.id, existing.id))
-          .returning();
-        results.push(updated);
-      } else {
-        const [created] = await db.insert(agoranomiaLabelPrints).values(rec).returning();
-        results.push(created);
-      }
+      const [created] = await db.insert(agoranomiaLabelPrints).values(rec).returning();
+      results.push(created);
     }
     return results;
   }

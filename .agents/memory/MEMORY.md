@@ -47,3 +47,6 @@
 - [Large catalog loading](large-catalog-loading.md) — never fetch or log the full item catalog globally; use bounded server-side pages and searches
 - [Optional product families](optional-product-families.md) — families group products horizontally across categories; transfer them by stable code, not database ID
 - [Cashier-safe web register](cashier-safe-web-register.md) — inherit terminal layouts, but keep reads minimal and derive checkout/card amounts from server-owned order data
+- [Partial-index upsert drift](partial-index-upsert-drift.md) — schema declarations do not prove a partial unique index exists; verify the live DB before relying on ON CONFLICT inference
+- [Tauri POS indexed search](tauri-pos-indexed-search.md) — use exact barcode/SKU indexes plus FTS5 prefix search; hydrate layout items separately from bounded browse pages
+- [Promotional shelf-label prior prices](promotional-shelf-label-prior-prices.md) — keep prior-price provenance explicit; legacy attestation must never masquerade as complete 30-day history

@@ -173,13 +173,15 @@ pub async fn sync_inbox(
                 let price = item["price"].as_f64()
                     .or_else(|| item["price"].as_str().and_then(|s| s.parse().ok()))
                     .unwrap_or(0.0);
-                let valid_until = item["validUntil"].as_str().unwrap_or("").to_string();
+                let valid_from = item["validFrom"].as_str().filter(|value| !value.is_empty());
+                let valid_until = item["validUntil"].as_str().filter(|value| !value.is_empty());
 
                 sqlx::query(
-                    "INSERT OR REPLACE INTO price_overrides (product_id, override_price, valid_until, reason) VALUES (?,?,?,'inbox')"
+                    "INSERT OR REPLACE INTO price_overrides (product_id, override_price, valid_from, valid_until, reason) VALUES (?,?,?,?,'inbox')"
                 )
                 .bind(product_id)
                 .bind(price)
+                .bind(valid_from)
                 .bind(valid_until)
                 .execute(pool).await.map_err(|e| e.to_string())?;
 

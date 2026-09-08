@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, itemLocationStock, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@shared/schema";
 import { customerPreferences, customerFeedback, customerNotifications } from "@shared/schema";
 import { productFamilies, insertProductFamilySchema } from "@shared/schema";
+import { labelProfiles } from "@shared/schema";
 import { parseAdminImportRequest, shouldRestoreBackupSettings } from "./import-settings-policy";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
@@ -1449,6 +1450,9 @@ export async function registerRoutes(
     try {
       const data = insertCategorySchema.parse(req.body);
       if (data.parentId === "none" || data.parentId === "") data.parentId = null;
+      if (data.parentId && !(await storage.getCategory(data.parentId))) {
+        return res.status(400).json({ message: "Parent category not found" });
+      }
       const cat = await storage.createCategory(data);
       res.json(cat);
     } catch (e: any) {
@@ -1465,6 +1469,25 @@ export async function registerRoutes(
       if (parentId !== undefined) update.parentId = (parentId === "none" || parentId === "") ? null : parentId;
       if (vatRate !== undefined) update.vatRate = vatRate === "" ? null : vatRate;
       if (active !== undefined) update.active = active;
+      if (update.parentId) {
+        const allCategories = await db.select({ id: categories.id, parentId: categories.parentId }).from(categories);
+        const parentById = new Map(allCategories.map(category => [category.id, category.parentId]));
+        if (!parentById.has(update.parentId)) {
+          return res.status(400).json({ message: "Parent category not found" });
+        }
+        const visited = new Set<string>();
+        let ancestorId: string | null = update.parentId;
+        while (ancestorId) {
+          if (ancestorId === (req.params.id as string)) {
+            return res.status(400).json({ message: "A category cannot be moved beneath one of its children" });
+          }
+          if (visited.has(ancestorId)) {
+            return res.status(400).json({ message: "The selected parent belongs to an invalid category cycle" });
+          }
+          visited.add(ancestorId);
+          ancestorId = parentById.get(ancestorId) || null;
+        }
+      }
       const [updated] = await db.update(categories).set(update).where(eq(categories.id, (req.params.id as string))).returning();
       if (!updated) return res.status(404).json({ message: "Category not found" });
       res.json(updated);
@@ -1785,18 +1808,97 @@ export async function registerRoutes(
     }
   });
 
-  const numericStringFields = ["price1", "price2", "price3", "price4", "price5", "costPrice", "vatRate", "alcoholPercentage"];
+  const numericStringFields = ["price1", "price2", "price3", "price4", "price5", "costPrice", "vatRate", "alcoholPercentage", "shelfLabelQuantity", "shelfLabelPreviousPrice"];
   const numericIntFields = ["stockQuantity", "reorderLevel", "packSize"];
-  function sanitizeItemNumericFields(body: any) {
+  const shelfLabelUnits = new Set(["g", "kg", "ml", "L", "pc", "m", "m2", "m3"]);
+  function normalizeShelfLabelUnit(value: unknown) {
+    const raw = String(value || "").trim();
+    const aliases: Record<string, string> = {
+      l: "L",
+      litre: "L",
+      liter: "L",
+      piece: "pc",
+      item: "pc",
+      pcs: "pc",
+      metre: "m",
+      meter: "m",
+      "m²": "m2",
+      sqm: "m2",
+      "m³": "m3",
+      cbm: "m3",
+    };
+    return aliases[raw.toLowerCase()] || raw;
+  }
+  function normalizeAndValidateItemDetails(body: any, base: any = {}) {
+    const discountTouched = ["shelfLabelDiscountEnabled", "shelfLabelPreviousPrice", "price1"]
+      .some((field) => Object.prototype.hasOwnProperty.call(body, field));
+    const previousPriceConfirmed = body.confirmPreviousPrice30Days === true;
+    delete body.confirmPreviousPrice30Days;
+    delete body.shelfLabelPreviousPriceProvenance;
+    const merged = { ...base, ...body };
+    const itemType = merged.itemType || "general";
+    if (!["general", "garment"].includes(itemType)) throw new Error("Item type must be general or garment");
+    body.itemType = itemType;
+    if (itemType === "garment") {
+      body.shelfLabelUomEnabled = false;
+      body.shelfLabelQuantity = null;
+      body.shelfLabelUnit = null;
+    } else {
+      body.garmentGender = null;
+      body.garmentMaterial = null;
+      body.garmentStyle = null;
+      body.garmentCare = null;
+      if (merged.shelfLabelUomEnabled) {
+        const quantity = Number(merged.shelfLabelQuantity);
+        const shelfLabelUnit = normalizeShelfLabelUnit(merged.shelfLabelUnit);
+        if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Shelf label quantity must be greater than zero");
+        if (!shelfLabelUnits.has(shelfLabelUnit)) throw new Error("Select a supported shelf label unit");
+        body.shelfLabelUomEnabled = true;
+        body.shelfLabelQuantity = String(quantity);
+        body.shelfLabelUnit = shelfLabelUnit;
+      } else {
+        body.shelfLabelUomEnabled = false;
+        body.shelfLabelQuantity = null;
+        body.shelfLabelUnit = null;
+      }
+    }
+    const discountEnabled = merged.shelfLabelDiscountEnabled === true;
+    if (discountEnabled) {
+      const currentPrice = Number(merged.price1);
+      const previousPrice = Number(merged.shelfLabelPreviousPrice);
+      if (!Number.isFinite(previousPrice) || previousPrice <= currentPrice) {
+        throw new Error("The prior shelf-label price must be higher than the current selling price");
+      }
+      if (discountTouched && !previousPriceConfirmed) {
+        throw new Error("Confirm that the prior price is the applicable lowest selling price from the preceding 30 days");
+      }
+      body.shelfLabelDiscountEnabled = true;
+      body.shelfLabelPreviousPrice = previousPrice.toFixed(2);
+      body.shelfLabelPreviousPriceVerifiedAt = discountTouched
+        ? new Date()
+        : merged.shelfLabelPreviousPriceVerifiedAt;
+    } else {
+      body.shelfLabelDiscountEnabled = false;
+      body.shelfLabelPreviousPrice = null;
+      body.shelfLabelPreviousPriceVerifiedAt = null;
+      body.shelfLabelPreviousPriceProvenance = null;
+    }
+    return body;
+  }
+  function sanitizeItemNumericFields(body: any, partial = false) {
     for (const field of numericStringFields) {
+      if (partial && !Object.prototype.hasOwnProperty.call(body, field)) continue;
       if (field === "vatRate") {
         // null/undefined/empty means "inherit from category" — keep as null
         if (body[field] === "") body[field] = null;
+      } else if (field === "shelfLabelQuantity" && (body[field] === "" || body[field] === null || body[field] === undefined)) {
+        body[field] = null;
       } else if (body[field] === "" || body[field] === null || body[field] === undefined) {
         body[field] = "0";
       }
     }
     for (const field of numericIntFields) {
+      if (partial && !Object.prototype.hasOwnProperty.call(body, field)) continue;
       if (body[field] === "" || body[field] === null || body[field] === undefined) {
         body[field] = field === "packSize" ? 1 : 0;
       } else if (typeof body[field] === "string") {
@@ -1841,6 +1943,7 @@ export async function registerRoutes(
   app.post("/api/items", async (req, res) => {
     let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
+      normalizeAndValidateItemDetails(req.body);
       sanitizeItemNumericFields(req.body);
       const data = insertItemSchema.parse(req.body);
       if (data.categoryId === "") data.categoryId = null;
@@ -1858,14 +1961,18 @@ export async function registerRoutes(
   app.patch("/api/items/:id", async (req, res) => {
     let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
-      sanitizeItemNumericFields(req.body);
       const itemId = req.params.id as string;
+      const existingItem = await storage.getItem(itemId);
+      if (!existingItem) return res.status(404).json({ message: "Item not found" });
+      normalizeAndValidateItemDetails(req.body, existingItem);
+      sanitizeItemNumericFields(req.body, true);
+      if (req.body.categoryId === "") req.body.categoryId = null;
+      req.body = insertItemSchema.partial().parse(req.body);
       if (req.body.barcode) {
         releaseBarcodeLock = await acquireCatalogImportLock();
         await assertBarcodeAvailable(req.body.barcode, `item:${itemId}`);
       }
       const item = await storage.updateItem(itemId, req.body);
-      if (!item) return res.status(404).json({ message: "Item not found" });
       res.json(item);
     } catch (e: any) {
       res.status(400).json({ message: e.message });
@@ -2187,8 +2294,12 @@ export async function registerRoutes(
             barcode: barcodeAssignment.barcode,
             description: getValue("description") || null,
             categoryId,
+            itemType: getValue("itemType") || "general",
             unitType: getValue("unitType") || "pc",
             packSize: parseInt(getValue("packSize")) || 1,
+            shelfLabelUomEnabled: ["1", "true", "yes", "y"].includes(getValue("shelfLabelUomEnabled").toLowerCase()),
+            shelfLabelQuantity: getValue("shelfLabelQuantity") || null,
+            shelfLabelUnit: getValue("shelfLabelUnit") || null,
             price1: getValue("price1") || "0",
             price2: getValue("price2") || "0",
             price3: getValue("price3") || "0",
@@ -2202,6 +2313,10 @@ export async function registerRoutes(
             brand: getValue("brand") || null,
             origin: getValue("origin") || null,
             vintage: getValue("vintage") || null,
+            garmentGender: getValue("garmentGender") || null,
+            garmentMaterial: getValue("garmentMaterial") || null,
+            garmentStyle: getValue("garmentStyle") || null,
+            garmentCare: getValue("garmentCare") || null,
             active: true,
           };
 
@@ -2212,6 +2327,9 @@ export async function registerRoutes(
             if (categoryId) updateData.categoryId = categoryId;
             if (getValue("unitType")) updateData.unitType = itemData.unitType;
             if (getValue("packSize")) updateData.packSize = itemData.packSize;
+            for (const f of ["itemType", "shelfLabelUomEnabled", "shelfLabelQuantity", "shelfLabelUnit", "garmentGender", "garmentMaterial", "garmentStyle", "garmentCare"] as const) {
+              if (getValue(f)) updateData[f] = (itemData as any)[f];
+            }
             for (const p of ["price1", "price2", "price3", "price4", "price5", "costPrice"] as const) {
               if (getValue(p)) updateData[p] = (itemData as any)[p];
             }
@@ -2220,11 +2338,13 @@ export async function registerRoutes(
             for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
               if (getValue(f)) updateData[f] = (itemData as any)[f];
             }
+            normalizeAndValidateItemDetails(updateData, existing);
             await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
               storage.updateItem(existing.id, updateData)
             );
             results.updated++;
           } else {
+            normalizeAndValidateItemDetails(itemData);
             const created = await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, (barcode) =>
               storage.createItem({ ...itemData, barcode })
             );
@@ -2332,8 +2452,12 @@ export async function registerRoutes(
             barcode: barcodeAssignment.barcode,
             description: clean(row.description) || null,
             categoryId,
+            itemType: clean(row.itemType) || "general",
             unitType: clean(row.unitType) || "pc",
             packSize: parseInt(clean(row.packSize)) || 1,
+            shelfLabelUomEnabled: ["1", "true", "yes", "y"].includes(clean(row.shelfLabelUomEnabled).toLowerCase()),
+            shelfLabelQuantity: clean(row.shelfLabelQuantity) || null,
+            shelfLabelUnit: clean(row.shelfLabelUnit) || null,
             price1: clean(row.price1) || "0",
             price2: clean(row.price2) || "0",
             price3: clean(row.price3) || "0",
@@ -2347,6 +2471,10 @@ export async function registerRoutes(
             brand: clean(row.brand) || null,
             origin: clean(row.origin) || null,
             vintage: clean(row.vintage) || null,
+            garmentGender: clean(row.garmentGender) || null,
+            garmentMaterial: clean(row.garmentMaterial) || null,
+            garmentStyle: clean(row.garmentStyle) || null,
+            garmentCare: clean(row.garmentCare) || null,
             active: true,
           };
 
@@ -2357,6 +2485,9 @@ export async function registerRoutes(
             if (categoryId) updateData.categoryId = categoryId;
             if (clean(row.unitType)) updateData.unitType = itemData.unitType;
             if (clean(row.packSize)) updateData.packSize = itemData.packSize;
+            for (const f of ["itemType", "shelfLabelUomEnabled", "shelfLabelQuantity", "shelfLabelUnit", "garmentGender", "garmentMaterial", "garmentStyle", "garmentCare"] as const) {
+              if (clean((row as any)[f])) updateData[f] = (itemData as any)[f];
+            }
             for (const p of ["price1", "price2", "price3", "price4", "price5", "costPrice"] as const) {
               if (clean((row as any)[p])) updateData[p] = (itemData as any)[p];
             }
@@ -2365,11 +2496,13 @@ export async function registerRoutes(
             for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
               if (clean((row as any)[f])) updateData[f] = (itemData as any)[f];
             }
+            normalizeAndValidateItemDetails(updateData, existing);
             await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
               storage.updateItem(existing.id, updateData)
             );
             results.updated++;
           } else {
+            normalizeAndValidateItemDetails(itemData);
             const created = await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, (barcode) =>
               storage.createItem({ ...itemData, barcode })
             );
@@ -10398,7 +10531,43 @@ export async function registerRoutes(
         if (m) resolved = { kind: "media", url: m.url, mediaType: m.mediaType, name: m.name };
       } else if (it.contentType === "item" && it.itemId) {
         const p = itemById.get(it.itemId);
-        if (p) resolved = { kind: "item", name: p.name, imageUrl: p.imageUrl, price: p.price1, brand: p.brand };
+        if (p) {
+          const price = Number(p.price1 || 0);
+          const quantity = p.shelfLabelUomEnabled ? Number(p.shelfLabelQuantity || 0) : 0;
+          const unit = p.shelfLabelUomEnabled ? p.shelfLabelUnit : null;
+          const unitPriceFor = (value: number) => {
+            if (quantity <= 0 || !unit) return null;
+            return unit === "g" || unit === "ml"
+              ? (value / quantity) * 1000
+              : value / quantity;
+          };
+          const unitLabels: Record<string, string> = {
+            g: "/ kg", kg: "/ kg", ml: "/ L", L: "/ L",
+            pc: "/ item", m: "/ m", m2: "/ m²", m3: "/ m³",
+          };
+          const previousPrice = p.shelfLabelDiscountEnabled
+            ? Number(p.shelfLabelPreviousPrice || 0)
+            : null;
+          resolved = {
+            kind: "item",
+            name: p.name,
+            imageUrl: p.imageUrl,
+            price: p.price1,
+            brand: p.brand,
+            promotional: previousPrice !== null && previousPrice > price,
+            previousPrice: previousPrice !== null ? previousPrice.toFixed(2) : null,
+            discountPercentage: previousPrice !== null
+              ? (((previousPrice - price) / previousPrice) * 100).toFixed(2)
+              : null,
+            unitPrice: unitPriceFor(price)?.toFixed(2) || null,
+            previousUnitPrice: previousPrice !== null
+              ? unitPriceFor(previousPrice)?.toFixed(2) || null
+              : null,
+            unitLabel: unit ? unitLabels[unit] || null : null,
+            discountProvenance: p.shelfLabelPreviousPriceProvenance,
+            updatedAt: p.updatedAt,
+          };
+        }
       } else if (it.contentType === "offer" && it.offerId) {
         const o = offerById.get(it.offerId);
         if (o) resolved = { kind: "offer", name: o.name, description: o.description, discountPercentage: o.discountPercentage };
@@ -10507,6 +10676,7 @@ export async function registerRoutes(
       const screen = await storage.getSignageScreenByCode((req.params.code as string).toUpperCase());
       if (!screen) return res.status(404).json({ message: "Unknown pairing code" });
       const items = await resolveSignagePlaylist(screen.playlistId);
+      res.set("Cache-Control", "no-store, max-age=0");
       res.json({ screen: { id: screen.id, name: screen.name, screenType: screen.screenType }, items });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -10791,13 +10961,38 @@ export async function registerRoutes(
       const audit = allItems.map((item: any) => {
         const printed = printMap.get(item.id);
         const currentPrice = parseFloat(item.price1 || "0");
-        const needsReprint = !printed || parseFloat(printed.printedPrice) !== currentPrice;
+        const previousPrice = item.shelfLabelDiscountEnabled ? parseFloat(item.shelfLabelPreviousPrice || "0") : null;
+        const quantity = item.shelfLabelUomEnabled ? parseFloat(item.shelfLabelQuantity || "0") : 0;
+        const unit = item.shelfLabelUomEnabled ? item.shelfLabelUnit : null;
+        const referencePrice = (price: number | null) => {
+          if (price === null || quantity <= 0 || !unit) return { value: null, label: null };
+          if (unit === "g") return { value: (price / quantity) * 1000, label: "/ kg" };
+          if (unit === "ml") return { value: (price / quantity) * 1000, label: "/ L" };
+          const labels: Record<string, string> = { kg: "/ kg", L: "/ L", pc: "/ item", m: "/ m", m2: "/ m²", m3: "/ m³" };
+          return { value: price / quantity, label: labels[unit] || "/ m" };
+        };
+        const currentUnit = referencePrice(currentPrice);
+        const previousUnit = referencePrice(previousPrice);
+        const needsReprint = !printed
+          || parseFloat(printed.printedPrice) !== currentPrice
+          || (printed.printedPreviousPrice == null ? null : parseFloat(printed.printedPreviousPrice)) !== previousPrice
+          || (printed.printedUnitPrice == null ? null : parseFloat(printed.printedUnitPrice)) !== (currentUnit.value === null ? null : Number(currentUnit.value.toFixed(2)))
+          || (printed.printedPreviousUnitPrice == null ? null : parseFloat(printed.printedPreviousUnitPrice)) !== (previousUnit.value === null ? null : Number(previousUnit.value.toFixed(2)))
+          || (printed.unitLabel || null) !== currentUnit.label
+          || (printed.discountProvenance || null) !== (item.shelfLabelPreviousPriceProvenance || null);
         return {
           itemId: item.id,
           itemName: item.name,
           sku: item.sku,
           barcode: item.barcode,
           volume: item.volume || null,
+          shelfLabelUomEnabled: item.shelfLabelUomEnabled,
+          shelfLabelQuantity: item.shelfLabelQuantity,
+          shelfLabelUnit: item.shelfLabelUnit,
+          shelfLabelDiscountEnabled: item.shelfLabelDiscountEnabled,
+          shelfLabelPreviousPrice: previousPrice,
+          shelfLabelPreviousPriceVerifiedAt: item.shelfLabelPreviousPriceVerifiedAt,
+          shelfLabelPreviousPriceProvenance: item.shelfLabelPreviousPriceProvenance,
           currentPrice,
           lastPrintedPrice: printed ? parseFloat(printed.printedPrice) : null,
           lastPrintedAt: printed?.printedAt || null,
@@ -10809,18 +11004,34 @@ export async function registerRoutes(
   });
   app.post("/api/pda/agoranomia/print-batch", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const { itemIds, overrides } = req.body as { itemIds: string[]; overrides?: Record<string, { unitType: string; unitSize: number; expirationDate?: string }> };
+      const { itemIds, overrides, labelProfileId, profileSnapshot } = req.body as {
+        itemIds: string[];
+        overrides?: Record<string, { expirationDate?: string }>;
+        labelProfileId?: string;
+        profileSnapshot?: Record<string, unknown>;
+      };
       if (!Array.isArray(itemIds) || !itemIds.length) return res.status(400).json({ message: "itemIds required" });
+      if (profileSnapshot && profileSnapshot.version !== 1) return res.status(400).json({ message: "Unsupported label profile snapshot version" });
+      let selectedLabelProfile: typeof labelProfiles.$inferSelect | undefined;
+      if (labelProfileId) {
+        selectedLabelProfile = (await db.select().from(labelProfiles).where(eq(labelProfiles.id, labelProfileId)).limit(1))[0];
+        if (!selectedLabelProfile || selectedLabelProfile.kind !== "shelf") {
+          return res.status(400).json({ message: "A valid shelf label profile is required" });
+        }
+      }
       const allItems = await storage.getItems();
 
-      // Reference units: g → per 100 g, ml → per 100 ml, kg → per kg, L → per L, pc → no unit price
+      // Cyprus unit prices: weight, volume, count, length, area, and volume.
       function calcUnitPrice(price: number, unitSize: number, unitType: string): { unitPrice: number | null; unitLabel: string } {
-        if (!unitSize || unitSize <= 0 || unitType === "pc") return { unitPrice: null, unitLabel: "€/unit" };
-        if (unitType === "g")  return { unitPrice: (price / unitSize) * 100, unitLabel: "per 100 g" };
-        if (unitType === "ml") return { unitPrice: (price / unitSize) * 100, unitLabel: "per 100 ml" };
-        if (unitType === "kg") return { unitPrice: price / unitSize, unitLabel: "per kg" };
-        if (unitType === "L")  return { unitPrice: price / unitSize, unitLabel: "per L" };
-        return { unitPrice: price / unitSize, unitLabel: `per ${unitType}` };
+        if (!unitSize || unitSize <= 0) return { unitPrice: null, unitLabel: "" };
+        if (unitType === "g")  return { unitPrice: (price / unitSize) * 1000, unitLabel: "/ kg" };
+        if (unitType === "ml") return { unitPrice: (price / unitSize) * 1000, unitLabel: "/ L" };
+        if (unitType === "kg") return { unitPrice: price / unitSize, unitLabel: "/ kg" };
+        if (unitType === "L")  return { unitPrice: price / unitSize, unitLabel: "/ L" };
+        if (unitType === "pc") return { unitPrice: price / unitSize, unitLabel: "/ item" };
+        if (unitType === "m2") return { unitPrice: price / unitSize, unitLabel: "/ m²" };
+        if (unitType === "m3") return { unitPrice: price / unitSize, unitLabel: "/ m³" };
+        return { unitPrice: price / unitSize, unitLabel: "/ m" };
       }
 
       const records = itemIds.map((itemId: string) => {
@@ -10828,17 +11039,40 @@ export async function registerRoutes(
         if (!item) return null;
         const currentPrice = parseFloat(item.price1 || "0");
         const override = overrides?.[itemId];
-        const unitSize = override?.unitSize && override.unitSize > 0 ? override.unitSize : 0;
-        const unitType = override?.unitType || "pc";
+        const unitSize = item.shelfLabelUomEnabled ? parseFloat(item.shelfLabelQuantity || "0") : 0;
+        const unitType = (item.shelfLabelUomEnabled ? item.shelfLabelUnit : "pc") || "pc";
         const { unitPrice, unitLabel } = calcUnitPrice(currentPrice, unitSize, unitType);
+        const previousPrice = item.shelfLabelDiscountEnabled
+          ? parseFloat(item.shelfLabelPreviousPrice || "0")
+          : null;
+        const allowedDiscountProvenance = new Set(["recorded_30_day_low", "staff_attested_legacy_period"]);
+        if (item.shelfLabelDiscountEnabled && (previousPrice === null || previousPrice <= currentPrice || !item.shelfLabelPreviousPriceVerifiedAt)) {
+          throw new Error(`${item.name}: promotional label is missing a valid verified prior price`);
+        }
+        if (previousPrice !== null && !allowedDiscountProvenance.has(item.shelfLabelPreviousPriceProvenance || "")) {
+          throw new Error(`${item.name}: promotional label is missing valid prior-price provenance`);
+        }
+        const previousUnitPrice = previousPrice !== null
+          ? calcUnitPrice(previousPrice, unitSize, unitType).unitPrice
+          : null;
+        const discountPercentage = previousPrice !== null
+          ? ((previousPrice - currentPrice) / previousPrice) * 100
+          : null;
         return insertAgoranomiaLabelPrintSchema.parse({
           itemId: item.id,
           itemName: item.name,
           sku: item.sku,
           printedPrice: currentPrice.toFixed(2),
           printedUnitPrice: unitPrice !== null ? unitPrice.toFixed(2) : null,
+          printedPreviousPrice: previousPrice !== null ? previousPrice.toFixed(2) : null,
+          printedPreviousUnitPrice: previousUnitPrice !== null ? previousUnitPrice.toFixed(2) : null,
+          discountPercentage: discountPercentage !== null ? discountPercentage.toFixed(2) : null,
+          discountVerifiedAt: previousPrice !== null ? item.shelfLabelPreviousPriceVerifiedAt : null,
+          discountProvenance: previousPrice !== null ? item.shelfLabelPreviousPriceProvenance : null,
           unitLabel,
           printedByUsername: req.user!.username,
+          labelProfileId: selectedLabelProfile?.id ?? null,
+          profileSnapshot: profileSnapshot ?? selectedLabelProfile?.config ?? null,
         });
       }).filter(Boolean);
 
@@ -11601,16 +11835,17 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  // ── Layout column config (responsive breakpoints) ──────────────────────────
-  // Returns the layout set's column counts for all 5 screen-size breakpoints.
-  // Terminals call this from JS on startup to drive useResponsiveColumns().
+  // ── Live layout config and buttons ─────────────────────────────────────────
+  // Terminals call this on startup so layout edits reach already-registered
+  // devices without requiring a factory reset or re-registration.
   app.get("/api/pos/sync/layout-config", requireTerminal, async (req, res) => {
     try {
       const terminal = (req as any).terminal;
       const fallback = { columns: 4, colsTablet: 3, colsMobile: 2, colsLarge: 6, colsTV: 8, buttonRadius: "rounded", colorTheme: "standard" };
-      if (!terminal.layoutSetId) return res.json(fallback);
+      if (!terminal.layoutSetId) return res.json({ ...fallback, buttons: [] });
       const ls = await storage.getPosLayoutSet(terminal.layoutSetId);
-      if (!ls) return res.json(fallback);
+      if (!ls) return res.json({ ...fallback, buttons: [] });
+      const buttons = await storage.getPosLayoutButtons(terminal.layoutSetId);
       res.json({
         columns:      ls.columns     ?? 4,
         colsTablet:   ls.colsTablet  ?? 3,
@@ -11619,8 +11854,134 @@ export async function registerRoutes(
         colsTV:       (ls as any).colsTV       ?? 8,
         buttonRadius: (ls as any).buttonRadius ?? "rounded",
         colorTheme:   (ls as any).colorTheme   ?? "standard",
+        buttons,
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/sync/customer-search", requireTerminal, async (req, res) => {
+    try {
+      const query = String(req.query.q || "").trim();
+      if (!query) return res.json([]);
+      const pattern = `%${query}%`;
+      const rows = await db.select({
+        id: customers.id,
+        name: customers.name,
+        code: customers.code,
+        phone: customers.phone,
+        currentBalance: customers.currentBalance,
+        priceLevel: customers.priceLevel,
+        loyaltyPoints: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}), 0)::int`,
+      })
+        .from(customers)
+        .leftJoin(customerLoyaltyPoints, eq(customerLoyaltyPoints.customerId, customers.id))
+        .where(and(
+          eq(customers.active, true),
+          or(
+            ilike(customers.id, pattern),
+            ilike(customers.name, pattern),
+            ilike(customers.code, pattern),
+            ilike(customers.phone, pattern),
+          ),
+        ))
+        .groupBy(customers.id)
+        .limit(20);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  const labelProfilePayloadSchema = z.object({
+    name: z.string().trim().min(1).max(100),
+    kind: z.enum(["barcode", "shelf"]),
+    config: z.record(z.unknown()).refine((value) => value.version === 1, "Unsupported profile version"),
+    isDefault: z.boolean().optional(),
+  });
+
+  app.get("/api/label-profiles", requireStaff, requireModule("items"), async (_req, res) => {
+    try {
+      res.json(await db.select().from(labelProfiles).orderBy(desc(labelProfiles.isDefault), labelProfiles.kind, labelProfiles.name));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/label-profiles", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const payload = labelProfilePayloadSchema.parse(req.body);
+      const [created] = await db.transaction(async (tx) => {
+        if (payload.isDefault) {
+          await tx.update(labelProfiles).set({ isDefault: false }).where(eq(labelProfiles.kind, payload.kind));
+        }
+        return tx.insert(labelProfiles).values({
+          ...payload,
+          isDefault: payload.isDefault ?? false,
+          isSystem: false,
+          createdBy: (req as any).user?.id ?? null,
+        }).returning();
+      });
+      res.status(201).json(created);
+    } catch (e: any) {
+      res.status(e?.name === "ZodError" ? 400 : 409).json({ message: e.message });
+    }
+  });
+
+  app.put("/api/label-profiles/:id", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const existing = (await db.select().from(labelProfiles).where(eq(labelProfiles.id, req.params.id as string)).limit(1))[0];
+      if (!existing) return res.status(404).json({ message: "Label profile not found" });
+      const payload = labelProfilePayloadSchema.partial().parse(req.body);
+      if (existing.isSystem && Object.keys(payload).some(key => key !== "isDefault")) {
+        return res.status(409).json({ message: "Built-in profiles are read-only; duplicate one to customize it" });
+      }
+      const nextKind = payload.kind ?? existing.kind;
+      const [updated] = await db.transaction(async (tx) => {
+        if (payload.isDefault) {
+          await tx.update(labelProfiles).set({ isDefault: false }).where(eq(labelProfiles.kind, nextKind));
+        }
+        return tx.update(labelProfiles).set({ ...payload, updatedAt: new Date() })
+          .where(eq(labelProfiles.id, existing.id)).returning();
+      });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(e?.name === "ZodError" ? 400 : 409).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/label-profiles/:id", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const existing = (await db.select().from(labelProfiles).where(eq(labelProfiles.id, req.params.id as string)).limit(1))[0];
+      if (!existing) return res.status(404).json({ message: "Label profile not found" });
+      if (existing.isSystem) return res.status(409).json({ message: "Built-in profiles cannot be deleted; duplicate and customize them instead" });
+      await db.delete(labelProfiles).where(eq(labelProfiles.id, existing.id));
+      res.status(204).end();
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/label-profiles/:id/duplicate", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const existing = (await db.select().from(labelProfiles).where(eq(labelProfiles.id, req.params.id as string)).limit(1))[0];
+      if (!existing) return res.status(404).json({ message: "Label profile not found" });
+      const baseName = `${existing.name} Copy`;
+      let name = baseName;
+      for (let suffix = 2; await db.select({ id: labelProfiles.id }).from(labelProfiles).where(eq(labelProfiles.name, name)).limit(1).then(rows => rows.length > 0); suffix++) {
+        name = `${baseName} ${suffix}`;
+      }
+      const [created] = await db.insert(labelProfiles).values({
+        name,
+        kind: existing.kind,
+        config: existing.config,
+        isDefault: false,
+        isSystem: false,
+        createdBy: (req as any).user?.id ?? null,
+      }).returning();
+      res.status(201).json(created);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
   });
 
   // ── POS Phase 3: Return Orders ─────────────────────────────────────────────

@@ -10,6 +10,13 @@ interface AuditRow {
   sku: string;
   barcode: string | null;
   volume: string | null;
+  shelfLabelUomEnabled: boolean;
+  shelfLabelQuantity: string | null;
+  shelfLabelUnit: UnitType | null;
+  shelfLabelDiscountEnabled: boolean;
+  shelfLabelPreviousPrice: number | null;
+  shelfLabelPreviousPriceVerifiedAt: string | null;
+  shelfLabelPreviousPriceProvenance: string | null;
   currentPrice: number;
   lastPrintedPrice: number | null;
   lastPrintedAt: string | null;
@@ -24,18 +31,33 @@ interface PrintedLabel {
   volume: string | null;
   printedPrice: string;
   printedUnitPrice: string | null;
+  printedPreviousPrice: string | null;
+  printedPreviousUnitPrice: string | null;
+  discountPercentage: string | null;
+  discountVerifiedAt: string | null;
+  discountProvenance: string | null;
   unitLabel: string | null;
   expirationDate: string | null;
 }
 
-type UnitType = "kg" | "L" | "pc" | "g" | "ml";
+type UnitType = "kg" | "L" | "pc" | "g" | "ml" | "m" | "m2" | "m3";
 
 interface UnitConfig {
   unitType: UnitType;
   unitSize: string;
 }
 
-const UNIT_OPTIONS: UnitType[] = ["pc", "kg", "g", "L", "ml"];
+const UNIT_OPTIONS: UnitType[] = ["pc", "kg", "g", "L", "ml", "m", "m2", "m3"];
+const UNIT_LABELS: Record<UnitType, string> = {
+  pc: "Piece / item (€/item)",
+  kg: "Kilogram (€/kg)",
+  g: "Gram pack (€/kg)",
+  L: "Litre (€/L)",
+  ml: "Millilitre pack (€/L)",
+  m: "Metre (€/m)",
+  m2: "Square metre (€/m²)",
+  m3: "Cubic metre (€/m³)",
+};
 
 function guessUnitConfig(volume: string | null | undefined): UnitConfig {
   if (!volume) return { unitType: "pc", unitSize: "1" };
@@ -52,20 +74,24 @@ function guessUnitConfig(volume: string | null | undefined): UnitConfig {
 
 /**
  * EU-style reference unit pricing:
- *   g  → per 100 g   (price ÷ size × 100)
- *   ml → per 100 ml
+ *   g  → per kg      (price ÷ size × 1000)
+ *   ml → per L
  *   kg → per kg      (price ÷ size)
  *   L  → per L
- *   pc → no unit price
+ *   pc → per item
+ *   m/m²/m³ → per standard unit
  */
 function computeUnitPrice(currentPrice: number, config: UnitConfig): { unitPrice: number | null; unitLabel: string } {
   const size = parseFloat(config.unitSize);
-  if (!size || size <= 0 || config.unitType === "pc") return { unitPrice: null, unitLabel: "" };
-  if (config.unitType === "g")  return { unitPrice: (currentPrice / size) * 100, unitLabel: "per 100 g" };
-  if (config.unitType === "ml") return { unitPrice: (currentPrice / size) * 100, unitLabel: "per 100 ml" };
-  if (config.unitType === "kg") return { unitPrice: currentPrice / size, unitLabel: "per kg" };
-  if (config.unitType === "L")  return { unitPrice: currentPrice / size, unitLabel: "per L" };
-  return { unitPrice: currentPrice / size, unitLabel: `per ${config.unitType}` };
+  if (!size || size <= 0) return { unitPrice: null, unitLabel: "" };
+  if (config.unitType === "g")  return { unitPrice: (currentPrice / size) * 1000, unitLabel: "/ kg" };
+  if (config.unitType === "ml") return { unitPrice: (currentPrice / size) * 1000, unitLabel: "/ L" };
+  if (config.unitType === "kg") return { unitPrice: currentPrice / size, unitLabel: "/ kg" };
+  if (config.unitType === "L")  return { unitPrice: currentPrice / size, unitLabel: "/ L" };
+  if (config.unitType === "pc") return { unitPrice: currentPrice / size, unitLabel: "/ item" };
+  if (config.unitType === "m2") return { unitPrice: currentPrice / size, unitLabel: "/ m²" };
+  if (config.unitType === "m3") return { unitPrice: currentPrice / size, unitLabel: "/ m³" };
+  return { unitPrice: currentPrice / size, unitLabel: "/ m" };
 }
 
 /** Format ISO date string (YYYY-MM-DD) → DD/MM/YYYY for display */
@@ -107,6 +133,9 @@ function openPrintableLabels(labels: PrintedLabel[]) {
     .row-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.03em; flex-shrink: 0; }
     .row-value { font-size: 12px; font-weight: 600; color: #111; text-align: right; }
     .price-row .row-value { font-size: 22px; font-weight: 800; color: #111; }
+    .offer-row { background: #fff1e6; border: 1px solid #fdba74; border-radius: 4px; padding: 4px 6px; }
+    .offer-row .row-label, .offer-row .row-value { color: #9a3412; font-weight: 800; }
+    .prior-row .row-value, .prior-unit-row .row-value { text-decoration: line-through; }
     .unit-price-row { background: #f8f8f8; border-radius: 4px; padding: 4px 6px; }
     .unit-price-row .row-label { color: #444; }
     .unit-price-row .row-value { font-size: 13px; color: #222; }
@@ -125,17 +154,44 @@ function openPrintableLabels(labels: PrintedLabel[]) {
       const plu = l.barcode || l.sku || "—";
       const vol = l.volume || null;
       const expDisplay = l.expirationDate ? formatDate(l.expirationDate) : null;
+      const provenance = l.discountProvenance === "recorded_30_day_low"
+        ? "Recorded 30-day price history"
+        : l.discountProvenance === "staff_attested_legacy_period"
+          ? "Staff-attested legacy period"
+          : null;
       return `
       <div class="label">
         <div class="product-name">${l.itemName}${vol ? ` <span class="vol">${vol}</span>` : ""}</div>
+        ${l.printedPreviousPrice
+          ? `<div class="row offer-row">
+               <span class="row-label">ΠΡΟΣΦΟΡΑ / OFFER</span>
+               <span class="row-value">-${parseFloat(l.discountPercentage || "0").toFixed(0)}%</span>
+             </div>
+             <div class="row prior-row">
+               <span class="row-label">Προγενέστερη Τιμή / Prior Price</span>
+               <span class="row-value">&euro;${parseFloat(l.printedPreviousPrice).toFixed(2)}</span>
+             </div>`
+          : ""}
         <div class="row price-row">
-          <span class="row-label">Price</span>
+          <span class="row-label">${l.printedPreviousPrice ? "Τιμή Προσφοράς / Sale Price" : "Price"}</span>
           <span class="row-value">&euro;${parseFloat(l.printedPrice).toFixed(2)}</span>
         </div>
         ${l.printedUnitPrice && l.unitLabel && l.unitLabel !== "€/unit"
           ? `<div class="row unit-price-row">
-               <span class="row-label">Unit Price</span>
+               <span class="row-label">Μοναδιαία Τιμή / Unit Price</span>
                <span class="row-value">&euro;${parseFloat(l.printedUnitPrice).toFixed(2)} ${l.unitLabel}</span>
+             </div>`
+          : ""}
+        ${l.printedPreviousUnitPrice && l.unitLabel
+          ? `<div class="row prior-unit-row">
+               <span class="row-label">Προγενέστερη Μοναδιαία Τιμή / Prior Unit Price</span>
+               <span class="row-value">&euro;${parseFloat(l.printedPreviousUnitPrice).toFixed(2)} ${l.unitLabel}</span>
+             </div>`
+          : ""}
+        ${provenance
+          ? `<div class="row provenance-row">
+               <span class="row-label">Έλεγχος / Verification</span>
+               <span class="row-value">${provenance}</span>
              </div>`
           : ""}
         ${vol
@@ -167,31 +223,22 @@ export default function Agoranomia() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [scanMessage, setScanMessage] = useState<string | null>(null);
-  const [unitConfigs, setUnitConfigs] = useState<Record<string, UnitConfig>>({});
   const [expirationDates, setExpirationDates] = useState<Record<string, string>>({});
 
   const auditQuery = useQuery<AuditRow[]>({ queryKey: ["/api/pda/agoranomia/audit"] });
 
   const configFor = (row: AuditRow): UnitConfig =>
-    unitConfigs[row.itemId] || guessUnitConfig(row.volume);
-
-  function updateConfig(itemId: string, patch: Partial<UnitConfig>, row: AuditRow) {
-    setUnitConfigs((prev) => ({
-      ...prev,
-      [itemId]: { ...configFor(row), ...prev[itemId], ...patch },
-    }));
-  }
+    row.shelfLabelUomEnabled && row.shelfLabelUnit && Number(row.shelfLabelQuantity) > 0
+      ? { unitType: row.shelfLabelUnit, unitSize: String(row.shelfLabelQuantity) }
+      : { unitType: "pc", unitSize: "1" };
 
   const printBatch = useMutation({
     mutationFn: async (itemIds: string[]) => {
-      const overrides: Record<string, { unitType: string; unitSize: number; expirationDate?: string }> = {};
+      const overrides: Record<string, { expirationDate?: string }> = {};
       itemIds.forEach((id) => {
         const row = (auditQuery.data || []).find((r) => r.itemId === id);
         if (!row) return;
-        const cfg = configFor(row);
         overrides[id] = {
-          unitType: cfg.unitType,
-          unitSize: parseFloat(cfg.unitSize) || 0,
           expirationDate: expirationDates[id] || undefined,
         };
       });
@@ -266,6 +313,14 @@ export default function Agoranomia() {
         {needsReprint.map((row) => {
           const cfg = configFor(row);
           const { unitPrice, unitLabel } = computeUnitPrice(row.currentPrice, cfg);
+          const previousUnitPrice = row.shelfLabelDiscountEnabled && row.shelfLabelPreviousPrice !== null
+            ? computeUnitPrice(row.shelfLabelPreviousPrice, cfg).unitPrice
+            : null;
+          const provenance = row.shelfLabelPreviousPriceProvenance === "recorded_30_day_low"
+            ? "Recorded 30-day history"
+            : row.shelfLabelPreviousPriceProvenance === "staff_attested_legacy_period"
+              ? "Staff-attested legacy period"
+              : null;
           const expDate = expirationDates[row.itemId] || "";
           const expDisplay = formatDate(expDate);
 
@@ -295,24 +350,10 @@ export default function Agoranomia() {
                 </div>
               </label>
 
-              {/* Unit config */}
+              {/* Unit pricing is authoritative from Item Details */}
               <div className="flex items-center gap-2 pl-7 text-xs flex-wrap">
-                <span className="text-muted-foreground">Unit size</span>
-                <input
-                  value={cfg.unitSize}
-                  onChange={(e) => updateConfig(row.itemId, { unitSize: e.target.value.replace(/[^0-9.]/g, "") }, row)}
-                  className="w-16 rounded border border-border bg-background px-2 py-1"
-                  data-testid={`input-unit-size-${row.itemId}`}
-                />
-                <select
-                  value={cfg.unitType}
-                  onChange={(e) => updateConfig(row.itemId, { unitType: e.target.value as UnitType }, row)}
-                  className="rounded border border-border bg-background px-2 py-1"
-                  data-testid={`select-unit-type-${row.itemId}`}
-                >
-                  {UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}
-                </select>
-                {unitPrice !== null && cfg.unitType !== "pc" && (
+                <span className="text-muted-foreground">Item Details UOM: {cfg.unitSize} {UNIT_LABELS[cfg.unitType]}</span>
+                {unitPrice !== null && (
                   <span className="text-muted-foreground font-medium" data-testid={`text-unit-price-${row.itemId}`}>
                     = €{unitPrice.toFixed(2)} {unitLabel}
                   </span>
@@ -343,13 +384,37 @@ export default function Agoranomia() {
                     {row.volume ? <span className="font-normal text-muted-foreground"> {row.volume}</span> : null}
                   </div>
                   <div className="flex justify-between gap-4 mt-1">
-                    <span className="text-muted-foreground uppercase text-[9px] tracking-wide">Price</span>
+                    <span className="text-muted-foreground text-[9px] tracking-wide">{row.shelfLabelDiscountEnabled ? "Τιμή Προσφοράς / Sale Price" : "Price"}</span>
                     <span className="font-extrabold text-base">€{row.currentPrice.toFixed(2)}</span>
                   </div>
+                  {row.shelfLabelDiscountEnabled && row.shelfLabelPreviousPrice !== null && (
+                    <>
+                      <div className="flex justify-between gap-4 rounded bg-orange-100 px-1 py-0.5 text-orange-800">
+                        <span className="font-bold text-[9px]">ΠΡΟΣΦΟΡΑ / OFFER</span>
+                        <span className="font-bold">-{(((row.shelfLabelPreviousPrice - row.currentPrice) / row.shelfLabelPreviousPrice) * 100).toFixed(0)}%</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-muted-foreground text-[9px]">Προγενέστερη Τιμή / Prior Price</span>
+                        <span className="line-through">€{row.shelfLabelPreviousPrice.toFixed(2)}</span>
+                      </div>
+                    </>
+                  )}
                   {unitPrice !== null && (
                     <div className="flex justify-between gap-4 bg-muted rounded px-1 py-0.5 mt-0.5">
-                      <span className="text-muted-foreground uppercase text-[9px] tracking-wide">Unit Price</span>
+                       <span className="text-muted-foreground text-[9px] tracking-wide">Μοναδιαία Τιμή / Unit Price</span>
                       <span className="font-semibold">€{unitPrice.toFixed(2)} {unitLabel}</span>
+                    </div>
+                  )}
+                  {previousUnitPrice !== null && (
+                    <div className="flex justify-between gap-4 px-1 py-0.5">
+                      <span className="text-muted-foreground text-[9px]">Προγενέστερη Μοναδιαία Τιμή / Prior Unit Price</span>
+                      <span className="line-through">€{previousUnitPrice.toFixed(2)} {unitLabel}</span>
+                    </div>
+                  )}
+                  {row.shelfLabelDiscountEnabled && provenance && (
+                    <div className="flex justify-between gap-4 rounded bg-slate-100 px-1 py-0.5">
+                      <span className="text-muted-foreground text-[9px]">Έλεγχος / Verification</span>
+                      <span className="font-medium text-[9px]">{provenance}</span>
                     </div>
                   )}
                   {row.volume && (

@@ -528,19 +528,25 @@ function SizePicker({
 
 // ── ButtonDialog ───────────────────────────────────────────────────────────────
 function ButtonDialog({
-  slot, onSave, onClear, onClose, items, categories, allLayouts, currentLayoutId,
+  slot, onSave, onClear, onClose, onCategoryRenamed, items, categories, allLayouts, currentLayoutId,
 }: {
   slot: SlotData;
   onSave: (s: SlotData) => void;
   onClear: () => void;
   onClose: () => void;
   items: { id: string; name: string }[];
-  categories: { id: string; name: string }[];
+  categories: { id: string; name: string; description?: string | null }[];
+  onCategoryRenamed: (id: string, name: string) => void;
   allLayouts: PosLayoutSet[];
   currentLayoutId: string;
 }) {
+  const { toast } = useToast();
   const [draft, setDraft] = useState<SlotData>({ shape: "rect", colspan: 1, rowspan: 1, ...slot });
   const [itemSearch, setItemSearch] = useState("");
+  const [categoryEditor, setCategoryEditor] = useState<"new" | "edit" | null>(null);
+  const [categoryName, setCategoryName] = useState("");
+  const [categoryDescription, setCategoryDescription] = useState("");
+  const [savingCategory, setSavingCategory] = useState(false);
   const set = (patch: Partial<SlotData>) => setDraft(d => ({ ...d, ...patch }));
 
   // Auto-label on selection
@@ -574,6 +580,36 @@ function ButtonDialog({
     : items.slice(0, 80);
 
   const otherLayouts = allLayouts.filter(l => l.id !== currentLayoutId);
+  const selectedCategory = categories.find(category => category.id === draft.categoryId);
+
+  function openCategoryEditor(mode: "new" | "edit") {
+    setCategoryEditor(mode);
+    setCategoryName(mode === "edit" ? selectedCategory?.name ?? "" : "");
+    setCategoryDescription(mode === "edit" ? selectedCategory?.description ?? "" : "");
+  }
+
+  async function saveCategory() {
+    const name = categoryName.trim();
+    if (!name || (categoryEditor === "edit" && !selectedCategory)) return;
+    setSavingCategory(true);
+    try {
+      const response = await apiRequest(
+        categoryEditor === "edit" ? "PATCH" : "POST",
+        categoryEditor === "edit" ? `/api/categories/${selectedCategory!.id}` : "/api/categories",
+        { name, description: categoryDescription.trim() || null },
+      );
+      const category = await response.json();
+      await queryClient.invalidateQueries({ queryKey: ["/api/categories"] });
+      set({ categoryId: category.id, label: category.name.slice(0, 30) });
+      if (categoryEditor === "edit") onCategoryRenamed(category.id, category.name);
+      setCategoryEditor(null);
+      toast({ title: categoryEditor === "new" ? "Category created" : "Category updated" });
+    } catch (error: any) {
+      toast({ title: "Could not save category", description: error.message, variant: "destructive" });
+    } finally {
+      setSavingCategory(false);
+    }
+  }
 
   const isValid =
     draft.buttonType === "empty" ||
@@ -643,7 +679,32 @@ function ButtonDialog({
                 </TabsContent>
 
                 {/* Category */}
-                <TabsContent value="category" className="mt-3">
+                <TabsContent value="category" className="mt-3 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">Choose a category tile for this grid position.</p>
+                    <div className="flex gap-1.5">
+                      <Button type="button" size="sm" variant="outline" onClick={() => openCategoryEditor("new")}>
+                        <Plus className="mr-1 h-3.5 w-3.5" />New
+                      </Button>
+                      <Button type="button" size="sm" variant="outline" disabled={!selectedCategory} onClick={() => openCategoryEditor("edit")}>
+                        <Settings2 className="mr-1 h-3.5 w-3.5" />Edit
+                      </Button>
+                    </div>
+                  </div>
+                  {categoryEditor && (
+                    <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+                      <Label htmlFor="grid-category-name">{categoryEditor === "new" ? "New category name" : "Edit category"}</Label>
+                      <Input id="grid-category-name" autoFocus value={categoryName} onChange={event => setCategoryName(event.target.value)} placeholder="Category name" />
+                      <Input value={categoryDescription} onChange={event => setCategoryDescription(event.target.value)} placeholder="Description (optional)" />
+                      <div className="flex justify-end gap-2">
+                        <Button type="button" size="sm" variant="ghost" onClick={() => setCategoryEditor(null)}>Cancel</Button>
+                        <Button type="button" size="sm" disabled={!categoryName.trim() || savingCategory} onClick={saveCategory}>
+                          {savingCategory && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+                          {categoryEditor === "new" ? "Create and select" : "Save category"}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-1.5">
                     {categories.map(c => (
                       <button key={c.id} type="button" onClick={() => set({ categoryId: c.id })} data-testid={`cat-option-${c.id}`}
@@ -822,7 +883,7 @@ export default function PosLayoutEditor() {
     enabled: !!layoutId,
   });
   const { data: items = EMPTY_ITEMS } = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/items"] });
-  const { data: categories = EMPTY_CATEGORIES } = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/categories"] });
+  const { data: categories = EMPTY_CATEGORIES } = useQuery<{ id: string; name: string; description?: string | null }[]>({ queryKey: ["/api/categories"] });
 
   // Layout meta
   const [name,         setName]         = useState("");
@@ -1318,6 +1379,10 @@ export default function PosLayoutEditor() {
           onSave={s => { updateSlot(selected, s); setSelected(null); }}
           onClear={() => { clearSlot(selected); setSelected(null); }}
           onClose={() => setSelected(null)}
+          onCategoryRenamed={(categoryId, categoryName) => {
+            setSlots(previous => previous.map(slot => slot.categoryId === categoryId ? { ...slot, label: categoryName.slice(0, 30) } : slot));
+            setDirty(true);
+          }}
           items={items}
           categories={categories}
           allLayouts={allLayouts}

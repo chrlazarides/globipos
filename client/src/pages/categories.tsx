@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -185,13 +185,46 @@ export default function Categories() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  const filtered = categories.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    (c.description || "").toLowerCase().includes(search.toLowerCase())
-  );
-
-  const topLevel = filtered.filter((c) => !c.parentId);
-  const children = (parentId: string) => filtered.filter((c) => c.parentId === parentId);
+  const categoryById = new Map(categories.map(category => [category.id, category]));
+  const childrenByParent = new Map<string, Category[]>();
+  for (const category of categories) {
+    if (!category.parentId) continue;
+    const siblings = childrenByParent.get(category.parentId) || [];
+    siblings.push(category);
+    childrenByParent.set(category.parentId, siblings);
+  }
+  for (const children of childrenByParent.values()) {
+    children.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  const query = search.trim().toLowerCase();
+  const visibleIds = new Set<string>();
+  const addDescendants = (categoryId: string, visited = new Set<string>()) => {
+    if (visited.has(categoryId)) return;
+    visited.add(categoryId);
+    visibleIds.add(categoryId);
+    for (const child of childrenByParent.get(categoryId) || []) addDescendants(child.id, visited);
+  };
+  if (!query) {
+    categories.forEach(category => visibleIds.add(category.id));
+  } else {
+    for (const category of categories) {
+      const matches = category.name.toLowerCase().includes(query) ||
+        (category.description || "").toLowerCase().includes(query);
+      if (!matches) continue;
+      addDescendants(category.id);
+      let parentId = category.parentId;
+      const ancestors = new Set<string>();
+      while (parentId && !ancestors.has(parentId)) {
+        ancestors.add(parentId);
+        visibleIds.add(parentId);
+        parentId = categoryById.get(parentId)?.parentId || null;
+      }
+    }
+  }
+  const roots = categories
+    .filter(category => !category.parentId || !categoryById.has(category.parentId))
+    .filter(category => visibleIds.has(category.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const getVatLabel = (vatRate: string | null | undefined) => {
     if (vatRate == null || vatRate === "") return null;
@@ -199,6 +232,81 @@ export default function Categories() {
     const found = CY_VAT_RATES.find((r) => parseFloat(r.value) === rate);
     return found ? `${rate}%` : `${rate}%`;
   };
+
+  const renderedIds = new Set<string>();
+  const renderCategoryRows = (category: Category, depth = 0, ancestry = new Set<string>()): JSX.Element[] => {
+    if (ancestry.has(category.id) || renderedIds.has(category.id)) return [];
+    renderedIds.add(category.id);
+    const nextAncestry = new Set(ancestry).add(category.id);
+    const children = (childrenByParent.get(category.id) || []).filter(child => visibleIds.has(child.id));
+    const allDirectChildren = childrenByParent.get(category.id) || [];
+    const rows = [
+      <TableRow
+        key={category.id}
+        className={`group ${depth > 0 ? "bg-muted/30" : ""}`}
+        data-testid={`row-category-${category.id}`}
+      >
+        <TableCell>
+          <div className="flex items-center gap-2" style={{ paddingLeft: `${depth * 24}px` }}>
+            {depth === 0
+              ? <Layers className="w-4 h-4 text-muted-foreground shrink-0" />
+              : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+            <span className={depth === 0 ? "font-medium" : "text-sm"}>{category.name}</span>
+            {allDirectChildren.length > 0 && (
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                {allDirectChildren.length} {allDirectChildren.length === 1 ? "child" : "children"}
+              </Badge>
+            )}
+          </div>
+        </TableCell>
+        <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
+          {category.description || "—"}
+        </TableCell>
+        <TableCell>
+          {getVatLabel(category.vatRate) ? (
+            <Badge variant="outline">{getVatLabel(category.vatRate)} VAT</Badge>
+          ) : (
+            <span className="text-xs text-muted-foreground">No override</span>
+          )}
+        </TableCell>
+        <TableCell>
+          <Badge variant={category.active ? "default" : "secondary"}>
+            {category.active ? "Active" : "Inactive"}
+          </Badge>
+        </TableCell>
+        <TableCell>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2"
+            data-testid={`button-edit-category-${category.id}`}
+            onClick={() => setEditingCategory(category)}
+          >
+            <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
+          </Button>
+        </TableCell>
+      </TableRow>,
+    ];
+    for (const child of children) rows.push(...renderCategoryRows(child, depth + 1, nextAncestry));
+    return rows;
+  };
+  const categoryRows = roots.flatMap(root => renderCategoryRows(root));
+  for (const category of categories) {
+    if (visibleIds.has(category.id) && !renderedIds.has(category.id)) {
+      categoryRows.push(...renderCategoryRows(category));
+    }
+  }
+
+  const descendantIdsForEdit = new Set<string>();
+  if (editingCategory) {
+    const pending = [...(childrenByParent.get(editingCategory.id) || [])];
+    while (pending.length) {
+      const descendant = pending.pop()!;
+      if (descendantIdsForEdit.has(descendant.id)) continue;
+      descendantIdsForEdit.add(descendant.id);
+      pending.push(...(childrenByParent.get(descendant.id) || []));
+    }
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -227,7 +335,7 @@ export default function Categories() {
 
           {isLoading ? (
             <div className="py-12 text-center text-sm text-muted-foreground">Loading categories...</div>
-          ) : filtered.length === 0 ? (
+          ) : visibleIds.size === 0 ? (
             <div className="py-12 text-center space-y-2">
               <Layers className="w-10 h-10 mx-auto text-muted-foreground opacity-30" />
               <p className="text-sm text-muted-foreground">
@@ -246,80 +354,7 @@ export default function Categories() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {topLevel.map((cat) => (
-                  <Fragment key={cat.id}>
-                    <TableRow key={cat.id} className="group" data-testid={`row-category-${cat.id}`}>
-                      <TableCell>
-                        <div className="flex items-center gap-2 font-medium">
-                          <Layers className="w-4 h-4 text-muted-foreground shrink-0" />
-                          {cat.name}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
-                        {cat.description || "—"}
-                      </TableCell>
-                      <TableCell>
-                        {getVatLabel(cat.vatRate) ? (
-                          <Badge variant="outline">{getVatLabel(cat.vatRate)} VAT</Badge>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">No override</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={cat.active ? "default" : "secondary"}>
-                          {cat.active ? "Active" : "Inactive"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2"
-                          data-testid={`button-edit-category-${cat.id}`}
-                          onClick={() => setEditingCategory(cat)}
-                        >
-                          <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                    {children(cat.id).map((child) => (
-                      <TableRow key={child.id} className="group bg-muted/30" data-testid={`row-category-${child.id}`}>
-                        <TableCell>
-                          <div className="flex items-center gap-2 pl-6 text-sm">
-                            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                            {child.name}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
-                          {child.description || "—"}
-                        </TableCell>
-                        <TableCell>
-                          {getVatLabel(child.vatRate) ? (
-                            <Badge variant="outline">{getVatLabel(child.vatRate)} VAT</Badge>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">No override</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={child.active ? "default" : "secondary"}>
-                            {child.active ? "Active" : "Inactive"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 px-2"
-                            data-testid={`button-edit-category-${child.id}`}
-                            onClick={() => setEditingCategory(child)}
-                          >
-                            <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </Fragment>
-                ))}
+                {categoryRows}
               </TableBody>
             </Table>
           )}
@@ -350,7 +385,7 @@ export default function Categories() {
             <CategoryForm
               onSubmit={(d) => updateCategory.mutate(d)}
               isPending={updateCategory.isPending}
-              categories={categories.filter((c) => c.id !== editingCategory.id)}
+              categories={categories.filter((c) => c.id !== editingCategory.id && !descendantIdsForEdit.has(c.id))}
               defaultValues={{
                 name: editingCategory.name,
                 description: editingCategory.description || "",

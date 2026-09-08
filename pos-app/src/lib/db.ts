@@ -46,10 +46,11 @@ export const getProductByBarcode = (
 ): Promise<Product | null> =>
   invoke<Product | null>("get_product_by_barcode", { barcode });
 
-export const getActiveProductsCount = async (): Promise<number> => {
-  const all = await getProducts();
-  return all.length;
-};
+export const getProductsByIds = (itemIds: string[]): Promise<Product[]> =>
+  invoke<Product[]>("get_products_by_ids", { itemIds });
+
+export const getActiveProductsCount = (): Promise<number> =>
+  invoke<number>("get_active_products_count");
 
 // ── Categories ────────────────────────────────────────────────────────────────
 

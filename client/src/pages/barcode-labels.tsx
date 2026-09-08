@@ -13,6 +13,9 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, Printer, Trash2, Plus, Minus, Barcode as BarcodeIcon, Tag, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Item, ItemVariant } from "@shared/schema";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { LabelDesigner, DEFAULT_ELEMENTS, type LabelElement } from "@/components/label-designer/label-designer";
+import { Copy, Save, Star, Pencil, Layers3, LayoutTemplate, AlertTriangle } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface QueueLine {
@@ -21,6 +24,12 @@ interface QueueLine {
   sku: string;
   barcode: string;
   price: string;
+  unitPrice?: number;
+  unitLabel?: string;
+  previousPrice?: number;
+  previousUnitPrice?: number;
+  discountPercentage?: number;
+  garmentDetails?: string;
   qty: number;
 }
 
@@ -93,7 +102,50 @@ function variantLabel(v: ItemVariant, itemName: string): string {
 }
 
 // ── Live preview of a single label ────────────────────────────────────────────
-function LabelPreview({ line, opts }: { line: QueueLine | undefined; opts: FieldOpts & { w: number; h: number } }) {
+function elementValue(line: QueueLine, field?: string): string {
+  switch (field) {
+    case "name": return line.name;
+    case "sku": return line.sku;
+    case "barcodeText": return line.barcode;
+    case "price": return `${line.previousPrice != null ? "Τιμή Προσφοράς / Sale Price: " : ""}€${Number(line.price || 0).toFixed(2)}`;
+    case "offer": return line.previousPrice != null ? `ΠΡΟΣΦΟΡΑ / OFFER · -${line.discountPercentage?.toFixed(0)}%` : "";
+    case "priorPrice": return line.previousPrice != null ? `Προγενέστερη Τιμή / Prior Price: €${line.previousPrice.toFixed(2)}` : "";
+    case "unitPrice": return line.unitPrice != null && line.unitLabel ? `Μοναδιαία Τιμή / Unit Price: €${line.unitPrice.toFixed(2)} ${line.unitLabel}` : "";
+    case "priorUnitPrice": return line.previousUnitPrice != null && line.unitLabel ? `Προγενέστερη Μοναδιαία Τιμή / Prior Unit Price: €${line.previousUnitPrice.toFixed(2)} ${line.unitLabel}` : "";
+    case "garment": return line.garmentDetails ?? "";
+    default: return "";
+  }
+}
+
+function elementAllowed(element: LabelElement, fields: FieldOpts): boolean {
+  if (!element.visible) return false;
+  if (element.field === "name") return fields.showName;
+  if (element.field === "sku") return fields.showSku;
+  if (element.field === "barcodeText") return fields.showBarcodeText;
+  if (element.field === "price") return fields.showPrice;
+  if (["unitPrice", "priorUnitPrice"].includes(element.field ?? "")) return fields.showUnitPrice;
+  if (element.field === "garment") return fields.showGarmentDetails;
+  return true;
+}
+
+function normalizedElements(value: unknown): LabelElement[] {
+  if (!Array.isArray(value)) return DEFAULT_ELEMENTS;
+  return value.map((element: any) => ({
+    ...element,
+    type: element.type ?? "text",
+    field: element.field ?? element.id,
+    x: Number(element.x ?? 5),
+    y: Number(element.y ?? 5),
+    w: Number(element.w ?? 90),
+    h: Number(element.h ?? 10),
+    fontSize: Number(element.fontSize ?? 7),
+    fontWeight: Number(element.fontWeight ?? 400),
+    textAlign: element.textAlign ?? "center",
+    visible: element.visible !== false,
+  }));
+}
+
+function LabelPreview({ line, opts, elements }: { line: QueueLine | undefined; opts: FieldOpts & { w: number; h: number }; elements: LabelElement[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -124,24 +176,35 @@ function LabelPreview({ line, opts }: { line: QueueLine | undefined; opts: Field
   const scale = 3.2; // mm → px approx for preview
   return (
     <div
-      className="border rounded-md bg-white text-black mx-auto flex flex-col items-center justify-center overflow-hidden px-1"
+      className="relative border rounded-md bg-white text-black mx-auto overflow-hidden"
       style={{ width: opts.w * scale, height: opts.h * scale }}
       data-testid="label-preview"
     >
-      {opts.showName && <div className="text-[10px] font-semibold leading-tight text-center truncate w-full">{line.name}</div>}
-      {opts.showSku && line.sku && <div className="text-[9px] leading-tight">{line.sku}</div>}
-      {qrDataUrl ? (
-        <img src={qrDataUrl} alt="QR code" className="max-w-full object-contain" style={{ maxHeight: opts.h * scale * 0.55 }} />
-      ) : (
-        <canvas ref={ref} className="max-w-full" style={{ maxHeight: opts.h * scale * 0.45 }} />
-      )}
-      {opts.showBarcodeText && <div className="text-[9px] tracking-wider leading-tight">{line.barcode}</div>}
-      {opts.showPrice && <div className="text-[11px] font-bold leading-tight">€{Number(line.price || 0).toFixed(2)}</div>}
+      {elements.filter(element => elementAllowed(element, opts)).map(element => {
+        const style = { left: `${element.x}%`, top: `${element.y}%`, width: `${element.w}%`, height: `${element.h}%` };
+        if (element.field === "barcode") {
+          return qrDataUrl
+            ? <img key={element.id} src={qrDataUrl} alt="QR code" className="absolute object-contain" style={style} />
+            : <canvas key={element.id} ref={ref} className="absolute max-w-full" style={style} />;
+        }
+        const text = elementValue(line, element.field);
+        if (!text) return null;
+        return <div key={element.id} className="absolute overflow-hidden leading-tight" style={{ ...style, fontSize: `${element.fontSize}px`, fontWeight: element.fontWeight, textAlign: element.textAlign }}>{text}</div>;
+      })}
     </div>
   );
 }
 
-interface FieldOpts { showName: boolean; showSku: boolean; showPrice: boolean; showBarcodeText: boolean }
+interface FieldOpts {
+  showName: boolean;
+  showSku: boolean;
+  showPrice: boolean;
+  showBarcodeText: boolean;
+  showUnitPrice: boolean;
+  showGarmentDetails: boolean;
+}
+interface LabelProfile { id: string; name: string; kind: "barcode" | "shelf"; config: any; isDefault: boolean; isSystem: boolean; createdAt: string; updatedAt: string }
+const profileConfig = (mode: PrintMode, thermalPresetId: string, customW: number, customH: number, a4PresetId: string, priceLevel: string, fields: FieldOpts, elements: LabelElement[]) => ({ version: 1, mode, thermalPresetId, customW, customH, a4PresetId, priceLevel, fields, elements });
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function BarcodeLabelsPage() {
@@ -154,14 +217,45 @@ export default function BarcodeLabelsPage() {
   const [customH, setCustomH] = useState(30);
   const [a4PresetId, setA4PresetId] = useState("3x8");
   const [priceLevel, setPriceLevel] = useState("1");
-  const [fields, setFields] = useState<FieldOpts>({ showName: true, showSku: false, showPrice: true, showBarcodeText: true });
+  const [fields, setFields] = useState<FieldOpts>({
+    showName: true,
+    showSku: false,
+    showPrice: true,
+    showBarcodeText: true,
+    showUnitPrice: true,
+    showGarmentDetails: true,
+  });
   const [expandItemId, setExpandItemId] = useState<string | null>(null);
+  const [kind, setKind] = useState<"barcode" | "shelf">("barcode");
+  const [elements, setElements] = useState<LabelElement[]>(DEFAULT_ELEMENTS);
+  const [activeProfileId, setActiveProfileId] = useState<string>("");
+  const [profileName, setProfileName] = useState("");
+  const [profileDialog, setProfileDialog] = useState<"new" | "save" | "rename" | null>(null);
 
   const { data: items = [], isLoading } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   const { data: variants = [], isLoading: variantsLoading } = useQuery<ItemVariant[]>({
     queryKey: ["/api/items", expandItemId, "variants"],
     enabled: !!expandItemId,
   });
+  const { data: profiles = [], isLoading: profilesLoading, isError: profilesError } = useQuery<LabelProfile[]>({ queryKey: ["/api/label-profiles"] });
+  const profileMutation = async (method: string, url: string, body?: any) => { await apiRequest(method, url, body); await queryClient.invalidateQueries({ queryKey: ["/api/label-profiles"] }); };
+  const selectedProfile = profiles.find(p => p.id === activeProfileId);
+  const currentConfig = () => profileConfig(mode, thermalPresetId, customW, customH, a4PresetId, priceLevel, fields, elements);
+  function applyProfile(p: LabelProfile) {
+    const c = p.config || {}; setActiveProfileId(p.id); setKind(p.kind);
+    if (c.mode) setMode(c.mode); if (c.thermalPresetId) setThermalPresetId(c.thermalPresetId); if (c.customW) setCustomW(c.customW); if (c.customH) setCustomH(c.customH); if (c.a4PresetId) setA4PresetId(c.a4PresetId); if (c.priceLevel) setPriceLevel(c.priceLevel); if (c.fields) setFields({ ...fields, ...c.fields }); setElements(normalizedElements(c.elements));
+  }
+  useEffect(() => { const p = profiles.find(x => x.isDefault) || profiles[0]; if (p && !activeProfileId) applyProfile(p); }, [profiles]);
+  async function createOrSaveProfile() {
+    const name = profileName.trim(); if (!name) return;
+    const body = { name, kind, config: currentConfig() };
+    try { const res = await apiRequest("POST", "/api/label-profiles", body); const p = await res.json(); setActiveProfileId(p.id); setProfileName(""); setProfileDialog(null); await queryClient.invalidateQueries({ queryKey: ["/api/label-profiles"] }); toast({ title: "Profile saved", description: `${name} is ready for quick retrieval.` }); } catch { toast({ title: "Could not save profile", variant: "destructive" }); }
+  }
+  async function saveCurrent() { if (!selectedProfile) return; try { await profileMutation("PUT", `/api/label-profiles/${selectedProfile.id}`, { config: currentConfig(), kind }); toast({ title: "Changes saved" }); } catch { toast({ title: "Could not save changes", variant: "destructive" }); } }
+  async function duplicateProfile() { if (!selectedProfile) return; try { const r = await apiRequest("POST", `/api/label-profiles/${selectedProfile.id}/duplicate`); const p = await r.json(); await queryClient.invalidateQueries({ queryKey: ["/api/label-profiles"] }); setActiveProfileId(p.id); toast({ title: "Profile duplicated" }); } catch { toast({ title: "Could not duplicate profile", variant: "destructive" }); } }
+  async function deleteProfile() { if (!selectedProfile || selectedProfile.isSystem || !window.confirm(`Delete ${selectedProfile.name}?`)) return; try { await profileMutation("DELETE", `/api/label-profiles/${selectedProfile.id}`); setActiveProfileId(""); toast({ title: "Profile deleted" }); } catch { toast({ title: "Could not delete profile", variant: "destructive" }); } }
+  async function renameProfile() { if (!selectedProfile || !profileName.trim()) return; try { await profileMutation("PUT", `/api/label-profiles/${selectedProfile.id}`, { name: profileName.trim() }); setProfileDialog(null); setProfileName(""); toast({ title: "Profile renamed" }); } catch { toast({ title: "Could not rename profile", variant: "destructive" }); } }
+  async function makeDefault() { if (!selectedProfile) return; try { await profileMutation("PUT", `/api/label-profiles/${selectedProfile.id}`, { isDefault: true }); toast({ title: "Default profile updated" }); } catch { toast({ title: "Could not update default", variant: "destructive" }); } }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -176,6 +270,40 @@ export default function BarcodeLabelsPage() {
   const priceOf = (obj: { [k: string]: any }, parent?: Item) => {
     const key = `price${priceLevel}`;
     return String(obj[key] ?? parent?.[key as keyof Item] ?? obj.price1 ?? parent?.price1 ?? "0");
+  };
+
+  const labelDetails = (item: Item, price: string) => {
+    const quantity = Number((item as any).shelfLabelQuantity || 0);
+    const unit = String((item as any).shelfLabelUnit || "");
+    let unitPrice: number | undefined;
+    let unitLabel: string | undefined;
+    const referencePrice = (numericPrice: number) => {
+      if (unit === "g" || unit === "ml") return (numericPrice / quantity) * 1000;
+      if (["kg", "L", "m", "pc", "m2", "m3"].includes(unit)) return numericPrice / quantity;
+      return undefined;
+    };
+    if ((item as any).shelfLabelUomEnabled && quantity > 0 && unit) {
+      unitPrice = referencePrice(Number(price || 0));
+      if (unit === "g" || unit === "kg") unitLabel = "/ kg";
+      else if (unit === "ml" || unit === "L") unitLabel = "/ L";
+      else if (unit === "pc") unitLabel = "/ item";
+      else if (unit === "m2") unitLabel = "/ m²";
+      else if (unit === "m3") unitLabel = "/ m³";
+      else unitLabel = "/ m";
+    }
+    const configuredPreviousPrice = Number((item as any).shelfLabelPreviousPrice || 0);
+    const currentPrice = Number(price || 0);
+    const discountApplies = priceLevel === "1"
+      && currentPrice === Number(item.price1)
+      && (item as any).shelfLabelDiscountEnabled
+      && configuredPreviousPrice > currentPrice;
+    const previousPrice = discountApplies ? configuredPreviousPrice : undefined;
+    const previousUnitPrice = previousPrice != null && unitPrice != null ? referencePrice(previousPrice) : undefined;
+    const discountPercentage = previousPrice != null ? ((previousPrice - currentPrice) / previousPrice) * 100 : undefined;
+    const garmentDetails = (item as any).itemType === "garment"
+      ? [(item as any).garmentGender, (item as any).garmentStyle, (item as any).garmentMaterial].filter(Boolean).join(" · ")
+      : undefined;
+    return { unitPrice, unitLabel, previousPrice, previousUnitPrice, discountPercentage, garmentDetails };
   };
 
   function addLine(line: Omit<QueueLine, "qty">) {
@@ -195,7 +323,8 @@ export default function BarcodeLabelsPage() {
       setExpandItemId(expandItemId === item.id ? null : item.id);
       return;
     }
-    addLine({ key: item.id, name: item.name, sku: item.sku ?? "", barcode: item.barcode ?? "", price: priceOf(item) });
+    const price = priceOf(item);
+    addLine({ key: item.id, name: item.name, sku: item.sku ?? "", barcode: item.barcode ?? "", price, ...labelDetails(item, price) });
   }
 
   function setQty(key: string, qty: number) {
@@ -212,14 +341,14 @@ export default function BarcodeLabelsPage() {
   const previewDims = mode === "thermal" ? { w: labelW, h: labelH } : { w: a4.labelW, h: a4.labelH };
 
   function labelHtml(line: QueueLine, img: string, w: number, h: number): string {
-    const nameFs = Math.max(6, Math.min(9, w / 7));
-    return `<div class="lbl" style="width:${w}mm;height:${h}mm;">
-      ${fields.showName ? `<div class="nm" style="font-size:${nameFs}pt">${escapeHtml(line.name)}</div>` : ""}
-      ${fields.showSku && line.sku ? `<div class="sk">${escapeHtml(line.sku)}</div>` : ""}
-      <img src="${img}" style="max-width:${w - 4}mm;max-height:${h * 0.42}mm;" />
-      ${fields.showBarcodeText ? `<div class="bc">${escapeHtml(line.barcode)}</div>` : ""}
-      ${fields.showPrice ? `<div class="pr">€${Number(line.price || 0).toFixed(2)}</div>` : ""}
-    </div>`;
+    const content = elements.filter(element => elementAllowed(element, fields)).map(element => {
+      const style = `left:${element.x}%;top:${element.y}%;width:${element.w}%;height:${element.h}%;`;
+      if (element.field === "barcode") return `<img class="el" src="${img}" style="${style}object-fit:contain;" />`;
+      const text = elementValue(line, element.field);
+      if (!text) return "";
+      return `<div class="el" style="${style}font-size:${element.fontSize}pt;font-weight:${element.fontWeight};text-align:${element.textAlign};">${escapeHtml(text)}</div>`;
+    }).join("");
+    return `<div class="lbl" style="width:${w}mm;height:${h}mm;">${content}</div>`;
   }
 
   function escapeHtml(s: string) {
@@ -230,6 +359,30 @@ export default function BarcodeLabelsPage() {
     if (queue.length === 0) {
       toast({ title: "Nothing to print", description: "Add items to the print queue first" });
       return;
+    }
+    if (!fields.showPrice && queue.some((line) => line.previousPrice != null)) {
+      toast({ title: "Sale price required", description: "Promotional labels must show the current sale price.", variant: "destructive" });
+      return;
+    }
+    if (!fields.showUnitPrice && queue.some((line) => line.previousUnitPrice != null)) {
+      toast({ title: "Unit prices required", description: "Promotional labels for measured goods must show current and prior unit prices.", variant: "destructive" });
+      return;
+    }
+    const promotionalLines = queue.filter((line) => line.previousPrice != null);
+    if (promotionalLines.length) {
+      const printWidth = mode === "thermal" ? labelW : a4.labelW;
+      const printHeight = mode === "thermal" ? labelH : a4.labelH;
+      const hasPromotionalUnitPrice = promotionalLines.some((line) => line.previousUnitPrice != null);
+      const minimumWidth = hasPromotionalUnitPrice ? 58 : 50;
+      const minimumHeight = hasPromotionalUnitPrice ? 40 : 30;
+      if (printWidth < minimumWidth || printHeight < minimumHeight) {
+        toast({
+          title: "Label is too small for a compliant promotion",
+          description: `Use at least ${minimumWidth} × ${minimumHeight} mm so the mandatory prior and current prices are not clipped.`,
+          variant: "destructive",
+        });
+        return;
+      }
     }
     const imgs = new Map<string, string>();
     for (const line of queue) {
@@ -249,11 +402,8 @@ export default function BarcodeLabelsPage() {
     let body = "";
     let pageCss = "";
     const common = `
-      .lbl{display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;box-sizing:border-box;padding:1mm;text-align:center;}
-      .nm{font-weight:600;line-height:1.05;max-height:2.2em;overflow:hidden;width:100%;}
-      .sk{font-size:6.5pt;line-height:1.1;}
-      .bc{font-size:6.5pt;letter-spacing:.06em;line-height:1.15;}
-      .pr{font-size:9pt;font-weight:700;line-height:1.1;}
+      .lbl{position:relative;overflow:hidden;box-sizing:border-box;}
+      .el{position:absolute;box-sizing:border-box;overflow:hidden;line-height:1.08;}
       body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#000;}
       img{display:block;}`;
 
@@ -283,21 +433,28 @@ export default function BarcodeLabelsPage() {
     w.document.close();
   }
 
+  const dirty = selectedProfile ? JSON.stringify(selectedProfile.config) !== JSON.stringify(currentConfig()) : false;
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2"><BarcodeIcon className="w-6 h-6" /> Barcode Labels</h1>
-          <p className="text-sm text-muted-foreground">Design and print barcode price labels — thermal roll or A4 sticker sheets</p>
-        </div>
-        <Button onClick={handlePrint} disabled={totalLabels === 0} data-testid="button-print-labels">
-          <Printer className="w-4 h-4 mr-2" /> Print {totalLabels > 0 ? `${totalLabels} label${totalLabels > 1 ? "s" : ""}` : "labels"}
-        </Button>
-      </div>
+    <div className="min-h-[100dvh] bg-[#f4f5f1] p-4 text-slate-900 sm:p-6">
+      <div className="mx-auto max-w-[1500px] space-y-5">
+        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-slate-200 pb-5">
+          <div><div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[.2em] text-[#9a7228]"><BarcodeIcon className="h-4 w-4" />GlobiPOS / production tools</div><h1 className="text-3xl font-semibold tracking-[-.035em] text-[#26312b]">Barcode labels</h1><p className="mt-1 max-w-xl text-sm text-slate-500">A predictable workspace for compliant shelf labels, barcode rolls, and A4 runs.</p></div>
+          <Button onClick={handlePrint} disabled={totalLabels === 0} className="bg-[#28382f] text-[#f7f3e8] hover:bg-[#354c40]" data-testid="button-print-labels"><Printer className="h-4 w-4" />Print {totalLabels ? `${totalLabels} label${totalLabels > 1 ? "s" : ""}` : "labels"}</Button>
+        </header>
+        <section className="grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr]">
+          <div className="rounded-2xl bg-[#28382f] p-4 text-[#f7f3e8] shadow-sm"><div className="flex items-center justify-between"><div><p className="text-[10px] uppercase tracking-[.18em] text-[#c9d3b7]">Active format</p><p className="mt-1 text-lg font-semibold">{selectedProfile?.name || "Unsaved layout"}</p></div><Layers3 className="h-5 w-5 text-[#d6a74e]" /></div><div className="mt-4 flex items-center justify-between text-xs text-[#c9d3b7]"><span>{kind === "shelf" ? "Compliant shelf label" : "Barcode label"} · {mode === "thermal" ? `${labelW} × ${labelH} mm` : "A4 sheet"}</span><span className={dirty ? "text-[#f0c36d]" : "text-[#c9d3b7]"}>{dirty ? "Unsaved changes" : "Saved"}</span></div></div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-slate-400">Queue</p><p className="mt-2 text-2xl font-semibold">{totalLabels}</p><p className="text-xs text-slate-500">{queue.length} product lines ready to print</p></div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-slate-400">Print guard</p><p className="mt-2 flex items-center gap-2 text-sm font-medium text-[#506c55]"><span className="h-2 w-2 rounded-full bg-[#718d6f]" />Mandatory fields enforced</p><p className="mt-1 text-xs text-slate-500">Sale, prior, and unit prices stay protected.</p></div>
+        </section>
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(38,49,43,.04)]">
+          <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><LayoutTemplate className="h-5 w-5 text-[#9a7228]" /><div><h2 className="font-semibold">Saved formats</h2><p className="text-xs text-slate-500">Retrieve the exact format your printer expects.</p></div></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => { setProfileName(""); setProfileDialog("new"); }}><Plus className="h-3.5 w-3.5" />New profile</Button>{selectedProfile && <><Button size="sm" variant="outline" onClick={saveCurrent} disabled={!dirty}><Save className="h-3.5 w-3.5" />Save</Button><Button size="sm" variant="outline" onClick={duplicateProfile}><Copy className="h-3.5 w-3.5" />Duplicate</Button></>}</div></div>
+          {profilesError ? <p className="mt-4 text-sm text-red-700">Profiles could not be loaded. Retry the page to reconnect.</p> : <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{profilesLoading ? [1,2,3].map(i => <div key={i} className="h-16 w-44 animate-pulse rounded-xl bg-slate-100" />) : profiles.map(p => <button key={p.id} onClick={() => applyProfile(p)} className={`min-w-[180px] rounded-xl border px-3 py-2.5 text-left transition-colors ${p.id === activeProfileId ? "border-[#d6a74e] bg-[#fbf5e9]" : "border-slate-200 hover:border-[#b4bcae]"}`}><span className="flex items-center justify-between gap-2 text-sm font-medium"><span className="truncate">{p.name}</span>{p.isDefault && <Star className="h-3.5 w-3.5 fill-[#d6a74e] text-[#d6a74e]" />}</span><span className="mt-1 block text-[11px] uppercase tracking-wider text-slate-400">{p.kind} · {p.isSystem ? "System" : "Custom"}</span></button>)}</div>}
+          {selectedProfile && <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3"><span className="text-xs text-slate-500">Manage “{selectedProfile.name}”</span><Button variant="ghost" size="sm" onClick={makeDefault} disabled={selectedProfile.isDefault}><Star className="h-3 w-3" />{selectedProfile.isDefault ? "Default" : "Make default"}</Button><Button variant="ghost" size="sm" onClick={() => { setProfileName(selectedProfile.name); setProfileDialog("rename"); }} disabled={selectedProfile.isSystem}><Pencil className="h-3 w-3" />Rename</Button><Button variant="ghost" size="sm" onClick={deleteProfile} disabled={selectedProfile.isSystem} className="text-red-700">{selectedProfile.isSystem ? "System profile" : "Delete"}</Button></div>}
+        </section>
+        {profileDialog && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4"><div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl"><h3 className="font-semibold">{profileDialog === "rename" ? "Rename profile" : profileDialog === "save" ? "Save as new profile" : "Create profile"}</h3><p className="mt-1 text-xs text-slate-500">Keep names short and specific to the printer or shelf run.</p><Input autoFocus className="mt-4" value={profileName} onChange={e => setProfileName(e.target.value)} onKeyDown={e => e.key === "Enter" && (profileDialog === "rename" ? renameProfile() : createOrSaveProfile())} placeholder="e.g. Front till · 50 × 30" /><div className="mt-4 flex justify-end gap-2"><Button variant="ghost" onClick={() => setProfileDialog(null)}>Cancel</Button><Button onClick={profileDialog === "rename" ? renameProfile : createOrSaveProfile}>Save profile</Button></div></div></div>}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Item picker */}
-        <Card className="lg:col-span-1">
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[310px_330px_minmax(0,1fr)]">
+        <Card className="border-slate-200 shadow-sm">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">1. Pick items</CardTitle>
             <div className="relative">
@@ -327,7 +484,10 @@ export default function BarcodeLabelsPage() {
                     {variants.map(v => (
                       <button
                         key={v.id}
-                        onClick={() => addLine({ key: v.id, name: variantLabel(v, item.name), sku: v.sku ?? "", barcode: v.barcode ?? "", price: priceOf(v as any, item) })}
+                        onClick={() => {
+                          const price = priceOf(v as any, item);
+                          addLine({ key: v.id, name: variantLabel(v, item.name), sku: v.sku ?? "", barcode: v.barcode ?? "", price, ...labelDetails(item, price) });
+                        }}
                         className="w-full text-left px-2 py-1 rounded hover:bg-muted flex items-center justify-between gap-2 text-xs"
                         data-testid={`row-pick-variant-${v.id}`}
                       >
@@ -338,7 +498,11 @@ export default function BarcodeLabelsPage() {
                     {variants.length > 0 && (
                       <Button
                         variant="ghost" size="sm" className="w-full h-7 text-xs"
-                        onClick={() => variants.forEach(v => v.barcode && addLine({ key: v.id, name: variantLabel(v, item.name), sku: v.sku ?? "", barcode: v.barcode ?? "", price: priceOf(v as any, item) }))}
+                        onClick={() => variants.forEach(v => {
+                          if (!v.barcode) return;
+                          const price = priceOf(v as any, item);
+                          addLine({ key: v.id, name: variantLabel(v, item.name), sku: v.sku ?? "", barcode: v.barcode, price, ...labelDetails(item, price) });
+                        })}
                         data-testid={`button-add-all-variants-${item.id}`}
                       >
                         <Plus className="w-3 h-3 mr-1" /> Add all variants
@@ -352,8 +516,7 @@ export default function BarcodeLabelsPage() {
           </CardContent>
         </Card>
 
-        {/* Print queue */}
-        <Card className="lg:col-span-1">
+        <Card className="border-slate-200 shadow-sm">
           <CardHeader className="pb-3 flex flex-row items-center justify-between space-y-0">
             <CardTitle className="text-base">2. Print queue <Badge variant="outline" className="ml-1">{totalLabels}</Badge></CardTitle>
             {queue.length > 0 && (
@@ -386,13 +549,16 @@ export default function BarcodeLabelsPage() {
           </CardContent>
         </Card>
 
-        {/* Label design */}
-        <Card className="lg:col-span-1">
+        <Card className="border-slate-200 shadow-sm xl:col-span-1">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">3. Label layout</CardTitle>
-            <CardDescription>Choose printer type, size, and what to show</CardDescription>
+             <CardDescription>Choose output, price logic, and fields</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#f1f3ef] p-1">
+              <button onClick={() => setKind("barcode")} className={`rounded-md px-2 py-2 text-xs font-medium ${kind === "barcode" ? "bg-white text-[#28382f] shadow-sm" : "text-slate-500"}`}>Barcode label</button>
+              <button onClick={() => setKind("shelf")} className={`rounded-md px-2 py-2 text-xs font-medium ${kind === "shelf" ? "bg-white text-[#28382f] shadow-sm" : "text-slate-500"}`}>Shelf label</button>
+            </div>
             <Tabs value={mode} onValueChange={v => setMode(v as PrintMode)}>
               <TabsList className="grid grid-cols-2 w-full">
                 <TabsTrigger value="thermal" data-testid="tab-thermal">Thermal roll</TabsTrigger>
@@ -441,13 +607,15 @@ export default function BarcodeLabelsPage() {
               <p className="text-[11px] text-muted-foreground">Applies to items added after changing the level.</p>
             </div>
 
-            <div className="space-y-1.5">
+             <div className="space-y-1.5">
               <Label className="text-xs">Show on label</Label>
               {([
                 ["showName", "Item name"],
                 ["showSku", "SKU"],
                 ["showBarcodeText", "Barcode number"],
                 ["showPrice", "Price"],
+                ["showUnitPrice", "Unit/reference price (when enabled on item)"],
+                ["showGarmentDetails", "Garment details (when applicable)"],
               ] as const).map(([k, lbl]) => (
                 <label key={k} className="flex items-center gap-2 text-sm cursor-pointer">
                   <Checkbox checked={fields[k]} onCheckedChange={c => setFields(f => ({ ...f, [k]: !!c }))} data-testid={`checkbox-${k}`} />
@@ -456,13 +624,18 @@ export default function BarcodeLabelsPage() {
               ))}
             </div>
 
-            <div className="space-y-1.5">
+             <div className="space-y-1.5">
               <Label className="text-xs flex items-center gap-1"><Tag className="w-3 h-3" /> Preview ({previewDims.w} × {previewDims.h} mm)</Label>
-              <LabelPreview line={queue[0]} opts={{ ...fields, ...previewDims }} />
+              <LabelPreview line={queue[0]} opts={{ ...fields, ...previewDims }} elements={elements} />
             </div>
-          </CardContent>
-        </Card>
+           </CardContent>
+         </Card>
+        </div>
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Visual label designer</h2><p className="text-xs text-slate-500">The same saved configuration drives preview and print.</p></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => { setProfileName(""); setProfileDialog("save"); }} disabled={!selectedProfile}><Save className="h-3.5 w-3.5" />Save as</Button><div className="rounded-lg bg-[#f1eadb] px-3 py-1.5 text-xs font-medium text-[#71531d]">{labelW} × {labelH} mm</div></div></div>
+          <LabelDesigner kind={kind} elements={elements} onChange={setElements} onReset={() => setElements(selectedProfile?.config?.elements || DEFAULT_ELEMENTS)} />
+        </section>
       </div>
     </div>
-  );
+   );
 }

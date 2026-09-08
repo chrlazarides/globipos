@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, uuid, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, uuid, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -202,8 +202,16 @@ export const items = pgTable("items", {
   description: text("description"),
   categoryId: varchar("category_id"),
   familyId: varchar("family_id").references(() => productFamilies.id, { onDelete: "set null" }),
+  itemType: text("item_type").notNull().default("general"),
   unitType: text("unit_type").notNull().default("pc"),
   packSize: integer("pack_size").notNull().default(1),
+  shelfLabelUomEnabled: boolean("shelf_label_uom_enabled").notNull().default(false),
+  shelfLabelQuantity: numeric("shelf_label_quantity", { precision: 12, scale: 3 }),
+  shelfLabelUnit: text("shelf_label_unit"),
+  shelfLabelDiscountEnabled: boolean("shelf_label_discount_enabled").notNull().default(false),
+  shelfLabelPreviousPrice: numeric("shelf_label_previous_price", { precision: 10, scale: 2 }),
+  shelfLabelPreviousPriceVerifiedAt: timestamp("shelf_label_previous_price_verified_at"),
+  shelfLabelPreviousPriceProvenance: text("shelf_label_previous_price_provenance"),
   price1: numeric("price_1", { precision: 10, scale: 2 }).notNull().default("0"),
   price2: numeric("price_2", { precision: 10, scale: 2 }).notNull().default("0"),
   price3: numeric("price_3", { precision: 10, scale: 2 }).notNull().default("0"),
@@ -222,9 +230,24 @@ export const items = pgTable("items", {
   active: boolean("active").default(true).notNull(),
   hasVariants: boolean("has_variants").default(false).notNull(),
   season: text("season"),
+  garmentGender: text("garment_gender"),
+  garmentMaterial: text("garment_material"),
+  garmentStyle: text("garment_style"),
+  garmentCare: text("garment_care"),
   sequenceNo: serial("sequence_no").notNull(),
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 });
+
+export const itemShelfPriceHistory = pgTable("item_shelf_price_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  price: numeric("price", { precision: 10, scale: 2 }).notNull(),
+  effectiveAt: timestamp("effective_at").notNull().defaultNow(),
+  source: text("source").notNull().default("item_update"),
+  recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+}, (table) => [
+  index("item_shelf_price_history_item_effective_idx").on(table.itemId, table.effectiveAt),
+]);
 
 // Product variants (color/size/textile/quality/etc.) for items with hasVariants=true.
 // Each variant has its own SKU/barcode/stock, and may override price/cost from the parent item.
@@ -1406,16 +1429,41 @@ export type StockTransferItem = typeof stockTransferItems.$inferSelect;
 // item on the handheld compares the current system price to this record so
 // staff can build a "needs reprint" batch when prices have changed since the
 // label was last printed (Cyprus consumer-protection unit pricing compliance).
+export const labelProfiles = pgTable("label_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  kind: text("kind").notNull(), // barcode | shelf
+  config: jsonb("config").$type<Record<string, unknown>>().notNull(),
+  isDefault: boolean("is_default").notNull().default(false),
+  isSystem: boolean("is_system").notNull().default(false),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export const insertLabelProfileSchema = createInsertSchema(labelProfiles).omit({
+  id: true, createdAt: true, updatedAt: true,
+});
+export type InsertLabelProfile = z.infer<typeof insertLabelProfileSchema>;
+export type LabelProfile = typeof labelProfiles.$inferSelect;
+
 export const agoranomiaLabelPrints = pgTable("agoranomia_label_prints", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  itemId: varchar("item_id").notNull().unique(),
+  itemId: varchar("item_id").notNull(),
   itemName: text("item_name").notNull(),
   sku: text("sku"),
   printedPrice: numeric("printed_price", { precision: 10, scale: 2 }).notNull(),
   printedUnitPrice: numeric("printed_unit_price", { precision: 10, scale: 2 }),
+  printedPreviousPrice: numeric("printed_previous_price", { precision: 10, scale: 2 }),
+  printedPreviousUnitPrice: numeric("printed_previous_unit_price", { precision: 10, scale: 2 }),
+  discountPercentage: numeric("discount_percentage", { precision: 5, scale: 2 }),
+  discountVerifiedAt: timestamp("discount_verified_at"),
+  discountProvenance: text("discount_provenance"),
   unitLabel: text("unit_label"), // e.g. "per L", "per kg", "per pc"
   printedAt: timestamp("printed_at").defaultNow().notNull(),
   printedByUsername: text("printed_by_username"),
+  labelProfileId: varchar("label_profile_id"),
+  profileSnapshot: jsonb("profile_snapshot").$type<Record<string, unknown>>(),
 });
 
 export const insertAgoranomiaLabelPrintSchema = createInsertSchema(agoranomiaLabelPrints).omit({ id: true, printedAt: true });

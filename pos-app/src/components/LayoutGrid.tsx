@@ -3,7 +3,7 @@ import type { CSSProperties, ComponentType, SVGProps } from "react";
 import { ChevronLeftIcon, LayersIcon, ReceiptTextIcon } from "lucide-react";
 import {
   CashIcon, CardIcon, VoidIcon, HoldIcon, RecallIcon, DiscountIcon, SubtotalIcon,
-  VoucherIcon, RefundIcon, PayIcon,
+  VoucherIcon, RefundIcon, PayIcon, LoyaltyIcon,
 } from "./icons/PosIcons";
 import type { LayoutButton, Product } from "../types";
 import { formatCurrency } from "../lib/pricing";
@@ -24,10 +24,17 @@ interface LayoutGridProps {
 const ACTION_COLORS: Record<string, string> = {
   PAY_CASH:            "bg-green-700 hover:bg-green-600 text-white",
   PAY_CARD:            "bg-blue-700 hover:bg-blue-600 text-white",
+  PAY_SPLIT:           "bg-cyan-700 hover:bg-cyan-600 text-white",
+  PAY_VOUCHER:         "bg-pink-800 hover:bg-pink-700 text-white",
   VOID_ORDER:          "bg-red-800 hover:bg-red-700 text-white",
   CLEAR_ORDER:         "bg-red-800 hover:bg-red-700 text-white",
+  VOID_LINE:           "bg-red-800 hover:bg-red-700 text-white",
+  VOID_SALE:           "bg-red-800 hover:bg-red-700 text-white",
   HOLD_ORDER:          "bg-amber-700 hover:bg-amber-600 text-white",
   RECALL_ORDER:        "bg-amber-700 hover:bg-amber-600 text-white",
+  QTY:                 "bg-slate-700 hover:bg-slate-600 text-white",
+  WEIGHT:              "bg-indigo-700 hover:bg-indigo-600 text-white",
+  PRICE_CHECK:         "bg-cyan-700 hover:bg-cyan-600 text-white",
   PRICE_OVERRIDE:      "bg-purple-800 hover:bg-purple-700 text-white",
   LINE_DISCOUNT_PCT:   "bg-purple-800 hover:bg-purple-700 text-white",
   ORDER_DISCOUNT_PCT:  "bg-purple-800 hover:bg-purple-700 text-white",
@@ -51,13 +58,23 @@ const ACTION_COLORS: Record<string, string> = {
   REPRINT_LAST:        "bg-slate-700 hover:bg-slate-600 text-white",
   ISSUE_VOUCHER:       "bg-pink-800 hover:bg-pink-700 text-white",
   TOGGLE_LANGUAGE:     "bg-slate-700 hover:bg-slate-600 text-white",
+  CUSTOMER_LOOKUP:     "bg-violet-700 hover:bg-violet-600 text-white",
+  CUSTOMER_CLEAR:      "bg-violet-800 hover:bg-violet-700 text-white",
+  REFUND:              "bg-rose-800 hover:bg-rose-700 text-white",
+  EXCHANGE:            "bg-rose-700 hover:bg-rose-600 text-white",
+  MANAGER_OVERRIDE:    "bg-red-900 hover:bg-red-800 text-white",
+  CHANGE_CASHIER:      "bg-slate-800 hover:bg-slate-700 text-white",
 };
 
 const ACTION_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   PAY_CASH:            CashIcon,
   PAY_CARD:            CardIcon,
+  PAY_SPLIT:           PayIcon,
+  PAY_VOUCHER:         VoucherIcon,
   VOID_ORDER:          VoidIcon,
   CLEAR_ORDER:         VoidIcon,
+  VOID_LINE:           VoidIcon,
+  VOID_SALE:           VoidIcon,
   HOLD_ORDER:          HoldIcon,
   RECALL_ORDER:        RecallIcon,
   PRICE_OVERRIDE:      DiscountIcon,
@@ -69,6 +86,8 @@ const ACTION_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   PROMO_CODE:          DiscountIcon,
   MANUAL_PROMO:        DiscountIcon,
   PRICE_CHECK:         SubtotalIcon,
+  QTY:                 SubtotalIcon,
+  WEIGHT:              SubtotalIcon,
   CASH_IN:             CashIcon,
   CASH_OUT:            CashIcon,
   PETTY_CASH:          CashIcon,
@@ -85,6 +104,12 @@ const ACTION_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   REPRINT_LAST:        SubtotalIcon,
   ISSUE_VOUCHER:       VoucherIcon,
   TOGGLE_LANGUAGE:     SubtotalIcon,
+  CUSTOMER_LOOKUP:     LoyaltyIcon,
+  CUSTOMER_CLEAR:      LoyaltyIcon,
+  REFUND:              RefundIcon,
+  EXCHANGE:            RefundIcon,
+  MANAGER_OVERRIDE:    VoidIcon,
+  CHANGE_CASHIER:      LoyaltyIcon,
 };
 
 export function LayoutGrid({

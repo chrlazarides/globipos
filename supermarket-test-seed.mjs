@@ -207,8 +207,9 @@ console.log("\n══ 5. POS LAYOUT ══");
 let layoutSetId;
 {
   const { status, data } = await api("POST", "/api/pos/layouts", {
-    name: "Supermarket Standard", description: "4-column supermarket layout",
-    locationId, columns: 4, active: true,
+    name: "Supermarket Standard",
+    description: "Responsive supermarket touchscreen layout with complete transaction, item, customer, payment and manager controls",
+    locationId, columns: 6, rows: 7, colsTablet: 5, colsMobile: 3, colsLarge: 6, colsTV: 8, active: true,
   });
   if (status === 200 || status === 201) {
     layoutSetId = data.id;
@@ -219,6 +220,14 @@ let layoutSetId;
     if (found) { layoutSetId = found.id; log("Layout Set: Supermarket Standard (existing)", true); }
     else { log("Layout Set: Supermarket Standard", false, JSON.stringify(data)); }
   }
+}
+
+if (layoutSetId) {
+  await api("PUT", `/api/pos/layouts/${layoutSetId}`, {
+    name: "Supermarket Standard",
+    description: "Responsive supermarket touchscreen layout with complete transaction, item, customer, payment and manager controls",
+    locationId, columns: 6, rows: 7, colsTablet: 5, colsMobile: 3, colsLarge: 6, colsTV: 8, active: true,
+  });
 }
 
 // Assign layout to terminal
@@ -257,37 +266,30 @@ for (const cat of CATS) {
   });
 }
 
-// Pad to next row boundary (4 columns)
-while (pos % 4 !== 0) {
-  buttons.push({ layoutSetId, position: pos++, label: "", color: "#1f2937", buttonType: "empty", icon: null, itemId: null, categoryId: null, actionCode: null });
-}
-
-// Row 4: fast-access action buttons
+// Requested supermarket touchscreen controls
 const ACTIONS = [
-  { label: "Pay Cash",    color: "#16a34a", actionCode: "PAY_CASH" },
-  { label: "Pay Card",    color: "#2563eb", actionCode: "PAY_CARD" },
-  { label: "Discount %",  color: "#d97706", actionCode: "ORDER_DISCOUNT_PCT" },
-  { label: "Void Line",   color: "#dc2626", actionCode: "VOID_LINE" },
+  ["Pay Cash", "#16a34a", "PAY_CASH"], ["Pay Card", "#2563eb", "PAY_CARD"],
+  ["Void Item", "#dc2626", "VOID_LINE"], ["Clear Sale", "#b91c1c", "CLEAR_ORDER"],
+  ["Quantity", "#475569", "QTY"], ["Price Check", "#0891b2", "PRICE_CHECK"],
+  ["Item Lookup", "#0e7490", "ITEM_SEARCH"], ["Weight / Scale", "#4f46e5", "WEIGHT"],
+  ["Line Disc %", "#7e22ce", "DISCOUNT_PCT"], ["Line Disc €", "#7e22ce", "DISCOUNT_FIXED"],
+  ["Sale Disc %", "#9333ea", "ORDER_DISCOUNT_PCT"], ["Member / Loyalty", "#6d28d9", "CUSTOMER_LOOKUP"],
+  ["Clear Member", "#5b21b6", "CUSTOMER_CLEAR"], ["Return / Refund", "#be123c", "REFUND"],
+  ["Price Override", "#7e22ce", "PRICE_OVERRIDE"], ["Total / Tender", "#15803d", "TOTAL"],
+  ["Voucher / Gift", "#9d174d", "PAY_VOUCHER"], ["Split Tender", "#0e7490", "PAY_SPLIT"],
+  ["Open Drawer", "#0f766e", "OPEN_DRAWER"], ["No Sale", "#0f766e", "NO_SALE"],
+  ["Hold Sale", "#b45309", "HOLD"], ["Recall Sale", "#b45309", "RECALL"],
+  ["Manager Override", "#7f1d1d", "MANAGER_OVERRIDE"], ["Change Cashier", "#334155", "CHANGE_CASHIER"],
+  ["Sign Out", "#1e293b", "SIGN_OUT"], ["Exchange", "#be123c", "EXCHANGE"],
+  ["Enter Barcode", "#0369a1", "BARCODE_SCAN"], ["PLU / Produce", "#4338ca", "PLU"],
+  ["Numeric Keypad", "#475569", "NUMPAD"], ["Void Sale", "#991b1b", "VOID_SALE"],
+  ["Redeem Points", "#6d28d9", "LOYALTY_POINTS"], ["Exact / Quick Cash", "#15803d", "PAY_CASH"],
 ];
-for (const a of ACTIONS) {
-  buttons.push({ layoutSetId, position: pos++, label: a.label, color: a.color, buttonType: "action", actionCode: a.actionCode, icon: null, itemId: null, categoryId: null });
-}
-
-// Row 5-7: hot products
-const HOT_SKUS = [
-  "MILK001","EGGS001","BREA001","WATR001","COLA001",
-  "CRIS001","CHOC001","BEER001","WINE001","CHKN001",
-  "TOMA001","BANA001",
-];
-for (const sku of HOT_SKUS) {
-  const itemId = itemIds[sku];
-  if (!itemId) continue;
-  const prod = PRODUCTS.find(p => p.sku === sku);
+for (const [label, color, actionCode] of ACTIONS) {
   buttons.push({
     layoutSetId, position: pos++,
-    label: prod?.name.split(" ").slice(0, 2).join(" ") || sku,
-    color: "#374151", buttonType: "item",
-    itemId, icon: null, categoryId: null, actionCode: null,
+    label, color, buttonType: "action", actionCode,
+    icon: null, itemId: null, categoryId: null,
   });
 }
 

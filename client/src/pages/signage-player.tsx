@@ -11,6 +11,13 @@ interface ResolvedContent {
   brand?: string;
   description?: string;
   discountPercentage?: string;
+  promotional?: boolean;
+  previousPrice?: string | null;
+  unitPrice?: string | null;
+  previousUnitPrice?: string | null;
+  unitLabel?: string | null;
+  discountProvenance?: string | null;
+  updatedAt?: string | null;
 }
 
 interface PlaylistItem {
@@ -25,7 +32,7 @@ interface PlayResponse {
   items: PlaylistItem[];
 }
 
-const REFRESH_MS = 60_000;
+const REFRESH_MS = 15_000;
 const HEARTBEAT_MS = 30_000;
 
 export default function SignagePlayer() {
@@ -118,11 +125,34 @@ export default function SignagePlayer() {
       )}
       {r.kind === "item" && (
         <div className="w-full h-screen flex flex-col items-center justify-center gap-6" data-testid="card-signage-item">
-          {r.imageUrl && <img src={r.imageUrl} className="max-h-[60vh] object-contain" alt={r.name} />}
+          {r.imageUrl && <img src={r.imageUrl} className="max-h-[45vh] object-contain" alt={r.name} />}
           <div className="text-center">
             {r.brand && <p className="text-2xl text-white/60">{r.brand}</p>}
             <p className="text-5xl font-bold" data-testid="text-signage-item-name">{r.name}</p>
-            {r.price && <p className="text-6xl font-extrabold text-emerald-400 mt-4" data-testid="text-signage-item-price">£{r.price}</p>}
+            {r.promotional && (
+              <div className="mt-5" data-testid="signage-item-promotion">
+                <p className="text-4xl font-black text-amber-400">ΠΡΟΣΦΟΡΑ / OFFER · -{Number(r.discountPercentage || 0).toFixed(0)}%</p>
+                <p className="text-2xl text-white/70 mt-2">
+                  Προγενέστερη Τιμή / Prior Price: <span className="line-through">€{Number(r.previousPrice || 0).toFixed(2)}</span>
+                </p>
+              </div>
+            )}
+            {r.price && (
+              <p className="text-6xl font-extrabold text-emerald-400 mt-4" data-testid="text-signage-item-price">
+                {r.promotional && <span className="block text-2xl text-white mb-1">Τιμή Προσφοράς / Sale Price</span>}
+                €{Number(r.price).toFixed(2)}
+              </p>
+            )}
+            {r.unitPrice && r.unitLabel && (
+              <p className="text-2xl font-semibold mt-3">
+                Μοναδιαία Τιμή / Unit Price: €{Number(r.unitPrice).toFixed(2)} {r.unitLabel}
+              </p>
+            )}
+            {r.promotional && r.previousUnitPrice && r.unitLabel && (
+              <p className="text-lg text-white/65 mt-1">
+                Προγενέστερη Μοναδιαία Τιμή / Prior Unit Price: <span className="line-through">€{Number(r.previousUnitPrice).toFixed(2)} {r.unitLabel}</span>
+              </p>
+            )}
           </div>
         </div>
       )}

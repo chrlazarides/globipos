@@ -21,7 +21,7 @@ import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
 } from "../types";
-import { getProducts, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher, getStockByLocation, getPosLocations, createStockTransfer } from "../lib/db";
+import { getProducts, getProductsByIds, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher, getStockByLocation, getPosLocations, createStockTransfer, getCustomerLive } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
 import {
   requestProductAddition,
@@ -482,7 +482,87 @@ function RecallDialog({ onRecall, onClose }: {
 
 // ── Main POS Screen ───────────────────────────────────────────────────────────
 
-type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "manual_barcode" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "transaction_review" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | "age_check" | "produce" | "bottle_return" | "coupon" | "click_collect" | null;
+type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "manual_barcode" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "transaction_review" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | "age_check" | "produce" | "bottle_return" | "coupon" | "click_collect" | "customer_lookup" | null;
+
+function CustomerLookupDialog({
+  serverUrl,
+  terminalCode,
+  onSelect,
+  onClose,
+}: {
+  serverUrl: string;
+  terminalCode: string;
+  onSelect: (customer: { id: string; name: string; code: string; phone?: string; loyaltyPoints?: number }) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState("");
+  const [results, setResults] = useState<Array<{ id: string; name: string; code: string; phone?: string; loyaltyPoints?: number }>>([]);
+
+  async function searchCustomers() {
+    const value = query.trim();
+    if (!value) return;
+    setChecking(true);
+    setError("");
+    try {
+      const response = await fetch(`${serverUrl.replace(/\/$/, "")}/api/pos/sync/customer-search?q=${encodeURIComponent(value)}`, {
+        headers: { "X-Terminal-Code": terminalCode },
+      });
+      if (!response.ok) throw new Error("Customer lookup failed.");
+      const matches = await response.json();
+      setResults(matches);
+      if (!matches.length) setError("Customer or loyalty member not found.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Customer lookup failed.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="w-[min(92vw,28rem)] rounded-2xl border border-gray-700 bg-gray-900 p-6 text-white shadow-2xl">
+        <h2 className="text-xl font-bold">Customer / Loyalty Lookup</h2>
+        <p className="mt-1 text-sm text-gray-400">Scan or enter the customer or loyalty member ID.</p>
+        <input
+          autoFocus
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && searchCustomers()}
+          className="mt-4 w-full rounded-xl border border-gray-600 bg-gray-800 px-4 py-3 text-lg outline-none focus:border-burgundy-500"
+          placeholder="Customer / loyalty ID"
+          data-testid="input-customer-lookup"
+        />
+        {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+        {results.length > 0 && (
+          <div className="mt-3 max-h-56 space-y-2 overflow-y-auto">
+            {results.map((customer) => (
+              <button
+                key={customer.id}
+                className="w-full rounded-xl border border-gray-700 bg-gray-800 p-3 text-left hover:border-burgundy-500"
+                onClick={() => { onSelect(customer); onClose(); }}
+              >
+                <span className="block font-semibold">{customer.name}</span>
+                <span className="text-xs text-gray-400">{customer.code}{customer.phone ? ` · ${customer.phone}` : ""} · {customer.loyaltyPoints ?? 0} points</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <button className="rounded-xl bg-gray-700 px-4 py-3 font-semibold hover:bg-gray-600" onClick={onClose}>Cancel</button>
+          <button
+            className="rounded-xl bg-burgundy-600 px-4 py-3 font-semibold hover:bg-burgundy-500 disabled:opacity-50"
+            disabled={!query.trim() || checking}
+            onClick={searchCustomers}
+          >
+            {checking ? "Searching…" : "Search"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 type CashDialogMode = "cash_in" | "cash_out" | "petty_cash";
 type POSMode = "sell" | "sco" | "shift" | "fallback" | "barcode_config" | "receipt_design" | "hardware_config" | "sco_monitor";
 
@@ -595,6 +675,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const { theme: posTheme, toggleTheme } = usePosTheme();
 
   const [products, setProducts]           = useState<Product[]>([]);
+  const [layoutProducts, setLayoutProducts] = useState<Product[]>([]);
   const [categories, setCategories]       = useState<Category[]>([]);
   const [layoutButtons, setLayoutButtons] = useState<LayoutButton[]>([]);
   const [layoutConfig, setLayoutConfig]   = useState<LayoutColumnConfig | null>(null);
@@ -656,6 +737,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [dialog, setDialog]               = useState<Dialog>(null);
   const [numpadMode, setNumpadModeState]  = useState<NumpadMode>("qty");
+  const [paymentInitialTab, setPaymentInitialTab] = useState<"cash" | "card" | "split">("cash");
+  const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; code: string; phone?: string; loyaltyPoints?: number } | null>(null);
   const [cashDialogMode, setCashDialogMode] = useState<CashDialogMode>("cash_in");
   const [deptSaleVatRate, setDeptSaleVatRate] = useState<number | null>(null);
   const [mode, setMode]                   = useState<POSMode>(config.sco_mode ? "sco" : "sell");
@@ -683,7 +766,31 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       headers: { "X-Terminal-Code": config.terminal_code },
     })
       .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data) setLayoutConfig(data); })
+      .then(data => {
+        if (!data) return;
+        setLayoutConfig(data);
+        if (Array.isArray(data.buttons)) {
+          const liveButtons: LayoutButton[] = data.buttons.map((button: any) => ({
+            position: button.position,
+            label: button.label,
+            color: button.color,
+            icon: button.icon ?? undefined,
+            button_type: button.buttonType,
+            item_id: button.itemId ?? undefined,
+            category_id: button.categoryId ?? undefined,
+            action_code: button.actionCode ?? undefined,
+            sublayout_id: button.sublayoutId ?? undefined,
+            colspan: button.colspan ?? 1,
+            rowspan: button.rowspan ?? 1,
+          }));
+          setLayoutButtons(liveButtons);
+          if (liveButtons.length > 0) {
+            setMaxButtonPos(Math.max(...liveButtons.map((button) => button.position)));
+            const itemIds = [...new Set(liveButtons.map((button) => button.item_id).filter((id): id is string => !!id))];
+            getProductsByIds(itemIds).then(setLayoutProducts).catch(() => {});
+          }
+        }
+      })
       .catch(() => {/* no-op: defaults apply */});
   }, [config.server_url, config.terminal_code]);
 
@@ -701,6 +808,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     getCategories().then(setCategories).catch(() => {});
     getLayout().then((btns) => {
       setLayoutButtons(btns);
+      const layoutItemIds = [...new Set(btns.map((button) => button.item_id).filter((id): id is string => !!id))];
+      getProductsByIds(layoutItemIds).then(setLayoutProducts).catch(() => {});
       if (btns.length > 0) {
         setMaxButtonPos(Math.max(...btns.map((b) => b.position)));
       }
@@ -718,6 +827,9 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   useEffect(() => {
     getProducts(selectedCategory ?? undefined).then(setProducts).catch(() => {});
   }, [selectedCategory]);
+  const productsForLayout = [
+    ...new Map([...products, ...layoutProducts].map((product) => [product.server_id, product])).values(),
+  ];
 
   // Re-evaluate multi-buy promotions whenever cart product lines or applied coupons change.
   // Uses stable string keys to short-circuit when only the promo lines changed (our own update),
@@ -919,19 +1031,36 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   // ── Action dispatcher ──────────────────────────────────────────────────────
   const handleAction = useCallback((code: string) => {
     switch (code) {
-      case "CLEAR_ORDER":         engine.clearOrder(); break;
-      case "VOID_ORDER":          perms.requestAction("void_order", () => { engine.voidOrder(); }); break;
-      case "HOLD_ORDER":          engine.holdOrder(); break;
-      case "RECALL_ORDER":        setDialog("recall"); break;
+      case "CLEAR_ORDER":
+      case "NEW_SALE":
+      case "CANCEL_BILL":
+      case "CLEAR_CART":          engine.clearOrder(); break;
+      case "VOID_ORDER":
+      case "VOID_SALE":           perms.requestAction("void_order", () => { engine.voidOrder(); }); break;
+      case "VOID_LINE":           perms.requestAction("void_line", engine.voidLine); break;
+      case "HOLD_ORDER":
+      case "HOLD":
+      case "SUSPEND_SALE":        engine.holdOrder(); break;
+      case "RECALL_ORDER":
+      case "RECALL":              setDialog("recall"); break;
+      case "REFUND":
+      case "EXCHANGE":            perms.requestAction("refund", () => setDialog("refund")); break;
       case "REPEAT_LAST":         engine.repeatLastItem(); break;
       case "CORRECTION":          engine.correction(); break;
       case "ADD_LINE_NOTE":       setDialog("note_line"); break;
       case "ADD_NOTE":            setDialog("note_order"); break;
       case "PRICE_CHECK":         setDialog("price_check"); break;
+      case "ITEM_SEARCH":         setDialog("price_check"); break;
+      case "BARCODE_SCAN":        setDialog("manual_barcode"); break;
+      case "PLU":
+      case "WEIGHT":              setDialog("produce"); break;
+      case "QTY":                 setNumpadModeState("qty"); setDialog("numpad"); break;
       case "PROMO_CODE":          setDialog("promo"); break;
       case "PRICE_OVERRIDE":      perms.requestAction("price_override", () => { setNumpadModeState("price_override"); setDialog("numpad"); }); break;
       case "LINE_DISCOUNT_PCT":   perms.requestAction("discount", () => { setNumpadModeState("line_discount_pct"); setDialog("numpad"); }); break;
+      case "DISCOUNT_PCT":        perms.requestAction("discount", () => { setNumpadModeState("line_discount_pct"); setDialog("numpad"); }); break;
       case "LINE_DISCOUNT_FIXED": perms.requestAction("discount", () => { setNumpadModeState("line_discount_fixed"); setDialog("numpad"); }); break;
+      case "DISCOUNT_FIXED":      perms.requestAction("discount", () => { setNumpadModeState("line_discount_fixed"); setDialog("numpad"); }); break;
       case "ORDER_DISCOUNT_PCT":  perms.requestAction("discount", () => { setNumpadModeState("order_discount_pct"); setDialog("numpad"); }); break;
       case "ORDER_DISCOUNT_FIXED":perms.requestAction("discount", () => { setNumpadModeState("order_discount_fixed"); setDialog("numpad"); }); break;
       case "REMOVE_DISCOUNT":     engine.removeDiscount(); break;
@@ -943,12 +1072,19 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "FALLBACK_RULES": setMode("fallback"); break;
       case "BARCODE_CONFIG": setMode("barcode_config"); break;
       case "RECEIPT_DESIGN": setMode("receipt_design"); break;
-      case "PAY_CASH":
-      case "PAY_CARD": setDialog("payment"); break;
+      case "PAY_CASH":            setPaymentInitialTab("cash"); setDialog("payment"); break;
+      case "PAY_CARD":            setPaymentInitialTab("card"); setDialog("payment"); break;
+      case "PAY_SPLIT":           setPaymentInitialTab("split"); setDialog("payment"); break;
+      case "PAY_VOUCHER":
+      case "LOYALTY_POINTS":
+      case "TOTAL":
+      case "SUBTOTAL":            setPaymentInitialTab("split"); setDialog("payment"); break;
+      case "CUSTOMER_LOOKUP":     setDialog("customer_lookup"); break;
+      case "CUSTOMER_CLEAR":      engine.setCustomer(""); setSelectedCustomer(null); break;
       // ── Quantity multiplier before scan ──────────────────────────────────
       case "NUMPAD": setNumpadModeState("qty_multiplier"); setDialog("numpad"); break;
       // ── Cash drawer & journal group ──────────────────────────────────────
-      case "OPEN_DRAWER": hw.openDrawer(); break;
+      case "OPEN_DRAWER": perms.requestAction("open_drawer", () => hw.openDrawer()); break;
       case "NO_SALE": shift.noSale(); break;
       case "CASH_IN": setCashDialogMode("cash_in"); setDialog("cash_dialog"); break;
       case "CASH_OUT": setCashDialogMode("cash_out"); setDialog("cash_dialog"); break;
@@ -977,6 +1113,11 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         break;
       // ── Language switch (receipt labels) ────────────────────────────────
       case "TOGGLE_LANGUAGE": toggleLanguage(); break;
+      case "MANAGER_OVERRIDE": perms.requestAction("manage_cashiers", () => alert("Manager authorisation granted.")); break;
+      case "CHANGE_CASHIER":
+      case "SIGN_OUT":
+      case "SHIFT_END":
+      case "END_SHIFT": perms.requestAction("end_shift", onLogout); break;
       // ── Phase 3: New actions ─────────────────────────────────────────────
       case "PRODUCE":         setDialog("produce"); break;
       case "PLU_ENTRY":       setDialog("produce"); break;
@@ -991,7 +1132,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "SCO_MONITOR":     setMode("sco_monitor"); break;
       case "HARDWARE_CONFIG": setMode("hardware_config"); break;
     }
-  }, [engine, perms, hw, shift, toggleLanguage, multiBuy, session.cashier_id, session.cashier_name]);
+  }, [engine, perms, hw, shift, toggleLanguage, multiBuy, session.cashier_id, session.cashier_name, onLogout]);
 
   // ── Numpad confirm ────────────────────────────────────────────────────────
   function handleNumpadConfirm(value: number) {
@@ -1277,7 +1418,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <LayoutGrid
             buttons={layoutButtons}
-            products={products}
+            products={productsForLayout}
             columns={activeColumns}
             rows={activeRows}
             priceLevel={engine.order.price_level}
@@ -1349,6 +1490,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       <PaymentDialog
         open={dialog === "payment"}
         orderTotal={engine.order.total}
+        initialTab={paymentInitialTab}
+        loyaltyPoints={selectedCustomer?.loyaltyPoints ?? 0}
         onComplete={handlePaymentComplete}
         onCancel={() => setDialog(null)}
       />
@@ -1393,6 +1536,18 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onSearch={(query) => getProducts(undefined, query)}
           onLookupBarcode={(barcode) => getProductByBarcode(barcode)}
           onGetStockByLocation={(itemId) => getStockByLocation(itemId)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+
+      {dialog === "customer_lookup" && (
+        <CustomerLookupDialog
+          serverUrl={config.server_url}
+          terminalCode={config.terminal_code}
+          onSelect={(customer) => {
+            setSelectedCustomer(customer);
+            engine.setCustomer(customer.id);
+          }}
           onClose={() => setDialog(null)}
         />
       )}

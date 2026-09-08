@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
@@ -31,6 +33,10 @@ const itemImportFields = [
   { key: "category", label: "Category" },
   { key: "unitType", label: "Unit Type" },
   { key: "packSize", label: "Pack Size" },
+  { key: "itemType", label: "Item Type" },
+  { key: "shelfLabelUomEnabled", label: "Print Unit Price on Shelf Labels" },
+  { key: "shelfLabelQuantity", label: "Shelf Label UOM Quantity" },
+  { key: "shelfLabelUnit", label: "Shelf Label UOM Unit" },
   { key: "price1", label: "Price Level 1" },
   { key: "price2", label: "Price Level 2" },
   { key: "price3", label: "Price Level 3" },
@@ -44,6 +50,10 @@ const itemImportFields = [
   { key: "brand", label: "Brand / Producer" },
   { key: "origin", label: "Origin" },
   { key: "vintage", label: "Vintage" },
+  { key: "garmentGender", label: "Garment Gender / Department" },
+  { key: "garmentMaterial", label: "Garment Material" },
+  { key: "garmentStyle", label: "Garment Style" },
+  { key: "garmentCare", label: "Garment Care" },
 ];
 
 const itemFormSchema = insertItemSchema.extend({
@@ -51,6 +61,24 @@ const itemFormSchema = insertItemSchema.extend({
   sku: z.string().min(1, "SKU is required"),
   price1: z.string().min(1),
   familyId: z.preprocess((value) => value === "" ? null : value, z.string().nullable().optional()),
+  confirmPreviousPrice30Days: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  if (data.shelfLabelUomEnabled) {
+    if (!data.shelfLabelUnit) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["shelfLabelUnit"], message: "Select a unit of measure" });
+    }
+    if (!data.shelfLabelQuantity || Number(data.shelfLabelQuantity) <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["shelfLabelQuantity"], message: "Enter a quantity greater than zero" });
+    }
+  }
+  if (data.shelfLabelDiscountEnabled) {
+    if (!data.shelfLabelPreviousPrice || Number(data.shelfLabelPreviousPrice) <= Number(data.price1)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["shelfLabelPreviousPrice"], message: "Prior price must be higher than the current selling price" });
+    }
+    if (!data.confirmPreviousPrice30Days) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["confirmPreviousPrice30Days"], message: "Confirm the statutory prior-price check" });
+    }
+  }
 });
 
 const CY_VAT_RATES = [
@@ -552,8 +580,15 @@ export default function Items() {
                 description: editingItem.description || "",
                 categoryId: editingItem.categoryId || "",
                 familyId: editingItem.familyId || "",
+                itemType: (editingItem as any).itemType || "general",
                 unitType: editingItem.unitType,
                 packSize: editingItem.packSize,
+                shelfLabelUomEnabled: (editingItem as any).shelfLabelUomEnabled || false,
+                shelfLabelQuantity: (editingItem as any).shelfLabelQuantity || "",
+                shelfLabelUnit: (editingItem as any).shelfLabelUnit || "",
+                shelfLabelDiscountEnabled: (editingItem as any).shelfLabelDiscountEnabled || false,
+                shelfLabelPreviousPrice: (editingItem as any).shelfLabelPreviousPrice || "",
+                confirmPreviousPrice30Days: !!(editingItem as any).shelfLabelPreviousPriceVerifiedAt,
                 price1: editingItem.price1,
                 price2: editingItem.price2,
                 price3: editingItem.price3,
@@ -568,6 +603,10 @@ export default function Items() {
                 brand: editingItem.brand || "",
                 origin: editingItem.origin || "",
                 vintage: editingItem.vintage || "",
+                garmentGender: (editingItem as any).garmentGender || "",
+                garmentMaterial: (editingItem as any).garmentMaterial || "",
+                garmentStyle: (editingItem as any).garmentStyle || "",
+                garmentCare: (editingItem as any).garmentCare || "",
                 active: editingItem.active,
               }}
             />
@@ -1165,14 +1204,20 @@ function ItemForm({ onSubmit, isPending, categories, families, defaultValues, pr
   const form = useForm({
     resolver: zodResolver(itemFormSchema),
     defaultValues: defaultValues || {
-      name: "", sku: "", barcode: "", description: "", categoryId: "", familyId: "", unitType: "pc", packSize: 1,
+      name: "", sku: "", barcode: "", description: "", categoryId: "", familyId: "", itemType: "general", unitType: "pc", packSize: 1,
+      shelfLabelUomEnabled: false, shelfLabelQuantity: "", shelfLabelUnit: "",
+      shelfLabelDiscountEnabled: false, shelfLabelPreviousPrice: "", confirmPreviousPrice30Days: false,
       price1: "0", price2: "0", price3: "0", price4: "0", price5: "0", costPrice: "0", vatRate: null,
-      stockQuantity: 0, reorderLevel: 10, volume: "", alcoholPercentage: "", brand: "", origin: "", vintage: "", active: true,
+      stockQuantity: 0, reorderLevel: 10, volume: "", alcoholPercentage: "", brand: "", origin: "", vintage: "",
+      garmentGender: "", garmentMaterial: "", garmentStyle: "", garmentCare: "", active: true,
     },
   });
 
   const categoryId = form.watch("categoryId");
   const currentSku = form.watch("sku");
+  const itemType = form.watch("itemType");
+  const shelfLabelUomEnabled = form.watch("shelfLabelUomEnabled");
+  const shelfLabelDiscountEnabled = form.watch("shelfLabelDiscountEnabled");
 
   const suggestSku = useCallback(async (catId: string) => {
     if (!catId || isEditing) return;
@@ -1391,7 +1436,7 @@ function ItemForm({ onSubmit, isPending, categories, families, defaultValues, pr
             <div className="grid grid-cols-2 gap-4">
               <FormField control={form.control} name="stockQuantity" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Stock Quantity (bottles)</FormLabel>
+                  <FormLabel>Stock Quantity</FormLabel>
                   <FormControl><Input type="number" {...field} onChange={(e) => field.onChange(parseInt(e.target.value) || 0)} data-testid="input-stock" /></FormControl>
                   <FormMessage />
                 </FormItem>
@@ -1406,6 +1451,19 @@ function ItemForm({ onSubmit, isPending, categories, families, defaultValues, pr
             </div>
           </TabsContent>
           <TabsContent value="details" className="space-y-4 mt-4">
+            <FormField control={form.control} name="itemType" render={({ field }) => (
+              <FormItem>
+                <FormLabel>Item Type</FormLabel>
+                <Select value={field.value || "general"} onValueChange={field.onChange}>
+                  <FormControl><SelectTrigger data-testid="select-item-type"><SelectValue /></SelectTrigger></FormControl>
+                  <SelectContent>
+                    <SelectItem value="general">General item / supermarket</SelectItem>
+                    <SelectItem value="garment">Garment / apparel</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )} />
             <FormField control={form.control} name="brand" render={({ field }) => (
               <FormItem>
                 <FormLabel>Brand / Producer</FormLabel>
@@ -1413,6 +1471,25 @@ function ItemForm({ onSubmit, isPending, categories, families, defaultValues, pr
                 <FormMessage />
               </FormItem>
             )} />
+            {itemType === "garment" ? (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField control={form.control} name="garmentGender" render={({ field }) => (
+                    <FormItem><FormLabel>Department / Gender</FormLabel><FormControl><Input {...field} value={field.value || ""} placeholder="e.g. Women, Men, Kids, Unisex" data-testid="input-garment-gender" /></FormControl><FormMessage /></FormItem>
+                  )} />
+                  <FormField control={form.control} name="garmentStyle" render={({ field }) => (
+                    <FormItem><FormLabel>Style / Fit</FormLabel><FormControl><Input {...field} value={field.value || ""} placeholder="e.g. Slim fit, Polo, A-line" data-testid="input-garment-style" /></FormControl><FormMessage /></FormItem>
+                  )} />
+                </div>
+                <FormField control={form.control} name="garmentMaterial" render={({ field }) => (
+                  <FormItem><FormLabel>Material / Composition</FormLabel><FormControl><Input {...field} value={field.value || ""} placeholder="e.g. 100% cotton" data-testid="input-garment-material" /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="garmentCare" render={({ field }) => (
+                  <FormItem><FormLabel>Care Instructions</FormLabel><FormControl><Textarea {...field} value={field.value || ""} placeholder="e.g. Machine wash at 30°C" data-testid="input-garment-care" /></FormControl><FormDescription>Use Variants for garment colour, size, textile, or quality combinations.</FormDescription><FormMessage /></FormItem>
+                )} />
+              </>
+            ) : (
+              <>
             <div className="grid grid-cols-2 gap-4">
               <FormField control={form.control} name="volume" render={({ field }) => (
                 <FormItem>
@@ -1428,6 +1505,59 @@ function ItemForm({ onSubmit, isPending, categories, families, defaultValues, pr
                   <FormMessage />
                 </FormItem>
               )} />
+            </div>
+                <div className="rounded-md border p-4 space-y-3">
+                  <FormField control={form.control} name="shelfLabelUomEnabled" render={({ field }) => (
+                    <FormItem className="flex items-center justify-between gap-4">
+                      <div><FormLabel>Print unit price on shelf labels</FormLabel><FormDescription>Optional supermarket reference pricing, such as price per 100 g or per litre.</FormDescription></div>
+                      <FormControl><Switch checked={!!field.value} onCheckedChange={field.onChange} data-testid="switch-shelf-label-uom" /></FormControl>
+                    </FormItem>
+                  )} />
+                  {shelfLabelUomEnabled && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <FormField control={form.control} name="shelfLabelQuantity" render={({ field }) => (
+                        <FormItem><FormLabel>Pack quantity</FormLabel><FormControl><Input type="number" min="0.001" step="0.001" {...field} value={field.value || ""} placeholder="e.g. 500" data-testid="input-shelf-label-quantity" /></FormControl><FormMessage /></FormItem>
+                      )} />
+                      <FormField control={form.control} name="shelfLabelUnit" render={({ field }) => (
+                        <FormItem><FormLabel>Pack measurement</FormLabel><Select value={field.value || ""} onValueChange={field.onChange}><FormControl><SelectTrigger data-testid="select-shelf-label-unit"><SelectValue placeholder="Select unit" /></SelectTrigger></FormControl><SelectContent><SelectItem value="g">Gram (g) — print €/kg</SelectItem><SelectItem value="kg">Kilogram (kg) — print €/kg</SelectItem><SelectItem value="ml">Millilitre (ml) — print €/L</SelectItem><SelectItem value="L">Litre (L) — print €/L</SelectItem><SelectItem value="pc">Piece / item — print €/item</SelectItem><SelectItem value="m">Metre (m) — print €/m</SelectItem><SelectItem value="m2">Square metre (m²) — print €/m²</SelectItem><SelectItem value="m3">Cubic metre (m³) — print €/m³</SelectItem></SelectContent></Select><FormDescription>Enter the quantity contained in the selling pack. Grams and millilitres are converted to €/kg and €/L.</FormDescription><FormMessage /></FormItem>
+                      )} />
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+            <div className="rounded-md border border-orange-300 bg-orange-50/50 dark:bg-orange-950/10 p-4 space-y-3">
+              <FormField control={form.control} name="shelfLabelDiscountEnabled" render={({ field }) => (
+                <FormItem className="flex items-center justify-between gap-4">
+                  <div>
+                    <FormLabel>Promotional / discount shelf label</FormLabel>
+                    <FormDescription>Print the current sale price together with the legally required prior price.</FormDescription>
+                  </div>
+                  <FormControl><Switch checked={!!field.value} onCheckedChange={field.onChange} data-testid="switch-shelf-label-discount" /></FormControl>
+                </FormItem>
+              )} />
+              {shelfLabelDiscountEnabled && (
+                <>
+                  <FormField control={form.control} name="shelfLabelPreviousPrice" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Prior price (€)</FormLabel>
+                      <FormControl><Input type="number" min="0.01" step="0.01" {...field} value={field.value || ""} placeholder="Lowest applicable selling price during the preceding 30 days" data-testid="input-shelf-label-previous-price" /></FormControl>
+                      <FormDescription>This is not necessarily the immediately previous price. It must be the applicable lowest price during the preceding 30 days.</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="confirmPreviousPrice30Days" render={({ field }) => (
+                    <FormItem className="flex items-start gap-3 space-y-0 rounded border bg-background p-3">
+                      <FormControl><Checkbox checked={!!field.value} onCheckedChange={(checked) => field.onChange(!!checked)} data-testid="checkbox-confirm-previous-price" /></FormControl>
+                      <div>
+                        <FormLabel>I verified the statutory prior price</FormLabel>
+                        <FormDescription>I confirm this is the applicable lowest selling price for the same product and quantity during the preceding 30 days.</FormDescription>
+                        <FormMessage />
+                      </div>
+                    </FormItem>
+                  )} />
+                </>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <FormField control={form.control} name="origin" render={({ field }) => (

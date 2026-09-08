@@ -37,6 +37,7 @@ const CURRENCY_RATES: Record<string, number> = {
 interface PaymentDialogProps {
   open: boolean;
   orderTotal: number;
+  initialTab?: PaymentTab;
   loyaltyPoints?: number;      // customer's available points
   loyaltyValuePerPoint?: number; // e.g. 0.01 = 1 cent per point
   accountCredit?: number;      // customer's available credit
@@ -98,6 +99,7 @@ function methodIcon(m: TenderMethod) {
 export default function PaymentDialog({
   open,
   orderTotal,
+  initialTab = "cash",
   loyaltyPoints = 0,
   loyaltyValuePerPoint = 0.01,
   accountCredit = 0,
@@ -121,7 +123,7 @@ export default function PaymentDialog({
   useEffect(() => {
     if (open) {
       payment.clearTenders();
-      setTab("cash");
+      setTab(initialTab);
       setNumpadValue("");
       setVoucherCode("");
       setVoucherLookup(null);
@@ -133,7 +135,7 @@ export default function PaymentDialog({
       setCreditNoteError(null);
       setDisplayCurrency("EUR");
     }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, initialTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const parsedAmount = parseFloat(numpadValue) || 0;
 
