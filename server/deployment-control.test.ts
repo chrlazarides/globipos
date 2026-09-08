@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 import {
+  applyDomainIncidentTransition,
   csvCell,
   domainIncidentTransition,
   domainNotificationKind,
   isActiveDomainCheckDue,
+  loadDeploymentProfilesWithIncidents,
   nextPendingDomainNotification,
   withDeadline,
 } from "./deployment-control";
+import { db, pool } from "./db";
+import { deploymentDomainIncidents, deploymentProfiles } from "@shared/schema";
+import { eq } from "drizzle-orm";
 
 const now = Date.parse("2026-09-08T12:00:00.000Z");
 
@@ -93,4 +99,117 @@ test("CSV export cells preserve commas, quotes, and newlines", () => {
   assert.equal(csvCell("DNS, TLS"), '"DNS, TLS"');
   assert.equal(csvCell('bad "certificate"\nretry'), '"bad ""certificate""\nretry"');
   assert.equal(csvCell(null), "");
+});
+
+async function createDeployment(slug: string) {
+  const [profile] = await db.insert(deploymentProfiles).values({
+    slug,
+    clientName: `Incident test ${slug}`,
+    backOfficeUrl: `https://${slug}.example.com`,
+    posServerUrl: `https://${slug}.example.com`,
+    customerDomain: `${slug}.example.com`,
+  }).returning();
+  return profile;
+}
+
+test("database incident lifecycle keeps one open incident and closes it once", async t => {
+  const slug = `incident-${crypto.randomUUID()}`;
+  const profile = await createDeployment(slug);
+  t.after(async () => {
+    await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, profile.id));
+  });
+
+  const startedAt = new Date("2026-09-08T10:00:00.000Z");
+  await db.transaction(async tx => {
+    await applyDomainIncidentTransition(tx, profile.id, "start", startedAt, "DNS failed");
+    await applyDomainIncidentTransition(tx, profile.id, "start", new Date("2026-09-08T10:05:00.000Z"), "DNS still failed");
+  });
+
+  let incidents = await db.select().from(deploymentDomainIncidents)
+    .where(eq(deploymentDomainIncidents.deploymentId, profile.id));
+  assert.equal(incidents.length, 1);
+  assert.equal(incidents[0].recoveredAt, null);
+  assert.equal(incidents[0].reason, "DNS failed");
+
+  // A routing edit resets readiness but must not manufacture a recovery.
+  await db.update(deploymentProfiles).set({
+    customerDomain: `${slug}-new.example.com`,
+    domainStatus: "pending",
+  }).where(eq(deploymentProfiles.id, profile.id));
+  incidents = await db.select().from(deploymentDomainIncidents)
+    .where(eq(deploymentDomainIncidents.deploymentId, profile.id));
+  assert.equal(incidents[0].recoveredAt, null);
+
+  const recoveredAt = new Date("2026-09-08T10:30:00.000Z");
+  await applyDomainIncidentTransition(db, profile.id, "recover", recoveredAt, "Connected");
+  await applyDomainIncidentTransition(db, profile.id, "recover", new Date("2026-09-08T11:00:00.000Z"), "Connected again");
+  incidents = await db.select().from(deploymentDomainIncidents)
+    .where(eq(deploymentDomainIncidents.deploymentId, profile.id));
+  assert.equal(incidents.length, 1);
+  assert.equal(incidents[0].recoveredAt?.toISOString(), recoveredAt.toISOString());
+});
+
+test("deployment API grouping returns only the five newest incidents", async t => {
+  const slug = `history-${crypto.randomUUID()}`;
+  const profile = await createDeployment(slug);
+  t.after(async () => {
+    await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, profile.id));
+  });
+  for (let index = 0; index < 7; index++) {
+    const startedAt = new Date(Date.UTC(2026, 8, 1, index));
+    await db.insert(deploymentDomainIncidents).values({
+      deploymentId: profile.id,
+      startedAt,
+      recoveredAt: new Date(startedAt.getTime() + 10 * 60_000),
+      reason: `Failure ${index}`,
+    });
+  }
+
+  const profiles = await loadDeploymentProfilesWithIncidents();
+  const result = profiles.find((candidate: any) => candidate.id === profile.id);
+  assert.ok(result);
+  assert.deepEqual(result.domainIncidents.map((incident: any) => incident.reason), [
+    "Failure 6", "Failure 5", "Failure 4", "Failure 3", "Failure 2",
+  ]);
+});
+
+test("incident migration backfills a failed deployment without duplicating its open incident", async t => {
+  const slug = `backfill-${crypto.randomUUID()}`;
+  const client = await pool.connect();
+  t.after(() => client.release());
+  const backfill = `
+    INSERT INTO deployment_domain_incidents (deployment_id, started_at, reason)
+    SELECT id, COALESCE(domain_failure_started_at, domain_checked_at, now()), COALESCE(domain_message, 'Domain check failed')
+    FROM deployment_profiles
+    WHERE domain_status = 'failed'
+    ON CONFLICT (deployment_id) WHERE recovered_at IS NULL DO NOTHING
+  `;
+  await client.query("BEGIN");
+  try {
+    const inserted = await client.query<{ id: string }>(`
+      INSERT INTO deployment_profiles (
+        slug, client_name, back_office_url, pos_server_url, customer_domain,
+        domain_status, domain_message, domain_failure_started_at
+      ) VALUES ($1, $2, $3, $3, $4, 'failed', 'HTTPS unavailable', $5)
+      RETURNING id
+    `, [
+      slug,
+      `Incident test ${slug}`,
+      `https://${slug}.example.com`,
+      `${slug}.example.com`,
+      new Date("2026-09-08T09:00:00.000Z"),
+    ]);
+    await client.query(backfill);
+    await client.query(backfill);
+    const incidents = await client.query<{ started_at: Date; reason: string }>(`
+      SELECT started_at, reason
+      FROM deployment_domain_incidents
+      WHERE deployment_id = $1
+    `, [inserted.rows[0].id]);
+    assert.equal(incidents.rowCount, 1);
+    assert.equal(incidents.rows[0].started_at.toISOString(), "2026-09-08T09:00:00.000Z");
+    assert.equal(incidents.rows[0].reason, "HTTPS unavailable");
+  } finally {
+    await client.query("ROLLBACK");
+  }
 });

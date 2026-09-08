@@ -1,4 +1,3 @@
-import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -11,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Activity, AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Copy, Download, GitBranch, HeartPulse, KeyRound, Loader2, MonitorCog, Plus, RefreshCw, Search, Server, ShieldAlert, SlidersHorizontal, Trash2, Users, WifiOff, XCircle } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
 
 type Profile = {
   id: string; slug: string; clientName: string; status: "draft" | "active" | "suspended";
@@ -86,15 +86,15 @@ function reconcileForm(base: FormState, draft: FormState, latest: FormState) {
 function StatusPill({ status }: { status: string }) { const m = healthMeta[status] || healthMeta.unknown; const Icon = m.icon; return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${m.cls}`}><Icon className="h-3 w-3" />{m.label}</span>; }
 function DomainPill({ status }: { status: string }) { const m = domainMeta[status] || domainMeta.pending; const Icon = m.icon; return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${m.cls}`}><Icon className="h-3 w-3" />{m.label}</span>; }
 function Version({ value, target }: { value: string | null; target: string | null }) { const drift = target && target !== value; return <span className={`font-mono text-xs ${drift ? "text-amber-700" : "text-slate-600"}`}>{value || "—"}{drift ? ` → ${target}` : ""}</span>; }
-function incidentDuration(startedAt: string, recoveredAt: string | null) {
-  const milliseconds = Math.max(0, new Date(recoveredAt || Date.now()).getTime() - new Date(startedAt).getTime());
+export function incidentDuration(startedAt: string, recoveredAt: string | null, now = Date.now()) {
+  const milliseconds = Math.max(0, new Date(recoveredAt || now).getTime() - new Date(startedAt).getTime());
   const minutes = Math.floor(milliseconds / 60_000);
   if (minutes < 60) return `${Math.max(1, minutes)}m`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ${minutes % 60}m`;
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
-function IncidentHistory({ incidents }: { incidents: Profile["domainIncidents"] }) {
+export function IncidentHistory({ incidents }: { incidents: Profile["domainIncidents"] }) {
   return <div className="rounded-lg border">
     <div className="border-b bg-slate-50 px-4 py-3">
       <h3 className="text-sm font-semibold text-slate-900">Recent domain incidents</h3>

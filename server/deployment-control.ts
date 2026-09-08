@@ -276,6 +276,27 @@ export function domainIncidentTransition(
   if (nextStatus === "connected") return "recover" as const;
   return "none" as const;
 }
+
+export async function applyDomainIncidentTransition(
+  tx: Pick<typeof db, "insert" | "update">,
+  deploymentId: string,
+  transition: ReturnType<typeof domainIncidentTransition>,
+  checkedAt: Date,
+  reason: string,
+) {
+  if (transition === "start") {
+    await tx.insert(deploymentDomainIncidents).values({
+      deploymentId,
+      startedAt: checkedAt,
+      reason,
+    }).onConflictDoNothing();
+  } else if (transition === "recover") {
+    await tx.update(deploymentDomainIncidents).set({ recoveredAt: checkedAt }).where(and(
+      eq(deploymentDomainIncidents.deploymentId, deploymentId),
+      isNull(deploymentDomainIncidents.recoveredAt),
+    ));
+  }
+}
 function hasFreshConnectedDomains(profile: typeof deploymentProfiles.$inferSelect) {
   return profile.domainStatus === "connected"
     && profile.domainCheckedAt instanceof Date
@@ -355,19 +376,13 @@ async function checkProfileDomains(currentProfile: typeof deploymentProfiles.$in
     }).where(and(eq(deploymentProfiles.id, currentProfile.id), writePredicate, claimPredicate)).returning();
     if (!updated) return undefined;
 
-    const incidentTransition = domainIncidentTransition(currentProfile.domainStatus, domainStatus);
-    if (incidentTransition === "start") {
-      await tx.insert(deploymentDomainIncidents).values({
-        deploymentId: currentProfile.id,
-        startedAt: checkedAt,
-        reason: domainMessage,
-      }).onConflictDoNothing();
-    } else if (incidentTransition === "recover") {
-      await tx.update(deploymentDomainIncidents).set({ recoveredAt: checkedAt }).where(and(
-        eq(deploymentDomainIncidents.deploymentId, currentProfile.id),
-        isNull(deploymentDomainIncidents.recoveredAt),
-      ));
-    }
+    await applyDomainIncidentTransition(
+      tx,
+      currentProfile.id,
+      domainIncidentTransition(currentProfile.domainStatus, domainStatus),
+      checkedAt,
+      domainMessage,
+    );
     return updated;
   });
   return { profile, domainStatus, domainMessage };
@@ -467,32 +482,7 @@ export function registerDeploymentControlRoutes(app: Express) {
   });
 
   app.get("/api/control/deployments", requireSuperuser, async (_req, res) => {
-    const [profiles, incidents] = await Promise.all([
-      db.select().from(deploymentProfiles).orderBy(deploymentProfiles.clientName),
-      db.select().from(deploymentDomainIncidents).where(sql`
-        ${deploymentDomainIncidents.id} IN (
-          SELECT incident_id
-          FROM (
-            SELECT id AS incident_id,
-              row_number() OVER (PARTITION BY deployment_id ORDER BY started_at DESC) AS incident_rank
-            FROM deployment_domain_incidents
-          ) ranked_incidents
-          WHERE incident_rank <= 5
-        )
-      `).orderBy(desc(deploymentDomainIncidents.startedAt)),
-    ]);
-    const recentByDeployment = new Map<string, typeof incidents>();
-    for (const incident of incidents) {
-      const recent = recentByDeployment.get(incident.deploymentId) ?? [];
-      if (recent.length < 5) {
-        recent.push(incident);
-        recentByDeployment.set(incident.deploymentId, recent);
-      }
-    }
-    res.json(profiles.map(profile => ({
-      ...safeProfile(profile),
-      domainIncidents: recentByDeployment.get(profile.id) ?? [],
-    })));
+    res.json(await loadDeploymentProfilesWithIncidents());
   });
 
   app.get("/api/control/deployments/:id/incidents", requireSuperuser, async (req, res) => {
@@ -730,4 +720,35 @@ export function registerDeploymentControlRoutes(app: Express) {
     })).where(eq(deploymentProfiles.id, profile.id));
     res.json({ ok: true, deploymentId: profile.id });
   });
+}
+
+export async function loadDeploymentProfilesWithIncidents(
+  database: Pick<typeof db, "select"> = db,
+) {
+  const [profiles, incidents] = await Promise.all([
+    database.select().from(deploymentProfiles).orderBy(deploymentProfiles.clientName),
+    database.select().from(deploymentDomainIncidents).where(sql`
+      ${deploymentDomainIncidents.id} IN (
+        SELECT incident_id
+        FROM (
+          SELECT id AS incident_id,
+            row_number() OVER (PARTITION BY deployment_id ORDER BY started_at DESC) AS incident_rank
+          FROM deployment_domain_incidents
+        ) ranked_incidents
+        WHERE incident_rank <= 5
+      )
+    `).orderBy(desc(deploymentDomainIncidents.startedAt)),
+  ]);
+  const recentByDeployment = new Map<string, typeof incidents>();
+  for (const incident of incidents) {
+    const recent = recentByDeployment.get(incident.deploymentId) ?? [];
+    if (recent.length < 5) {
+      recent.push(incident);
+      recentByDeployment.set(incident.deploymentId, recent);
+    }
+  }
+  return profiles.map((profile: typeof deploymentProfiles.$inferSelect) => ({
+    ...safeProfile(profile),
+    domainIncidents: recentByDeployment.get(profile.id) ?? [],
+  }));
 }
