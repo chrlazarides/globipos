@@ -1,12 +1,12 @@
 import type { Express, Request, Response } from "express";
 import crypto from "crypto";
-import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db";
-import { activityLogs, deploymentProfiles, deploymentRollouts } from "@shared/schema";
 import { requireSuperuser } from "./auth";
 import { checkDomain, type DomainCheck } from "./domain-readiness";
 import { sendDomainStatusNotification } from "./email";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { activityLogs, deploymentDomainIncidents, deploymentProfiles, deploymentRollouts } from "@shared/schema";
 
 const statusSchema = z.enum(["draft", "active", "suspended"]);
 const healthStatusSchema = z.enum(["unknown", "healthy", "warning", "offline", "error"]);
@@ -227,6 +227,14 @@ export function isActiveDomainCheckDue(
   return now - profile.domainCheckedAt.getTime() >= interval;
 }
 
+export function domainIncidentTransition(
+  previousStatus: string,
+  nextStatus: "connected" | "failed",
+) {
+  if (nextStatus === "failed" && previousStatus !== "failed") return "start" as const;
+  if (nextStatus === "connected") return "recover" as const;
+  return "none" as const;
+}
 function hasFreshConnectedDomains(profile: typeof deploymentProfiles.$inferSelect) {
   return profile.domainStatus === "connected"
     && profile.domainCheckedAt instanceof Date
@@ -288,21 +296,39 @@ async function checkProfileDomains(currentProfile: typeof deploymentProfiles.$in
   const claimPredicate = claimToken
     ? eq(deploymentProfiles.domainCheckClaimToken, claimToken)
     : undefined;
-  const [profile] = await db.update(deploymentProfiles).set({
-    domainStatus,
-    domainMessage,
-    domainChecks: checks,
-    domainCheckedAt: checkedAt,
-    domainFailureStartedAt: failures.length ? (currentProfile.domainFailureStartedAt ?? checkedAt) : null,
-    domainFailureCount: failures.length ? currentProfile.domainFailureCount + 1 : 0,
-    domainNotificationPending: pendingNotification,
-    ...(notificationKind ? {
-      domainNotificationMessage: domainMessage,
-      domainNotificationCreatedAt: checkedAt,
-    } : {}),
-    ...(claimToken ? { domainCheckClaimedAt: null, domainCheckClaimToken: null } : {}),
-    updatedAt: checkedAt,
-  }).where(and(eq(deploymentProfiles.id, currentProfile.id), writePredicate, claimPredicate)).returning();
+  const profile = await db.transaction(async tx => {
+    const [updated] = await tx.update(deploymentProfiles).set({
+      domainStatus,
+      domainMessage,
+      domainChecks: checks,
+      domainCheckedAt: checkedAt,
+      domainFailureStartedAt: failures.length ? (currentProfile.domainFailureStartedAt ?? checkedAt) : null,
+      domainFailureCount: failures.length ? currentProfile.domainFailureCount + 1 : 0,
+      domainNotificationPending: pendingNotification,
+      ...(notificationKind ? {
+        domainNotificationMessage: domainMessage,
+        domainNotificationCreatedAt: checkedAt,
+      } : {}),
+      ...(claimToken ? { domainCheckClaimedAt: null, domainCheckClaimToken: null } : {}),
+      updatedAt: checkedAt,
+    }).where(and(eq(deploymentProfiles.id, currentProfile.id), writePredicate, claimPredicate)).returning();
+    if (!updated) return undefined;
+
+    const incidentTransition = domainIncidentTransition(currentProfile.domainStatus, domainStatus);
+    if (incidentTransition === "start") {
+      await tx.insert(deploymentDomainIncidents).values({
+        deploymentId: currentProfile.id,
+        startedAt: checkedAt,
+        reason: domainMessage,
+      }).onConflictDoNothing();
+    } else if (incidentTransition === "recover") {
+      await tx.update(deploymentDomainIncidents).set({ recoveredAt: checkedAt }).where(and(
+        eq(deploymentDomainIncidents.deploymentId, currentProfile.id),
+        isNull(deploymentDomainIncidents.recoveredAt),
+      ));
+    }
+    return updated;
+  });
   return { profile, domainStatus, domainMessage };
 }
 
@@ -400,8 +426,32 @@ export function registerDeploymentControlRoutes(app: Express) {
   });
 
   app.get("/api/control/deployments", requireSuperuser, async (_req, res) => {
-    const profiles = await db.select().from(deploymentProfiles).orderBy(deploymentProfiles.clientName);
-    res.json(profiles.map(safeProfile));
+    const [profiles, incidents] = await Promise.all([
+      db.select().from(deploymentProfiles).orderBy(deploymentProfiles.clientName),
+      db.select().from(deploymentDomainIncidents).where(sql`
+        ${deploymentDomainIncidents.id} IN (
+          SELECT incident_id
+          FROM (
+            SELECT id AS incident_id,
+              row_number() OVER (PARTITION BY deployment_id ORDER BY started_at DESC) AS incident_rank
+            FROM deployment_domain_incidents
+          ) ranked_incidents
+          WHERE incident_rank <= 5
+        )
+      `).orderBy(desc(deploymentDomainIncidents.startedAt)),
+    ]);
+    const recentByDeployment = new Map<string, typeof incidents>();
+    for (const incident of incidents) {
+      const recent = recentByDeployment.get(incident.deploymentId) ?? [];
+      if (recent.length < 5) {
+        recent.push(incident);
+        recentByDeployment.set(incident.deploymentId, recent);
+      }
+    }
+    res.json(profiles.map(profile => ({
+      ...safeProfile(profile),
+      domainIncidents: recentByDeployment.get(profile.id) ?? [],
+    })));
   });
 
   app.post("/api/control/deployments", requireSuperuser, async (req, res) => {

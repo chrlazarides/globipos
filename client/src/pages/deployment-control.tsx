@@ -18,12 +18,13 @@ type Profile = {
   customerDomain: string | null; posDomain: string | null;
   domainStatus: "pending" | "connected" | "failed"; domainMessage: string | null; domainCheckedAt: string | null; domainFailureStartedAt: string | null; domainFailureCount: number;
   domainChecks: Array<{ hostname: string; role: "customer" | "pos"; status: "connected" | "failed"; dnsAddresses: string[]; reason: string }>;
+  domainIncidents: Array<{ id: string; startedAt: string; recoveredAt: string | null; reason: string }>;
   branding: { companyName?: string; legalName?: string; logoUrl?: string; primaryColor?: string; legalAddress?: string; taxId?: string };
   enabledFeatures: string[]; paymentProvider: string | null; emailProvider: string | null; whatsappProvider: string | null;
   backOfficeVersion: string | null; posVersion: string | null; targetBackOfficeVersion: string | null; targetPosVersion: string | null;
   automationProvider: "manual" | "github" | "replit"; externalProjectId: string | null; lastHeartbeatAt: string | null; healthStatus: "unknown" | "healthy" | "warning" | "offline" | "error"; healthMessage: string | null; createdAt: string; updatedAt: string;
 };
-type FormState = Omit<Profile, "id" | "createdAt" | "updatedAt" | "lastHeartbeatAt" | "healthStatus" | "healthMessage" | "domainStatus" | "domainMessage" | "domainCheckedAt" | "domainChecks" | "domainFailureStartedAt" | "domainFailureCount">;
+type FormState = Omit<Profile, "id" | "createdAt" | "updatedAt" | "lastHeartbeatAt" | "healthStatus" | "healthMessage" | "domainStatus" | "domainMessage" | "domainCheckedAt" | "domainChecks" | "domainFailureStartedAt" | "domainFailureCount" | "domainIncidents">;
 type ConflictCode = "DEPLOYMENT_CHANGED" | "DOMAIN_CHANGED_DURING_CHECK";
 type ConflictNotice = { title: string; message: string; preserved: string[]; replaced: string[] };
 class ControlApiError extends Error {
@@ -80,6 +81,30 @@ function reconcileForm(base: FormState, draft: FormState, latest: FormState) {
 function StatusPill({ status }: { status: string }) { const m = healthMeta[status] || healthMeta.unknown; const Icon = m.icon; return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${m.cls}`}><Icon className="h-3 w-3" />{m.label}</span>; }
 function DomainPill({ status }: { status: string }) { const m = domainMeta[status] || domainMeta.pending; const Icon = m.icon; return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${m.cls}`}><Icon className="h-3 w-3" />{m.label}</span>; }
 function Version({ value, target }: { value: string | null; target: string | null }) { const drift = target && target !== value; return <span className={`font-mono text-xs ${drift ? "text-amber-700" : "text-slate-600"}`}>{value || "—"}{drift ? ` → ${target}` : ""}</span>; }
+function incidentDuration(startedAt: string, recoveredAt: string | null) {
+  const milliseconds = Math.max(0, new Date(recoveredAt || Date.now()).getTime() - new Date(startedAt).getTime());
+  const minutes = Math.floor(milliseconds / 60_000);
+  if (minutes < 60) return `${Math.max(1, minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+function IncidentHistory({ incidents }: { incidents: Profile["domainIncidents"] }) {
+  return <div className="rounded-lg border">
+    <div className="border-b bg-slate-50 px-4 py-3">
+      <h3 className="text-sm font-semibold text-slate-900">Recent domain incidents</h3>
+      <p className="mt-0.5 text-xs text-slate-500">Latest five outage and recovery records for this deployment.</p>
+    </div>
+    {incidents?.length ? <div className="divide-y">{incidents.map(incident => <div key={incident.id} className="space-y-1 px-4 py-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-medium text-slate-800">{new Date(incident.startedAt).toLocaleString()}</span>
+        <Badge variant={incident.recoveredAt ? "secondary" : "destructive"}>{incident.recoveredAt ? `Recovered · ${incidentDuration(incident.startedAt, incident.recoveredAt)}` : `Ongoing · ${incidentDuration(incident.startedAt, null)}`}</Badge>
+      </div>
+      <p className="text-slate-600">{incident.reason}</p>
+      <p className="text-slate-400">{incident.recoveredAt ? `Recovered ${new Date(incident.recoveredAt).toLocaleString()}` : "Recovery not yet recorded"}</p>
+    </div>)}</div> : <p className="px-4 py-5 text-sm text-slate-500">No domain incidents recorded.</p>}
+  </div>;
+}
 
 export default function DeploymentControlPage() {
   const { toast } = useToast();
@@ -160,6 +185,15 @@ export default function DeploymentControlPage() {
     {conflictNotice && formOpen && <div role="alert" className="fixed inset-x-4 top-4 z-[70] mx-auto max-w-3xl rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 shadow-xl"><div className="flex gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="font-semibold">{conflictNotice.title}</p><p className="mt-1 leading-5">{conflictNotice.message}</p>{conflictNotice.preserved.length > 0 && <p className="mt-2"><strong>Unsaved edits preserved:</strong> {conflictNotice.preserved.join(", ")}.</p>}{conflictNotice.replaced.length > 0 && <p className="mt-2"><strong>Replaced with newer server values:</strong> {conflictNotice.replaced.join(", ")}.</p>}{conflictNotice.preserved.length === 0 && conflictNotice.replaced.length === 0 && <p className="mt-2">No unsaved form edits needed reconciliation.</p>}</div></div></div>}
     {editing && formOpen && <div className="fixed inset-x-4 bottom-6 z-[60] mx-auto flex max-w-3xl flex-wrap items-center gap-2 rounded-lg border bg-background p-3 shadow-xl"><span className="text-sm font-semibold">Profile actions</span><div className="mr-auto flex min-w-0 items-center gap-2"><DomainPill status={editing.domainStatus} />{editing.domainMessage && <span title={editing.domainMessage} className="max-w-48 truncate text-xs text-slate-500">{editing.domainMessage}</span>}</div><Button variant="outline" disabled={domainMutation.isPending} onClick={() => domainMutation.mutate(editing.id)}>{domainMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Check domains</Button><Button variant="outline" onClick={() => credentialMutation.mutate(editing.id)}>Rotate credential</Button><Button variant="outline" onClick={() => exportProfile(editing)}>Download manifest</Button><Button variant="outline" onClick={() => { if (editing.status === "suspended" && !domainsFresh(editing)) { setActivationOverride({ request: { method: "PATCH", url: `/api/control/deployments/${editing.id}`, body: { status: "active" } }, clientName: editing.clientName, reason: editing.domainMessage || "Required domains do not have a recent successful check." }); } else { setFormOpen(false); if (editing.status === "suspended") mutation.mutate({ method: "PATCH", url: `/api/control/deployments/${editing.id}`, body: { status: "active" } }); else setSuspendTarget(editing); } }}>{editing.status === "suspended" ? "Reactivate deployment" : "Suspend deployment"}</Button>{editing.status === "draft" && <Button variant="destructive" onClick={() => { setFormOpen(false); setDeleteTarget(editing); }}>Delete draft</Button>}</div>}
     <div className="mx-auto max-w-[1500px] space-y-6">
+      {profiles.some(profile => profile.domainIncidents?.length) && <Card>
+        <CardHeader className="border-b bg-white px-5 py-4"><CardTitle className="text-base">Recent domain incidents by deployment</CardTitle></CardHeader>
+        <CardContent className="grid gap-4 p-5 lg:grid-cols-2">
+          {profiles.filter(profile => profile.domainIncidents?.length).map(profile => <div key={profile.id} className="space-y-2">
+            <button className="text-left text-sm font-semibold text-teal-800 hover:underline" onClick={() => openEdit(profile)}>{profile.clientName}</button>
+            <IncidentHistory incidents={profile.domainIncidents} />
+          </div>)}
+        </CardContent>
+      </Card>}
       <header className="flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-teal-700"><MonitorCog className="h-4 w-4" /> GlobiPOS support cockpit</div><h1 className="text-3xl font-semibold tracking-tight text-slate-900">Deployment Control Center</h1><p className="mt-1 text-sm text-slate-500">Manage isolated customer installations from one shared codebase.</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => { control.refetch(); deployments.refetch(); }}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button><Button onClick={openCreate}><Plus className="mr-2 h-4 w-4" />New deployment</Button></div></header>
       {activeDomainFailures.length > 0 && <Card className="border-red-300 bg-red-50"><CardContent className="p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" /><div><p className="font-semibold text-red-900">{activeDomainFailures.length} active customer domain{activeDomainFailures.length === 1 ? " is" : "s are"} not responding</p><div className="mt-2 space-y-1">{activeDomainFailures.map(p => <button key={p.id} className="block text-left text-sm text-red-800 underline-offset-2 hover:underline" onClick={() => openEdit(p)}><strong>{p.clientName}</strong> — {p.domainMessage || "Domain check failed"} <span className="text-red-600">({p.domainFailureCount} consecutive; since {p.domainFailureStartedAt ? new Date(p.domainFailureStartedAt).toLocaleString() : "unknown"})</span></button>)}</div></div></div></CardContent></Card>}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Card><CardContent className="p-4"><div className="flex justify-between"><Users className="h-4 w-4 text-teal-700" /><span className="text-2xl font-semibold">{total}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Registered clients</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><HeartPulse className="h-4 w-4 text-emerald-700" /><span className="text-2xl font-semibold text-emerald-700">{healthy}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Healthy heartbeat</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><GitBranch className="h-4 w-4 text-amber-700" /><span className="text-2xl font-semibold text-amber-700">{drift}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Version drift</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><Activity className="h-4 w-4 text-slate-500" /><span className="text-2xl font-semibold">{rollouts.data?.length || 0}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Rollouts recorded</p></CardContent></Card></div>

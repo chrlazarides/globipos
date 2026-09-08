@@ -75,6 +75,18 @@ export const deploymentProfiles = pgTable("deployment_profiles", {
   updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
+export const deploymentDomainIncidents = pgTable("deployment_domain_incidents", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  deploymentId: uuid("deployment_id").notNull().references(() => deploymentProfiles.id, { onDelete: "cascade" }),
+  startedAt: timestamp("started_at").notNull(),
+  recoveredAt: timestamp("recovered_at"),
+  reason: text("reason").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("deployment_domain_incidents_one_open")
+    .on(table.deploymentId)
+    .where(sql`${table.recoveredAt} IS NULL`),
+]);
 export const deploymentRollouts = pgTable("deployment_rollouts", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   scope: text("scope").notNull(),

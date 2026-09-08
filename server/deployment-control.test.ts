@@ -6,6 +6,7 @@ import {
   nextPendingDomainNotification,
   withDeadline,
 } from "./deployment-control";
+import { domainIncidentTransition, isActiveDomainCheckDue, withDeadline } from "./deployment-control";
 
 const now = Date.parse("2026-09-08T12:00:00.000Z");
 
@@ -75,4 +76,13 @@ test("failed notification delivery remains pending for the next monitor retry", 
   const afterSuccessfulDelivery = null;
   assert.equal(nextPendingDomainNotification("failed", "failed", afterSuccessfulDelivery), null);
   assert.equal(nextPendingDomainNotification("failed", "connected", afterSuccessfulDelivery), "recovery");
+});
+
+test("domain incidents are created and recovered only on status transitions", () => {
+  assert.equal(domainIncidentTransition("connected", "failed"), "start");
+  assert.equal(domainIncidentTransition("pending", "failed"), "start");
+  assert.equal(domainIncidentTransition("failed", "failed"), "none");
+  assert.equal(domainIncidentTransition("connected", "connected"), "recover");
+  assert.equal(domainIncidentTransition("pending", "connected"), "recover");
+  assert.equal(domainIncidentTransition("failed", "connected"), "recover");
 });
