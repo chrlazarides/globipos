@@ -21,6 +21,16 @@ export interface CustomerAiEngine {
 
 type SettingValue = { key: string; value: string } | [string, string];
 
+export interface CustomerAiCompletionClient {
+  chat: {
+    completions: {
+      create(request: any): Promise<{
+        choices: Array<{ message?: { content?: string | null } }>;
+      }>;
+    };
+  };
+}
+
 export function resolveCustomerAiConfig(settings: Iterable<SettingValue>): CustomerAiConfig {
   const values = new Map<string, string>();
   for (const setting of settings) {
@@ -83,7 +93,7 @@ export function getCustomerAiStatus(config: CustomerAiConfig) {
   };
 }
 
-function clientFor(engine: CustomerAiEngine): OpenAI | null {
+function clientFor(engine: CustomerAiEngine): CustomerAiCompletionClient | null {
   if (engine.activeProvider === "replit") {
     return new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
   }
@@ -102,9 +112,10 @@ export async function enhanceCustomerRecommendations(
   config: CustomerAiConfig,
   candidates: Array<{ id: string; name: string; category?: string; price: string; reason: string }>,
   customerSummary: Record<string, unknown>,
+  completionClient?: CustomerAiCompletionClient,
 ): Promise<{ orderedIds: string[]; reasons: Record<string, string>; engine: CustomerAiEngine }> {
   const engine = getCustomerAiEngine(config, config.recommendationsEnabled);
-  const client = clientFor(engine);
+  const client = engine.activeProvider === "deterministic" ? null : completionClient || clientFor(engine);
   if (!client || !candidates.length) return { orderedIds: candidates.map(candidate => candidate.id), reasons: {}, engine };
   try {
     const completion = await client.chat.completions.create({
@@ -138,9 +149,10 @@ export async function enhanceCustomerRecommendations(
 export async function classifyCustomerFeedback(
   config: CustomerAiConfig,
   feedback: { context: string; rating: number; comment: string },
+  completionClient?: CustomerAiCompletionClient,
 ): Promise<{ sentiment: "positive" | "neutral" | "negative"; score: number; engine: CustomerAiEngine } | null> {
   const engine = getCustomerAiEngine(config, config.sentimentEnabled);
-  const client = clientFor(engine);
+  const client = engine.activeProvider === "deterministic" ? null : completionClient || clientFor(engine);
   if (!client) return null;
   try {
     const completion = await client.chat.completions.create({

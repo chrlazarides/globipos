@@ -9,6 +9,7 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "test:pos-builds": "tsx --test server/pos-builds.test.ts",
+    "test:customer-ai": "tsx --test server/customer-ai-service.test.ts server/customer-ai-routes.test.ts",
     "test:pos-version": "node --test scripts/pos-version.test.mjs",
     "db:push": "drizzle-kit push"
   },
