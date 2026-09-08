@@ -97,6 +97,7 @@ export interface CustomerAiCompletionClient {
   };
 }
 
+export const CUSTOMER_AI_DEADLINE_MS = 1_500;
 export function resolveCustomerAiConfig(settings: Iterable<SettingValue>): CustomerAiConfig {
   const values = new Map<string, string>();
   for (const setting of settings) {
@@ -191,14 +192,14 @@ export async function enhanceCustomerRecommendations(
     return { orderedIds: candidates.map(candidate => candidate.id), reasons: {}, engine };
   }
   try {
-    const completion = await client.chat.completions.create({
+    const completion = await guardedProviderCall(engine.activeProvider as RemoteProvider, () => client.chat.completions.create({
       model: engine.model,
       messages: [
         { role: "system", content: "Rank only the supplied candidate products using only the supplied JSON. Return ONLY JSON: {\"orderedIds\":[\"candidate-id\"],\"reasons\":{\"candidate-id\":\"short grounded reason\"}}. Do not invent products, prices, stock, facts, or IDs. Reasons must be under 160 characters." },
         { role: "user", content: JSON.stringify({ candidates, customerSummary }) },
       ],
       max_completion_tokens: 500,
-    });
+    }));
     const result = jsonObject(completion.choices[0]?.message?.content || "{}") as Record<string, unknown>;
     const ids = new Set(candidates.map(candidate => candidate.id));
     const orderedIds = Array.isArray(result.orderedIds)
@@ -212,10 +213,19 @@ export async function enhanceCustomerRecommendations(
         if (ids.has(id) && typeof reason === "string" && reason.trim()) reasons[id] = reason.trim().slice(0, 160);
       }
     }
+    recordProviderSuccess(engine.activeProvider as RemoteProvider);
     recordSuccess();
     return { orderedIds: uniqueIds, reasons, engine };
   } catch (error) {
-    recordFallback("recommendation", failureCategory(error));
+    if (!(error instanceof CustomerAiCircuitOpenError)) {
+      recordProviderFailure(engine.activeProvider as RemoteProvider);
+    }
+    recordFallback(
+      "recommendation",
+      error instanceof CustomerAiCircuitOpenError
+        ? runtimeHealth.lastFailureCategory || "provider"
+        : failureCategory(error),
+    );
     console.warn("[customer-ai] recommendation enhancement failed; using deterministic ranking");
     return { orderedIds: candidates.map(candidate => candidate.id), reasons: {}, engine: { ...engine, activeProvider: "deterministic", fallback: true } };
   }
@@ -233,23 +243,92 @@ export async function classifyCustomerFeedback(
     return null;
   }
   try {
-    const completion = await client.chat.completions.create({
+    const completion = await guardedProviderCall(engine.activeProvider as RemoteProvider, () => client.chat.completions.create({
       model: engine.model,
       messages: [
         { role: "system", content: "Classify supplied customer feedback. Return ONLY strict JSON: {\"sentiment\":\"positive\"|\"neutral\"|\"negative\",\"score\":number}. Score must be between -1 and 1. Use only the supplied feedback." },
         { role: "user", content: JSON.stringify(feedback) },
       ],
       max_completion_tokens: 80,
-    });
+    }));
     const result = jsonObject(completion.choices[0]?.message?.content || "{}") as Record<string, unknown>;
     if (!["positive", "neutral", "negative"].includes(String(result.sentiment)) || typeof result.score !== "number" || !Number.isFinite(result.score) || result.score < -1 || result.score > 1) {
       throw new Error("invalid response");
     }
+    recordProviderSuccess(engine.activeProvider as RemoteProvider);
     recordSuccess();
     return { sentiment: result.sentiment as "positive" | "neutral" | "negative", score: result.score, engine };
   } catch (error) {
-    recordFallback("feedback", failureCategory(error));
+    if (!(error instanceof CustomerAiCircuitOpenError)) {
+      recordProviderFailure(engine.activeProvider as RemoteProvider);
+    }
+    recordFallback(
+      "feedback",
+      error instanceof CustomerAiCircuitOpenError
+        ? runtimeHealth.lastFailureCategory || "provider"
+        : failureCategory(error),
+    );
     console.warn("[customer-ai] sentiment classification failed; using heuristic");
     return null;
   }
 }
+
+export const CUSTOMER_AI_CIRCUIT_FAILURE_THRESHOLD = 2;
+
+type RemoteProvider = Exclude<CustomerAiEngine["activeProvider"], "deterministic">;
+
+function circuitAllowsRequest(provider: RemoteProvider): boolean {
+  const state = providerCircuits.get(provider);
+  if (!state?.openUntil) return true;
+  if (Date.now() < state.openUntil) return false;
+  providerCircuits.set(provider, { consecutiveFailures: 0, openUntil: 0 });
+  return true;
+}
+
+function recordProviderSuccess(provider: RemoteProvider) {
+  providerCircuits.delete(provider);
+}
+
+function recordProviderFailure(provider: RemoteProvider) {
+  const previous = providerCircuits.get(provider);
+  const consecutiveFailures = (previous?.consecutiveFailures || 0) + 1;
+  providerCircuits.set(provider, {
+    consecutiveFailures,
+    openUntil: consecutiveFailures >= CUSTOMER_AI_CIRCUIT_FAILURE_THRESHOLD
+      ? Date.now() + CUSTOMER_AI_CIRCUIT_COOLDOWN_MS
+      : 0,
+  });
+}
+
+export const CUSTOMER_AI_CIRCUIT_COOLDOWN_MS = 30_000;
+
+type CircuitState = { consecutiveFailures: number; openUntil: number };
+
+export function resetCustomerAiCircuitBreakersForTests() {
+  providerCircuits.clear();
+}
+
+async function guardedProviderCall<T>(provider: RemoteProvider, call: () => Promise<T>): Promise<T> {
+  if (!circuitAllowsRequest(provider)) throw new CustomerAiCircuitOpenError("customer AI circuit open");
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const providerPromise = Promise.resolve().then(call);
+  // The provider may reject after the deadline. Attach a terminal handler now so
+  // that late settlement can neither mutate circuit state nor become unhandled.
+  void providerPromise.catch(() => undefined);
+
+  try {
+    return await Promise.race([
+      providerPromise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("customer AI deadline exceeded")), CUSTOMER_AI_DEADLINE_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+const providerCircuits = new Map<RemoteProvider, CircuitState>();
+
+class CustomerAiCircuitOpenError extends Error {}

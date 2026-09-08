@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  CUSTOMER_AI_CIRCUIT_COOLDOWN_MS,
+  CUSTOMER_AI_DEADLINE_MS,
   classifyCustomerFeedback,
   enhanceCustomerRecommendations,
   getCustomerAiEngine,
   getCustomerAiStatus,
   resetCustomerAiRuntimeHealth,
   resolveCustomerAiConfig,
+  resetCustomerAiCircuitBreakersForTests,
   type CustomerAiCompletionClient,
   type CustomerAiConfig,
 } from "./customer-ai-service";
@@ -46,6 +49,19 @@ function failingClient(error = new Error("provider unavailable")): CustomerAiCom
       completions: {
         async create() {
           throw error;
+        },
+      },
+    },
+  };
+}
+
+function pendingClient(onCall?: () => void): CustomerAiCompletionClient {
+  return {
+    chat: {
+      completions: {
+        create() {
+          onCall?.();
+          return new Promise(() => undefined);
         },
       },
     },
@@ -115,7 +131,7 @@ test("resolves every provider selection and availability state", async () => {
 
   for (const state of availabilityStates) {
     await withProviderEnvironment(state.environment, () => {
-      const status = getCustomerAiStatus(config());
+    const status = getCustomerAiStatus(config());
       assert.equal(status.availability.replit, state.replit);
       assert.equal(status.availability.xai, state.xai);
       assert.equal(getCustomerAiEngine(config({ requestedProvider: "auto" })).activeProvider, state.replit ? "replit" : "deterministic");
@@ -151,6 +167,7 @@ test("invalid provider settings and missing credentials produce deterministic re
 });
 
 test("invalid models, timeouts, and malformed JSON fall back without customer-facing failure", async () => {
+  resetCustomerAiCircuitBreakersForTests();
   await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
     const candidates = [
       { id: "a", name: "Apple", price: "1.25", reason: "In stock" },
@@ -175,7 +192,120 @@ test("invalid models, timeouts, and malformed JSON fall back without customer-fa
   });
 });
 
+test("recommendations and sentiment stop at the deadline and ignore late provider rejection", async () => {
+  resetCustomerAiCircuitBreakersForTests();
+  await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
+    const candidates = [{ id: "a", name: "Apple", price: "1.25", reason: "In stock" }];
+    const started = Date.now();
+    const recommendation = await enhanceCustomerRecommendations(
+      config({ requestedProvider: "xai" }),
+      candidates,
+      {},
+      pendingClient(),
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed >= CUSTOMER_AI_DEADLINE_MS - 100);
+    assert.ok(elapsed < CUSTOMER_AI_DEADLINE_MS + 500);
+    assert.deepEqual(recommendation.orderedIds, ["a"]);
+    assert.equal(recommendation.engine.activeProvider, "deterministic");
+
+    const lateRejectingClient: CustomerAiCompletionClient = {
+      chat: {
+        completions: {
+          create() {
+            return new Promise((_, reject) => {
+              setTimeout(() => reject(new Error("late provider failure")), CUSTOMER_AI_DEADLINE_MS + 50);
+            });
+          },
+        },
+      },
+    };
+    assert.equal(await classifyCustomerFeedback(
+      config({ requestedProvider: "xai" }),
+      { context: "order", rating: 3, comment: "Okay" },
+      lateRejectingClient,
+    ), null);
+    await new Promise(resolve => setTimeout(resolve, 100));
+  });
+});
+
+test("repeated failures open the provider circuit and it recovers after cooldown", async () => {
+  resetCustomerAiCircuitBreakersForTests();
+  await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
+    const candidates = [{ id: "a", name: "Apple", price: "1.25", reason: "In stock" }];
+    const selected = config({ requestedProvider: "xai" });
+    await enhanceCustomerRecommendations(selected, candidates, {}, failingClient());
+    await enhanceCustomerRecommendations(selected, candidates, {}, failingClient());
+
+    let calls = 0;
+    const bypassed = await enhanceCustomerRecommendations(selected, candidates, {}, clientReturning(
+      '{"orderedIds":["a"],"reasons":{"a":"remote"}}',
+    ));
+    assert.deepEqual(bypassed.reasons, {});
+
+    const originalNow = Date.now;
+    Date.now = () => originalNow() + CUSTOMER_AI_CIRCUIT_COOLDOWN_MS + 1;
+    try {
+      const recovered = await enhanceCustomerRecommendations(
+        selected,
+        candidates,
+        {},
+        {
+          chat: {
+            completions: {
+              async create() {
+                calls += 1;
+                return { choices: [{ message: { content: '{"orderedIds":["a"],"reasons":{"a":"remote"}}' } }] };
+              },
+            },
+          },
+        },
+      );
+      assert.equal(calls, 1);
+      assert.deepEqual(recovered.reasons, { a: "remote" });
+      assert.equal(recovered.engine.activeProvider, "xai");
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+});
+
+test("repeated malformed recommendations open the circuit", async () => {
+  resetCustomerAiCircuitBreakersForTests();
+  await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
+    const candidates = [{ id: "a", name: "Apple", price: "1.25", reason: "In stock" }];
+    const selected = config({ requestedProvider: "xai" });
+    await enhanceCustomerRecommendations(selected, candidates, {}, clientReturning("malformed"));
+    await enhanceCustomerRecommendations(selected, candidates, {}, clientReturning("malformed"));
+
+    let calls = 0;
+    const result = await enhanceCustomerRecommendations(selected, candidates, {}, pendingClient(() => {
+      calls += 1;
+    }));
+    assert.equal(calls, 0);
+    assert.deepEqual(result.orderedIds, ["a"]);
+    assert.equal(result.engine.activeProvider, "deterministic");
+  });
+});
+
+test("repeated invalid sentiment responses open the circuit", async () => {
+  resetCustomerAiCircuitBreakersForTests();
+  await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
+    const feedback = { context: "order", rating: 2, comment: "Late" };
+    const selected = config({ requestedProvider: "xai" });
+    await classifyCustomerFeedback(selected, feedback, clientReturning('{"sentiment":"angry","score":-1}'));
+    await classifyCustomerFeedback(selected, feedback, clientReturning('{"sentiment":"angry","score":-1}'));
+
+    let calls = 0;
+    assert.equal(await classifyCustomerFeedback(selected, feedback, pendingClient(() => {
+      calls += 1;
+    })), null);
+    assert.equal(calls, 0);
+  });
+});
+
 test("model output can only reorder supplied IDs and cannot alter catalog facts", async () => {
+  resetCustomerAiCircuitBreakersForTests();
   await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
     const candidates = [
       { id: "safe-a", name: "Apple", category: "Fruit", price: "1.25", reason: "In stock" },
@@ -205,6 +335,7 @@ test("model output can only reorder supplied IDs and cannot alter catalog facts"
 });
 
 test("sentiment accepts only validated classifications and otherwise requests heuristic fallback", async () => {
+  resetCustomerAiCircuitBreakersForTests();
   await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
     const feedback = { context: "order", rating: 2, comment: "Late delivery" };
     const valid = await classifyCustomerFeedback(
@@ -250,6 +381,7 @@ test("status reports booleans and never exposes credential values", async () => 
 
 test("runtime health records only sanitized fallback categories and clears degradation after success", async () => {
   resetCustomerAiRuntimeHealth();
+  resetCustomerAiCircuitBreakersForTests();
   await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
     const candidates = [{ id: "a", name: "Apple", price: "1.25", reason: "In stock" }];
     const sensitiveError = new Error("401 invalid API key secret-value prompt-content");
@@ -265,12 +397,18 @@ test("runtime health records only sanitized fallback categories and clears degra
     assert.equal(JSON.stringify(degraded).includes("secret-value"), false);
     assert.equal(JSON.stringify(degraded).includes("prompt-content"), false);
 
-    await enhanceCustomerRecommendations(
-      config({ requestedProvider: "xai" }),
-      candidates,
-      {},
-      clientReturning('{"orderedIds":["a"],"reasons":{}}'),
-    );
+    const originalNow = Date.now;
+    Date.now = () => originalNow() + CUSTOMER_AI_CIRCUIT_COOLDOWN_MS + 1;
+    try {
+      await enhanceCustomerRecommendations(
+        config({ requestedProvider: "xai" }),
+        candidates,
+        {},
+        clientReturning('{"orderedIds":["a"],"reasons":{}}'),
+      );
+    } finally {
+      Date.now = originalNow;
+    }
     const recovered = getCustomerAiStatus(config({ requestedProvider: "xai" })).runtimeHealth;
     assert.equal(recovered.degraded, false);
     assert.equal(recovered.consecutiveFallbackCount, 0);
