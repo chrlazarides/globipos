@@ -6,7 +6,7 @@ import { requireSuperuser } from "./auth";
 import { checkDomain, type DomainCheck } from "./domain-readiness";
 import { sendDomainStatusNotification } from "./email";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
-import { activityLogs, deploymentDomainIncidents, deploymentProfiles, deploymentRollouts } from "@shared/schema";
+import { activityLogs, deploymentDomainIncidents, deploymentProfiles, deploymentRollouts, operatorAlertFailures } from "@shared/schema";
 
 const statusSchema = z.enum(["draft", "active", "suspended"]);
 const healthStatusSchema = z.enum(["unknown", "healthy", "warning", "offline", "error"]);
@@ -516,8 +516,16 @@ export function registerDeploymentControlRoutes(app: Express) {
   }
   startActiveDomainMonitor();
 
-  app.get("/api/control/status", requireSuperuser, (_req, res) => {
-    res.json({ enabled: true, environment: process.env.NODE_ENV, automationDispatch: "not_attached" });
+  app.get("/api/control/status", requireSuperuser, async (_req, res) => {
+    const alertDeliveryFailures = await db.select().from(operatorAlertFailures)
+      .where(isNull(operatorAlertFailures.resolvedAt))
+      .orderBy(desc(operatorAlertFailures.lastFailedAt));
+    res.json({
+      enabled: true,
+      environment: process.env.NODE_ENV,
+      automationDispatch: "not_attached",
+      alertDeliveryFailures,
+    });
   });
 
   app.get("/api/control/deployments", requireSuperuser, async (_req, res) => {

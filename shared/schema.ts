@@ -92,6 +92,23 @@ export const deploymentDomainIncidents = pgTable("deployment_domain_incidents", 
     .on(table.deploymentId)
     .where(sql`${table.recoveredAt} IS NULL`),
 ]);
+
+export const operatorAlertFailures = pgTable("operator_alert_failures", {
+  alertKey: text("alert_key").primaryKey(),
+  event: text("event").notNull(),
+  operation: text("operation").notNull(),
+  reason: text("reason").notNull(),
+  occurrenceCount: integer("occurrence_count").notNull().default(1),
+  deliveryAttempts: integer("delivery_attempts").notNull(),
+  status: text("status").notNull().default("pending"),
+  claimedAt: timestamp("claimed_at"),
+  claimToken: text("claim_token"),
+  nextAttemptAt: timestamp("next_attempt_at"),
+  firstFailedAt: timestamp("first_failed_at").defaultNow().notNull(),
+  lastFailedAt: timestamp("last_failed_at").defaultNow().notNull(),
+  resolvedAt: timestamp("resolved_at"),
+});
+
 export const deploymentRollouts = pgTable("deployment_rollouts", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   scope: text("scope").notNull(),

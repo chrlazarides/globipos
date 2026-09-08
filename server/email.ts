@@ -201,11 +201,16 @@ export type DomainStatusNotification = {
 
 export async function sendCustomerAiPersistenceAlert(
   operation: 'load' | 'save',
-): Promise<{ success: boolean; skipped?: boolean }> {
+): Promise<{ success: boolean; skipped?: boolean; reason?: 'support_recipient_missing' | 'email_delivery_failed'; error?: string }> {
   const supportEmail = await getSettingValue('resend_reply_to');
   if (!supportEmail?.trim()) {
     console.warn('[operator-alert] Customer AI persistence notification skipped: support recipient is not configured');
-    return { success: false, skipped: true };
+    return {
+      success: false,
+      skipped: true,
+      reason: 'support_recipient_missing',
+      error: 'Support recipient is not configured',
+    };
   }
 
   try {
@@ -230,9 +235,10 @@ export async function sendCustomerAiPersistenceAlert(
     if (replyTo) payload.reply_to = replyTo;
     await sendEmailPayload(payload);
     return { success: true };
-  } catch {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to deliver operator alert';
     console.error(`[operator-alert] customer_ai_health_persistence_failed ${operation} delivery failed`);
-    return { success: false };
+    return { success: false, reason: 'email_delivery_failed', error: message };
   }
 }
 

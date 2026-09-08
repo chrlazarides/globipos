@@ -37,6 +37,17 @@ type IncidentHistoryResponse = {
   incidents: Profile["domainIncidents"];
   pagination: { page: number; pageSize: number; total: number; totalPages: number };
 };
+type OperatorAlertFailure = {
+  alertKey: string;
+  event: string;
+  operation: "load" | "save";
+  reason: string;
+  occurrenceCount: number;
+  deliveryAttempts: number;
+  status: "pending" | "delivering" | "failed";
+  firstFailedAt: string;
+  lastFailedAt: string;
+};
 class ControlApiError extends Error {
   constructor(message: string, readonly code?: string) { super(message); }
 }
@@ -149,7 +160,7 @@ export default function DeploymentControlPage() {
   const [historyPage, setHistoryPage] = useState(1);
   const [rollout, setRollout] = useState({ all: false, targetBackOfficeVersion: "", targetPosVersion: "", notes: "" });
   useEffect(() => { const unique = Array.from(new Set(selected)); if (unique.length !== selected.length) setSelected(unique); }, [selected]);
-  const control = useQuery<any>({ queryKey: ["/api/control/status"] });
+  const control = useQuery<any>({ queryKey: ["/api/control/status"], refetchInterval: 60_000 });
   const deployments = useQuery<Profile[]>({ queryKey: ["/api/control/deployments"], enabled: !!control.data, refetchInterval: 60_000 });
   const rollouts = useQuery<any[]>({ queryKey: ["/api/control/rollouts"], enabled: !!control.data });
   const history = useQuery<IncidentHistoryResponse>({
@@ -224,6 +235,7 @@ export default function DeploymentControlPage() {
   };
   const activeDomainFailures = profiles.filter(p => p.status === "active" && p.domainStatus === "failed");
   const activeDeliveryWarnings = profiles.filter(p => p.domainNotificationDeliveryStatus === "failed" || p.domainNotificationDeliveryStatus === "skipped");
+  const operatorAlertFailures = (control.data?.alertDeliveryFailures || []) as OperatorAlertFailure[];
   const total = profiles.length, healthy = profiles.filter(p => p.healthStatus === "healthy").length, drift = profiles.filter(p => p.targetBackOfficeVersion && p.targetBackOfficeVersion !== p.backOfficeVersion || p.targetPosVersion && p.targetPosVersion !== p.posVersion).length;
   const rolloutData = (rollouts.data || []).map((r: any) => ({ ...r, all: r.scope === "all" }));
 
@@ -245,6 +257,7 @@ export default function DeploymentControlPage() {
         </CardContent>
       </Card>}
       <header className="flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-teal-700"><MonitorCog className="h-4 w-4" /> GlobiPOS support cockpit</div><h1 className="text-3xl font-semibold tracking-tight text-slate-900">Deployment Control Center</h1><p className="mt-1 text-sm text-slate-500">Manage isolated customer installations from one shared codebase.</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => { control.refetch(); deployments.refetch(); }}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button><Button onClick={openCreate}><Plus className="mr-2 h-4 w-4" />New deployment</Button></div></header>
+      {operatorAlertFailures.length > 0 && <Card className="border-red-300 bg-red-50"><CardContent className="p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" /><div><p className="font-semibold text-red-950">Operator alerts could not be delivered</p><div className="mt-2 space-y-2">{operatorAlertFailures.map(failure => <div key={failure.alertKey} className="text-sm text-red-900"><strong>Customer AI history {failure.operation}</strong> — {failure.reason}<span className="block text-xs text-red-700">{failure.occurrenceCount} occurrence{failure.occurrenceCount === 1 ? "" : "s"}; last delivery used {failure.deliveryAttempts} attempt{failure.deliveryAttempts === 1 ? "" : "s"} at {new Date(failure.lastFailedAt).toLocaleString()}</span></div>)}</div></div></div></CardContent></Card>}
       {activeDomainFailures.length > 0 && <Card className="border-red-300 bg-red-50"><CardContent className="p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" /><div><p className="font-semibold text-red-900">{activeDomainFailures.length} active customer domain{activeDomainFailures.length === 1 ? " is" : "s are"} not responding</p><div className="mt-2 space-y-1">{activeDomainFailures.map(p => <button key={p.id} className="block text-left text-sm text-red-800 underline-offset-2 hover:underline" onClick={() => openEdit(p)}><strong>{p.clientName}</strong> — {p.domainMessage || "Domain check failed"} <span className="text-red-600">({p.domainFailureCount} consecutive; since {p.domainFailureStartedAt ? new Date(p.domainFailureStartedAt).toLocaleString() : "unknown"})</span></button>)}</div></div></div></CardContent></Card>}
       {activeDeliveryWarnings.length > 0 && <Card className="border-amber-300 bg-amber-50"><CardContent className="p-4"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" /><div><p className="font-semibold text-amber-950">{activeDeliveryWarnings.length} deployment alert{activeDeliveryWarnings.length === 1 ? " needs" : "s need"} delivery attention</p><div className="mt-2 space-y-1">{activeDeliveryWarnings.map(p => <button key={p.id} className="block text-left text-sm text-amber-900 underline-offset-2 hover:underline" onClick={() => openEdit(p)}><strong>{p.clientName}</strong> — {p.domainNotificationDeliveryMessage || "Notification could not be delivered"}</button>)}</div></div></div></CardContent></Card>}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Card><CardContent className="p-4"><div className="flex justify-between"><Users className="h-4 w-4 text-teal-700" /><span className="text-2xl font-semibold">{total}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Registered clients</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><HeartPulse className="h-4 w-4 text-emerald-700" /><span className="text-2xl font-semibold text-emerald-700">{healthy}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Healthy heartbeat</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><GitBranch className="h-4 w-4 text-amber-700" /><span className="text-2xl font-semibold text-amber-700">{drift}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Version drift</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><Activity className="h-4 w-4 text-slate-500" /><span className="text-2xl font-semibold">{rollouts.data?.length || 0}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Rollouts recorded</p></CardContent></Card></div>
