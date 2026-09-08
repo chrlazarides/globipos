@@ -36,3 +36,4 @@
 - [Settings have two default paths](settings-default-paths.md) — audit both startup initialization and the Load Defaults endpoint; startup usually makes the UI endpoint unavailable
 - [Remote alert acknowledgements](remote-alert-acknowledgements.md) — server acknowledgements must survive stale device heartbeats until the device leaves its alert state
 - [Client deployment isolation](client-deployment-isolation.md) — separate backend+DB per client, one shared main codebase, centrally managed profiles and rollouts
+- [Safe domain readiness checks](domain-readiness-checks.md) — pin HTTPS to the validated public DNS address and use conditional writes so stale checks cannot authorize changed routing

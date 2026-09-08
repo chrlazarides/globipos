@@ -133,6 +133,23 @@ test("omits malformed asset URLs before caching release metadata", async () => {
   assert.equal(fake.requests.length, 1);
 });
 
+test("omits assets with malformed names without failing the release response", async () => {
+  const release = githubRelease(repoA, "bad-name");
+  release.assets.push({
+    name: null as unknown as string,
+    size: 1234,
+    browser_download_url: `${repoA}/releases/download/v1.0.0-bad-name/malformed.msi`,
+    download_count: 1,
+  });
+  const fake = createFakeFetch([{ ok: true, status: 200, body: [release] }]);
+  const result = releasesFrom(await createPosBuildsResolver({
+    getSettings: async () => settingsFor(repoA),
+    fetchFn: fake.fetchFn,
+  })());
+
+  assert.deepEqual(result.releases[0].assets.map(asset => asset.name), ["GlobiPOS-bad-name.msi"]);
+});
+
 test("returns only the last-known-good assets during a temporary GitHub failure", async () => {
   let currentTime = 100;
   const fake = createFakeFetch([

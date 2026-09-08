@@ -197,7 +197,7 @@ export function createPosBuildsResolver({
           prerelease: Boolean(release.prerelease),
           htmlUrl: release.html_url,
           assets: (release.assets ?? [])
-            .filter((asset) => !asset.name.endsWith(".sig") && asset.name !== "latest.json")
+            .filter((asset) => typeof asset?.name === "string" && !asset.name.endsWith(".sig") && asset.name !== "latest.json")
             .filter((asset) =>
               isValidGithubReleaseAssetUrl(asset.browser_download_url, owner, repo),
             )

@@ -1,10 +1,11 @@
 import type { Express, Request, Response } from "express";
 import crypto from "crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db";
 import { activityLogs, deploymentProfiles, deploymentRollouts } from "@shared/schema";
 import { requireSuperuser } from "./auth";
+import { checkDomain, type DomainCheck } from "./domain-readiness";
 
 const statusSchema = z.enum(["draft", "active", "suspended"]);
 const healthStatusSchema = z.enum(["unknown", "healthy", "warning", "offline", "error"]);
@@ -69,7 +70,12 @@ function validateProfileRouting(value: z.infer<typeof profileBaseSchema>, ctx: z
 }
 
 const profileSchema = profileBaseSchema.superRefine(validateProfileRouting);
-const profileUpdateSchema = profileBaseSchema.partial();
+const profileCreateSchema = profileBaseSchema.extend({
+  overrideDomainWarning: z.boolean().optional(),
+}).strict().superRefine((value, ctx) => validateProfileRouting(value, ctx));
+const profilePatchSchema = profileBaseSchema.partial().extend({
+  overrideDomainWarning: z.boolean().optional(),
+}).strict();
 const heartbeatSchema = z.object({
   backOfficeVersion: versionSchema.optional(),
   posVersion: versionSchema.optional(),
@@ -109,6 +115,7 @@ function safeProfile(profile: typeof deploymentProfiles.$inferSelect) {
   return safe;
 }
 
+
 async function logControlActivity(req: Request, action: string, entity: string, entityId: string, description: string) {
   try {
     await db.insert(activityLogs).values({
@@ -130,6 +137,14 @@ function validationError(res: Response, error: z.ZodError) {
   return res.status(400).json({ message: "Invalid request", errors: error.flatten() });
 }
 
+const DOMAIN_CHECK_MAX_AGE_MS = 15 * 60 * 1000;
+
+function hasFreshConnectedDomains(profile: typeof deploymentProfiles.$inferSelect) {
+  return profile.domainStatus === "connected"
+    && profile.domainCheckedAt instanceof Date
+    && Date.now() - profile.domainCheckedAt.getTime() <= DOMAIN_CHECK_MAX_AGE_MS;
+}
+
 export function registerDeploymentControlRoutes(app: Express) {
   if (process.env.NODE_ENV !== "development" && process.env.CONTROL_PLANE_ENABLED !== "true") {
     return;
@@ -145,11 +160,19 @@ export function registerDeploymentControlRoutes(app: Express) {
   });
 
   app.post("/api/control/deployments", requireSuperuser, async (req, res) => {
-    const parsed = profileSchema.safeParse(req.body);
+    const parsed = profileCreateSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error);
+    const { overrideDomainWarning, ...profileValues } = parsed.data;
+    if (profileValues.status === "active" && !overrideDomainWarning) {
+      return res.status(409).json({
+        message: "A new deployment cannot be active before its domains are checked. Create it as a draft, run the domain check, then activate it.",
+        code: "DOMAIN_NOT_READY",
+        domainStatus: "pending",
+      });
+    }
     try {
-      const [profile] = await db.insert(deploymentProfiles).values(parsed.data).returning();
-      await logControlActivity(req, "create", "deployment_profile", profile.id, `Created deployment profile ${profile.slug}`);
+      const [profile] = await db.insert(deploymentProfiles).values(profileValues).returning();
+      await logControlActivity(req, overrideDomainWarning ? "override_domain_activation" : "create", "deployment_profile", profile.id, overrideDomainWarning ? `Created and activated ${profile.slug} with an explicit domain warning override` : `Created deployment profile ${profile.slug}`);
       res.status(201).json(safeProfile(profile));
     } catch (error: any) {
       if (error?.code === "23505") return res.status(409).json({ message: "Deployment slug already exists" });
@@ -158,19 +181,93 @@ export function registerDeploymentControlRoutes(app: Express) {
   });
 
   app.patch("/api/control/deployments/:id", requireSuperuser, async (req, res) => {
-    const parsed = profileUpdateSchema.safeParse(req.body);
+    const parsed = profilePatchSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error);
     if (Object.keys(parsed.data).length === 0) return res.status(400).json({ message: "No updates supplied" });
     const id = String(req.params.id);
     const [currentProfile] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, id));
     if (!currentProfile) return res.status(404).json({ message: "Deployment profile not found" });
-    const merged = profileSchema.safeParse({ ...editableProfile(currentProfile), ...parsed.data });
+    const { overrideDomainWarning, ...updates } = parsed.data;
+    const merged = profileSchema.safeParse({ ...editableProfile(currentProfile), ...updates });
     if (!merged.success) return validationError(res, merged.error);
+    const routingChanged = (
+      updates.customerDomain !== undefined && updates.customerDomain !== currentProfile.customerDomain
+    ) || (
+      updates.posDomain !== undefined && updates.posDomain !== currentProfile.posDomain
+    );
+    const targetStatus = updates.status ?? currentProfile.status;
+    const needsActivationApproval = targetStatus === "active" && (
+      currentProfile.status !== "active" || routingChanged
+    );
+    if (needsActivationApproval && (!hasFreshConnectedDomains(currentProfile) || routingChanged) && !overrideDomainWarning) {
+      return res.status(409).json({
+        message: "Required customer domains are not connected with a recent check. Run the domain check before activation, or deliberately override this warning.",
+        code: "DOMAIN_NOT_READY",
+        domainStatus: currentProfile.domainStatus,
+        domainMessage: currentProfile.domainMessage,
+      });
+    }
+    const stableCustomerDomain = currentProfile.customerDomain === null
+      ? isNull(deploymentProfiles.customerDomain)
+      : eq(deploymentProfiles.customerDomain, currentProfile.customerDomain);
+    const stablePosDomain = currentProfile.posDomain === null
+      ? isNull(deploymentProfiles.posDomain)
+      : eq(deploymentProfiles.posDomain, currentProfile.posDomain);
+    const stableRoutingPredicate = and(stableCustomerDomain, stablePosDomain);
+    const activationPredicate = needsActivationApproval && !overrideDomainWarning
+      ? and(
+          stableRoutingPredicate,
+          eq(deploymentProfiles.status, currentProfile.status),
+          eq(deploymentProfiles.domainStatus, currentProfile.domainStatus),
+          currentProfile.domainCheckedAt ? eq(deploymentProfiles.domainCheckedAt, currentProfile.domainCheckedAt) : isNull(deploymentProfiles.domainCheckedAt),
+        )
+      : and(stableRoutingPredicate, (routingChanged || updates.status !== undefined) ? eq(deploymentProfiles.status, currentProfile.status) : undefined);
     const [profile] = await db.update(deploymentProfiles)
-      .set(withoutUndefined({ ...parsed.data, updatedAt: new Date() }))
-      .where(eq(deploymentProfiles.id, id))
+      .set(withoutUndefined({
+        ...updates,
+        ...(routingChanged ? { domainStatus: "pending", domainMessage: "Hostname changed; run the domain check again.", domainChecks: [], domainCheckedAt: null } : {}),
+        updatedAt: new Date(),
+      }))
+      .where(and(eq(deploymentProfiles.id, id), activationPredicate))
       .returning();
-    await logControlActivity(req, "update", "deployment_profile", profile.id, `Updated deployment profile ${profile.slug}`);
+    if (!profile) {
+      return res.status(409).json({ message: "Deployment routing or domain readiness changed while saving. Review the latest profile and try again.", code: "DEPLOYMENT_CHANGED" });
+    }
+    await logControlActivity(req, overrideDomainWarning ? "override_domain_activation" : "update", "deployment_profile", profile.id, overrideDomainWarning ? `Activated ${profile.slug} with an explicit domain warning override (previous status: ${currentProfile.domainStatus})` : `Updated deployment profile ${profile.slug}`);
+    res.json(safeProfile(profile));
+  });
+
+  app.post("/api/control/deployments/:id/check-domains", requireSuperuser, async (req, res) => {
+    const id = String(req.params.id);
+    const [currentProfile] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, id));
+    if (!currentProfile) return res.status(404).json({ message: "Deployment profile not found" });
+    if (!currentProfile.customerDomain) {
+      return res.status(400).json({ message: "A primary customer hostname is required before checking domains" });
+    }
+    const targets: Array<{ hostname: string; role: DomainCheck["role"] }> = [
+      { hostname: currentProfile.customerDomain, role: "customer" },
+      ...(currentProfile.posDomain ? [{ hostname: currentProfile.posDomain, role: "pos" as const }] : []),
+    ];
+    const checks = await Promise.all(targets.map(target => checkDomain(target.hostname, target.role)));
+    const failures = checks.filter(check => check.status === "failed");
+    const domainStatus = failures.length ? "failed" : "connected";
+    const domainMessage = failures.length
+      ? failures.map(check => `${check.hostname}: ${check.reason}`).join("; ")
+      : `All ${checks.length} required hostname${checks.length === 1 ? "" : "s"} passed DNS and HTTPS checks.`;
+    const routingPredicate = currentProfile.posDomain === null
+      ? and(eq(deploymentProfiles.customerDomain, currentProfile.customerDomain!), isNull(deploymentProfiles.posDomain))
+      : and(eq(deploymentProfiles.customerDomain, currentProfile.customerDomain!), eq(deploymentProfiles.posDomain, currentProfile.posDomain));
+    const [profile] = await db.update(deploymentProfiles).set({
+      domainStatus,
+      domainMessage,
+      domainChecks: checks,
+      domainCheckedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(and(eq(deploymentProfiles.id, id), routingPredicate)).returning();
+    if (!profile) {
+      return res.status(409).json({ message: "Hostname settings changed while the check was running. Run the domain check again.", code: "DOMAIN_CHANGED_DURING_CHECK" });
+    }
+    await logControlActivity(req, "check_domains", "deployment_profile", id, `Domain check ${domainStatus} for ${profile.slug}: ${domainMessage}`);
     res.json(safeProfile(profile));
   });
 
