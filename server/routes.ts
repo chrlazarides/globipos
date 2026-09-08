@@ -4416,9 +4416,9 @@ export async function registerRoutes(
         "set -e",
         "",
         "echo \"\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
         "echo \" " + companyName + " — Deployment Setup\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
         "echo \"\"",
         "",
         "# ── 1. Check prerequisites ────────────────────────────────",
@@ -4482,9 +4482,9 @@ export async function registerRoutes(
         "fi",
         "",
         "echo \"\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
         "echo \" Setup complete! Visit your domain to access the app.\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
       ].join("\n");
 
       // Caddyfile (optional reverse proxy)
@@ -4775,9 +4775,9 @@ export async function registerRoutes(
         "set -e",
         "",
         "echo \"\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
         "echo \" " + companyName + " — Startup\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
         "echo \"\"",
         "",
         "# ── 1. Prerequisites ──────────────────────────────────────",
@@ -4823,9 +4823,9 @@ export async function registerRoutes(
         "fi",
         "",
         "echo \"\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
         "echo \" Done! Visit your domain to access the app.\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
       ].join("\n");
 
       // Caddyfile
@@ -5050,9 +5050,9 @@ export async function registerRoutes(
         "set -e",
         "",
         "echo \"\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
         "echo \" " + companyName + " — Synology Docker Setup\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
         "echo \"\"",
         "",
         "command -v docker >/dev/null 2>&1 || { echo \"ERROR: Docker not found. Install Container Manager from Synology Package Center.\"; exit 1; }",
@@ -5084,12 +5084,12 @@ export async function registerRoutes(
         "echo \"✓ Services started\"",
         "",
         "echo \"\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
         "echo \" Done!\"",
         "echo \" App is available at http://YOUR-SYNOLOGY-IP:$(grep APP_PORT .env | cut -d= -f2 || echo 3000)\"",
         "echo \" Note: First start imports the database automatically.\"",
         "echo \" This takes ~30 seconds — wait before opening the app.\"",
-        "echo \"========================================================\"",
+        "echo \"--------------------------------------------------------\"",
       ].join("\n");
 
       // README-SYNOLOGY.md

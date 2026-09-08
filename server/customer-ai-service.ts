@@ -46,21 +46,21 @@ const runtimeHealth: CustomerAiRuntimeHealth = {
   lastFailureAt: null,
 };
 export interface CustomerAiHealthPersistence {
-  recordFallback(feature: "recommendation" | "feedback", category: CustomerAiFailureCategory): Promise<void>;
-  recordSuccess(): Promise<void>;
-  load(): Promise<CustomerAiRuntimeHealth | null>;
-}
-
-interface LegacyCustomerAiHealthPersistence {
   load(): Promise<unknown>;
-  save(health: CustomerAiRuntimeHealth): Promise<void>;
+  recordFallback(
+    feature: "recommendation" | "feedback",
+    category: CustomerAiFailureCategory,
+    occurredAt: Date,
+  ): Promise<unknown>;
+  recordSuccess(expectedFailureRevision: number): Promise<unknown>;
 }
+type PersistedCustomerAiRuntimeHealth = CustomerAiRuntimeHealth & { failureRevision: number };
 const FAILURE_CATEGORIES = new Set<CustomerAiFailureCategory>([
   "configuration", "authentication", "rate_limit", "timeout", "model", "invalid_response", "provider",
 ]);
 let healthPersistence: CustomerAiHealthPersistence | null = null;
-
 let pendingHealthWrite = Promise.resolve();
+let failureRevision = 0;
 export const CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS = 60_000;
 type HealthPersistenceOperation = "load" | "save";
 const lastHealthPersistenceSignalAt: Record<HealthPersistenceOperation, number> = {
@@ -100,16 +100,34 @@ export function sanitizeCustomerAiRuntimeHealth(value: unknown): CustomerAiRunti
 function applyRuntimeHealth(health: CustomerAiRuntimeHealth) {
   Object.assign(runtimeHealth, health);
 }
+
+function sanitizePersistedCustomerAiRuntimeHealth(value: unknown): PersistedCustomerAiRuntimeHealth {
+  const input = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    ...sanitizeCustomerAiRuntimeHealth(input),
+    failureRevision: sanitizedCount(input.failureRevision),
+  };
+}
+
+function applyPersistedRuntimeHealth(health: PersistedCustomerAiRuntimeHealth) {
+  applyRuntimeHealth(health);
+  failureRevision = health.failureRevision;
+}
+
+async function refreshCustomerAiRuntimeHealth(): Promise<PersistedCustomerAiRuntimeHealth | undefined> {
+  const persistence = healthPersistence;
+  if (!persistence) return undefined;
+  let loaded: PersistedCustomerAiRuntimeHealth | undefined;
+  pendingHealthWrite = pendingHealthWrite.catch(() => undefined).then(async () => {
+    loaded = sanitizePersistedCustomerAiRuntimeHealth(await persistence.load());
+    applyPersistedRuntimeHealth(loaded);
+  }).catch(() => reportHealthPersistenceFailure("load"));
+  await pendingHealthWrite;
+  return loaded;
+}
+
 export async function initializeCustomerAiRuntimeHealth() {
-  try {
-    await pendingHealthWrite;
-    if (healthPersistence) {
-      applyRuntimeHealth(sanitizeCustomerAiRuntimeHealth(await healthPersistence.load()));
-    }
-  } catch {
-    reportHealthPersistenceFailure("load");
-    // Operational health must never prevent the server from starting.
-  }
+  await refreshCustomerAiRuntimeHealth();
 }
 
 function failureCategory(error: unknown): CustomerAiFailureCategory {
@@ -124,21 +142,40 @@ function failureCategory(error: unknown): CustomerAiFailureCategory {
 
 async function recordFallback(feature: "recommendation" | "feedback", category: CustomerAiFailureCategory) {
   try {
+    const occurredAt = new Date();
     runtimeHealth.fallbackCount += 1;
     runtimeHealth[feature === "recommendation" ? "recommendationFallbackCount" : "feedbackFallbackCount"] += 1;
     runtimeHealth.consecutiveFallbackCount += 1;
     runtimeHealth.lastFailureCategory = category;
-    runtimeHealth.lastFailureAt = new Date().toISOString();
-    enqueueHealthWrite(persistence => persistence.recordFallback(feature, category));
+    runtimeHealth.lastFailureAt = occurredAt.toISOString();
+    failureRevision += 1;
+    const persistence = healthPersistence;
+    if (!persistence) return;
+    pendingHealthWrite = pendingHealthWrite.catch(() => undefined).then(async () => {
+      const persisted = await persistence.recordFallback(feature, category, occurredAt);
+      applyPersistedRuntimeHealth(sanitizePersistedCustomerAiRuntimeHealth(persisted));
+    }).catch(() => reportHealthPersistenceFailure("save"));
+    await pendingHealthWrite;
   } catch {
     // Operational health must never affect a customer request.
   }
 }
 
-async function recordSuccess() {
+async function recordSuccess(observedFailureRevision: number) {
   try {
-    runtimeHealth.consecutiveFallbackCount = 0;
-    enqueueHealthWrite(persistence => persistence.recordSuccess());
+    const persistence = healthPersistence;
+    if (!persistence) {
+      if (failureRevision === observedFailureRevision) runtimeHealth.consecutiveFallbackCount = 0;
+      return;
+    }
+    pendingHealthWrite = pendingHealthWrite.catch(() => undefined).then(async () => {
+      const persisted = await persistence.recordSuccess(observedFailureRevision);
+      applyPersistedRuntimeHealth(sanitizePersistedCustomerAiRuntimeHealth(persisted));
+    }).catch(() => {
+      reportHealthPersistenceFailure("save");
+      if (failureRevision === observedFailureRevision) runtimeHealth.consecutiveFallbackCount = 0;
+    });
+    await pendingHealthWrite;
   } catch {
     // Operational health must never affect a customer request.
   }
@@ -151,23 +188,12 @@ export function resetCustomerAiRuntimeHealth() {
   runtimeHealth.consecutiveFallbackCount = 0;
   runtimeHealth.lastFailureCategory = null;
   runtimeHealth.lastFailureAt = null;
+  failureRevision = 0;
 }
 
-export async function setCustomerAiHealthPersistenceForTests(
-  persistence?: CustomerAiHealthPersistence | LegacyCustomerAiHealthPersistence,
-) {
+export async function setCustomerAiHealthPersistenceForTests(persistence?: CustomerAiHealthPersistence) {
   await pendingHealthWrite;
-  if (!persistence) {
-    configureCustomerAiHealthPersistence(null);
-  } else if ("save" in persistence) {
-    configureCustomerAiHealthPersistence({
-      load: async () => sanitizeCustomerAiRuntimeHealth(await persistence.load()),
-      recordFallback: async () => persistence.save({ ...runtimeHealth }),
-      recordSuccess: async () => persistence.save({ ...runtimeHealth }),
-    });
-  } else {
-    configureCustomerAiHealthPersistence(persistence);
-  }
+  configureCustomerAiHealthPersistence(persistence || null);
 }
 
 type SettingValue = { key: string; value: string } | [string, string];
@@ -232,15 +258,8 @@ export function getCustomerAiEngine(config: CustomerAiConfig, featureEnabled = t
 
 export async function getCustomerAiStatus(config: CustomerAiConfig) {
   const engine = getCustomerAiEngine(config);
-  let health = runtimeHealth;
-  try {
-    await pendingHealthWrite;
-    health = healthPersistence
-      ? sanitizeCustomerAiRuntimeHealth(await healthPersistence.load())
-      : runtimeHealth;
-  } catch {
-    // Admin health reporting falls back locally when persistence is unavailable.
-  }
+  await refreshCustomerAiRuntimeHealth();
+  const health = runtimeHealth;
   return {
     ...engine,
     enabled: config.enabled,
@@ -286,6 +305,7 @@ export async function enhanceCustomerRecommendations(
     return { orderedIds: candidates.map(candidate => candidate.id), reasons: {}, engine };
   }
   try {
+    const observedFailureRevision = (await refreshCustomerAiRuntimeHealth())?.failureRevision ?? failureRevision;
     const completion = await guardedProviderCall(engine.activeProvider as RemoteProvider, () => client.chat.completions.create({
       model: engine.model,
       messages: [
@@ -308,7 +328,7 @@ export async function enhanceCustomerRecommendations(
       }
     }
     recordProviderSuccess(engine.activeProvider as RemoteProvider);
-    await recordSuccess();
+    await recordSuccess(observedFailureRevision);
     return { orderedIds: uniqueIds, reasons, engine };
   } catch (error) {
     if (!(error instanceof CustomerAiCircuitOpenError)) {
@@ -337,6 +357,7 @@ export async function classifyCustomerFeedback(
     return null;
   }
   try {
+    const observedFailureRevision = (await refreshCustomerAiRuntimeHealth())?.failureRevision ?? failureRevision;
     const completion = await guardedProviderCall(engine.activeProvider as RemoteProvider, () => client.chat.completions.create({
       model: engine.model,
       messages: [
@@ -350,7 +371,7 @@ export async function classifyCustomerFeedback(
       throw new Error("invalid response");
     }
     recordProviderSuccess(engine.activeProvider as RemoteProvider);
-    await recordSuccess();
+    await recordSuccess(observedFailureRevision);
     return { sentiment: result.sentiment as "positive" | "neutral" | "negative", score: result.score, engine };
   } catch (error) {
     if (!(error instanceof CustomerAiCircuitOpenError)) {
@@ -435,13 +456,4 @@ class CustomerAiCircuitOpenError extends Error {}
 export function configureCustomerAiHealthPersistence(persistence: CustomerAiHealthPersistence | null) {
   healthPersistence = persistence;
   pendingHealthWrite = Promise.resolve();
-}
-
-function enqueueHealthWrite(write: (persistence: CustomerAiHealthPersistence) => Promise<void>) {
-  const persistence = healthPersistence;
-  if (!persistence) return;
-  pendingHealthWrite = pendingHealthWrite
-    .catch(() => undefined)
-    .then(() => write(persistence))
-    .catch(() => reportHealthPersistenceFailure("save"));
 }

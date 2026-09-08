@@ -14,7 +14,7 @@ export function createCustomerAiHealthPersistence(
   database: CustomerAiHealthDatabase = db,
 ): CustomerAiHealthPersistence {
   return {
-    async recordFallback(feature, category) {
+    async recordFallback(feature, category, occurredAt) {
       const recommendationIncrement = feature === "recommendation" ? 1 : 0;
       const feedbackIncrement = feature === "feedback" ? 1 : 0;
       await database.insert(customerAiHealth).values({
@@ -23,8 +23,9 @@ export function createCustomerAiHealthPersistence(
         recommendationFallbackCount: recommendationIncrement,
         feedbackFallbackCount: feedbackIncrement,
         consecutiveFallbackCount: 1,
+        failureRevision: 1,
         lastFailureCategory: category,
-        lastFailureAt: new Date(),
+        lastFailureAt: occurredAt,
       }).onConflictDoUpdate({
         target: customerAiHealth.scope,
         set: {
@@ -32,18 +33,34 @@ export function createCustomerAiHealthPersistence(
           recommendationFallbackCount: sql`LEAST(2147483647::bigint, ${customerAiHealth.recommendationFallbackCount}::bigint + ${recommendationIncrement})::integer`,
           feedbackFallbackCount: sql`LEAST(2147483647::bigint, ${customerAiHealth.feedbackFallbackCount}::bigint + ${feedbackIncrement})::integer`,
           consecutiveFallbackCount: sql`LEAST(2147483647::bigint, ${customerAiHealth.consecutiveFallbackCount}::bigint + 1)::integer`,
-          lastFailureCategory: category,
-          lastFailureAt: sql`CURRENT_TIMESTAMP`,
+          failureRevision: sql`LEAST(2147483647::bigint, ${customerAiHealth.failureRevision}::bigint + 1)::integer`,
+          lastFailureCategory: sql`CASE
+            WHEN ${customerAiHealth.lastFailureAt} IS NULL OR ${occurredAt} >= ${customerAiHealth.lastFailureAt}
+            THEN ${category}
+            ELSE ${customerAiHealth.lastFailureCategory}
+          END`,
+          lastFailureAt: sql`GREATEST(COALESCE(${customerAiHealth.lastFailureAt}, ${occurredAt}), ${occurredAt})`,
           updatedAt: sql`CURRENT_TIMESTAMP`,
         },
-      });
+      }).returning().then(rows => rows[0]);
     },
-    async recordSuccess() {
-      await database.insert(customerAiHealth).values({ scope: "global", consecutiveFallbackCount: 0 })
+    async recordSuccess(expectedFailureRevision) {
+      return database.insert(customerAiHealth).values({
+        scope: "global",
+        consecutiveFallbackCount: 0,
+        failureRevision: expectedFailureRevision,
+      })
         .onConflictDoUpdate({
           target: customerAiHealth.scope,
-          set: { consecutiveFallbackCount: 0, updatedAt: sql`CURRENT_TIMESTAMP` },
-        });
+          set: {
+            consecutiveFallbackCount: sql`CASE
+              WHEN ${customerAiHealth.failureRevision} = ${expectedFailureRevision}
+              THEN 0
+              ELSE ${customerAiHealth.consecutiveFallbackCount}
+            END`,
+            updatedAt: sql`CURRENT_TIMESTAMP`,
+          },
+        }).returning().then(rows => rows[0]);
     },
     async load() {
       const [health] = await database.select().from(customerAiHealth).where(eq(customerAiHealth.scope, "global"));
@@ -56,6 +73,7 @@ export function createCustomerAiHealthPersistence(
         recommendationFallbackCount: health.recommendationFallbackCount,
         feedbackFallbackCount: health.feedbackFallbackCount,
         consecutiveFallbackCount: health.consecutiveFallbackCount,
+        failureRevision: health.failureRevision,
         lastFailureCategory: allowedCategories.has(health.lastFailureCategory as CustomerAiFailureCategory)
           ? health.lastFailureCategory as CustomerAiFailureCategory
           : null,

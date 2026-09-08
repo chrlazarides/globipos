@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach, beforeEach } from "node:test";
 import {
   CUSTOMER_AI_CIRCUIT_COOLDOWN_MS,
   CUSTOMER_AI_DEADLINE_MS,
@@ -17,8 +17,58 @@ import {
   setCustomerAiHealthPersistenceForTests,
   type CustomerAiCompletionClient,
   type CustomerAiConfig,
+  type CustomerAiHealthPersistence,
 } from "./customer-ai-service";
 import { setCustomerAiPersistenceAlertTransportForTests } from "./operator-alerting";
+
+function inMemoryAtomicPersistence(initial?: Record<string, unknown>) {
+  let stored = sanitizeCustomerAiRuntimeHealth(initial);
+  let failureRevision = typeof initial?.failureRevision === "number" ? initial.failureRevision : 0;
+  const writes: unknown[] = [];
+  const persistence: CustomerAiHealthPersistence = {
+    async load() {
+      return { ...structuredClone(stored), failureRevision };
+    },
+    async recordFallback(feature, category, occurredAt) {
+      const previousAt = stored.lastFailureAt ? new Date(stored.lastFailureAt) : null;
+      const isLatest = !previousAt || occurredAt >= previousAt;
+      stored = {
+        ...stored,
+        fallbackCount: stored.fallbackCount + 1,
+        recommendationFallbackCount: stored.recommendationFallbackCount + (feature === "recommendation" ? 1 : 0),
+        feedbackFallbackCount: stored.feedbackFallbackCount + (feature === "feedback" ? 1 : 0),
+        consecutiveFallbackCount: stored.consecutiveFallbackCount + 1,
+        lastFailureCategory: isLatest ? category : stored.lastFailureCategory,
+        lastFailureAt: isLatest ? occurredAt.toISOString() : stored.lastFailureAt,
+      };
+      failureRevision += 1;
+      const row = { ...structuredClone(stored), failureRevision };
+      writes.push(row);
+      return row;
+    },
+    async recordSuccess(expectedFailureRevision) {
+      if (failureRevision === expectedFailureRevision) {
+        stored = { ...stored, consecutiveFallbackCount: 0 };
+      }
+      const row = { ...structuredClone(stored), failureRevision };
+      writes.push(row);
+      return row;
+    },
+  };
+  return { persistence, writes, read: () => ({ ...structuredClone(stored), failureRevision }) };
+}
+
+beforeEach(async () => {
+  await setCustomerAiHealthPersistenceForTests(inMemoryAtomicPersistence().persistence);
+  resetCustomerAiRuntimeHealth();
+  resetCustomerAiCircuitBreakersForTests();
+});
+
+afterEach(async () => {
+  resetCustomerAiRuntimeHealth();
+  resetCustomerAiCircuitBreakersForTests();
+  await setCustomerAiHealthPersistenceForTests();
+});
 
 const ENV_KEYS = [
   "AI_INTEGRATIONS_OPENAI_BASE_URL",
@@ -423,17 +473,8 @@ test("runtime health records only sanitized fallback categories and clears degra
 });
 
 test("runtime health survives restart hydration and persists only sanitized fields", async () => {
-  let stored: unknown;
-  const writes: unknown[] = [];
-  const persistence = {
-    async load() {
-      return stored;
-    },
-    async save(health) {
-      stored = structuredClone(health);
-      writes.push(structuredClone(health));
-    },
-  };
+  const atomic = inMemoryAtomicPersistence();
+  const { persistence, writes } = atomic;
   await setCustomerAiHealthPersistenceForTests(persistence);
   resetCustomerAiRuntimeHealth();
   resetCustomerAiCircuitBreakersForTests();
@@ -447,11 +488,13 @@ test("runtime health survives restart hydration and persists only sanitized fiel
       }
 
       assert.equal(writes.length, 3);
+      const stored = atomic.read();
       const serialized = JSON.stringify(stored);
       assert.equal(serialized.includes("secret"), false);
       assert.equal(serialized.includes("private-customer-text"), false);
       assert.deepEqual(Object.keys(stored as object).sort(), [
         "consecutiveFallbackCount",
+        "failureRevision",
         "fallbackCount",
         "feedbackFallbackCount",
         "lastFailureAt",
@@ -517,7 +560,12 @@ test("restart hydration rejects malformed and sensitive persisted values", async
         providerError: "sensitive text that must be ignored",
       };
     },
-    async save() {},
+    async recordFallback() {
+      return undefined;
+    },
+    async recordSuccess() {
+      return undefined;
+    },
   });
   resetCustomerAiRuntimeHealth();
   try {
@@ -548,7 +596,10 @@ test("persistence failures emit sanitized, rate-limited operational signals", as
     async load() {
       throw new Error(sensitive);
     },
-    async save() {
+    async recordFallback() {
+      throw new Error(sensitive);
+    },
+    async recordSuccess() {
       throw new Error(sensitive);
     },
   });
@@ -590,12 +641,12 @@ test("persistence failures emit sanitized, rate-limited operational signals", as
       );
     });
     assert.deepEqual(warnings.slice(2), [
-      ["[customer-ai] operational health persistence save failed"],
       ["[customer-ai] operational health persistence load failed"],
+      ["[customer-ai] operational health persistence save failed"],
     ]);
     assert.deepEqual(alerts.slice(2), [
-      { event: "customer_ai_health_persistence_failed", operation: "save" },
       { event: "customer_ai_health_persistence_failed", operation: "load" },
+      { event: "customer_ai_health_persistence_failed", operation: "save" },
     ]);
     assert.equal(JSON.stringify(alerts).includes("secret-value"), false);
   } finally {
@@ -606,4 +657,89 @@ test("persistence failures emit sanitized, rate-limited operational signals", as
     setCustomerAiPersistenceAlertTransportForTests();
     await setCustomerAiHealthPersistenceForTests();
   }
+});
+
+test("atomic persistence keeps concurrent fallback totals and stale success ordering exact", async () => {
+  const { persistence, read } = inMemoryAtomicPersistence();
+  await Promise.all([
+    persistence.recordFallback("recommendation", "timeout", new Date("2026-09-08T10:00:00.000Z")),
+    persistence.recordFallback("feedback", "rate_limit", new Date("2026-09-08T10:00:01.000Z")),
+    persistence.recordFallback("recommendation", "provider", new Date("2026-09-08T10:00:02.000Z")),
+  ]);
+  assert.equal(read().fallbackCount, 3);
+  assert.equal(read().recommendationFallbackCount, 2);
+  assert.equal(read().feedbackFallbackCount, 1);
+  assert.equal(read().consecutiveFallbackCount, 3);
+
+  await persistence.recordSuccess(2);
+  assert.equal(read().consecutiveFallbackCount, 3);
+  await persistence.recordSuccess(3);
+  assert.equal(read().consecutiveFallbackCount, 0);
+  assert.equal(read().fallbackCount, 3);
+});
+
+test("a stale replica refreshes shared health before a later success and status read", async () => {
+  const atomic = inMemoryAtomicPersistence();
+  await setCustomerAiHealthPersistenceForTests(atomic.persistence);
+  await atomic.persistence.recordFallback("recommendation", "timeout", new Date("2026-09-08T10:00:00.000Z"));
+  resetCustomerAiRuntimeHealth();
+
+  const staleReplicaStatus = await getCustomerAiStatus(config());
+  assert.equal(staleReplicaStatus.runtimeHealth.fallbackCount, 1);
+  assert.equal(staleReplicaStatus.runtimeHealth.consecutiveFallbackCount, 1);
+
+  await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
+    await enhanceCustomerRecommendations(
+      config({ requestedProvider: "xai" }),
+      [{ id: "a", name: "Apple", price: "1.25", reason: "In stock" }],
+      {},
+      clientReturning('{"orderedIds":["a"],"reasons":{}}'),
+    );
+  });
+  assert.equal(atomic.read().fallbackCount, 1);
+  assert.equal(atomic.read().consecutiveFallbackCount, 0);
+});
+
+test("an in-flight success cannot clear a fallback completed after it started", async () => {
+  const atomic = inMemoryAtomicPersistence();
+  await setCustomerAiHealthPersistenceForTests(atomic.persistence);
+  let releaseSuccess!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>(resolve => {
+    markStarted = resolve;
+  });
+  const release = new Promise<void>(resolve => {
+    releaseSuccess = resolve;
+  });
+  const delayedSuccess: CustomerAiCompletionClient = {
+    chat: {
+      completions: {
+        async create() {
+          markStarted();
+          await release;
+          return { choices: [{ message: { content: '{"orderedIds":["a"],"reasons":{}}' } }] };
+        },
+      },
+    },
+  };
+
+  await withProviderEnvironment({ XAI_API_KEY: "configured" }, async () => {
+    const successfulRequest = enhanceCustomerRecommendations(
+      config({ requestedProvider: "xai" }),
+      [{ id: "a", name: "Apple", price: "1.25", reason: "In stock" }],
+      {},
+      delayedSuccess,
+    );
+    await started;
+    await classifyCustomerFeedback(
+      config({ requestedProvider: "xai" }),
+      { context: "order", rating: 2, comment: "Late" },
+      failingClient(),
+    );
+    releaseSuccess();
+    await successfulRequest;
+  });
+
+  assert.equal(atomic.read().fallbackCount, 1);
+  assert.equal(atomic.read().consecutiveFallbackCount, 1);
 });

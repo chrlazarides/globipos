@@ -137,6 +137,7 @@ export const customerAiHealth = pgTable("customer_ai_health", {
   recommendationFallbackCount: integer("recommendation_fallback_count").notNull().default(0),
   feedbackFallbackCount: integer("feedback_fallback_count").notNull().default(0),
   consecutiveFallbackCount: integer("consecutive_fallback_count").notNull().default(0),
+  failureRevision: integer("failure_revision").notNull().default(0),
   lastFailureCategory: text("last_failure_category"),
   lastFailureAt: timestamp("last_failure_at"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
