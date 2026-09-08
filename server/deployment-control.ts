@@ -5,6 +5,7 @@ import { db } from "./db";
 import { requireSuperuser } from "./auth";
 import { checkDomain, type DomainCheck } from "./domain-readiness";
 import { sendDomainStatusNotification } from "./email";
+import { retryCustomerAiPersistenceAlert } from "./operator-alerting";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { activityLogs, deploymentDomainIncidents, deploymentProfiles, deploymentRollouts, operatorAlertFailures } from "@shared/schema";
 
@@ -533,6 +534,22 @@ export function registerDeploymentControlRoutes(app: Express) {
       automationDispatch: "not_attached",
       alertDeliveryFailures,
     });
+  });
+
+  app.post("/api/control/operator-alerts/:operation/retry", requireSuperuser, async (req, res) => {
+    const operation = z.enum(["load", "save"]).safeParse(req.params.operation);
+    if (!operation.success) return res.status(400).json({ message: "Unknown operator alert operation" });
+    const outcome = await retryCustomerAiPersistenceAlert(operation.data);
+    if (outcome === "not_claimed") {
+      return res.status(409).json({
+        message: "This alert is already being delivered, is still in cooldown, or is no longer unresolved.",
+        code: "OPERATOR_ALERT_RETRY_NOT_READY",
+      });
+    }
+    await logControlActivity(req, "retry", "operator_alert", `customer_ai_health_persistence_failed:${operation.data}`, `Retried customer AI history ${operation.data} alert delivery`);
+    const [failure] = await db.select().from(operatorAlertFailures)
+      .where(eq(operatorAlertFailures.alertKey, `customer_ai_health_persistence_failed:${operation.data}`));
+    res.status(outcome === "delivered" ? 200 : 502).json({ outcome, alert: failure ?? null });
   });
 
   app.get("/api/control/deployments", requireSuperuser, async (_req, res) => {

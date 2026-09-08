@@ -32,6 +32,7 @@ type CustomerAiPersistenceAlertResolver = (
 ) => Promise<void>;
 type CustomerAiPersistenceAlertClaimer = (
   alert: CustomerAiPersistenceAlert,
+  existingOnly?: boolean,
 ) => Promise<string | null>;
 
 const emailTransport: CustomerAiPersistenceAlertTransport = async alert => {
@@ -78,28 +79,30 @@ function withDeliveryDeadline(
 
 let deliveryDeadline = withDeliveryDeadline;
 
-export const databaseAlertClaimer: CustomerAiPersistenceAlertClaimer = async alert => {
+export const databaseAlertClaimer: CustomerAiPersistenceAlertClaimer = async (alert, existingOnly = false) => {
   const { db } = await import("./db");
   const now = new Date();
   const token = crypto.randomUUID();
-  await db.insert(operatorAlertFailures).values({
-    alertKey: alertKey(alert),
-    event: alert.event,
-    operation: alert.operation,
-    reason: "Operator alert delivery is pending",
-    deliveryAttempts: 0,
-    status: "pending",
-    firstFailedAt: now,
-    lastFailedAt: now,
-    resolvedAt: null,
-  }).onConflictDoUpdate({
-    target: operatorAlertFailures.alertKey,
-    set: {
-      occurrenceCount: sql`${operatorAlertFailures.occurrenceCount} + 1`,
+  if (!existingOnly) {
+    await db.insert(operatorAlertFailures).values({
+      alertKey: alertKey(alert),
+      event: alert.event,
+      operation: alert.operation,
+      reason: "Operator alert delivery is pending",
+      deliveryAttempts: 0,
+      status: "pending",
+      firstFailedAt: now,
       lastFailedAt: now,
       resolvedAt: null,
-    },
-  });
+    }).onConflictDoUpdate({
+      target: operatorAlertFailures.alertKey,
+      set: {
+        occurrenceCount: sql`${operatorAlertFailures.occurrenceCount} + 1`,
+        lastFailedAt: now,
+        resolvedAt: null,
+      },
+    });
+  }
   const staleClaim = new Date(now.getTime() - DELIVERY_LEASE_MS);
   const [claimed] = await db.update(operatorAlertFailures).set({
     status: "delivering",
@@ -108,6 +111,7 @@ export const databaseAlertClaimer: CustomerAiPersistenceAlertClaimer = async ale
     claimToken: token,
   }).where(and(
     eq(operatorAlertFailures.alertKey, alertKey(alert)),
+    isNull(operatorAlertFailures.resolvedAt),
     or(isNull(operatorAlertFailures.claimedAt), lt(operatorAlertFailures.claimedAt, staleClaim)),
     or(isNull(operatorAlertFailures.nextAttemptAt), lte(operatorAlertFailures.nextAttemptAt, now)),
   )).returning({ alertKey: operatorAlertFailures.alertKey });
@@ -156,9 +160,10 @@ export const databaseAlertResolver: CustomerAiPersistenceAlertResolver = async (
 
 let customerAiPersistenceAlertResolver = databaseAlertResolver;
 
-export async function deliverCustomerAiPersistenceAlert(
+async function attemptCustomerAiPersistenceAlert(
   operation: CustomerAiPersistenceOperation,
-): Promise<void> {
+  existingOnly: boolean,
+): Promise<"delivered" | "failed" | "not_claimed"> {
   const transport = customerAiPersistenceAlertTransport;
   const claimer = customerAiPersistenceAlertClaimer;
   const recorder = customerAiPersistenceAlertFailureRecorder;
@@ -170,15 +175,15 @@ export async function deliverCustomerAiPersistenceAlert(
     event: "customer_ai_health_persistence_failed",
     operation,
   };
-  const claimToken = bypassClaim ? "test-claim" : await claimer(alert);
-  if (!claimToken) return;
+  const claimToken = bypassClaim ? "test-claim" : await claimer(alert, existingOnly);
+  if (!claimToken) return "not_claimed";
   let delivery: CustomerAiPersistenceAlertDelivery = { success: false };
   let attempts = 0;
   for (let index = 0; index <= RETRY_DELAYS_MS.length; index += 1) {
     attempts += 1;
     try {
       const result = await deadline(transport(alert));
-      if (!result) return;
+      if (!result) return "delivered";
       delivery = result;
     } catch (error) {
       delivery = {
@@ -191,15 +196,26 @@ export async function deliverCustomerAiPersistenceAlert(
       await resolver(alert, claimToken).catch(error => {
         console.error("[operator-alert] Failed to resolve durable delivery warning:", error);
       });
-      return;
+      return "delivered";
     }
     if (delivery.skipped || index === RETRY_DELAYS_MS.length) break;
     await delay(RETRY_DELAYS_MS[index]);
   }
   await recorder(alert, delivery, attempts, claimToken);
   console.error(`[operator-alert] customer_ai_health_persistence_failed ${operation} delivery failed after ${attempts} attempt${attempts === 1 ? "" : "s"}`);
+  return "failed";
+}
+export async function deliverCustomerAiPersistenceAlert(
+  operation: CustomerAiPersistenceOperation,
+): Promise<void> {
+  await attemptCustomerAiPersistenceAlert(operation, false);
 }
 
+export async function retryCustomerAiPersistenceAlert(
+  operation: CustomerAiPersistenceOperation,
+) {
+  return attemptCustomerAiPersistenceAlert(operation, true);
+}
 export function emitCustomerAiPersistenceAlert(operation: CustomerAiPersistenceOperation): void {
   void deliverCustomerAiPersistenceAlert(operation)
     .catch(error => console.error("[operator-alert] Failed to record operator alert delivery failure:", error));

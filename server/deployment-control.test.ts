@@ -138,6 +138,15 @@ test("CSV export cells preserve commas, quotes, and newlines", () => {
   assert.equal(csvCell(null), "");
 });
 
+test("operator alert retries are exposed only through the superuser control route", () => {
+  const source = readFileSync(new URL("./deployment-control.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /app\.post\("\/api\/control\/operator-alerts\/:operation\/retry", requireSuperuser,/,
+  );
+  assert.match(source, /z\.enum\(\["load", "save"\]\)\.safeParse\(req\.params\.operation\)/);
+});
+
 async function createDeployment(slug: string) {
   const [profile] = await db.insert(deploymentProfiles).values({
     slug,

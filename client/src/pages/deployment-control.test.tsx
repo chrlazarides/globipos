@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -33,4 +34,10 @@ test("incident history renders start, recovery, duration, reason, and ongoing la
   assert.match(markup, /Ongoing · /);
   assert.match(markup, /HTTPS certificate expired/);
   assert.match(markup, /Recovery not yet recorded/);
+});
+
+test("unresolved operator alert warnings offer a retry delivery action", () => {
+  const source = readFileSync(new URL("./deployment-control.tsx", import.meta.url), "utf8");
+  assert.match(source, /\/api\/control\/operator-alerts\/\$\{operation\}\/retry/);
+  assert.match(source, /Retry delivery<\/Button>/);
 });
