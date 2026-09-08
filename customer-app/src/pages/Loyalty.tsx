@@ -7,8 +7,6 @@ import { Trophy, TrendingUp, Gift, Star, Sparkles, Wallet } from "lucide-react";
 
 interface LoyaltyProps { customer: CustomerSession; }
 
-const REDEEM_RATE = 100; // 100 points = €1 discount
-
 function tierColor(tier: string): string {
   if (tier === "Gold")   return "bg-yellow-100 text-yellow-800 border-yellow-300 dark:bg-yellow-900/40 dark:text-yellow-200";
   if (tier === "Silver") return "bg-slate-100 text-slate-800 border-slate-300 dark:bg-slate-800 dark:text-slate-200";
@@ -28,6 +26,8 @@ export default function Loyalty({ customer }: LoyaltyProps) {
   const [redeemPoints, setRedeemPoints] = useState("");
   const [redeemSuccess, setRedeemSuccess] = useState<string | null>(null);
   const [redeemError, setRedeemError] = useState<string | null>(null);
+  const redeemRate = Number(data?.redeemPointsPerEuro ?? 100);
+  const minimumRedemption = Number(data?.minimumRedemptionPoints ?? redeemRate);
 
   const redeemMutation = useMutation({
     mutationFn: (points: number) =>
@@ -39,8 +39,8 @@ export default function Loyalty({ customer }: LoyaltyProps) {
       queryClient.invalidateQueries({ queryKey: ["/api/customer/loyalty"] });
       setRedeemPoints("");
       setRedeemError(null);
-      const euroValue = (data.pointsRedeemed / REDEEM_RATE).toFixed(2);
-      setRedeemSuccess(`Redeemed ${data.pointsRedeemed} pts — €${euroValue} discount applied to your account!`);
+      const euroValue = Number(data.discountEuros).toFixed(2);
+      setRedeemSuccess(`Converted ${data.pointsRedeemed} pts into €${euroValue} cashback credit.`);
       setTimeout(() => setRedeemSuccess(null), 5000);
     },
     onError: (err: any) => {
@@ -50,8 +50,12 @@ export default function Loyalty({ customer }: LoyaltyProps) {
 
   function handleRedeem() {
     const pts = parseInt(redeemPoints, 10);
-    if (!pts || pts < REDEEM_RATE) {
-      setRedeemError(`Minimum redemption is ${REDEEM_RATE} points`);
+    if (!pts || pts < minimumRedemption) {
+      setRedeemError(`Minimum redemption is ${minimumRedemption} points`);
+      return;
+    }
+    if (pts % redeemRate !== 0) {
+      setRedeemError(`Redeem points in multiples of ${redeemRate}`);
       return;
     }
     if (pts > (data?.balance || 0)) {
@@ -77,9 +81,14 @@ export default function Loyalty({ customer }: LoyaltyProps) {
 
   if (!data) return null;
 
-  const { balance, earned, redeemed, tier, nextTier, cashbackBalance = 0, cashbackRate = 0.01, loyaltyPointsPerEuro = 1, history } = data;
+  const {
+    balance, earned, redeemed, tier, nextTier, cashbackBalance = 0, cashbackRate = 0,
+    loyaltyPointsPerEuro = 0, loyaltyEnabled = true, cashbackEnabled = true,
+    cashbackRates = { bronze: 0.01, silver: 0.015, gold: 0.02 },
+    tierThresholds = { silver: 1000, gold: 5000 }, history,
+  } = data;
   const progressPct = nextTier ? Math.min(100, (balance / nextTier.threshold) * 100) : 100;
-  const redeemableEuros = Math.floor(balance / REDEEM_RATE);
+  const redeemableEuros = Math.floor(balance / redeemRate);
   const cashbackPct = (cashbackRate * 100).toFixed(1).replace(".0", "");
   const pointLabel = Number(loyaltyPointsPerEuro) === 1 ? "point" : "points";
 
@@ -87,7 +96,10 @@ export default function Loyalty({ customer }: LoyaltyProps) {
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">Loyalty Rewards</h1>
-        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Earn {loyaltyPointsPerEuro} {pointLabel} per €1 spent · {REDEEM_RATE} pts = €1 discount · {cashbackPct}% cashback</p>
+        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">
+          {loyaltyEnabled ? `Earn ${loyaltyPointsPerEuro} ${pointLabel} per €1 spent · ${redeemRate} pts = €1 cashback` : "Points earning is currently disabled"}
+          {cashbackEnabled ? ` · ${cashbackPct}% cashback` : " · Cashback is currently disabled"}
+        </p>
       </div>
 
       {/* Hero card */}
@@ -140,7 +152,7 @@ export default function Loyalty({ customer }: LoyaltyProps) {
       </div>
 
       {/* Cashback wallet card */}
-      <div className="bg-[hsl(var(--card))] border border-green-200 dark:border-green-800 rounded-xl p-4">
+      {cashbackEnabled && <div className="bg-[hsl(var(--card))] border border-green-200 dark:border-green-800 rounded-xl p-4">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-full bg-green-100 dark:bg-green-900/40 flex items-center justify-center flex-shrink-0">
@@ -170,17 +182,17 @@ export default function Loyalty({ customer }: LoyaltyProps) {
             Place an order to start earning {cashbackPct}% cashback on every purchase
           </p>
         )}
-      </div>
+      </div>}
 
       {/* Redeem points */}
-      {balance >= REDEEM_RATE && (
+      {loyaltyEnabled && cashbackEnabled && balance >= minimumRedemption && (
         <div className="bg-[hsl(var(--card))] border border-[hsl(var(--primary))]/30 rounded-xl p-4 space-y-3">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-[hsl(var(--primary))]" />
             <p className="text-sm font-semibold">Redeem Points</p>
           </div>
           <p className="text-xs text-[hsl(var(--muted-foreground))]">
-            You can redeem up to <strong>{Number(balance).toLocaleString()} pts</strong> for <strong>€{redeemableEuros}.00</strong> off your next order.
+              Convert points into cashback credit. You can convert up to <strong>{Number(balance).toLocaleString()} pts</strong> for <strong>€{redeemableEuros}.00</strong>.
           </p>
 
           {redeemSuccess && (
@@ -197,10 +209,10 @@ export default function Loyalty({ customer }: LoyaltyProps) {
               type="number"
               value={redeemPoints}
               onChange={(e) => { setRedeemPoints(e.target.value); setRedeemError(null); }}
-              placeholder={`Min ${REDEEM_RATE} pts`}
-              min={REDEEM_RATE}
+              placeholder={`Min ${minimumRedemption} pts`}
+              min={minimumRedemption}
               max={balance}
-              step={REDEEM_RATE}
+              step={redeemRate}
               className="flex-1 px-3 py-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]"
               data-testid="input-redeem-points"
             />
@@ -214,9 +226,9 @@ export default function Loyalty({ customer }: LoyaltyProps) {
               {redeemMutation.isPending ? "…" : "Redeem"}
             </button>
           </div>
-          {redeemPoints && parseInt(redeemPoints, 10) >= REDEEM_RATE && (
+          {redeemPoints && parseInt(redeemPoints, 10) >= minimumRedemption && (
             <p className="text-xs text-[hsl(var(--muted-foreground))]">
-              = €{(parseInt(redeemPoints, 10) / REDEEM_RATE).toFixed(2)} discount
+              = €{(parseInt(redeemPoints, 10) / redeemRate).toFixed(2)} cashback credit
             </p>
           )}
         </div>
@@ -256,9 +268,9 @@ export default function Loyalty({ customer }: LoyaltyProps) {
         </div>
         <div className="divide-y divide-[hsl(var(--border))]">
           {[
-            { name: "Bronze", pts: 0,    benefit: `${loyaltyPointsPerEuro} ${pointLabel}/€1 · redeem 100 pts = €1 · 1% cashback` },
-            { name: "Silver", pts: 1000, benefit: "Priority processing · 1.5% cashback" },
-            { name: "Gold",   pts: 5000, benefit: "Dedicated manager · best pricing · 2% cashback" },
+            { name: "Bronze", pts: 0, benefit: `${loyaltyPointsPerEuro} ${pointLabel}/€1 · redeem ${redeemRate} pts = €1 · ${(cashbackRates.bronze * 100).toFixed(2).replace(/\\.00$/, "")}% cashback` },
+            { name: "Silver", pts: tierThresholds.silver, benefit: `Priority processing · ${(cashbackRates.silver * 100).toFixed(2).replace(/\\.00$/, "")}% cashback` },
+            { name: "Gold", pts: tierThresholds.gold, benefit: `Dedicated manager · best pricing · ${(cashbackRates.gold * 100).toFixed(2).replace(/\\.00$/, "")}% cashback` },
           ].map((t) => (
             <div key={t.name} className={`flex items-center gap-3 px-4 py-3 ${tier === t.name ? "bg-[hsl(var(--primary))]/5" : ""}`}>
               <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border flex-shrink-0 ${tierColor(t.name)}`}>

@@ -102,6 +102,41 @@ async function getLoyaltyPointsPerEuro(): Promise<number> {
   const rate = Number(setting?.value);
   return Number.isFinite(rate) && rate >= 0 ? rate : 1;
 }
+
+async function getLoyaltyPolicy() {
+  const rows = await storage.getSettings();
+  const values = new Map(rows.map((row) => [row.key, row.value]));
+  const numberValue = (key: string, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER) => {
+    const value = Number(values.get(key));
+    return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+  };
+  return {
+    loyaltyEnabled: values.get("loyalty_enabled") !== "false",
+    cashbackEnabled: values.get("cashback_enabled") !== "false",
+    pointsPerEuro: numberValue("loyalty_points_per_euro", 1),
+    redeemPointsPerEuro: Math.round(numberValue("loyalty_redeem_points_per_euro", 100, 1)),
+    minimumRedemptionPoints: Math.round(numberValue("loyalty_redeem_min_points", 100, 1)),
+    silverThreshold: Math.round(numberValue("loyalty_silver_threshold", 1000)),
+    goldThreshold: Math.round(numberValue("loyalty_gold_threshold", 5000)),
+    bronzeCashbackPercent: numberValue("loyalty_cashback_bronze_percent", 1, 0, 100),
+    silverCashbackPercent: numberValue("loyalty_cashback_silver_percent", 1.5, 0, 100),
+    goldCashbackPercent: numberValue("loyalty_cashback_gold_percent", 2, 0, 100),
+    maxCashbackOrderPercent: numberValue("loyalty_max_cashback_order_percent", 100, 0, 100),
+  };
+}
+
+function loyaltyTier(balance: number, policy: Awaited<ReturnType<typeof getLoyaltyPolicy>>) {
+  return balance >= policy.goldThreshold ? "Gold" : balance >= policy.silverThreshold ? "Silver" : "Bronze";
+}
+
+function cashbackRateForTier(tier: string, policy: Awaited<ReturnType<typeof getLoyaltyPolicy>>) {
+  const percent = tier === "Gold"
+    ? policy.goldCashbackPercent
+    : tier === "Silver"
+      ? policy.silverCashbackPercent
+      : policy.bronzeCashbackPercent;
+  return percent / 100;
+}
 function hashSettingsPassword(pw: string) {
   return crypto.createHash("sha256").update(pw).digest("hex");
 }
@@ -4031,6 +4066,31 @@ export async function registerRoutes(
     try {
       const { settings } = req.body;
       if (!Array.isArray(settings)) return res.status(400).json({ message: "Settings array required" });
+      const loyaltyNumericLimits: Record<string, [number, number]> = {
+        loyalty_points_per_euro: [0, 1000],
+        loyalty_redeem_points_per_euro: [1, 1000000],
+        loyalty_redeem_min_points: [1, 100000000],
+        loyalty_silver_threshold: [0, 100000000],
+        loyalty_gold_threshold: [0, 100000000],
+        loyalty_cashback_bronze_percent: [0, 100],
+        loyalty_cashback_silver_percent: [0, 100],
+        loyalty_cashback_gold_percent: [0, 100],
+        loyalty_max_cashback_order_percent: [0, 100],
+      };
+      for (const setting of settings) {
+        if (setting.key === "loyalty_enabled" || setting.key === "cashback_enabled") {
+          if (!["true", "false"].includes(String(setting.value))) {
+            return res.status(400).json({ message: `${setting.label || setting.key} must be enabled or disabled` });
+          }
+        }
+        const limits = loyaltyNumericLimits[setting.key];
+        if (limits) {
+          const value = Number(setting.value);
+          if (!Number.isFinite(value) || value < limits[0] || value > limits[1]) {
+            return res.status(400).json({ message: `${setting.label || setting.key} must be between ${limits[0]} and ${limits[1]}` });
+          }
+        }
+      }
       const results = [];
       for (const s of settings) {
         const result = await storage.upsertSetting(s.key, s.value, s.label, s.group);
@@ -4128,7 +4188,17 @@ export async function registerRoutes(
         { key: "reorder_weeks_cover", value: "8", label: "Reorder Weeks of Cover", group: "inventory" },
         { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
         { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
-        { key: "loyalty_points_per_euro", value: "1", label: "Loyalty Points per €1 Spent", group: "portal" },
+        { key: "loyalty_enabled", value: "true", label: "Loyalty Points Enabled", group: "loyalty" },
+        { key: "cashback_enabled", value: "true", label: "Cashback Enabled", group: "loyalty" },
+        { key: "loyalty_points_per_euro", value: "1", label: "Loyalty Points per €1 Spent", group: "loyalty" },
+        { key: "loyalty_redeem_points_per_euro", value: "100", label: "Points Required per €1 Redemption", group: "loyalty" },
+        { key: "loyalty_redeem_min_points", value: "100", label: "Minimum Redemption Points", group: "loyalty" },
+        { key: "loyalty_silver_threshold", value: "1000", label: "Silver Tier Threshold (Points)", group: "loyalty" },
+        { key: "loyalty_gold_threshold", value: "5000", label: "Gold Tier Threshold (Points)", group: "loyalty" },
+        { key: "loyalty_cashback_bronze_percent", value: "1", label: "Bronze Cashback (%)", group: "loyalty" },
+        { key: "loyalty_cashback_silver_percent", value: "1.5", label: "Silver Cashback (%)", group: "loyalty" },
+        { key: "loyalty_cashback_gold_percent", value: "2", label: "Gold Cashback (%)", group: "loyalty" },
+        { key: "loyalty_max_cashback_order_percent", value: "100", label: "Maximum Cashback per Order (%)", group: "loyalty" },
       ];
       const results = [];
       for (const d of defaults) {
@@ -6704,6 +6774,7 @@ export async function registerRoutes(
       if (!orderItems?.length) return res.status(400).json({ message: "Items required" });
       const customer = await storage.getCustomer(auth.customerId);
       if (!customer) return res.status(404).json({ message: "Customer not found" });
+      const loyaltyPolicy = await getLoyaltyPolicy();
 
       const VAT_RATE = 0.19;
       let subtotal = 0;
@@ -6760,7 +6831,10 @@ export async function registerRoutes(
 
       // Apply cashback credit if requested
       const availableCashback = parseFloat(String(customer.cashbackBalance || "0"));
-      const cashbackApplied = useCashback ? Math.min(availableCashback, total) : 0;
+      const cashbackLimit = total * (loyaltyPolicy.maxCashbackOrderPercent / 100);
+      const cashbackApplied = useCashback && loyaltyPolicy.cashbackEnabled
+        ? Math.min(availableCashback, total, cashbackLimit)
+        : 0;
       if (cashbackApplied > 0) {
         total = Math.max(0, total - cashbackApplied);
       }
@@ -6803,9 +6877,8 @@ export async function registerRoutes(
       } catch { /* proforma creation non-fatal */ }
 
       // Award loyalty points using this store's configured conversion rate.
-      if (subtotal > 0) {
-        const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
-        const pts = Math.floor(subtotal * loyaltyPointsPerEuro);
+      if (subtotal > 0 && loyaltyPolicy.loyaltyEnabled) {
+        const pts = Math.floor(subtotal * loyaltyPolicy.pointsPerEuro);
         if (pts > 0) {
           await db.insert(customerLoyaltyPoints).values({
             customerId: auth.customerId, points: pts, type: "earn",
@@ -6820,9 +6893,9 @@ export async function registerRoutes(
           balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
         }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
         const loyBalance = loyTotals?.balance || 0;
-        const cbTier = loyBalance >= 5000 ? "Gold" : loyBalance >= 1000 ? "Silver" : "Bronze";
-        const cbRate = cbTier === "Gold" ? 0.02 : cbTier === "Silver" ? 0.015 : 0.01;
-        const earnedCashback = parseFloat((subtotal * cbRate).toFixed(2));
+        const cbTier = loyaltyTier(loyBalance, loyaltyPolicy);
+        const cbRate = cashbackRateForTier(cbTier, loyaltyPolicy);
+        const earnedCashback = loyaltyPolicy.cashbackEnabled ? parseFloat((subtotal * cbRate).toFixed(2)) : 0;
 
         const currentCb = parseFloat(String(customer.cashbackBalance || "0"));
         const newCb = Math.max(0, currentCb - cashbackApplied + earnedCashback);
@@ -6883,13 +6956,17 @@ export async function registerRoutes(
       }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
 
       const balance = totals?.balance || 0;
-      const tier = balance >= 5000 ? "Gold" : balance >= 1000 ? "Silver" : "Bronze";
-      const nextTier = tier === "Bronze" ? { name: "Silver", threshold: 1000 } : tier === "Silver" ? { name: "Gold", threshold: 5000 } : null;
-      const cashbackRate = tier === "Gold" ? 0.02 : tier === "Silver" ? 0.015 : 0.01;
+      const policy = await getLoyaltyPolicy();
+      const tier = loyaltyTier(balance, policy);
+      const nextTier = tier === "Bronze"
+        ? { name: "Silver", threshold: policy.silverThreshold }
+        : tier === "Silver"
+          ? { name: "Gold", threshold: policy.goldThreshold }
+          : null;
+      const cashbackRate = policy.cashbackEnabled ? cashbackRateForTier(tier, policy) : 0;
 
       const customer = await storage.getCustomer(auth.customerId);
       const cashbackBalance = parseFloat(String(customer?.cashbackBalance || "0"));
-      const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
 
       res.json({
         balance,
@@ -6899,7 +6976,18 @@ export async function registerRoutes(
         nextTier,
         cashbackBalance,
         cashbackRate,
-        loyaltyPointsPerEuro,
+        loyaltyPointsPerEuro: policy.loyaltyEnabled ? policy.pointsPerEuro : 0,
+        loyaltyEnabled: policy.loyaltyEnabled,
+        cashbackEnabled: policy.cashbackEnabled,
+        redeemPointsPerEuro: policy.redeemPointsPerEuro,
+        minimumRedemptionPoints: policy.minimumRedemptionPoints,
+        tierThresholds: { silver: policy.silverThreshold, gold: policy.goldThreshold },
+        cashbackRates: {
+          bronze: policy.bronzeCashbackPercent / 100,
+          silver: policy.silverCashbackPercent / 100,
+          gold: policy.goldCashbackPercent / 100,
+        },
+        maxCashbackOrderPercent: policy.maxCashbackOrderPercent,
         history: history.map((h) => ({
           id: h.id, points: h.points, type: h.type, reason: h.reason,
           sourceType: h.sourceType, createdAt: h.createdAt,
@@ -6962,32 +7050,44 @@ export async function registerRoutes(
     const auth = await requireCustomerAuth(req, res);
     if (!auth) return;
     try {
+      const policy = await getLoyaltyPolicy();
+      if (!policy.loyaltyEnabled) return res.status(400).json({ message: "Loyalty redemptions are disabled" });
+      if (!policy.cashbackEnabled) return res.status(400).json({ message: "Cashback wallet is disabled" });
       const { points } = req.body;
       const pts = parseInt(points, 10);
-      if (!pts || pts < 100) return res.status(400).json({ message: "Minimum redemption is 100 points" });
-      if (pts % 100 !== 0) return res.status(400).json({ message: "Points must be redeemed in multiples of 100" });
+      if (!pts || pts < policy.minimumRedemptionPoints) {
+        return res.status(400).json({ message: `Minimum redemption is ${policy.minimumRedemptionPoints} points` });
+      }
+      if (pts % policy.redeemPointsPerEuro !== 0) {
+        return res.status(400).json({ message: `Points must be redeemed in multiples of ${policy.redeemPointsPerEuro}` });
+      }
 
-      // Check current balance
-      const [totals] = await db.select({
-        balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
-      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
-
-      const balance = totals?.balance || 0;
-      if (pts > balance) return res.status(400).json({ message: "Insufficient points balance" });
-
-      // Insert negative points entry (redemption)
-      await db.insert(customerLoyaltyPoints).values({
-        customerId: auth.customerId,
-        points: -pts,
-        type: "redeem",
-        reason: `Redeemed ${pts} pts for €${(pts / 100).toFixed(2)} discount`,
-        sourceType: "redemption",
-        sourceId: null,
+      const result = await db.transaction(async (tx) => {
+        await tx.execute(sql`select id from ${customers} where ${customers.id} = ${auth.customerId} for update`);
+        const [totals] = await tx.select({
+          balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
+        }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
+        const balance = Number(totals?.balance || 0);
+        if (pts > balance) throw new Error("INSUFFICIENT_POINTS");
+        const discountEuros = pts / policy.redeemPointsPerEuro;
+        await tx.insert(customerLoyaltyPoints).values({
+          customerId: auth.customerId,
+          points: -pts,
+          type: "redeem",
+          reason: `Converted ${pts} pts to €${discountEuros.toFixed(2)} cashback`,
+          sourceType: "redemption",
+          sourceId: null,
+        });
+        await tx.update(customers)
+          .set({ cashbackBalance: sql`coalesce(${customers.cashbackBalance}, 0) + ${discountEuros.toFixed(2)}` })
+          .where(eq(customers.id, auth.customerId));
+        return { newBalance: balance - pts, discountEuros };
       });
-
-      const newBalance = balance - pts;
-      res.json({ pointsRedeemed: pts, newBalance, discountEuros: (pts / 100).toFixed(2) });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+      res.json({ pointsRedeemed: pts, newBalance: result.newBalance, discountEuros: result.discountEuros.toFixed(2) });
+    } catch (e: any) {
+      if (e?.message === "INSUFFICIENT_POINTS") return res.status(400).json({ message: "Insufficient points balance" });
+      res.status(500).json({ message: e.message });
+    }
   });
 
   // ─── Admin: push notification management ────────────────────────────────────

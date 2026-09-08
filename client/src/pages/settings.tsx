@@ -29,6 +29,7 @@ const groupIcons: Record<string, any> = {
   pricing: Tags,
   inventory: Package,
   portal: Settings2,
+  loyalty: Users,
 };
 
 const groupLabels: Record<string, string> = {
@@ -38,9 +39,10 @@ const groupLabels: Record<string, string> = {
   pricing: "Price Level Names",
   inventory: "Inventory",
   portal: "Customer Portal",
+  loyalty: "Loyalty & Cashback",
 };
 
-const groupOrder = ["company", "tax", "invoicing", "pricing", "inventory", "portal"];
+const groupOrder = ["company", "tax", "invoicing", "pricing", "inventory", "portal", "loyalty"];
 const HIDDEN_GROUPS = ["security", "backup"];
 const RETIRED_SETTINGS = ["pos_app_version"];
 const SESSION_KEY = "globi-pos_settings_auth";
@@ -322,6 +324,27 @@ export default function SettingsPage() {
     const loyaltyRate = Number(values["loyalty_points_per_euro"] ?? "1");
     if (!Number.isFinite(loyaltyRate) || loyaltyRate < 0) {
       toast({ title: "Invalid loyalty rate", description: "Loyalty points per €1 must be zero or greater.", variant: "destructive" });
+      return;
+    }
+    const numericRules: Array<[string, number, number]> = [
+      ["loyalty_redeem_points_per_euro", 1, 1000000],
+      ["loyalty_redeem_min_points", 1, 100000000],
+      ["loyalty_silver_threshold", 0, 100000000],
+      ["loyalty_gold_threshold", 0, 100000000],
+      ["loyalty_cashback_bronze_percent", 0, 100],
+      ["loyalty_cashback_silver_percent", 0, 100],
+      ["loyalty_cashback_gold_percent", 0, 100],
+      ["loyalty_max_cashback_order_percent", 0, 100],
+    ];
+    for (const [key, min, max] of numericRules) {
+      const value = Number(values[key]);
+      if (!Number.isFinite(value) || value < min || value > max) {
+        toast({ title: "Invalid loyalty setting", description: `Enter a value between ${min} and ${max}.`, variant: "destructive" });
+        return;
+      }
+    }
+    if (Number(values.loyalty_gold_threshold) <= Number(values.loyalty_silver_threshold)) {
+      toast({ title: "Invalid tier thresholds", description: "Gold threshold must be higher than Silver.", variant: "destructive" });
       return;
     }
     setSaving(true);
@@ -684,7 +707,7 @@ export default function SettingsPage() {
       );
     }
 
-    if (setting.key === "portal_enabled" || setting.key === "portal_allow_ordering") {
+    if (setting.key === "portal_enabled" || setting.key === "portal_allow_ordering" || setting.key === "loyalty_enabled" || setting.key === "cashback_enabled") {
       return (
         <Select value={val} onValueChange={(v) => updateValue(setting.key, v)}>
           <SelectTrigger data-testid={`select-setting-${setting.key}`}>
@@ -698,12 +721,13 @@ export default function SettingsPage() {
       );
     }
 
-    if (setting.key === "loyalty_points_per_euro") {
+    if (setting.group === "loyalty") {
       return (
         <Input
           type="number"
           min="0"
-          step="0.01"
+          max={setting.key.includes("percent") ? "100" : undefined}
+          step={setting.key.includes("threshold") || setting.key.includes("points_per_euro") || setting.key.includes("min_points") ? "1" : "0.01"}
           value={val}
           onChange={(e) => updateValue(setting.key, e.target.value)}
           data-testid={`input-setting-${setting.key}`}

@@ -30,7 +30,17 @@ const DEFAULT_SETTINGS = [
   { key: "reorder_weeks_cover", value: "8", label: "Reorder Weeks of Cover", group: "inventory" },
   { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
   { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
-  { key: "loyalty_points_per_euro", value: "1", label: "Loyalty Points per €1 Spent", group: "portal" },
+  { key: "loyalty_enabled", value: "true", label: "Loyalty Points Enabled", group: "loyalty" },
+  { key: "cashback_enabled", value: "true", label: "Cashback Enabled", group: "loyalty" },
+  { key: "loyalty_points_per_euro", value: "1", label: "Loyalty Points per €1 Spent", group: "loyalty" },
+  { key: "loyalty_redeem_points_per_euro", value: "100", label: "Points Required per €1 Redemption", group: "loyalty" },
+  { key: "loyalty_redeem_min_points", value: "100", label: "Minimum Redemption Points", group: "loyalty" },
+  { key: "loyalty_silver_threshold", value: "1000", label: "Silver Tier Threshold (Points)", group: "loyalty" },
+  { key: "loyalty_gold_threshold", value: "5000", label: "Gold Tier Threshold (Points)", group: "loyalty" },
+  { key: "loyalty_cashback_bronze_percent", value: "1", label: "Bronze Cashback (%)", group: "loyalty" },
+  { key: "loyalty_cashback_silver_percent", value: "1.5", label: "Silver Cashback (%)", group: "loyalty" },
+  { key: "loyalty_cashback_gold_percent", value: "2", label: "Gold Cashback (%)", group: "loyalty" },
+  { key: "loyalty_max_cashback_order_percent", value: "100", label: "Maximum Cashback per Order (%)", group: "loyalty" },
   { key: "settings_password", value: "", label: "Settings Password Hash", group: "security" },
   { key: "backup_email", value: "", label: "Backup Email Address", group: "backup" },
   { key: "backup_auto", value: "true", label: "Automatic Daily Backup", group: "backup" },
@@ -63,6 +73,12 @@ export async function ensureDefaultSettings() {
           label: setting.label,
           group: setting.group,
         });
+      } else {
+        // Keep customer values, but migrate labels/groups when settings are
+        // reorganized into a dedicated section.
+        await db.update(systemSettings)
+          .set({ label: setting.label, group: setting.group })
+          .where(eq(systemSettings.key, setting.key));
       }
     }
 
