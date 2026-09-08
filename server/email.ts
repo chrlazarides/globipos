@@ -201,12 +201,17 @@ export type DomainStatusNotification = {
 
 export async function sendDomainStatusNotification(
   notification: DomainStatusNotification,
-): Promise<{ success: boolean; skipped?: boolean; error?: string }> {
+): Promise<{ success: boolean; skipped?: boolean; reason?: 'support_recipient_missing' | 'email_delivery_failed'; error?: string }> {
   try {
     const supportEmail = await getSettingValue('resend_reply_to');
     if (!supportEmail?.trim()) {
       console.warn('[domain-monitor] Support notification skipped: Resend reply-to address is not configured');
-      return { success: false, skipped: true, error: 'Support email is not configured' };
+      return {
+        success: false,
+        skipped: true,
+        reason: 'support_recipient_missing',
+        error: 'Support recipient is not configured',
+      };
     }
 
     const fromEmail = await getFromEmail();
@@ -251,7 +256,7 @@ export async function sendDomainStatusNotification(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to send domain status notification';
     console.error('[domain-monitor] Support notification failed:', message);
-    return { success: false, error: message };
+    return { success: false, reason: 'email_delivery_failed', error: message };
   }
 }
 

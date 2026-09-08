@@ -198,6 +198,12 @@ let domainMonitorRunning = false;
 
 export type DomainNotificationKind = "outage" | "recovery" | null;
 
+export type DomainNotificationDelivery = {
+  status: "sent" | "failed" | "skipped";
+  kind: Exclude<DomainNotificationKind, null>;
+  message: string;
+  attemptedAt: string;
+};
 export function domainNotificationKind(
   previousStatus: string,
   nextStatus: string,
@@ -441,8 +447,32 @@ export function startActiveDomainMonitor() {
               failureStartedAt: result.profile.domainFailureStartedAt,
               checkedAt: result.profile.domainNotificationCreatedAt ?? result.profile.domainCheckedAt!,
             });
+            const attemptedAt = new Date();
+            const deliveryStatus = notificationResult.success
+              ? "sent"
+              : notificationResult.skipped ? "skipped" : "failed";
+            const deliveryMessage = notificationResult.success
+              ? `${pendingNotification === "outage" ? "Outage" : "Recovery"} notification delivered to support`
+              : notificationResult.error ?? "Domain notification could not be delivered";
+            const delivery: DomainNotificationDelivery = {
+              status: deliveryStatus,
+              kind: pendingNotification,
+              message: deliveryMessage,
+              attemptedAt: attemptedAt.toISOString(),
+            };
+            const deliveryUpdate = {
+              domainNotificationDeliveryStatus: deliveryStatus,
+              domainNotificationDeliveryKind: pendingNotification,
+              domainNotificationDeliveryMessage: deliveryMessage,
+              domainNotificationDeliveryAttemptedAt: attemptedAt,
+              domainNotificationDeliveryHistory: appendDomainNotificationDelivery(
+                result.profile.domainNotificationDeliveryHistory,
+                delivery,
+              ),
+            };
             if (notificationResult.success) {
               await db.update(deploymentProfiles).set({
+                ...deliveryUpdate,
                 domainNotificationPending: null,
                 domainNotificationMessage: null,
                 domainNotificationCreatedAt: null,
@@ -453,8 +483,17 @@ export function startActiveDomainMonitor() {
                   ? eq(deploymentProfiles.domainNotificationCreatedAt, result.profile.domainNotificationCreatedAt)
                   : isNull(deploymentProfiles.domainNotificationCreatedAt),
               ));
-            } else if (!notificationResult.skipped) {
-              console.error(`[domain-monitor] Notification failed for ${profile.slug}: ${notificationResult.error}`);
+            } else {
+              await db.update(deploymentProfiles).set(deliveryUpdate).where(and(
+                eq(deploymentProfiles.id, result.profile.id),
+                eq(deploymentProfiles.domainNotificationPending, pendingNotification),
+                result.profile.domainNotificationCreatedAt
+                  ? eq(deploymentProfiles.domainNotificationCreatedAt, result.profile.domainNotificationCreatedAt)
+                  : isNull(deploymentProfiles.domainNotificationCreatedAt),
+              ));
+              if (!notificationResult.skipped) {
+                console.error(`[domain-monitor] Notification failed for ${profile.slug}: ${notificationResult.error}`);
+              }
             }
           }
         } catch (error) {
@@ -663,6 +702,11 @@ export function registerDeploymentControlRoutes(app: Express) {
       domainNotificationPending: _domainNotificationPending,
       domainNotificationMessage: _domainNotificationMessage,
       domainNotificationCreatedAt: _domainNotificationCreatedAt,
+      domainNotificationDeliveryStatus: _domainNotificationDeliveryStatus,
+      domainNotificationDeliveryKind: _domainNotificationDeliveryKind,
+      domainNotificationDeliveryMessage: _domainNotificationDeliveryMessage,
+      domainNotificationDeliveryAttemptedAt: _domainNotificationDeliveryAttemptedAt,
+      domainNotificationDeliveryHistory: _domainNotificationDeliveryHistory,
       createdAt,
       updatedAt,
       lastHeartbeatAt,
@@ -720,6 +764,14 @@ export function registerDeploymentControlRoutes(app: Express) {
     })).where(eq(deploymentProfiles.id, profile.id));
     res.json({ ok: true, deploymentId: profile.id });
   });
+}
+
+export function appendDomainNotificationDelivery(
+  history: unknown,
+  delivery: DomainNotificationDelivery,
+): DomainNotificationDelivery[] {
+  const entries = Array.isArray(history) ? history : [];
+  return [...entries, delivery].slice(-50) as DomainNotificationDelivery[];
 }
 
 export async function loadDeploymentProfilesWithIncidents(

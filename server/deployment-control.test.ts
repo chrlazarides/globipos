@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import test from "node:test";
 import {
   applyDomainIncidentTransition,
+  appendDomainNotificationDelivery,
   csvCell,
   domainIncidentTransition,
   domainNotificationKind,
@@ -83,6 +84,41 @@ test("failed notification delivery remains pending for the next monitor retry", 
   const afterSuccessfulDelivery = null;
   assert.equal(nextPendingDomainNotification("failed", "failed", afterSuccessfulDelivery), null);
   assert.equal(nextPendingDomainNotification("failed", "connected", afterSuccessfulDelivery), "recovery");
+});
+
+test("notification delivery history retains failures after a later success", () => {
+  const failed = {
+    status: "failed" as const,
+    kind: "outage" as const,
+    message: "Email provider rejected the message",
+    attemptedAt: "2026-09-08T12:00:00.000Z",
+  };
+  const sent = {
+    status: "sent" as const,
+    kind: "outage" as const,
+    message: "Outage notification delivered to support",
+    attemptedAt: "2026-09-08T13:00:00.000Z",
+  };
+  assert.deepEqual(appendDomainNotificationDelivery([failed], sent), [failed, sent]);
+});
+
+test("notification delivery history is bounded to the latest 50 attempts", () => {
+  const history = Array.from({ length: 50 }, (_, index) => ({
+    status: "skipped" as const,
+    kind: "outage" as const,
+    message: `Attempt ${index}`,
+    attemptedAt: new Date(index * 1000).toISOString(),
+  }));
+  const latest = {
+    status: "sent" as const,
+    kind: "recovery" as const,
+    message: "Recovery notification delivered to support",
+    attemptedAt: "2026-09-08T14:00:00.000Z",
+  };
+  const result = appendDomainNotificationDelivery(history, latest);
+  assert.equal(result.length, 50);
+  assert.equal(result[0].message, "Attempt 1");
+  assert.deepEqual(result.at(-1), latest);
 });
 
 test("domain incidents are created and recovered only on status transitions", () => {
