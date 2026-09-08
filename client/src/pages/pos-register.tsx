@@ -496,8 +496,28 @@ export default function PosRegister() {
   });
   const [variantPickerItem, setVariantPickerItem] = useState<Item | null>(null);
 
-  const filteredTerminals = locationId ? terminals.filter(t => t.locationId === locationId) : terminals;
+  const activeLocations = locations.filter(location => location.active);
+  const activeTerminals = terminals.filter(terminal => terminal.active);
+  const filteredTerminals = locationId ? activeTerminals.filter(t => t.locationId === locationId) : activeTerminals;
   const cardConfigured = !!(terminalStatus?.activeProvider);
+
+  useEffect(() => {
+    if (activeLocations.length === 0) return;
+    const selectedLocationIsValid = activeLocations.some(location => location.id === locationId);
+    if (selectedLocationIsValid) return;
+
+    const locationWithTerminal = activeLocations.find(location =>
+      activeTerminals.some(terminal => terminal.locationId === location.id)
+    );
+    setLocationId((locationWithTerminal || activeLocations[0]).id);
+  }, [activeLocations, activeTerminals, locationId]);
+
+  useEffect(() => {
+    if (!locationId) return;
+    const terminalsAtLocation = activeTerminals.filter(terminal => terminal.locationId === locationId);
+    if (terminalsAtLocation.some(terminal => terminal.id === terminalId)) return;
+    setTerminalId(terminalsAtLocation[0]?.id || "");
+  }, [activeTerminals, locationId, terminalId]);
 
   const variantsForItem = useCallback(
     (itemId: string) => allVariants.filter(v => v.itemId === itemId && v.active),
@@ -666,14 +686,14 @@ export default function PosRegister() {
               <SelectValue placeholder="Select location…" />
             </SelectTrigger>
             <SelectContent>
-              {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+              {activeLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
         <div className="flex-1 min-w-[160px]">
-          <Select value={terminalId} onValueChange={setTerminalId} disabled={!locationId} data-testid="select-terminal">
+          <Select value={terminalId} onValueChange={setTerminalId} disabled={!locationId || filteredTerminals.length === 0} data-testid="select-terminal">
             <SelectTrigger className="h-9">
-              <SelectValue placeholder="Select terminal…" />
+              <SelectValue placeholder={locationId && filteredTerminals.length === 0 ? "No active terminals for location" : "Select terminal…"} />
             </SelectTrigger>
             <SelectContent>
               {filteredTerminals.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
