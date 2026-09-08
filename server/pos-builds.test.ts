@@ -148,6 +148,67 @@ test("does not reuse a cached release when the configured repository changes", a
   assert.equal(fake.requests[1], "https://api.github.com/repos/example/pos-b/releases?per_page=5");
 });
 
+test("reloads repository-scoped verified releases after a restart during a GitHub outage", async () => {
+  const persisted = new Map<string, { releases: PosBuildsResponse["releases"]; verifiedAt: Date }>([
+    [
+      repoA,
+      {
+        releases: [{
+          tag: "v1.0.0-persisted",
+          name: "POS persisted",
+          publishedAt: "2026-09-08T10:00:00.000Z",
+          prerelease: false,
+          htmlUrl: `${repoA}/releases/tag/v1.0.0-persisted`,
+          assets: [{
+            name: "GlobiPOS-persisted.msi",
+            size: 1234,
+            downloadUrl: `${repoA}/releases/download/v1.0.0-persisted/GlobiPOS-persisted.msi`,
+            downloads: 7,
+          }],
+        }],
+        verifiedAt: new Date("2026-09-08T10:00:00.000Z"),
+      },
+    ],
+  ]);
+  const fake = createFakeFetch([
+    { ok: false, status: 503 },
+    { ok: false, status: 503 },
+  ]);
+  let configuredRepo = repoA;
+  const resolveAfterRestart = createPosBuildsResolver({
+    getSettings: async () => settingsFor(configuredRepo),
+    fetchFn: fake.fetchFn,
+    getPersistedCache: async (repoUrl) => persisted.get(repoUrl),
+  });
+
+  const recovered = await resolveAfterRestart();
+
+  assert.equal(recovered.status, 200);
+  const recoveredBody = releasesFrom(recovered);
+  assert.equal(recoveredBody.stale, true);
+  assert.equal(recoveredBody.verifiedAt, "2026-09-08T10:00:00.000Z");
+  assert.deepEqual(recoveredBody.releases, persisted.get(repoA)?.releases);
+  assert.deepEqual(recoveredBody.releases[0].assets, [{
+    name: "GlobiPOS-persisted.msi",
+    size: 1234,
+    downloadUrl: `${repoA}/releases/download/v1.0.0-persisted/GlobiPOS-persisted.msi`,
+    downloads: 7,
+  }]);
+  assert.match(recoveredBody.warning ?? "", /last successfully verified release links/);
+
+  configuredRepo = repoB;
+  const otherRepository = await resolveAfterRestart();
+
+  assert.equal(otherRepository.status, 502);
+  assert.match(otherRepository.body.message, /No verified release links are cached yet/);
+  assert.equal("releases" in otherRepository.body, false);
+  assert.equal(otherRepository.body.message.includes("persisted"), false);
+  assert.deepEqual(fake.requests, [
+    "https://api.github.com/repos/example/pos-a/releases?per_page=5",
+    "https://api.github.com/repos/example/pos-b/releases?per_page=5",
+  ]);
+});
+
 test("returns no direct download links when GitHub is unavailable without a cache", async () => {
   const fake = createFakeFetch([{ ok: false, status: 503 }]);
   const resolve = createPosBuildsResolver({
