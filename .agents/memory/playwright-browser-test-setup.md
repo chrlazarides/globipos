@@ -28,6 +28,16 @@ a few non-obvious things matter:
   `test.skip` fallback that can silently mask the assertions in some
   environments.
 
+- **Do not switch mocked API states with a page reload in PWA browser tests.**
+  An installed service worker can take control after the first navigation and
+  serve live/cached API data instead of Playwright route mocks on reload, even
+  when the context asks to block new service workers. Use separate fresh test
+  cases for each mocked state.
+  **Why:** the rendered counters can look partly correct while a computed status
+  flag comes from live data, producing misleading UI-test failures.
+  **How to apply:** keep each mocked status scenario to one initial navigation;
+  split healthy/degraded or available/unavailable states into isolated tests.
+
 - **Headless Chromium in this sandbox needs extra Nix system libs**
   (glib, nss, dbus, atk, mesa, cairo, pango, gtk3, etc. via
   `installSystemDependencies`) before it can launch at all — not
