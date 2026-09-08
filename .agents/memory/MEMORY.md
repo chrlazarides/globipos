@@ -37,3 +37,4 @@
 - [Remote alert acknowledgements](remote-alert-acknowledgements.md) — server acknowledgements must survive stale device heartbeats until the device leaves its alert state
 - [Client deployment isolation](client-deployment-isolation.md) — separate backend+DB per client, one shared main codebase, centrally managed profiles and rollouts
 - [Safe domain readiness checks](domain-readiness-checks.md) — pin HTTPS to the validated public DNS address and use conditional writes so stale checks cannot authorize changed routing
+- [Fleet domain monitoring](fleet-domain-monitoring.md) — use DB leases, bounded probes, and per-target isolation so replicas or hung DNS cannot flood or freeze checks

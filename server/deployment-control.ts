@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import crypto from "crypto";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "./db";
 import { activityLogs, deploymentProfiles, deploymentRollouts } from "@shared/schema";
@@ -111,7 +111,12 @@ function editableProfile(profile: typeof deploymentProfiles.$inferSelect) {
 }
 
 function safeProfile(profile: typeof deploymentProfiles.$inferSelect) {
-  const { credentialHash: _credentialHash, ...safe } = profile;
+  const {
+    credentialHash: _credentialHash,
+    domainCheckClaimedAt: _domainCheckClaimedAt,
+    domainCheckClaimToken: _domainCheckClaimToken,
+    ...safe
+  } = profile;
   return safe;
 }
 
@@ -138,6 +143,13 @@ function validationError(res: Response, error: z.ZodError) {
 }
 
 const DOMAIN_CHECK_MAX_AGE_MS = 15 * 60 * 1000;
+const ACTIVE_DOMAIN_RECHECK_MS = 6 * 60 * 60 * 1000;
+const FAILED_DOMAIN_RETRY_MS = 60 * 60 * 1000;
+const DOMAIN_MONITOR_TICK_MS = 15 * 60 * 1000;
+const DOMAIN_CHECK_LEASE_MS = 10 * 60 * 1000;
+const DOMAIN_PROBE_TIMEOUT_MS = 20 * 1000;
+let domainMonitorStarted = false;
+let domainMonitorRunning = false;
 
 type DeploymentWriteSnapshot = Pick<
   typeof deploymentProfiles.$inferSelect,
@@ -182,16 +194,143 @@ function deploymentWritePredicate(guard: DeploymentWriteGuard) {
   );
 }
 
+export function isActiveDomainCheckDue(
+  profile: Pick<typeof deploymentProfiles.$inferSelect, "status" | "customerDomain" | "domainStatus" | "domainCheckedAt">,
+  now = Date.now(),
+) {
+  if (profile.status !== "active" || !profile.customerDomain) return false;
+  if (!profile.domainCheckedAt) return true;
+  const interval = profile.domainStatus === "failed" ? FAILED_DOMAIN_RETRY_MS : ACTIVE_DOMAIN_RECHECK_MS;
+  return now - profile.domainCheckedAt.getTime() >= interval;
+}
+
 function hasFreshConnectedDomains(profile: typeof deploymentProfiles.$inferSelect) {
   return profile.domainStatus === "connected"
     && profile.domainCheckedAt instanceof Date
     && Date.now() - profile.domainCheckedAt.getTime() <= DOMAIN_CHECK_MAX_AGE_MS;
 }
 
+function domainTargets(profile: typeof deploymentProfiles.$inferSelect) {
+  return [
+    { hostname: profile.customerDomain!, role: "customer" as const },
+    ...(profile.posDomain ? [{ hostname: profile.posDomain, role: "pos" as const }] : []),
+  ];
+}
+
+export function withDeadline<T>(promise: Promise<T>, timeoutMs: number, timeoutValue: T) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => resolve(timeoutValue), timeoutMs);
+    promise.then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function checkProfileDomains(currentProfile: typeof deploymentProfiles.$inferSelect, claimToken?: string) {
+  const checks = await Promise.all(domainTargets(currentProfile).map(target => withDeadline(
+    checkDomain(target.hostname, target.role),
+    DOMAIN_PROBE_TIMEOUT_MS,
+    {
+      hostname: target.hostname,
+      role: target.role,
+      status: "failed" as const,
+      dnsAddresses: [],
+      reason: `Domain probe timed out after ${DOMAIN_PROBE_TIMEOUT_MS / 1000} seconds`,
+    },
+  )));
+  const failures = checks.filter(check => check.status === "failed");
+  const domainStatus = failures.length ? "failed" : "connected";
+  const domainMessage = failures.length
+    ? failures.map(check => `${check.hostname}: ${check.reason}`).join("; ")
+    : `All ${checks.length} required hostname${checks.length === 1 ? "" : "s"} passed DNS and HTTPS checks.`;
+  const checkedAt = new Date();
+  const writePredicate = deploymentWritePredicate({
+    customerDomain: currentProfile.customerDomain,
+    posDomain: currentProfile.posDomain,
+    domainCheckedAt: currentProfile.domainCheckedAt,
+  });
+  const claimPredicate = claimToken
+    ? eq(deploymentProfiles.domainCheckClaimToken, claimToken)
+    : undefined;
+  const [profile] = await db.update(deploymentProfiles).set({
+    domainStatus,
+    domainMessage,
+    domainChecks: checks,
+    domainCheckedAt: checkedAt,
+    domainFailureStartedAt: failures.length ? (currentProfile.domainFailureStartedAt ?? checkedAt) : null,
+    domainFailureCount: failures.length ? currentProfile.domainFailureCount + 1 : 0,
+    ...(claimToken ? { domainCheckClaimedAt: null, domainCheckClaimToken: null } : {}),
+    updatedAt: checkedAt,
+  }).where(and(eq(deploymentProfiles.id, currentProfile.id), writePredicate, claimPredicate)).returning();
+  return { profile, domainStatus, domainMessage };
+}
+
+async function claimProfileDomainCheck(profile: typeof deploymentProfiles.$inferSelect, now: Date) {
+  const claimToken = crypto.randomUUID();
+  const staleBefore = new Date(now.getTime() - DOMAIN_CHECK_LEASE_MS);
+  const [claimed] = await db.update(deploymentProfiles).set({
+    domainCheckClaimedAt: now,
+    domainCheckClaimToken: claimToken,
+  }).where(and(
+    eq(deploymentProfiles.id, profile.id),
+    deploymentWritePredicate({
+      customerDomain: profile.customerDomain,
+      posDomain: profile.posDomain,
+      status: "active",
+      domainCheckedAt: profile.domainCheckedAt,
+    }),
+    or(isNull(deploymentProfiles.domainCheckClaimedAt), lt(deploymentProfiles.domainCheckClaimedAt, staleBefore)),
+  )).returning();
+  return claimed ? { profile: claimed, claimToken } : null;
+}
+
+export function startActiveDomainMonitor() {
+  if (domainMonitorStarted) return;
+  domainMonitorStarted = true;
+  const run = async () => {
+    if (domainMonitorRunning) return;
+    domainMonitorRunning = true;
+    try {
+      const now = Date.now();
+      const activeProfiles = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.status, "active"));
+      const due = activeProfiles.filter(profile => isActiveDomainCheckDue(profile, now));
+      for (const profile of due) {
+        try {
+          const claim = await claimProfileDomainCheck(profile, new Date());
+          if (!claim) continue;
+          const result = await checkProfileDomains(claim.profile, claim.claimToken);
+          if (!result.profile) continue;
+          if (result.domainStatus === "failed" && profile.domainStatus !== "failed") {
+            console.error(`[domain-monitor] Active deployment ${profile.slug} failed: ${result.domainMessage}`);
+          } else if (result.domainStatus === "connected" && profile.domainStatus === "failed") {
+            console.info(`[domain-monitor] Active deployment ${profile.slug} recovered`);
+          }
+        } catch (error) {
+          console.error(`[domain-monitor] Check failed for ${profile.slug}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error("[domain-monitor] Scheduled check failed:", error);
+    } finally {
+      domainMonitorRunning = false;
+    }
+  };
+  setTimeout(run, 60_000);
+  setInterval(run, DOMAIN_MONITOR_TICK_MS);
+}
+
 export function registerDeploymentControlRoutes(app: Express) {
   if (process.env.NODE_ENV !== "development" && process.env.CONTROL_PLANE_ENABLED !== "true") {
     return;
   }
+  startActiveDomainMonitor();
 
   app.get("/api/control/status", requireSuperuser, (_req, res) => {
     res.json({ enabled: true, environment: process.env.NODE_ENV, automationDispatch: "not_attached" });
@@ -262,7 +401,7 @@ export function registerDeploymentControlRoutes(app: Express) {
     const [profile] = await db.update(deploymentProfiles)
       .set(withoutUndefined({
         ...updates,
-        ...(routingChanged ? { domainStatus: "pending", domainMessage: "Hostname changed; run the domain check again.", domainChecks: [], domainCheckedAt: null } : {}),
+        ...(routingChanged ? { domainStatus: "pending", domainMessage: "Hostname changed; run the domain check again.", domainChecks: [], domainCheckedAt: null, domainFailureStartedAt: null, domainFailureCount: 0, domainCheckClaimedAt: null, domainCheckClaimToken: null } : {}),
         updatedAt: new Date(),
       }))
       .where(and(eq(deploymentProfiles.id, id), deploymentWritePredicate(writeGuard)))
@@ -281,27 +420,7 @@ export function registerDeploymentControlRoutes(app: Express) {
     if (!currentProfile.customerDomain) {
       return res.status(400).json({ message: "A primary customer hostname is required before checking domains" });
     }
-    const targets: Array<{ hostname: string; role: DomainCheck["role"] }> = [
-      { hostname: currentProfile.customerDomain, role: "customer" },
-      ...(currentProfile.posDomain ? [{ hostname: currentProfile.posDomain, role: "pos" as const }] : []),
-    ];
-    const checks = await Promise.all(targets.map(target => checkDomain(target.hostname, target.role)));
-    const failures = checks.filter(check => check.status === "failed");
-    const domainStatus = failures.length ? "failed" : "connected";
-    const domainMessage = failures.length
-      ? failures.map(check => `${check.hostname}: ${check.reason}`).join("; ")
-      : `All ${checks.length} required hostname${checks.length === 1 ? "" : "s"} passed DNS and HTTPS checks.`;
-    const routingPredicate = deploymentWritePredicate({
-      customerDomain: currentProfile.customerDomain,
-      posDomain: currentProfile.posDomain,
-    });
-    const [profile] = await db.update(deploymentProfiles).set({
-      domainStatus,
-      domainMessage,
-      domainChecks: checks,
-      domainCheckedAt: new Date(),
-      updatedAt: new Date(),
-    }).where(and(eq(deploymentProfiles.id, id), routingPredicate)).returning();
+    const { profile, domainStatus, domainMessage } = await checkProfileDomains(currentProfile);
     if (!profile) {
       return res.status(409).json({ message: "Hostname settings changed while the check was running. Run the domain check again.", code: "DOMAIN_CHANGED_DURING_CHECK" });
     }
@@ -336,7 +455,17 @@ export function registerDeploymentControlRoutes(app: Express) {
     const profileId = String(req.params.id);
     const [profile] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, profileId));
     if (!profile) return res.status(404).json({ message: "Deployment profile not found" });
-    const { credentialHash: _credentialHash, createdAt, updatedAt, lastHeartbeatAt, healthStatus, healthMessage, ...manifest } = profile;
+    const {
+      credentialHash: _credentialHash,
+      domainCheckClaimedAt: _domainCheckClaimedAt,
+      domainCheckClaimToken: _domainCheckClaimToken,
+      createdAt,
+      updatedAt,
+      lastHeartbeatAt,
+      healthStatus,
+      healthMessage,
+      ...manifest
+    } = profile;
     res.json({ manifestVersion: 1, deployment: manifest });
   });
 
