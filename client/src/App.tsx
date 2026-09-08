@@ -110,7 +110,6 @@ export function hasModuleAccess(user: AuthUser | null, module: string): boolean 
 
 // ─── Offline Data Sync ───────────────────────────────────────────────────────
 function OfflineDataSync() {
-  const { data: items } = useQuery<any[]>({ queryKey: ["/api/items"] });
   const { data: customers } = useQuery<any[]>({ queryKey: ["/api/customers"] });
   const { data: categories } = useQuery<any[]>({ queryKey: ["/api/categories"] });
   const { data: contracts } = useQuery<any[]>({ queryKey: ["/api/price-contracts"] });
@@ -118,7 +117,6 @@ function OfflineDataSync() {
   const { data: suppliers } = useQuery<any[]>({ queryKey: ["/api/suppliers"] });
   const { data: purchaseInvoices } = useQuery<any[]>({ queryKey: ["/api/purchase-invoices"] });
 
-  useEffect(() => { if (items && items.length > 0) offlineStore.cacheItems(items).catch(() => {}); }, [items]);
   useEffect(() => { if (customers && customers.length > 0) offlineStore.cacheCustomers(customers).catch(() => {}); }, [customers]);
   useEffect(() => { if (categories && categories.length > 0) offlineStore.cacheCategories(categories).catch(() => {}); }, [categories]);
   useEffect(() => { if (contracts && contracts.length > 0) offlineStore.cachePriceContracts(contracts).catch(() => {}); }, [contracts]);

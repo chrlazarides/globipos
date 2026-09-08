@@ -85,7 +85,10 @@ const SENSITIVE_RESPONSE_PATHS = new Set([
 function redactResponseForLog(value: unknown, depth = 0): unknown {
   if (depth > 8) return "[truncated]";
   if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return value.map(item => redactResponseForLog(item, depth + 1));
+  if (Array.isArray(value)) {
+    if (value.length > 50) return { type: "array", count: value.length, body: "[omitted]" };
+    return value.map(item => redactResponseForLog(item, depth + 1));
+  }
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [
