@@ -188,6 +188,73 @@ export async function sendEmailWithContent(
   }
 }
 
+export type DomainStatusNotification = {
+  clientName: string;
+  slug: string;
+  customerDomain: string;
+  posDomain: string | null;
+  status: 'failed' | 'recovered';
+  message: string;
+  failureStartedAt: Date | null;
+  checkedAt: Date;
+};
+
+export async function sendDomainStatusNotification(
+  notification: DomainStatusNotification,
+): Promise<{ success: boolean; skipped?: boolean; error?: string }> {
+  try {
+    const supportEmail = await getSettingValue('resend_reply_to');
+    if (!supportEmail?.trim()) {
+      console.warn('[domain-monitor] Support notification skipped: Resend reply-to address is not configured');
+      return { success: false, skipped: true, error: 'Support email is not configured' };
+    }
+
+    const fromEmail = await getFromEmail();
+    const recovered = notification.status === 'recovered';
+    const color = recovered ? '#047857' : '#b91c1c';
+    const heading = recovered ? 'Customer domain recovered' : 'Customer domain outage detected';
+    const subject = recovered
+      ? `[Resolved] ${notification.clientName} domain is available`
+      : `[Outage] ${notification.clientName} domain check failed`;
+    const domains = [
+      notification.customerDomain,
+      ...(notification.posDomain ? [notification.posDomain] : []),
+    ].join(', ');
+    const duration = recovered && notification.failureStartedAt
+      ? `<tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Outage began</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(notification.failureStartedAt.toISOString())}</td></tr>`
+      : '';
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: supportEmail.trim(),
+      subject,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:${color};padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">${heading}</h2>
+        </div>
+        <p style="color:#374151;">${recovered
+          ? 'Automated DNS and HTTPS checks are passing again.'
+          : 'Automated monitoring found that one or more required customer domains are unavailable.'}</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">Customer</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(notification.clientName)} (${escHtml(notification.slug)})</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Domains</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${escHtml(domains)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Checked</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(notification.checkedAt.toISOString())}</td></tr>
+          ${duration}
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Details</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(notification.message)}</td></tr>
+        </table>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated GlobiPOS fleet-monitoring notification.</p>
+      </div>`,
+    };
+    const replyTo = await getReplyToEmail();
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to send domain status notification';
+    console.error('[domain-monitor] Support notification failed:', message);
+    return { success: false, error: message };
+  }
+}
+
 export async function sendInvoiceEmail(
   toEmail: string,
   subject: string,

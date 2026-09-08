@@ -6,6 +6,7 @@ import { db } from "./db";
 import { activityLogs, deploymentProfiles, deploymentRollouts } from "@shared/schema";
 import { requireSuperuser } from "./auth";
 import { checkDomain, type DomainCheck } from "./domain-readiness";
+import { sendDomainStatusNotification } from "./email";
 
 const statusSchema = z.enum(["draft", "active", "suspended"]);
 const healthStatusSchema = z.enum(["unknown", "healthy", "warning", "offline", "error"]);
@@ -115,6 +116,9 @@ function safeProfile(profile: typeof deploymentProfiles.$inferSelect) {
     credentialHash: _credentialHash,
     domainCheckClaimedAt: _domainCheckClaimedAt,
     domainCheckClaimToken: _domainCheckClaimToken,
+    domainNotificationPending: _domainNotificationPending,
+    domainNotificationMessage: _domainNotificationMessage,
+    domainNotificationCreatedAt: _domainNotificationCreatedAt,
     ...safe
   } = profile;
   return safe;
@@ -150,6 +154,25 @@ const DOMAIN_CHECK_LEASE_MS = 10 * 60 * 1000;
 const DOMAIN_PROBE_TIMEOUT_MS = 20 * 1000;
 let domainMonitorStarted = false;
 let domainMonitorRunning = false;
+
+export type DomainNotificationKind = "outage" | "recovery" | null;
+
+export function domainNotificationKind(
+  previousStatus: string,
+  nextStatus: string,
+): DomainNotificationKind {
+  if (previousStatus !== "failed" && nextStatus === "failed") return "outage";
+  if (previousStatus === "failed" && nextStatus === "connected") return "recovery";
+  return null;
+}
+
+export function nextPendingDomainNotification(
+  previousStatus: string,
+  nextStatus: string,
+  currentPending: DomainNotificationKind,
+): DomainNotificationKind {
+  return domainNotificationKind(previousStatus, nextStatus) ?? currentPending;
+}
 
 type DeploymentWriteSnapshot = Pick<
   typeof deploymentProfiles.$inferSelect,
@@ -251,6 +274,12 @@ async function checkProfileDomains(currentProfile: typeof deploymentProfiles.$in
     ? failures.map(check => `${check.hostname}: ${check.reason}`).join("; ")
     : `All ${checks.length} required hostname${checks.length === 1 ? "" : "s"} passed DNS and HTTPS checks.`;
   const checkedAt = new Date();
+  const notificationKind = domainNotificationKind(currentProfile.domainStatus, domainStatus);
+  const pendingNotification = nextPendingDomainNotification(
+    currentProfile.domainStatus,
+    domainStatus,
+    currentProfile.domainNotificationPending as DomainNotificationKind,
+  );
   const writePredicate = deploymentWritePredicate({
     customerDomain: currentProfile.customerDomain,
     posDomain: currentProfile.posDomain,
@@ -266,6 +295,11 @@ async function checkProfileDomains(currentProfile: typeof deploymentProfiles.$in
     domainCheckedAt: checkedAt,
     domainFailureStartedAt: failures.length ? (currentProfile.domainFailureStartedAt ?? checkedAt) : null,
     domainFailureCount: failures.length ? currentProfile.domainFailureCount + 1 : 0,
+    domainNotificationPending: pendingNotification,
+    ...(notificationKind ? {
+      domainNotificationMessage: domainMessage,
+      domainNotificationCreatedAt: checkedAt,
+    } : {}),
     ...(claimToken ? { domainCheckClaimedAt: null, domainCheckClaimToken: null } : {}),
     updatedAt: checkedAt,
   }).where(and(eq(deploymentProfiles.id, currentProfile.id), writePredicate, claimPredicate)).returning();
@@ -307,10 +341,39 @@ export function startActiveDomainMonitor() {
           if (!claim) continue;
           const result = await checkProfileDomains(claim.profile, claim.claimToken);
           if (!result.profile) continue;
-          if (result.domainStatus === "failed" && profile.domainStatus !== "failed") {
+          const notificationKind = domainNotificationKind(profile.domainStatus, result.domainStatus);
+          if (notificationKind === "outage") {
             console.error(`[domain-monitor] Active deployment ${profile.slug} failed: ${result.domainMessage}`);
-          } else if (result.domainStatus === "connected" && profile.domainStatus === "failed") {
+          } else if (notificationKind === "recovery") {
             console.info(`[domain-monitor] Active deployment ${profile.slug} recovered`);
+          }
+          const pendingNotification = result.profile.domainNotificationPending as DomainNotificationKind;
+          if (pendingNotification) {
+            const notificationResult = await sendDomainStatusNotification({
+              clientName: result.profile.clientName,
+              slug: result.profile.slug,
+              customerDomain: result.profile.customerDomain!,
+              posDomain: result.profile.posDomain,
+              status: pendingNotification === "outage" ? "failed" : "recovered",
+              message: result.profile.domainNotificationMessage ?? result.domainMessage,
+              failureStartedAt: result.profile.domainFailureStartedAt,
+              checkedAt: result.profile.domainNotificationCreatedAt ?? result.profile.domainCheckedAt!,
+            });
+            if (notificationResult.success) {
+              await db.update(deploymentProfiles).set({
+                domainNotificationPending: null,
+                domainNotificationMessage: null,
+                domainNotificationCreatedAt: null,
+              }).where(and(
+                eq(deploymentProfiles.id, result.profile.id),
+                eq(deploymentProfiles.domainNotificationPending, pendingNotification),
+                result.profile.domainNotificationCreatedAt
+                  ? eq(deploymentProfiles.domainNotificationCreatedAt, result.profile.domainNotificationCreatedAt)
+                  : isNull(deploymentProfiles.domainNotificationCreatedAt),
+              ));
+            } else if (!notificationResult.skipped) {
+              console.error(`[domain-monitor] Notification failed for ${profile.slug}: ${notificationResult.error}`);
+            }
           }
         } catch (error) {
           console.error(`[domain-monitor] Check failed for ${profile.slug}:`, error);
@@ -401,7 +464,7 @@ export function registerDeploymentControlRoutes(app: Express) {
     const [profile] = await db.update(deploymentProfiles)
       .set(withoutUndefined({
         ...updates,
-        ...(routingChanged ? { domainStatus: "pending", domainMessage: "Hostname changed; run the domain check again.", domainChecks: [], domainCheckedAt: null, domainFailureStartedAt: null, domainFailureCount: 0, domainCheckClaimedAt: null, domainCheckClaimToken: null } : {}),
+        ...(routingChanged ? { domainStatus: "pending", domainMessage: "Hostname changed; run the domain check again.", domainChecks: [], domainCheckedAt: null, domainFailureStartedAt: null, domainFailureCount: 0, domainCheckClaimedAt: null, domainCheckClaimToken: null, domainNotificationPending: null, domainNotificationMessage: null, domainNotificationCreatedAt: null } : {}),
         updatedAt: new Date(),
       }))
       .where(and(eq(deploymentProfiles.id, id), deploymentWritePredicate(writeGuard)))
@@ -459,6 +522,9 @@ export function registerDeploymentControlRoutes(app: Express) {
       credentialHash: _credentialHash,
       domainCheckClaimedAt: _domainCheckClaimedAt,
       domainCheckClaimToken: _domainCheckClaimToken,
+      domainNotificationPending: _domainNotificationPending,
+      domainNotificationMessage: _domainNotificationMessage,
+      domainNotificationCreatedAt: _domainNotificationCreatedAt,
       createdAt,
       updatedAt,
       lastHeartbeatAt,

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isActiveDomainCheckDue, withDeadline } from "./deployment-control";
+import {
+  domainNotificationKind,
+  isActiveDomainCheckDue,
+  nextPendingDomainNotification,
+  withDeadline,
+} from "./deployment-control";
 
 const now = Date.parse("2026-09-08T12:00:00.000Z");
 
@@ -51,4 +56,23 @@ test("a stalled domain operation returns a useful timeout result", async () => {
     "domain probe timed out",
   );
   assert.equal(result, "domain probe timed out");
+});
+
+test("domain notifications are emitted only on outage and recovery transitions", () => {
+  assert.equal(domainNotificationKind("connected", "failed"), "outage");
+  assert.equal(domainNotificationKind("failed", "connected"), "recovery");
+  assert.equal(domainNotificationKind("failed", "failed"), null);
+  assert.equal(domainNotificationKind("connected", "connected"), null);
+  assert.equal(domainNotificationKind("pending", "failed"), "outage");
+  assert.equal(domainNotificationKind("unknown", "failed"), "outage");
+});
+
+test("failed notification delivery remains pending for the next monitor retry", () => {
+  const firstFailure = nextPendingDomainNotification("connected", "failed", null);
+  assert.equal(firstFailure, "outage");
+  assert.equal(nextPendingDomainNotification("failed", "failed", firstFailure), "outage");
+
+  const afterSuccessfulDelivery = null;
+  assert.equal(nextPendingDomainNotification("failed", "failed", afterSuccessfulDelivery), null);
+  assert.equal(nextPendingDomainNotification("failed", "connected", afterSuccessfulDelivery), "recovery");
 });
