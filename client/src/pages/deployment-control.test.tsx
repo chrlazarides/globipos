@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { IncidentHistory, incidentDuration } from "./deployment-control";
+import { IncidentHistory, incidentDuration, retryCooldownLabel } from "./deployment-control";
 
 test("incident duration formats minutes, hours, and days", () => {
   assert.equal(incidentDuration("2026-09-08T10:00:00.000Z", "2026-09-08T10:42:00.000Z"), "42m");
@@ -40,4 +40,11 @@ test("unresolved operator alert warnings offer a retry delivery action", () => {
   const source = readFileSync(new URL("./deployment-control.tsx", import.meta.url), "utf8");
   assert.match(source, /\/api\/control\/operator-alerts\/\$\{operation\}\/retry/);
   assert.match(source, /Retry delivery<\/Button>/);
+  assert.match(source, /disabled=\{alertRetryMutation\.isPending \|\| Boolean\(cooldownLabel\)\}/);
+});
+
+test("operator alert cooldown labels expire without a page reload", () => {
+  const retryAt = "2026-09-08T10:02:05.000Z";
+  assert.match(retryCooldownLabel(retryAt, new Date("2026-09-08T10:00:00.000Z").getTime())!, /in 2m 5s/);
+  assert.equal(retryCooldownLabel(retryAt, new Date(retryAt).getTime()), null);
 });

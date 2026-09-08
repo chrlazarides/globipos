@@ -145,6 +145,9 @@ test("operator alert retries are exposed only through the superuser control rout
     /app\.post\("\/api\/control\/operator-alerts\/:operation\/retry", requireSuperuser,/,
   );
   assert.match(source, /z\.enum\(\["load", "save"\]\)\.safeParse\(req\.params\.operation\)/);
+  assert.match(source, /OPERATOR_ALERT_RETRY_COOLDOWN/);
+  assert.match(source, /OPERATOR_ALERT_RETRY_LEASE_CONFLICT/);
+  assert.match(source, /Another operator or worker is already delivering this alert/);
 });
 
 async function createDeployment(slug: string) {

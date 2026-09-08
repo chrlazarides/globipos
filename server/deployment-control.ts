@@ -541,8 +541,24 @@ export function registerDeploymentControlRoutes(app: Express) {
     if (!operation.success) return res.status(400).json({ message: "Unknown operator alert operation" });
     const outcome = await retryCustomerAiPersistenceAlert(operation.data);
     if (outcome === "not_claimed") {
+      const [failure] = await db.select().from(operatorAlertFailures)
+        .where(eq(operatorAlertFailures.alertKey, `customer_ai_health_persistence_failed:${operation.data}`));
+      const now = Date.now();
+      if (failure?.nextAttemptAt && failure.nextAttemptAt.getTime() > now) {
+        return res.status(409).json({
+          message: `This alert is cooling down. Retry is available at ${failure.nextAttemptAt.toISOString()}.`,
+          code: "OPERATOR_ALERT_RETRY_COOLDOWN",
+          retryEligibleAt: failure.nextAttemptAt,
+        });
+      }
+      if (failure?.status === "delivering") {
+        return res.status(409).json({
+          message: "Another operator or worker is already delivering this alert. Try again shortly.",
+          code: "OPERATOR_ALERT_RETRY_LEASE_CONFLICT",
+        });
+      }
       return res.status(409).json({
-        message: "This alert is already being delivered, is still in cooldown, or is no longer unresolved.",
+        message: "This alert is no longer unresolved and cannot be retried.",
         code: "OPERATOR_ALERT_RETRY_NOT_READY",
       });
     }
