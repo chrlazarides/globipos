@@ -43,6 +43,8 @@ export const deploymentProfiles = pgTable("deployment_profiles", {
   status: text("status").notNull().default("draft"),
   backOfficeUrl: text("back_office_url").notNull(),
   posServerUrl: text("pos_server_url").notNull(),
+  customerDomain: text("customer_domain"),
+  posDomain: text("pos_domain"),
   branding: jsonb("branding").notNull().default({}),
   enabledFeatures: jsonb("enabled_features").notNull().default([]),
   paymentProvider: text("payment_provider").notNull().default("none"),

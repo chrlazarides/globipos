@@ -16,6 +16,10 @@ const urlSchema = z.string().url().refine(
   },
   "URL must use http or https",
 );
+const hostnameSchema = z.string().trim().min(1).max(253).regex(
+  /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/,
+  "Enter a hostname without a protocol or path",
+);
 const versionSchema = z.string().trim().min(1).max(128);
 const brandingSchema = z.object({
   companyName: z.string().trim().max(200).optional(),
@@ -32,6 +36,8 @@ const profileSchema = z.object({
   status: statusSchema.default("draft"),
   backOfficeUrl: urlSchema,
   posServerUrl: urlSchema,
+  customerDomain: hostnameSchema.nullable().optional(),
+  posDomain: hostnameSchema.nullable().optional(),
   branding: brandingSchema.default({}),
   enabledFeatures: z.array(z.string().trim().min(1).max(100)).max(100).default([]),
   paymentProvider: z.string().trim().min(1).max(100).default("none"),
@@ -43,7 +49,22 @@ const profileSchema = z.object({
   targetPosVersion: versionSchema.nullable().optional(),
   automationProvider: automationSchema.default("manual"),
   externalProjectId: z.string().trim().min(1).max(200).nullable().optional(),
-}).strict();
+}).strict().superRefine((value, ctx) => {
+  const customerDomain = value.customerDomain?.toLowerCase() || null;
+  const posDomain = value.posDomain?.toLowerCase() || null;
+  const backOfficeHost = new URL(value.backOfficeUrl).hostname.toLowerCase();
+  const posHost = new URL(value.posServerUrl).hostname.toLowerCase();
+
+  if (customerDomain && backOfficeHost !== customerDomain) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["backOfficeUrl"], message: "Back office URL must use the customer domain" });
+  }
+  if (posDomain && posHost !== posDomain) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["posServerUrl"], message: "POS URL must use the POS domain" });
+  }
+  if (customerDomain && !posDomain && posHost !== customerDomain) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["posServerUrl"], message: "POS URL must use the customer domain when no POS override is set" });
+  }
+});
 
 const profileUpdateSchema = profileSchema.partial();
 const heartbeatSchema = z.object({
