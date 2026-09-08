@@ -24,6 +24,11 @@ type Profile = {
   automationProvider: "manual" | "github" | "replit"; externalProjectId: string | null; lastHeartbeatAt: string | null; healthStatus: "unknown" | "healthy" | "warning" | "offline" | "error"; healthMessage: string | null; createdAt: string; updatedAt: string;
 };
 type FormState = Omit<Profile, "id" | "createdAt" | "updatedAt" | "lastHeartbeatAt" | "healthStatus" | "healthMessage" | "domainStatus" | "domainMessage" | "domainCheckedAt" | "domainChecks">;
+type ConflictCode = "DEPLOYMENT_CHANGED" | "DOMAIN_CHANGED_DURING_CHECK";
+type ConflictNotice = { title: string; message: string; preserved: string[]; replaced: string[] };
+class ControlApiError extends Error {
+  constructor(message: string, readonly code?: string) { super(message); }
+}
 const emptyForm: FormState = { slug: "", clientName: "", status: "draft", backOfficeUrl: "", posServerUrl: "", customerDomain: "", posDomain: "", branding: { companyName: "", legalName: "", logoUrl: "", primaryColor: "#1f6f78", legalAddress: "", taxId: "" }, enabledFeatures: [], paymentProvider: "", emailProvider: "", whatsappProvider: "", backOfficeVersion: "", posVersion: "", targetBackOfficeVersion: "", targetPosVersion: "", automationProvider: "manual", externalProjectId: "" };
 const featureOptions = ["inventory", "accounting", "pos", "customer-portal", "whatsapp", "digital-signage", "offline-sync"];
 const healthMeta: Record<string, { label: string; cls: string; icon: typeof CheckCircle2 }> = {
@@ -39,7 +44,39 @@ const domainMeta: Record<string, { label: string; cls: string; icon: typeof Chec
   pending: { label: "Pending", cls: "text-amber-700 bg-amber-50 border-amber-200", icon: AlertTriangle },
 };
 
-async function json<T>(res: Response): Promise<T> { return res.json(); }
+async function controlRequest<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined, credentials: "include" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ message: res.statusText }));
+    throw new ControlApiError(data.message || `Request failed (${res.status})`, data.code);
+  }
+  return res.json();
+}
+function hostnameFromUrl(value: string | null) { try { return value ? new URL(value).hostname : ""; } catch { return ""; } }
+function formFromProfile(p: Profile): FormState {
+  const customerDomain = p.customerDomain || hostnameFromUrl(p.backOfficeUrl);
+  const posHost = hostnameFromUrl(p.posServerUrl);
+  const posDomain = p.posDomain || (posHost && posHost !== customerDomain ? posHost : "");
+  return { slug: p.slug, clientName: p.clientName, status: p.status, backOfficeUrl: p.backOfficeUrl || "", posServerUrl: p.posServerUrl || "", customerDomain, posDomain, branding: { ...emptyForm.branding, ...p.branding }, enabledFeatures: p.enabledFeatures || [], paymentProvider: p.paymentProvider || "", emailProvider: p.emailProvider || "", whatsappProvider: p.whatsappProvider || "", backOfficeVersion: p.backOfficeVersion || "", posVersion: p.posVersion || "", targetBackOfficeVersion: p.targetBackOfficeVersion || "", targetPosVersion: p.targetPosVersion || "", automationProvider: p.automationProvider, externalProjectId: p.externalProjectId || "" };
+}
+const fieldLabels: Record<keyof FormState, string> = { slug: "slug", clientName: "client name", status: "status", backOfficeUrl: "back-office URL", posServerUrl: "POS URL", customerDomain: "customer hostname", posDomain: "POS hostname", branding: "branding", enabledFeatures: "enabled features", paymentProvider: "payment provider", emailProvider: "email provider", whatsappProvider: "WhatsApp provider", backOfficeVersion: "back-office version", posVersion: "POS version", targetBackOfficeVersion: "target back-office version", targetPosVersion: "target POS version", automationProvider: "automation provider", externalProjectId: "external project ID" };
+function valuesEqual(a: unknown, b: unknown) { return JSON.stringify(a) === JSON.stringify(b); }
+function reconcileForm(base: FormState, draft: FormState, latest: FormState) {
+  const next = { ...latest, branding: { ...latest.branding } };
+  const preserved: string[] = [], replaced: string[] = [];
+  for (const key of Object.keys(base) as Array<keyof FormState>) {
+    if (key === "branding") continue;
+    const userChanged = !valuesEqual(draft[key], base[key]), serverChanged = !valuesEqual(latest[key], base[key]);
+    if (userChanged && !serverChanged) { (next as any)[key] = draft[key]; preserved.push(fieldLabels[key]); }
+    else if (userChanged && serverChanged && !valuesEqual(draft[key], latest[key])) replaced.push(fieldLabels[key]);
+  }
+  for (const key of Object.keys(base.branding) as Array<keyof FormState["branding"]>) {
+    const userChanged = !valuesEqual(draft.branding[key], base.branding[key]), serverChanged = !valuesEqual(latest.branding[key], base.branding[key]);
+    if (userChanged && !serverChanged) { next.branding[key] = draft.branding[key]; preserved.push(`branding: ${key}`); }
+    else if (userChanged && serverChanged && !valuesEqual(draft.branding[key], latest.branding[key])) replaced.push(`branding: ${key}`);
+  }
+  return { form: next, preserved, replaced };
+}
 function StatusPill({ status }: { status: string }) { const m = healthMeta[status] || healthMeta.unknown; const Icon = m.icon; return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${m.cls}`}><Icon className="h-3 w-3" />{m.label}</span>; }
 function DomainPill({ status }: { status: string }) { const m = domainMeta[status] || domainMeta.pending; const Icon = m.icon; return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${m.cls}`}><Icon className="h-3 w-3" />{m.label}</span>; }
 function Version({ value, target }: { value: string | null; target: string | null }) { const drift = target && target !== value; return <span className={`font-mono text-xs ${drift ? "text-amber-700" : "text-slate-600"}`}>{value || "—"}{drift ? ` → ${target}` : ""}</span>; }
@@ -50,6 +87,7 @@ export default function DeploymentControlPage() {
   const [formOpen, setFormOpen] = useState(false); const [editing, setEditing] = useState<Profile | null>(null); const [form, setForm] = useState<FormState>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<Profile | null>(null); const [suspendTarget, setSuspendTarget] = useState<Profile | null>(null); const [credential, setCredential] = useState<{ client: string; token: string } | null>(null); const [rolloutOpen, setRolloutOpen] = useState(false);
   const [activationOverride, setActivationOverride] = useState<{ request: { method: string; url: string; body: any }; clientName: string; reason: string } | null>(null);
+  const [conflictNotice, setConflictNotice] = useState<ConflictNotice | null>(null);
   const [rollout, setRollout] = useState({ all: false, targetBackOfficeVersion: "", targetPosVersion: "", notes: "" });
   useEffect(() => { const unique = Array.from(new Set(selected)); if (unique.length !== selected.length) setSelected(unique); }, [selected]);
   const control = useQuery<any>({ queryKey: ["/api/control/status"] });
@@ -59,15 +97,41 @@ export default function DeploymentControlPage() {
   const profiles = deployments.data || [];
   const filtered = useMemo(() => profiles.filter(p => (!search || `${p.clientName} ${p.slug}`.toLowerCase().includes(search.toLowerCase())) && (statusFilter === "all" || p.status === statusFilter) && (healthFilter === "all" || p.healthStatus === healthFilter)), [profiles, search, statusFilter, healthFilter]);
   const invalidate = () => { queryClient.invalidateQueries({ queryKey: ["/api/control/deployments"] }); queryClient.invalidateQueries({ queryKey: ["/api/control/status"] }); queryClient.invalidateQueries({ queryKey: ["/api/control/rollouts"] }); };
-  const mutation = useMutation({ mutationFn: async (x: { method: string; url: string; body?: unknown }) => (await apiRequest(x.method, x.url, x.body)).json(), onSuccess: () => { invalidate(); setFormOpen(false); toast({ title: "Deployment profile saved" }); }, onError: (e: Error) => toast({ title: "Action failed", description: e.message, variant: "destructive" }) });
+  const recoverConflict = async (code: ConflictCode, profileId: string) => {
+    const result = await deployments.refetch();
+    if (result.error) {
+      toast({ title: "Deployment changed", description: "The save conflict was detected, but the latest profile could not be loaded. Try Refresh before saving again.", variant: "destructive" });
+      return;
+    }
+    const latest = result.data?.find(p => p.id === profileId);
+    if (!latest) {
+      setFormOpen(false); setEditing(null);
+      toast({ title: "Deployment changed", description: "The profile is no longer available. The deployment list has been refreshed.", variant: "destructive" });
+      return;
+    }
+    let preserved: string[] = [], replaced: string[] = [];
+    if (editing?.id === profileId) {
+      const reconciled = reconcileForm(formFromProfile(editing), form, formFromProfile(latest));
+      setForm(reconciled.form); preserved = reconciled.preserved; replaced = reconciled.replaced;
+    }
+    setEditing(latest);
+    setFormOpen(true);
+    const domainCheckChanged = code === "DOMAIN_CHANGED_DURING_CHECK";
+    setConflictNotice({
+      title: domainCheckChanged ? "Routing changed during the domain check" : "Deployment changed while saving",
+      message: domainCheckChanged ? "The check result was discarded because routing changed while it was running. The latest routing and readiness state is now loaded." : "Another operator or process changed routing, readiness, or status during this save. The latest deployment state is now loaded.",
+      preserved, replaced,
+    });
+    if (!formOpen) toast({ title: "Latest deployment state loaded", description: "Routing, readiness, or status changed during the operation. Review the profile before trying again." });
+  };
+  const mutation = useMutation({ mutationFn: (x: { method: string; url: string; body?: unknown }) => controlRequest<Profile>(x.method, x.url, x.body), onSuccess: () => { invalidate(); setFormOpen(false); setConflictNotice(null); toast({ title: "Deployment profile saved" }); }, onError: (e: Error, request) => { const code = e instanceof ControlApiError ? e.code : undefined; const id = request.url.match(/\/deployments\/([^/]+)/)?.[1]; if (id && code === "DEPLOYMENT_CHANGED") { void recoverConflict(code, id); return; } toast({ title: "Action failed", description: e.message, variant: "destructive" }); } });
   const deleting = useMutation({ mutationFn: (id: string) => apiRequest("DELETE", `/api/control/deployments/${id}`), onSuccess: () => { invalidate(); setDeleteTarget(null); toast({ title: "Deployment removed" }); }, onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }) });
   const credentialMutation = useMutation({ mutationFn: async (id: string) => (await apiRequest("POST", `/api/control/deployments/${id}/rotate-credential`, {})).json(), onSuccess: (data: any, id) => { const p = profiles.find(x => x.id === id); setCredential({ client: p?.clientName || "deployment", token: data.credential }); }, onError: (e: Error) => toast({ title: "Credential rotation failed", description: e.message, variant: "destructive" }) });
   const rolloutMutation = useMutation({ mutationFn: (body: any) => apiRequest("POST", "/api/control/rollouts", body), onSuccess: () => { invalidate(); setRolloutOpen(false); setSelected([]); toast({ title: "Upgrade rollout queued" }); }, onError: (e: Error) => toast({ title: "Rollout failed", description: e.message, variant: "destructive" }) });
-  const domainMutation = useMutation({ mutationFn: async (id: string) => (await apiRequest("POST", `/api/control/deployments/${id}/check-domains`, {})).json(), onSuccess: (profile: Profile) => { invalidate(); setEditing(profile); toast({ title: profile.domainStatus === "connected" ? "Domains connected" : "Domain check failed", description: profile.domainMessage || undefined, variant: profile.domainStatus === "failed" ? "destructive" : "default" }); }, onError: (e: Error) => toast({ title: "Domain check failed", description: e.message, variant: "destructive" }) });
+  const domainMutation = useMutation({ mutationFn: (id: string) => controlRequest<Profile>("POST", `/api/control/deployments/${id}/check-domains`, {}), onSuccess: (profile: Profile) => { invalidate(); setEditing(profile); setConflictNotice(null); toast({ title: profile.domainStatus === "connected" ? "Domains connected" : "Domain check failed", description: profile.domainMessage || undefined, variant: profile.domainStatus === "failed" ? "destructive" : "default" }); }, onError: (e: Error, id) => { const code = e instanceof ControlApiError ? e.code : undefined; if (code === "DOMAIN_CHANGED_DURING_CHECK") { void recoverConflict(code, id); return; } toast({ title: "Domain check failed", description: e.message, variant: "destructive" }); } });
 
-  const openCreate = () => { setEditing(null); setForm(emptyForm); setFormOpen(true); };
-  const hostnameFromUrl = (value: string | null) => { try { return value ? new URL(value).hostname : ""; } catch { return ""; } };
-  const openEdit = (p: Profile) => { const customerDomain = p.customerDomain || hostnameFromUrl(p.backOfficeUrl); const posDomain = p.posDomain || (hostnameFromUrl(p.posServerUrl) && hostnameFromUrl(p.posServerUrl) !== customerDomain ? hostnameFromUrl(p.posServerUrl) : ""); setEditing(p); setForm({ slug: p.slug, clientName: p.clientName, status: p.status, backOfficeUrl: p.backOfficeUrl || "", posServerUrl: p.posServerUrl || "", customerDomain, posDomain, branding: { ...emptyForm.branding, ...p.branding }, enabledFeatures: p.enabledFeatures || [], paymentProvider: p.paymentProvider || "", emailProvider: p.emailProvider || "", whatsappProvider: p.whatsappProvider || "", backOfficeVersion: p.backOfficeVersion || "", posVersion: p.posVersion || "", targetBackOfficeVersion: p.targetBackOfficeVersion || "", targetPosVersion: p.targetPosVersion || "", automationProvider: p.automationProvider, externalProjectId: p.externalProjectId || "" }); setFormOpen(true); };
+  const openCreate = () => { setEditing(null); setForm(emptyForm); setConflictNotice(null); setFormOpen(true); };
+  const openEdit = (p: Profile) => { setEditing(p); setForm(formFromProfile(p)); setConflictNotice(null); setFormOpen(true); };
   const setField = (key: keyof FormState, value: any) => setForm(f => ({ ...f, [key]: value }));
   const setDomain = (key: "customerDomain" | "posDomain", value: string) => setForm(f => {
     const next = { ...f, [key]: value.trim().toLowerCase() };
@@ -92,6 +156,7 @@ export default function DeploymentControlPage() {
   if (unavailable) return <div className="mx-auto flex min-h-[70vh] max-w-2xl items-center px-6"><Card className="w-full border-amber-200 bg-amber-50/50"><CardContent className="p-8 text-center"><ShieldAlert className="mx-auto mb-4 h-10 w-10 text-amber-700" /><h1 className="text-xl font-semibold text-slate-900">Deployment control is not available</h1><p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-slate-600">The control plane is development-only and must be explicitly enabled for this environment. This account may also need superuser access. No deployment data has been substituted.</p><Button variant="outline" className="mt-6" onClick={() => control.refetch()}><RefreshCw className="mr-2 h-4 w-4" />Check again</Button></CardContent></Card></div>;
 
   return <div className="min-h-full bg-slate-50/60 p-4 sm:p-6 lg:p-8">
+    {conflictNotice && formOpen && <div role="alert" className="fixed inset-x-4 top-4 z-[70] mx-auto max-w-3xl rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 shadow-xl"><div className="flex gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="font-semibold">{conflictNotice.title}</p><p className="mt-1 leading-5">{conflictNotice.message}</p>{conflictNotice.preserved.length > 0 && <p className="mt-2"><strong>Unsaved edits preserved:</strong> {conflictNotice.preserved.join(", ")}.</p>}{conflictNotice.replaced.length > 0 && <p className="mt-2"><strong>Replaced with newer server values:</strong> {conflictNotice.replaced.join(", ")}.</p>}{conflictNotice.preserved.length === 0 && conflictNotice.replaced.length === 0 && <p className="mt-2">No unsaved form edits needed reconciliation.</p>}</div></div></div>}
     {editing && formOpen && <div className="fixed inset-x-4 bottom-6 z-[60] mx-auto flex max-w-3xl flex-wrap items-center gap-2 rounded-lg border bg-background p-3 shadow-xl"><span className="text-sm font-semibold">Profile actions</span><div className="mr-auto flex min-w-0 items-center gap-2"><DomainPill status={editing.domainStatus} />{editing.domainMessage && <span title={editing.domainMessage} className="max-w-48 truncate text-xs text-slate-500">{editing.domainMessage}</span>}</div><Button variant="outline" disabled={domainMutation.isPending} onClick={() => domainMutation.mutate(editing.id)}>{domainMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Check domains</Button><Button variant="outline" onClick={() => credentialMutation.mutate(editing.id)}>Rotate credential</Button><Button variant="outline" onClick={() => exportProfile(editing)}>Download manifest</Button><Button variant="outline" onClick={() => { if (editing.status === "suspended" && !domainsFresh(editing)) { setActivationOverride({ request: { method: "PATCH", url: `/api/control/deployments/${editing.id}`, body: { status: "active" } }, clientName: editing.clientName, reason: editing.domainMessage || "Required domains do not have a recent successful check." }); } else { setFormOpen(false); if (editing.status === "suspended") mutation.mutate({ method: "PATCH", url: `/api/control/deployments/${editing.id}`, body: { status: "active" } }); else setSuspendTarget(editing); } }}>{editing.status === "suspended" ? "Reactivate deployment" : "Suspend deployment"}</Button>{editing.status === "draft" && <Button variant="destructive" onClick={() => { setFormOpen(false); setDeleteTarget(editing); }}>Delete draft</Button>}</div>}
     <div className="mx-auto max-w-[1500px] space-y-6">
       <header className="flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-teal-700"><MonitorCog className="h-4 w-4" /> GlobiPOS support cockpit</div><h1 className="text-3xl font-semibold tracking-tight text-slate-900">Deployment Control Center</h1><p className="mt-1 text-sm text-slate-500">Manage isolated customer installations from one shared codebase.</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => { control.refetch(); deployments.refetch(); }}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button><Button onClick={openCreate}><Plus className="mr-2 h-4 w-4" />New deployment</Button></div></header>
