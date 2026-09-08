@@ -57,7 +57,7 @@ type IntegrationCardProps = {
 };
 
 type ErpOption = {
-  id: "softone" | "sap-b1";
+  id: "softone" | "sap-b1" | "custom-api";
   name: string;
   description: string;
   interfaceName: string;
@@ -78,6 +78,13 @@ const erpOptions: ErpOption[] = [
     description: "Exchange master data and transactions with SAP Business One.",
     interfaceName: "SAP Business One Service Layer",
     requirements: ["Service Layer endpoint", "Company database identifier", "API-enabled integration account", "Data synchronization scope"],
+  },
+  {
+    id: "custom-api",
+    name: "Other ERP / Custom API",
+    description: "Connect another ERP using its supported API, middleware, or webhook interface.",
+    interfaceName: "REST API, SOAP service, or webhooks",
+    requirements: ["ERP API or middleware endpoint", "Authentication method and deployment secret", "Data field mapping", "Synchronization direction and schedule"],
   },
 ];
 
