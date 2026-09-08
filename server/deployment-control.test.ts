@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
+import express from "express";
 import {
   applyDomainIncidentTransition,
   appendDomainNotificationDelivery,
@@ -12,12 +14,16 @@ import {
   isActiveDomainCheckDue,
   loadDeploymentProfilesWithIncidents,
   nextPendingDomainNotification,
+  retryOperatorAlert,
   sanitizeResolvedOperatorAlert,
+  setOperatorAlertRetryLookupForTests,
   withDeadline,
 } from "./deployment-control";
 import { db, pool } from "./db";
 import { deploymentDomainIncidents, deploymentProfiles } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { requireAuth, requireSuperuser, signToken } from "./auth";
+import { setCustomerAiPersistenceAlertClaimerForTests } from "./operator-alerting";
 
 const now = Date.parse("2026-09-08T12:00:00.000Z");
 
@@ -150,6 +156,78 @@ test("operator alert retries are exposed only through the superuser control rout
   assert.match(source, /OPERATOR_ALERT_RETRY_COOLDOWN/);
   assert.match(source, /OPERATOR_ALERT_RETRY_LEASE_CONFLICT/);
   assert.match(source, /Another operator or worker is already delivering this alert/);
+});
+
+test("authenticated operator alert retries distinguish cooldown, lease, and not-ready conflicts", async t => {
+  const retryEligibleAt = new Date(Date.now() + 60_000);
+  let failure: any = {
+    alertKey: "customer_ai_health_persistence_failed:load",
+    event: "customer_ai_health_persistence_failed",
+    operation: "load",
+    reason: "Delivery failed",
+    occurrenceCount: 1,
+    deliveryAttempts: 1,
+    status: "failed",
+    claimedAt: null,
+    claimToken: null,
+    nextAttemptAt: retryEligibleAt,
+    firstFailedAt: new Date(),
+    lastFailedAt: new Date(),
+    resolvedAt: null,
+    retryHistory: [],
+  };
+  const app = express();
+  app.use(requireAuth);
+  app.post("/api/control/operator-alerts/:operation/retry", requireSuperuser, retryOperatorAlert);
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const { port } = server.address() as AddressInfo;
+  const token = signToken({
+    id: crypto.randomUUID(),
+    username: "alert-route-test",
+    email: null,
+    role: "superuser",
+    permissions: [],
+  });
+  const requestRetry = async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/control/operator-alerts/load/retry`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    return { response, body: await response.json() as Record<string, unknown> };
+  };
+
+  setCustomerAiPersistenceAlertClaimerForTests(async () => null);
+  setOperatorAlertRetryLookupForTests(async () => failure);
+  t.after(async () => {
+    setCustomerAiPersistenceAlertClaimerForTests();
+    setOperatorAlertRetryLookupForTests();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  });
+
+  const cooldown = await requestRetry();
+  assert.equal(cooldown.response.status, 409);
+  assert.equal(cooldown.body.code, "OPERATOR_ALERT_RETRY_COOLDOWN");
+  assert.equal(cooldown.body.retryEligibleAt, retryEligibleAt.toISOString());
+
+  failure = { ...failure, status: "delivering", nextAttemptAt: null, resolvedAt: null };
+  const lease = await requestRetry();
+  assert.equal(lease.response.status, 409);
+  assert.equal(lease.body.code, "OPERATOR_ALERT_RETRY_LEASE_CONFLICT");
+  assert.equal(lease.body.message, "Another operator or worker is already delivering this alert. Try again shortly.");
+
+  failure = { ...failure, status: "resolved", nextAttemptAt: null, resolvedAt: new Date() };
+  const resolved = await requestRetry();
+  assert.equal(resolved.response.status, 409);
+  assert.equal(resolved.body.code, "OPERATOR_ALERT_RETRY_NOT_READY");
+
+  failure = undefined;
+  const missing = await requestRetry();
+  assert.equal(missing.response.status, 409);
+  assert.equal(missing.body.code, "OPERATOR_ALERT_RETRY_NOT_READY");
 });
 
 test("operator alert retry history keeps only sanitized recent outcomes", () => {

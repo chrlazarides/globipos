@@ -520,6 +520,12 @@ export async function loadActiveOperatorAlertFailures() {
     .orderBy(desc(operatorAlertFailures.lastFailedAt));
 }
 
+type OperatorAlertRetryHistoryEntryInput = {
+  attemptedAt: string;
+  outcome: "delivered" | "failed";
+  operator: { id: string | null; username: string | null };
+};
+
 export type ResolvedOperatorAlert = {
   operation: string;
   resolvedAt: Date;
@@ -559,11 +565,6 @@ export async function loadResolvedOperatorAlerts(): Promise<ResolvedOperatorAler
   });
 }
 
-type OperatorAlertRetryHistoryEntryInput = {
-  attemptedAt: string;
-  outcome: "delivered" | "failed";
-  operator: { id: string | null; username: string | null };
-};
 export function registerDeploymentControlRoutes(app: Express) {
   if (process.env.NODE_ENV !== "development" && process.env.CONTROL_PLANE_ENABLED !== "true") {
     return;
@@ -584,52 +585,7 @@ export function registerDeploymentControlRoutes(app: Express) {
     });
   });
 
-  app.post("/api/control/operator-alerts/:operation/retry", requireSuperuser, async (req, res) => {
-    const operation = z.enum(["load", "save"]).safeParse(req.params.operation);
-    if (!operation.success) return res.status(400).json({ message: "Unknown operator alert operation" });
-    const outcome = await retryCustomerAiPersistenceAlert(operation.data);
-    if (outcome === "not_claimed") {
-      const [failure] = await db.select().from(operatorAlertFailures)
-        .where(eq(operatorAlertFailures.alertKey, `customer_ai_health_persistence_failed:${operation.data}`));
-      const now = Date.now();
-      if (failure?.nextAttemptAt && failure.nextAttemptAt.getTime() > now) {
-        return res.status(409).json({
-          message: `This alert is cooling down. Retry is available at ${failure.nextAttemptAt.toISOString()}.`,
-          code: "OPERATOR_ALERT_RETRY_COOLDOWN",
-          retryEligibleAt: failure.nextAttemptAt,
-        });
-      }
-      if (failure?.status === "delivering") {
-        return res.status(409).json({
-          message: "Another operator or worker is already delivering this alert. Try again shortly.",
-          code: "OPERATOR_ALERT_RETRY_LEASE_CONFLICT",
-        });
-      }
-      return res.status(409).json({
-        message: "This alert is no longer unresolved and cannot be retried.",
-        code: "OPERATOR_ALERT_RETRY_NOT_READY",
-      });
-    }
-    const alertKey = `customer_ai_health_persistence_failed:${operation.data}`;
-    const [currentFailure] = await db.select().from(operatorAlertFailures)
-      .where(eq(operatorAlertFailures.alertKey, alertKey));
-    if (currentFailure) {
-      await db.update(operatorAlertFailures).set({
-        retryHistory: appendOperatorAlertRetryHistory(currentFailure.retryHistory, {
-          attemptedAt: new Date().toISOString(),
-          outcome,
-          operator: {
-            id: req.user?.id ?? null,
-            username: req.user?.username ?? null,
-          },
-        }),
-      }).where(eq(operatorAlertFailures.alertKey, alertKey));
-    }
-    await logControlActivity(req, "retry", "operator_alert", alertKey, `Retried customer AI history ${operation.data} alert delivery: ${outcome}`);
-    const [failure] = await db.select().from(operatorAlertFailures)
-      .where(eq(operatorAlertFailures.alertKey, alertKey));
-    res.status(outcome === "delivered" ? 200 : 502).json({ outcome, alert: failure ?? null });
-  });
+  app.post("/api/control/operator-alerts/:operation/retry", requireSuperuser, retryOperatorAlert);
 
   app.get("/api/control/deployments", requireSuperuser, async (_req, res) => {
     res.json(await loadDeploymentProfilesWithIncidents());
@@ -931,4 +887,66 @@ export function appendOperatorAlertRetryHistory(
       })
     : [];
   return [...existing, entry].slice(-10);
+}
+
+let loadOperatorAlertForRetry = async (alertKey: string): Promise<RetryableOperatorAlert | undefined> => {
+  const [failure] = await db.select().from(operatorAlertFailures)
+    .where(eq(operatorAlertFailures.alertKey, alertKey));
+  return failure;
+};
+
+type RetryableOperatorAlert = typeof operatorAlertFailures.$inferSelect;
+
+export function setOperatorAlertRetryLookupForTests(
+  lookup?: (alertKey: string) => Promise<RetryableOperatorAlert | undefined>,
+) {
+  loadOperatorAlertForRetry = lookup ?? (async alertKey => {
+    const [failure] = await db.select().from(operatorAlertFailures)
+      .where(eq(operatorAlertFailures.alertKey, alertKey));
+    return failure;
+  });
+}
+
+export async function retryOperatorAlert(req: Request, res: Response) {
+  const operation = z.enum(["load", "save"]).safeParse(req.params.operation);
+  if (!operation.success) return res.status(400).json({ message: "Unknown operator alert operation" });
+  const outcome = await retryCustomerAiPersistenceAlert(operation.data);
+  const alertKey = `customer_ai_health_persistence_failed:${operation.data}`;
+  if (outcome === "not_claimed") {
+    const failure = await loadOperatorAlertForRetry(alertKey);
+    const now = Date.now();
+    if (failure?.nextAttemptAt && failure.nextAttemptAt.getTime() > now) {
+      return res.status(409).json({
+        message: `This alert is cooling down. Retry is available at ${failure.nextAttemptAt.toISOString()}.`,
+        code: "OPERATOR_ALERT_RETRY_COOLDOWN",
+        retryEligibleAt: failure.nextAttemptAt,
+      });
+    }
+    if (failure?.status === "delivering") {
+      return res.status(409).json({
+        message: "Another operator or worker is already delivering this alert. Try again shortly.",
+        code: "OPERATOR_ALERT_RETRY_LEASE_CONFLICT",
+      });
+    }
+    return res.status(409).json({
+      message: "This alert is no longer unresolved and cannot be retried.",
+      code: "OPERATOR_ALERT_RETRY_NOT_READY",
+    });
+  }
+  const currentFailure = await loadOperatorAlertForRetry(alertKey);
+  if (currentFailure) {
+    await db.update(operatorAlertFailures).set({
+      retryHistory: appendOperatorAlertRetryHistory(currentFailure.retryHistory, {
+        attemptedAt: new Date().toISOString(),
+        outcome,
+        operator: {
+          id: req.user?.id ?? null,
+          username: req.user?.username ?? null,
+        },
+      }),
+    }).where(eq(operatorAlertFailures.alertKey, alertKey));
+  }
+  await logControlActivity(req, "retry", "operator_alert", alertKey, `Retried customer AI history ${operation.data} alert delivery: ${outcome}`);
+  const failure = await loadOperatorAlertForRetry(alertKey);
+  res.status(outcome === "delivered" ? 200 : 502).json({ outcome, alert: failure ?? null });
 }
