@@ -78,7 +78,7 @@ function withDeliveryDeadline(
 
 let deliveryDeadline = withDeliveryDeadline;
 
-const databaseAlertClaimer: CustomerAiPersistenceAlertClaimer = async alert => {
+export const databaseAlertClaimer: CustomerAiPersistenceAlertClaimer = async alert => {
   const { db } = await import("./db");
   const now = new Date();
   const token = crypto.randomUUID();
@@ -117,7 +117,7 @@ const databaseAlertClaimer: CustomerAiPersistenceAlertClaimer = async alert => {
 let customerAiPersistenceAlertClaimer = databaseAlertClaimer;
 let bypassAlertClaimForTests = false;
 
-const databaseFailureRecorder: CustomerAiPersistenceAlertFailureRecorder = async (alert, delivery, attempts, claimToken) => {
+export const databaseFailureRecorder: CustomerAiPersistenceAlertFailureRecorder = async (alert, delivery, attempts, claimToken) => {
   const { db } = await import("./db");
   const now = new Date();
   const alertKey = `${alert.event}:${alert.operation}`;
@@ -137,7 +137,7 @@ const databaseFailureRecorder: CustomerAiPersistenceAlertFailureRecorder = async
 
 let customerAiPersistenceAlertFailureRecorder = databaseFailureRecorder;
 
-const databaseAlertResolver: CustomerAiPersistenceAlertResolver = async (alert, claimToken) => {
+export const databaseAlertResolver: CustomerAiPersistenceAlertResolver = async (alert, claimToken) => {
   const { db } = await import("./db");
   await db.update(operatorAlertFailures)
     .set({

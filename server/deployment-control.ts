@@ -510,6 +510,15 @@ export function startActiveDomainMonitor() {
   setInterval(run, DOMAIN_MONITOR_TICK_MS);
 }
 
+export async function loadActiveOperatorAlertFailures() {
+  return db.select().from(operatorAlertFailures)
+    .where(and(
+      isNull(operatorAlertFailures.resolvedAt),
+      inArray(operatorAlertFailures.status, ["pending", "delivering", "failed"]),
+    ))
+    .orderBy(desc(operatorAlertFailures.lastFailedAt));
+}
+
 export function registerDeploymentControlRoutes(app: Express) {
   if (process.env.NODE_ENV !== "development" && process.env.CONTROL_PLANE_ENABLED !== "true") {
     return;
@@ -517,9 +526,7 @@ export function registerDeploymentControlRoutes(app: Express) {
   startActiveDomainMonitor();
 
   app.get("/api/control/status", requireSuperuser, async (_req, res) => {
-    const alertDeliveryFailures = await db.select().from(operatorAlertFailures)
-      .where(isNull(operatorAlertFailures.resolvedAt))
-      .orderBy(desc(operatorAlertFailures.lastFailedAt));
+    const alertDeliveryFailures = await loadActiveOperatorAlertFailures();
     res.json({
       enabled: true,
       environment: process.env.NODE_ENV,
