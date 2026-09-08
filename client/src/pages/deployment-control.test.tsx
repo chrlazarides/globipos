@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { IncidentHistory, incidentDuration, retryCooldownLabel } from "./deployment-control";
+import { IncidentHistory, ResolvedOperatorAlerts, incidentDuration, retryCooldownLabel } from "./deployment-control";
 
 test("incident duration formats minutes, hours, and days", () => {
   assert.equal(incidentDuration("2026-09-08T10:00:00.000Z", "2026-09-08T10:42:00.000Z"), "42m");
@@ -47,4 +47,21 @@ test("operator alert cooldown labels expire without a page reload", () => {
   const retryAt = "2026-09-08T10:02:05.000Z";
   assert.match(retryCooldownLabel(retryAt, new Date("2026-09-08T10:00:00.000Z").getTime())!, /in 2m 5s/);
   assert.equal(retryCooldownLabel(retryAt, new Date(retryAt).getTime()), null);
+});
+
+test("resolved operator alerts render resolution time and sanitized retry outcomes", () => {
+  const markup = renderToStaticMarkup(<ResolvedOperatorAlerts alerts={[{
+    operation: "save",
+    resolvedAt: "2026-09-08T14:05:00.000Z",
+    retryHistory: [
+      { attemptedAt: "2026-09-08T14:00:00.000Z", outcome: "failed" },
+      { attemptedAt: "2026-09-08T14:05:00.000Z", outcome: "delivered" },
+    ],
+  }]} />);
+  assert.match(markup, /Recently resolved operator alerts/);
+  assert.match(markup, /Customer AI history save/);
+  assert.match(markup, /Resolved /);
+  assert.match(markup, /Failed/);
+  assert.match(markup, /Delivered/);
+  assert.doesNotMatch(markup, /credential|@example\.com|email address/i);
 });

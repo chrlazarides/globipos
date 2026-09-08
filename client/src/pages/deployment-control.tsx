@@ -54,6 +54,14 @@ type OperatorAlertFailure = {
     operator: { id: string | null; username: string | null };
   }>;
 };
+type ResolvedOperatorAlert = {
+  operation: "load" | "save";
+  resolvedAt: string;
+  retryHistory: Array<{
+    attemptedAt: string;
+    outcome: "delivered" | "failed";
+  }>;
+};
 class ControlApiError extends Error {
   constructor(message: string, readonly code?: string) { super(message); }
 }
@@ -151,6 +159,30 @@ export function IncidentHistory({ incidents }: { incidents: Profile["domainIncid
       <p className="text-slate-400">{incident.recoveredAt ? `Recovered ${new Date(incident.recoveredAt).toLocaleString()}` : "Recovery not yet recorded"}</p>
     </div>)}</div> : <p className="px-4 py-5 text-sm text-slate-500">No domain incidents recorded.</p>}
   </div>;
+}
+
+export function ResolvedOperatorAlerts({ alerts }: { alerts: ResolvedOperatorAlert[] }) {
+  if (!alerts.length) return null;
+  return <Card>
+    <details>
+      <summary className="cursor-pointer list-none px-5 py-4 text-sm font-semibold text-slate-900">
+        Recently resolved operator alerts <span className="ml-2 font-normal text-slate-500">({alerts.length})</span>
+      </summary>
+      <CardContent className="border-t p-5">
+        <p className="mb-3 text-xs text-slate-500">Latest 20 recovered alerts. Retry history contains delivery outcomes only.</p>
+        <div className="space-y-3">{alerts.map((alert, alertIndex) => <div key={`${alert.operation}-${alert.resolvedAt}-${alertIndex}`} className="rounded-md border bg-slate-50 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <strong className="text-slate-900">Customer AI history {alert.operation}</strong>
+            <span className="text-xs text-slate-500">Resolved {new Date(alert.resolvedAt).toLocaleString()}</span>
+          </div>
+          {alert.retryHistory.length > 0 ? <ul className="mt-2 space-y-1 border-t pt-2">{[...alert.retryHistory].reverse().map((retry, index) => <li key={`${retry.attemptedAt}-${index}`} className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            <span>{new Date(retry.attemptedAt).toLocaleString()}</span>
+            <Badge variant={retry.outcome === "delivered" ? "secondary" : "destructive"}>{retry.outcome === "delivered" ? "Delivered" : "Failed"}</Badge>
+          </li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No manual retries were recorded.</p>}
+        </div>)}</div>
+      </CardContent>
+    </details>
+  </Card>;
 }
 
 function incidentQuery(filters: { from: string; to: string; status: string }, page?: number) {
@@ -266,6 +298,7 @@ export default function DeploymentControlPage() {
   const activeDomainFailures = profiles.filter(p => p.status === "active" && p.domainStatus === "failed");
   const activeDeliveryWarnings = profiles.filter(p => p.domainNotificationDeliveryStatus === "failed" || p.domainNotificationDeliveryStatus === "skipped");
   const operatorAlertFailures = (control.data?.alertDeliveryFailures || []) as OperatorAlertFailure[];
+  const resolvedOperatorAlerts = (control.data?.resolvedOperatorAlerts || []) as ResolvedOperatorAlert[];
   const total = profiles.length, healthy = profiles.filter(p => p.healthStatus === "healthy").length, drift = profiles.filter(p => p.targetBackOfficeVersion && p.targetBackOfficeVersion !== p.backOfficeVersion || p.targetPosVersion && p.targetPosVersion !== p.posVersion).length;
   const rolloutData = (rollouts.data || []).map((r: any) => ({ ...r, all: r.scope === "all" }));
 
@@ -291,6 +324,7 @@ export default function DeploymentControlPage() {
         const cooldownLabel = failure.nextAttemptAt ? retryCooldownLabel(failure.nextAttemptAt, retryClock) : null;
         return <div key={failure.alertKey} className="rounded-md border border-red-200 bg-white/60 p-3 text-sm text-red-900"><div className="flex flex-wrap items-center justify-between gap-3"><div><strong>Customer AI history {failure.operation}</strong> — {failure.reason}<span className="block text-xs text-red-700">{failure.occurrenceCount} occurrence{failure.occurrenceCount === 1 ? "" : "s"}; last delivery used {failure.deliveryAttempts} attempt{failure.deliveryAttempts === 1 ? "" : "s"} at {new Date(failure.lastFailedAt).toLocaleString()}</span>{cooldownLabel && <span className="mt-1 block text-xs font-medium text-amber-800">{cooldownLabel}</span>}</div><Button size="sm" variant="outline" className="border-red-300 bg-white text-red-800 hover:bg-red-100" disabled={alertRetryMutation.isPending || Boolean(cooldownLabel)} onClick={() => alertRetryMutation.mutate(failure.operation)}>{alertRetryMutation.isPending && alertRetryMutation.variables === failure.operation ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Retry delivery</Button></div>{failure.retryHistory?.length > 0 && <div className="mt-3 border-t border-red-200 pt-2"><p className="text-xs font-semibold text-red-950">Recent manual retries</p><ul className="mt-1 space-y-1">{[...failure.retryHistory].reverse().map((retry, index) => <li key={`${retry.attemptedAt}-${index}`} className="flex flex-wrap items-center gap-x-2 text-xs text-red-800"><span>{new Date(retry.attemptedAt).toLocaleString()}</span><Badge variant={retry.outcome === "delivered" ? "secondary" : "destructive"}>{retry.outcome === "delivered" ? "Delivered" : "Failed"}</Badge><span>by {retry.operator?.username || "Unknown operator"}</span></li>)}</ul></div>}</div>;
       })}</div></div></div></CardContent></Card>}
+      <ResolvedOperatorAlerts alerts={resolvedOperatorAlerts} />
       {activeDomainFailures.length > 0 && <Card className="border-red-300 bg-red-50"><CardContent className="p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" /><div><p className="font-semibold text-red-900">{activeDomainFailures.length} active customer domain{activeDomainFailures.length === 1 ? " is" : "s are"} not responding</p><div className="mt-2 space-y-1">{activeDomainFailures.map(p => <button key={p.id} className="block text-left text-sm text-red-800 underline-offset-2 hover:underline" onClick={() => openEdit(p)}><strong>{p.clientName}</strong> — {p.domainMessage || "Domain check failed"} <span className="text-red-600">({p.domainFailureCount} consecutive; since {p.domainFailureStartedAt ? new Date(p.domainFailureStartedAt).toLocaleString() : "unknown"})</span></button>)}</div></div></div></CardContent></Card>}
       {activeDeliveryWarnings.length > 0 && <Card className="border-amber-300 bg-amber-50"><CardContent className="p-4"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" /><div><p className="font-semibold text-amber-950">{activeDeliveryWarnings.length} deployment alert{activeDeliveryWarnings.length === 1 ? " needs" : "s need"} delivery attention</p><div className="mt-2 space-y-1">{activeDeliveryWarnings.map(p => <button key={p.id} className="block text-left text-sm text-amber-900 underline-offset-2 hover:underline" onClick={() => openEdit(p)}><strong>{p.clientName}</strong> — {p.domainNotificationDeliveryMessage || "Notification could not be delivered"}</button>)}</div></div></div></CardContent></Card>}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Card><CardContent className="p-4"><div className="flex justify-between"><Users className="h-4 w-4 text-teal-700" /><span className="text-2xl font-semibold">{total}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Registered clients</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><HeartPulse className="h-4 w-4 text-emerald-700" /><span className="text-2xl font-semibold text-emerald-700">{healthy}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Healthy heartbeat</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><GitBranch className="h-4 w-4 text-amber-700" /><span className="text-2xl font-semibold text-amber-700">{drift}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Version drift</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><Activity className="h-4 w-4 text-slate-500" /><span className="text-2xl font-semibold">{rollouts.data?.length || 0}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Rollouts recorded</p></CardContent></Card></div>

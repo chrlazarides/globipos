@@ -93,6 +93,12 @@ export const deploymentDomainIncidents = pgTable("deployment_domain_incidents", 
     .where(sql`${table.recoveredAt} IS NULL`),
 ]);
 
+export type OperatorAlertRetryHistoryEntry = {
+  attemptedAt: string;
+  outcome: "delivered" | "failed";
+  operator: { id: string | null; username: string | null };
+};
+
 export const operatorAlertFailures = pgTable("operator_alert_failures", {
   alertKey: text("alert_key").primaryKey(),
   event: text("event").notNull(),
@@ -107,7 +113,7 @@ export const operatorAlertFailures = pgTable("operator_alert_failures", {
   firstFailedAt: timestamp("first_failed_at").defaultNow().notNull(),
   lastFailedAt: timestamp("last_failed_at").defaultNow().notNull(),
   resolvedAt: timestamp("resolved_at"),
-  retryHistory: jsonb("retry_history").notNull().default([]),
+  retryHistory: jsonb("retry_history").$type<OperatorAlertRetryHistoryEntry[]>().notNull().default([]),
 });
 
 export const deploymentRollouts = pgTable("deployment_rollouts", {

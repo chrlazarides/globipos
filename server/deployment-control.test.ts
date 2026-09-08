@@ -12,6 +12,7 @@ import {
   isActiveDomainCheckDue,
   loadDeploymentProfilesWithIncidents,
   nextPendingDomainNotification,
+  sanitizeResolvedOperatorAlert,
   withDeadline,
 } from "./deployment-control";
 import { db, pool } from "./db";
@@ -167,6 +168,30 @@ test("operator alert retry history keeps only sanitized recent outcomes", () => 
   assert.equal(result[0].operator.username, "operator-1");
   assert.deepEqual(result.at(-1), latest);
   assert.deepEqual(Object.keys(result.at(-1)!).sort(), ["attemptedAt", "operator", "outcome"]);
+});
+
+test("resolved operator alerts expose only bounded retry outcomes and resolution time", () => {
+  const alert = sanitizeResolvedOperatorAlert({
+    operation: "save",
+    resolvedAt: new Date("2026-09-08T14:05:00.000Z"),
+    retryHistory: Array.from({ length: 12 }, (_, index) => ({
+      attemptedAt: new Date(index * 1000).toISOString(),
+      outcome: index === 11 ? "delivered" as const : "failed" as const,
+      operator: { id: `secret-id-${index}`, username: `operator-${index}@example.com` },
+    })),
+  });
+  assert.ok(alert);
+  assert.equal(alert.retryHistory.length, 10);
+  assert.deepEqual(Object.keys(alert).sort(), ["operation", "resolvedAt", "retryHistory"]);
+  assert.deepEqual(Object.keys(alert.retryHistory[0]).sort(), ["attemptedAt", "outcome"]);
+  assert.doesNotMatch(JSON.stringify(alert), /secret-id|@example\.com/);
+});
+
+test("resolved operator alert history is capped and protected by superuser access", () => {
+  const source = readFileSync(new URL("./deployment-control.ts", import.meta.url), "utf8");
+  assert.match(source, /\.where\(isNotNull\(operatorAlertFailures\.resolvedAt\)\)/);
+  assert.match(source, /\.limit\(20\)/);
+  assert.match(source, /app\.get\("\/api\/control\/status", requireSuperuser,/);
 });
 
 async function createDeployment(slug: string) {

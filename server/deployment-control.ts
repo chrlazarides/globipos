@@ -7,7 +7,7 @@ import { checkDomain, type DomainCheck } from "./domain-readiness";
 import { sendDomainStatusNotification } from "./email";
 import { retryCustomerAiPersistenceAlert } from "./operator-alerting";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
-import { activityLogs, deploymentDomainIncidents, deploymentProfiles, deploymentRollouts, operatorAlertFailures } from "@shared/schema";
+import { activityLogs, deploymentDomainIncidents, deploymentProfiles, deploymentRollouts, operatorAlertFailures, type OperatorAlertRetryHistoryEntry } from "@shared/schema";
 
 const statusSchema = z.enum(["draft", "active", "suspended"]);
 const healthStatusSchema = z.enum(["unknown", "healthy", "warning", "offline", "error"]);
@@ -520,7 +520,46 @@ export async function loadActiveOperatorAlertFailures() {
     .orderBy(desc(operatorAlertFailures.lastFailedAt));
 }
 
-type OperatorAlertRetryHistoryEntry = {
+export type ResolvedOperatorAlert = {
+  operation: string;
+  resolvedAt: Date;
+  retryHistory: Array<{
+    attemptedAt: string;
+    outcome: "delivered" | "failed";
+  }>;
+};
+
+export function sanitizeResolvedOperatorAlert(
+  alert: Pick<typeof operatorAlertFailures.$inferSelect, "operation" | "resolvedAt" | "retryHistory">,
+): ResolvedOperatorAlert | null {
+  if (!alert.resolvedAt) return null;
+  const retryHistory = Array.isArray(alert.retryHistory)
+    ? alert.retryHistory.flatMap(entry => {
+        if (!entry || typeof entry !== "object") return [];
+        const candidate = entry as Partial<OperatorAlertRetryHistoryEntry>;
+        if (typeof candidate.attemptedAt !== "string" || (candidate.outcome !== "delivered" && candidate.outcome !== "failed")) return [];
+        return [{ attemptedAt: candidate.attemptedAt, outcome: candidate.outcome }];
+      }).slice(-10)
+    : [];
+  return { operation: alert.operation, resolvedAt: alert.resolvedAt, retryHistory };
+}
+
+export async function loadResolvedOperatorAlerts(): Promise<ResolvedOperatorAlert[]> {
+  const alerts = await db.select({
+    operation: operatorAlertFailures.operation,
+    resolvedAt: operatorAlertFailures.resolvedAt,
+    retryHistory: operatorAlertFailures.retryHistory,
+  }).from(operatorAlertFailures)
+    .where(isNotNull(operatorAlertFailures.resolvedAt))
+    .orderBy(desc(operatorAlertFailures.resolvedAt))
+    .limit(20);
+  return alerts.flatMap(alert => {
+    const sanitized = sanitizeResolvedOperatorAlert(alert);
+    return sanitized ? [sanitized] : [];
+  });
+}
+
+type OperatorAlertRetryHistoryEntryInput = {
   attemptedAt: string;
   outcome: "delivered" | "failed";
   operator: { id: string | null; username: string | null };
@@ -532,12 +571,16 @@ export function registerDeploymentControlRoutes(app: Express) {
   startActiveDomainMonitor();
 
   app.get("/api/control/status", requireSuperuser, async (_req, res) => {
-    const alertDeliveryFailures = await loadActiveOperatorAlertFailures();
+    const [alertDeliveryFailures, resolvedOperatorAlerts] = await Promise.all([
+      loadActiveOperatorAlertFailures(),
+      loadResolvedOperatorAlerts(),
+    ]);
     res.json({
       enabled: true,
       environment: process.env.NODE_ENV,
       automationDispatch: "not_attached",
       alertDeliveryFailures,
+      resolvedOperatorAlerts,
     });
   });
 
@@ -875,7 +918,7 @@ export async function loadDeploymentProfilesWithIncidents(
 
 export function appendOperatorAlertRetryHistory(
   history: unknown,
-  entry: OperatorAlertRetryHistoryEntry,
+  entry: OperatorAlertRetryHistoryEntryInput,
 ): OperatorAlertRetryHistoryEntry[] {
   const existing = Array.isArray(history)
     ? history.filter((item): item is OperatorAlertRetryHistoryEntry => {
