@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   applyDomainIncidentTransition,
   appendDomainNotificationDelivery,
+  appendOperatorAlertRetryHistory,
   csvCell,
   domainIncidentTransition,
   domainNotificationKind,
@@ -148,6 +149,24 @@ test("operator alert retries are exposed only through the superuser control rout
   assert.match(source, /OPERATOR_ALERT_RETRY_COOLDOWN/);
   assert.match(source, /OPERATOR_ALERT_RETRY_LEASE_CONFLICT/);
   assert.match(source, /Another operator or worker is already delivering this alert/);
+});
+
+test("operator alert retry history keeps only sanitized recent outcomes", () => {
+  const history = Array.from({ length: 10 }, (_, index) => ({
+    attemptedAt: new Date(index * 1000).toISOString(),
+    outcome: index % 2 === 0 ? "delivered" as const : "failed" as const,
+    operator: { id: `user-${index}`, username: `operator-${index}` },
+  }));
+  const latest = {
+    attemptedAt: "2026-09-08T14:00:00.000Z",
+    outcome: "failed" as const,
+    operator: { id: null, username: null },
+  };
+  const result = appendOperatorAlertRetryHistory(history, latest);
+  assert.equal(result.length, 10);
+  assert.equal(result[0].operator.username, "operator-1");
+  assert.deepEqual(result.at(-1), latest);
+  assert.deepEqual(Object.keys(result.at(-1)!).sort(), ["attemptedAt", "operator", "outcome"]);
 });
 
 async function createDeployment(slug: string) {

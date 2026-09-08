@@ -38,11 +38,16 @@ test("database alert claims serialize delivery and preserve the durable lifecycl
     }
   });
 
-  const migration = readFileSync(
+  const initialMigration = readFileSync(
     new URL("../migrations/0014_operator_alert_failures.sql", import.meta.url),
     "utf8",
   );
-  await pool.query(migration);
+  const retryHistoryMigration = readFileSync(
+    new URL("../migrations/0015_operator_alert_retry_history.sql", import.meta.url),
+    "utf8",
+  );
+  await pool.query(initialMigration);
+  await pool.query(retryHistoryMigration);
 
   const claims = await Promise.all([
     databaseAlertClaimer(alert),

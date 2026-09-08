@@ -107,6 +107,7 @@ export const operatorAlertFailures = pgTable("operator_alert_failures", {
   firstFailedAt: timestamp("first_failed_at").defaultNow().notNull(),
   lastFailedAt: timestamp("last_failed_at").defaultNow().notNull(),
   resolvedAt: timestamp("resolved_at"),
+  retryHistory: jsonb("retry_history").notNull().default([]),
 });
 
 export const deploymentRollouts = pgTable("deployment_rollouts", {

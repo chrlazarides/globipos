@@ -520,6 +520,11 @@ export async function loadActiveOperatorAlertFailures() {
     .orderBy(desc(operatorAlertFailures.lastFailedAt));
 }
 
+type OperatorAlertRetryHistoryEntry = {
+  attemptedAt: string;
+  outcome: "delivered" | "failed";
+  operator: { id: string | null; username: string | null };
+};
 export function registerDeploymentControlRoutes(app: Express) {
   if (process.env.NODE_ENV !== "development" && process.env.CONTROL_PLANE_ENABLED !== "true") {
     return;
@@ -562,9 +567,24 @@ export function registerDeploymentControlRoutes(app: Express) {
         code: "OPERATOR_ALERT_RETRY_NOT_READY",
       });
     }
-    await logControlActivity(req, "retry", "operator_alert", `customer_ai_health_persistence_failed:${operation.data}`, `Retried customer AI history ${operation.data} alert delivery`);
+    const alertKey = `customer_ai_health_persistence_failed:${operation.data}`;
+    const [currentFailure] = await db.select().from(operatorAlertFailures)
+      .where(eq(operatorAlertFailures.alertKey, alertKey));
+    if (currentFailure) {
+      await db.update(operatorAlertFailures).set({
+        retryHistory: appendOperatorAlertRetryHistory(currentFailure.retryHistory, {
+          attemptedAt: new Date().toISOString(),
+          outcome,
+          operator: {
+            id: req.user?.id ?? null,
+            username: req.user?.username ?? null,
+          },
+        }),
+      }).where(eq(operatorAlertFailures.alertKey, alertKey));
+    }
+    await logControlActivity(req, "retry", "operator_alert", alertKey, `Retried customer AI history ${operation.data} alert delivery: ${outcome}`);
     const [failure] = await db.select().from(operatorAlertFailures)
-      .where(eq(operatorAlertFailures.alertKey, `customer_ai_health_persistence_failed:${operation.data}`));
+      .where(eq(operatorAlertFailures.alertKey, alertKey));
     res.status(outcome === "delivered" ? 200 : 502).json({ outcome, alert: failure ?? null });
   });
 
@@ -851,4 +871,21 @@ export async function loadDeploymentProfilesWithIncidents(
     ...safeProfile(profile),
     domainIncidents: recentByDeployment.get(profile.id) ?? [],
   }));
+}
+
+export function appendOperatorAlertRetryHistory(
+  history: unknown,
+  entry: OperatorAlertRetryHistoryEntry,
+): OperatorAlertRetryHistoryEntry[] {
+  const existing = Array.isArray(history)
+    ? history.filter((item): item is OperatorAlertRetryHistoryEntry => {
+        if (!item || typeof item !== "object") return false;
+        const candidate = item as Partial<OperatorAlertRetryHistoryEntry>;
+        return typeof candidate.attemptedAt === "string"
+          && (candidate.outcome === "delivered" || candidate.outcome === "failed")
+          && !!candidate.operator
+          && typeof candidate.operator === "object";
+      })
+    : [];
+  return [...existing, entry].slice(-10);
 }
