@@ -30,7 +30,7 @@ const brandingSchema = z.object({
   taxId: z.string().trim().max(100).optional(),
 }).strict();
 
-const profileSchema = z.object({
+const profileBaseSchema = z.object({
   slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case").min(2).max(80),
   clientName: z.string().trim().min(1).max(200),
   status: statusSchema.default("draft"),
@@ -49,7 +49,9 @@ const profileSchema = z.object({
   targetPosVersion: versionSchema.nullable().optional(),
   automationProvider: automationSchema.default("manual"),
   externalProjectId: z.string().trim().min(1).max(200).nullable().optional(),
-}).strict().superRefine((value, ctx) => {
+}).strict();
+
+function validateProfileRouting(value: z.infer<typeof profileBaseSchema>, ctx: z.RefinementCtx) {
   const customerDomain = value.customerDomain?.toLowerCase() || null;
   const posDomain = value.posDomain?.toLowerCase() || null;
   const backOfficeHost = new URL(value.backOfficeUrl).hostname.toLowerCase();
@@ -64,9 +66,10 @@ const profileSchema = z.object({
   if (customerDomain && !posDomain && posHost !== customerDomain) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["posServerUrl"], message: "POS URL must use the customer domain when no POS override is set" });
   }
-});
+}
 
-const profileUpdateSchema = profileSchema.partial();
+const profileSchema = profileBaseSchema.superRefine(validateProfileRouting);
+const profileUpdateSchema = profileBaseSchema.partial();
 const heartbeatSchema = z.object({
   backOfficeVersion: versionSchema.optional(),
   posVersion: versionSchema.optional(),
@@ -93,6 +96,12 @@ const rolloutSchema = z.object({
 
 function withoutUndefined<T extends Record<string, unknown>>(values: T) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
+}
+
+function editableProfile(profile: typeof deploymentProfiles.$inferSelect) {
+  return Object.fromEntries(
+    Object.keys(profileBaseSchema.shape).map(key => [key, profile[key as keyof typeof profile]]),
+  );
 }
 
 function safeProfile(profile: typeof deploymentProfiles.$inferSelect) {
@@ -153,11 +162,14 @@ export function registerDeploymentControlRoutes(app: Express) {
     if (!parsed.success) return validationError(res, parsed.error);
     if (Object.keys(parsed.data).length === 0) return res.status(400).json({ message: "No updates supplied" });
     const id = String(req.params.id);
+    const [currentProfile] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, id));
+    if (!currentProfile) return res.status(404).json({ message: "Deployment profile not found" });
+    const merged = profileSchema.safeParse({ ...editableProfile(currentProfile), ...parsed.data });
+    if (!merged.success) return validationError(res, merged.error);
     const [profile] = await db.update(deploymentProfiles)
       .set(withoutUndefined({ ...parsed.data, updatedAt: new Date() }))
       .where(eq(deploymentProfiles.id, id))
       .returning();
-    if (!profile) return res.status(404).json({ message: "Deployment profile not found" });
     await logControlActivity(req, "update", "deployment_profile", profile.id, `Updated deployment profile ${profile.slug}`);
     res.json(safeProfile(profile));
   });
