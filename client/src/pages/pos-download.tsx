@@ -235,6 +235,7 @@ interface PosRelease {
 interface PosBuildsResponse {
   releases: PosRelease[];
   stale: boolean;
+  verifiedAt?: string;
   warning?: string;
 }
 const NO_RELEASES: PosRelease[] = [];
@@ -507,71 +508,81 @@ export default function PosDownload() {
                           <div key={i} className="h-10 rounded-md bg-muted animate-pulse" data-testid={`skeleton-build-${i}`} />
                         ))}
                       </div>
-                    ) : platformAssets.length > 0 ? (
-                      <div className="space-y-2">
+                    ) : (
+                      <>
                         {builds?.stale && (
                           <div className="flex gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800" data-testid="text-builds-stale">
                             <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-amber-500" />
-                            <p>{builds.warning}</p>
-                          </div>
-                        )}
-                        {latestRelease && (
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground pb-1" data-testid="text-latest-release-info">
-                            <Tag className="w-3 h-3" />
-                            <span className="font-medium text-foreground">{latestRelease.tag}</span>
-                            <span>· released {new Date(latestRelease.publishedAt).toLocaleDateString()}</span>
-                          </div>
-                        )}
-                        {platformAssets.map(a => (
-                          <Button key={a.name} asChild className="w-full justify-start" data-testid={`btn-download-${a.name}`}>
-                            <a href={a.downloadUrl} target="_blank" rel="noopener noreferrer">
-                              <Download className="w-4 h-4 mr-2" />
-                              <span className="truncate">{assetLabel(a.name)}</span>
-                              <span className="ml-auto flex items-center gap-2 text-xs opacity-70">
-                                {formatSize(a.size)}
-                                <ExternalLink className="w-3 h-3" />
-                              </span>
-                            </a>
-                          </Button>
-                        ))}
-                        <Button asChild variant="ghost" size="sm" className="text-xs text-muted-foreground w-full justify-start">
-                          <a href={latestRelease?.htmlUrl ?? `${githubRepo}/releases`} target="_blank" rel="noopener noreferrer">
-                            <Github className="w-3 h-3 mr-1" /> All releases on GitHub
-                          </a>
-                        </Button>
-                      </div>
-                    ) : buildsError ? (
-                      <div className="space-y-2">
-                        <div className="flex gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800" data-testid="text-builds-error">
-                          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-amber-500" />
-                          <p>Couldn't verify the latest release with GitHub, so no direct download link is shown. Try again shortly or review the releases on GitHub.</p>
-                        </div>
-                        {githubRepo && (
-                          <Button asChild variant="outline" size="sm" className="w-full justify-start">
-                            <a href={`${githubRepo.replace(/\/$/, "")}/releases`} target="_blank" rel="noopener noreferrer">
-                              <Github className="w-3 h-3 mr-1" /> Review releases on GitHub
-                            </a>
-                          </Button>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="rounded-lg border border-dashed p-5 space-y-3">
-                        <div className="flex gap-3">
-                          <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-                          <div className="space-y-1">
-                            <p className="font-medium text-sm">No compiled release yet</p>
-                            <p className="text-sm text-muted-foreground">
-                              The source code is complete and ready to compile. Use the <strong>Publish Release</strong> tab to build native binaries via GitHub Actions — it takes about 15 minutes and produces a download link for every platform.
+                            <p>
+                              <span className="font-semibold">GitHub is currently unavailable.</span>{" "}
+                              {builds.warning ?? "Showing the last successfully verified release links."}
+                              {builds.verifiedAt && <> These links were last verified {new Date(builds.verifiedAt).toLocaleString()}.</>}
                             </p>
                           </div>
-                        </div>
-                        <div className="flex gap-2 flex-wrap">
-                          <Badge variant="outline" className="text-xs">Windows .msi</Badge>
-                          <Badge variant="outline" className="text-xs">macOS .dmg</Badge>
-                          <Badge variant="outline" className="text-xs">Linux .AppImage</Badge>
-                          <Badge variant="outline" className="text-xs">Android .apk</Badge>
-                        </div>
-                      </div>
+                        )}
+                        {platformAssets.length > 0 ? (
+                          <div className="space-y-2">
+                            {latestRelease && (
+                              <div className="flex items-center gap-2 text-xs text-muted-foreground pb-1" data-testid="text-latest-release-info">
+                                <Tag className="w-3 h-3" />
+                                <span className="font-medium text-foreground">{latestRelease.tag}</span>
+                                <span>· released {new Date(latestRelease.publishedAt).toLocaleDateString()}</span>
+                              </div>
+                            )}
+                            {platformAssets.map(a => (
+                              <Button key={a.name} asChild className="w-full justify-start" data-testid={`btn-download-${a.name}`}>
+                                <a href={a.downloadUrl} target="_blank" rel="noopener noreferrer">
+                                  <Download className="w-4 h-4 mr-2" />
+                                  <span className="truncate">{assetLabel(a.name)}</span>
+                                  <span className="ml-auto flex items-center gap-2 text-xs opacity-70">
+                                    {formatSize(a.size)}
+                                    <ExternalLink className="w-3 h-3" />
+                                  </span>
+                                </a>
+                              </Button>
+                            ))}
+                            {latestRelease?.htmlUrl && (
+                              <Button asChild variant="ghost" size="sm" className="text-xs text-muted-foreground w-full justify-start">
+                                <a href={latestRelease.htmlUrl} target="_blank" rel="noopener noreferrer">
+                                  <Github className="w-3 h-3 mr-1" /> All releases on GitHub
+                                </a>
+                              </Button>
+                            )}
+                          </div>
+                        ) : buildsError ? (
+                          <div className="space-y-2">
+                            <div className="flex gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800" data-testid="text-builds-error">
+                              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-amber-500" />
+                              <p>Couldn't verify the latest release with GitHub, so no direct download link is shown. Try again shortly or review the releases on GitHub.</p>
+                            </div>
+                            {githubRepo && (
+                              <Button asChild variant="outline" size="sm" className="w-full justify-start">
+                                <a href={`${githubRepo.replace(/\/$/, "")}/releases`} target="_blank" rel="noopener noreferrer">
+                                  <Github className="w-3 h-3 mr-1" /> Review releases on GitHub
+                                </a>
+                              </Button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border border-dashed p-5 space-y-3">
+                            <div className="flex gap-3">
+                              <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                              <div className="space-y-1">
+                                <p className="font-medium text-sm">No compiled release yet</p>
+                                <p className="text-sm text-muted-foreground">
+                                  The source code is complete and ready to compile. Use the <strong>Publish Release</strong> tab to build native binaries via GitHub Actions — it takes about 15 minutes and produces a download link for every platform.
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex gap-2 flex-wrap">
+                              <Badge variant="outline" className="text-xs">Windows .msi</Badge>
+                              <Badge variant="outline" className="text-xs">macOS .dmg</Badge>
+                              <Badge variant="outline" className="text-xs">Linux .AppImage</Badge>
+                              <Badge variant="outline" className="text-xs">Android .apk</Badge>
+                            </div>
+                          </div>
+                        )}
+                      </>
                     )}
 
                     <Separator />

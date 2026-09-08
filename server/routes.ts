@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema } from "@shared/schema";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@shared/schema";
 import { parseAdminImportRequest, shouldRestoreBackupSettings } from "./import-settings-policy";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "./chatbot-service";
 import { z } from "zod";
@@ -8965,6 +8965,24 @@ export async function registerRoutes(
     getSettings: () => storage.getSettings(),
     getGithubToken: () => process.env.GLOBISYNC,
     getDefaultRepo: () => process.env.POS_GITHUB_REPO,
+    getPersistedCache: async (repoUrl) => {
+      const [persisted] = await db.select().from(posReleaseCaches)
+        .where(eq(posReleaseCaches.repoUrl, repoUrl))
+        .limit(1);
+      if (!persisted) return undefined;
+      return {
+        releases: (Array.isArray(persisted.releases) ? persisted.releases : []) as any,
+        verifiedAt: persisted.verifiedAt,
+      };
+    },
+    savePersistedCache: async (repoUrl, releases, verifiedAt) => {
+      await db.insert(posReleaseCaches)
+        .values({ repoUrl, releases, verifiedAt })
+        .onConflictDoUpdate({
+          target: posReleaseCaches.repoUrl,
+          set: { releases, verifiedAt },
+        });
+    },
   });
   app.get("/api/pos/builds", requireStaff, async (_req, res) => {
     const result = await resolvePosBuilds();

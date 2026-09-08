@@ -83,6 +83,15 @@ export const systemSettings = pgTable("system_settings", {
   group: text("group").notNull().default("general"),
 });
 
+// Last-known-good POS release metadata, keyed by the configured GitHub repository.
+// Asset URLs are copied only from a successful GitHub releases API response.
+export const posReleaseCaches = pgTable("pos_release_caches", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  repoUrl: text("repo_url").notNull().unique(),
+  releases: jsonb("releases").notNull().default([]),
+  verifiedAt: timestamp("verified_at").defaultNow().notNull(),
+});
+
 export const categories = pgTable("categories", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),

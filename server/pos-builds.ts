@@ -22,6 +22,7 @@ export interface PosRelease {
 export interface PosBuildsResponse {
   releases: PosRelease[];
   stale: boolean;
+  verifiedAt?: string;
   warning?: string;
 }
 
@@ -29,6 +30,7 @@ interface CachedBuilds {
   repoUrl: string;
   releases: PosRelease[];
   fetchedAt: number;
+  verifiedAt: string;
 }
 
 interface GitHubAsset {
@@ -57,6 +59,8 @@ export interface PosBuildsResolverOptions {
   fetchFn?: typeof fetch;
   getGithubToken?: () => string | undefined;
   getDefaultRepo?: () => string | undefined;
+  getPersistedCache?: (repoUrl: string) => Promise<{ releases: PosRelease[]; verifiedAt: Date | string } | undefined>;
+  savePersistedCache?: (repoUrl: string, releases: PosRelease[], verifiedAt: Date) => Promise<void>;
   now?: () => number;
   cacheMs?: number;
 }
@@ -72,6 +76,8 @@ export function createPosBuildsResolver({
   fetchFn = globalThis.fetch,
   getGithubToken = () => undefined,
   getDefaultRepo = () => undefined,
+  getPersistedCache,
+  savePersistedCache,
   now = Date.now,
   cacheMs = CACHE_MS,
 }: PosBuildsResolverOptions): () => Promise<PosBuildsResult> {
@@ -91,7 +97,7 @@ export function createPosBuildsResolver({
       if (cache && cache.repoUrl === repoUrl && now() - cache.fetchedAt < cacheMs) {
         return {
           status: 200,
-          body: { releases: cache.releases, stale: false },
+          body: { releases: cache.releases, stale: false, verifiedAt: cache.verifiedAt },
         };
       }
 
@@ -104,6 +110,17 @@ export function createPosBuildsResolver({
       }
 
       const [, owner, repo] = match;
+      if ((!cache || cache.repoUrl !== repoUrl) && getPersistedCache) {
+        const persisted = await getPersistedCache(repoUrl);
+        if (persisted) {
+          cache = {
+            repoUrl,
+            releases: persisted.releases,
+            fetchedAt: 0,
+            verifiedAt: new Date(persisted.verifiedAt).toISOString(),
+          };
+        }
+      }
       const headers: Record<string, string> = {
         Accept: "application/vnd.github+json",
         "User-Agent": "GlobiPOS",
@@ -123,6 +140,7 @@ export function createPosBuildsResolver({
             body: {
               releases: cache.releases,
               stale: true,
+              verifiedAt: cache.verifiedAt,
               warning: TEMPORARY_FAILURE_WARNING,
             },
           };
@@ -145,7 +163,21 @@ export function createPosBuildsResolver({
           prerelease: Boolean(release.prerelease),
           htmlUrl: release.html_url,
           assets: (release.assets ?? [])
-            .filter((asset) => !asset.name.endsWith(".sig") && asset.name !== "latest.json")
+            .filter((asset) => {
+              if (
+                typeof asset.name !== "string"
+                || typeof asset.browser_download_url !== "string"
+                || asset.name.endsWith(".sig")
+                || asset.name === "latest.json"
+              ) return false;
+              try {
+                const assetUrl = new URL(asset.browser_download_url);
+                return assetUrl.origin === "https://github.com"
+                  && assetUrl.pathname.startsWith(`/${owner}/${repo}/releases/download/`);
+              } catch {
+                return false;
+              }
+            })
             .map((asset) => ({
               name: asset.name,
               size: asset.size,
@@ -154,8 +186,11 @@ export function createPosBuildsResolver({
             })),
         }));
 
-      cache = { repoUrl, releases, fetchedAt: now() };
-      return { status: 200, body: { releases, stale: false } };
+      const fetchedAt = now();
+      const verifiedAt = new Date(fetchedAt);
+      await savePersistedCache?.(repoUrl, releases, verifiedAt);
+      cache = { repoUrl, releases, fetchedAt, verifiedAt: verifiedAt.toISOString() };
+      return { status: 200, body: { releases, stale: false, verifiedAt: cache.verifiedAt } };
     } catch (error: any) {
       if (requestedRepoUrl && cache?.repoUrl === requestedRepoUrl) {
         return {
@@ -163,6 +198,7 @@ export function createPosBuildsResolver({
           body: {
             releases: cache.releases,
             stale: true,
+            verifiedAt: cache.verifiedAt,
             warning: TEMPORARY_FAILURE_WARNING,
           },
         };
