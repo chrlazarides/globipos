@@ -29,7 +29,8 @@ import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScale
 import { isValidIanaTimeZone } from "@shared/quiet-hours";
 import { registerDeploymentControlRoutes } from "./deployment-control";
 import { createPosBuildsResolver } from "./pos-builds";
-import { classifyCustomerFeedback, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "./customer-ai-service";
+import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "./customer-ai-service";
+import { createCustomerAiHealthPersistence } from "./customer-ai-health-persistence";
 import { registerErpIntegrationRoutes } from "./erp-integration";
 function getLogoDataUrl(): string {
   const candidates = [
@@ -371,6 +372,7 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  configureCustomerAiHealthPersistence(createCustomerAiHealthPersistence());
   registerDeploymentControlRoutes(app);
 
   // ── Boot-time reconciliation for card-terminal charges ──────────────────────
@@ -4116,7 +4118,7 @@ export async function registerRoutes(
   app.get("/api/customer-ai/status", requireAdmin, async (_req, res) => {
     try {
       const settings = await storage.getSettings();
-      res.json(getCustomerAiStatus(resolveCustomerAiConfig(settings)));
+      res.json(await getCustomerAiStatus(resolveCustomerAiConfig(settings)));
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

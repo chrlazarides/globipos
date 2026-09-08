@@ -1,7 +1,4 @@
 import OpenAI from "openai";
-import { eq } from "drizzle-orm";
-import { customerAiHealth } from "@shared/schema";
-import { db } from "./db";
 import { emitCustomerAiPersistenceAlert } from "./operator-alerting";
 
 export const CUSTOMER_AI_PROVIDERS = ["auto", "replit", "xai", "deterministic"] as const;
@@ -40,7 +37,6 @@ export interface CustomerAiRuntimeHealth {
   lastFailureCategory: CustomerAiFailureCategory | null;
   lastFailureAt: string | null;
 }
-
 const runtimeHealth: CustomerAiRuntimeHealth = {
   fallbackCount: 0,
   recommendationFallbackCount: 0,
@@ -49,42 +45,22 @@ const runtimeHealth: CustomerAiRuntimeHealth = {
   lastFailureCategory: null,
   lastFailureAt: null,
 };
-
 export interface CustomerAiHealthPersistence {
+  recordFallback(feature: "recommendation" | "feedback", category: CustomerAiFailureCategory): Promise<void>;
+  recordSuccess(): Promise<void>;
+  load(): Promise<CustomerAiRuntimeHealth | null>;
+}
+
+interface LegacyCustomerAiHealthPersistence {
   load(): Promise<unknown>;
   save(health: CustomerAiRuntimeHealth): Promise<void>;
 }
-
 const FAILURE_CATEGORIES = new Set<CustomerAiFailureCategory>([
   "configuration", "authentication", "rate_limit", "timeout", "model", "invalid_response", "provider",
 ]);
+let healthPersistence: CustomerAiHealthPersistence | null = null;
 
-const databaseHealthPersistence: CustomerAiHealthPersistence = {
-  async load() {
-    const [row] = await db.select().from(customerAiHealth).where(eq(customerAiHealth.scope, "local")).limit(1);
-    return row;
-  },
-  async save(health) {
-    const values = {
-      scope: "local",
-      fallbackCount: health.fallbackCount,
-      recommendationFallbackCount: health.recommendationFallbackCount,
-      feedbackFallbackCount: health.feedbackFallbackCount,
-      consecutiveFallbackCount: health.consecutiveFallbackCount,
-      lastFailureCategory: health.lastFailureCategory,
-      lastFailureAt: health.lastFailureAt ? new Date(health.lastFailureAt) : null,
-      updatedAt: new Date(),
-    };
-    await db.insert(customerAiHealth).values(values).onConflictDoUpdate({
-      target: customerAiHealth.scope,
-      set: values,
-    });
-  },
-};
-
-let healthPersistence = databaseHealthPersistence;
-let persistenceQueue = Promise.resolve();
-
+let pendingHealthWrite = Promise.resolve();
 export const CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS = 60_000;
 type HealthPersistenceOperation = "load" | "save";
 const lastHealthPersistenceSignalAt: Record<HealthPersistenceOperation, number> = {
@@ -124,19 +100,12 @@ export function sanitizeCustomerAiRuntimeHealth(value: unknown): CustomerAiRunti
 function applyRuntimeHealth(health: CustomerAiRuntimeHealth) {
   Object.assign(runtimeHealth, health);
 }
-
-function persistRuntimeHealth(): Promise<void> {
-  const snapshot = { ...runtimeHealth };
-  persistenceQueue = persistenceQueue
-    .then(() => healthPersistence.save(snapshot))
-    .catch(() => reportHealthPersistenceFailure("save"));
-  return persistenceQueue;
-}
-
 export async function initializeCustomerAiRuntimeHealth() {
   try {
-    await persistenceQueue;
-    applyRuntimeHealth(sanitizeCustomerAiRuntimeHealth(await healthPersistence.load()));
+    await pendingHealthWrite;
+    if (healthPersistence) {
+      applyRuntimeHealth(sanitizeCustomerAiRuntimeHealth(await healthPersistence.load()));
+    }
   } catch {
     reportHealthPersistenceFailure("load");
     // Operational health must never prevent the server from starting.
@@ -160,7 +129,7 @@ async function recordFallback(feature: "recommendation" | "feedback", category: 
     runtimeHealth.consecutiveFallbackCount += 1;
     runtimeHealth.lastFailureCategory = category;
     runtimeHealth.lastFailureAt = new Date().toISOString();
-    await persistRuntimeHealth();
+    enqueueHealthWrite(persistence => persistence.recordFallback(feature, category));
   } catch {
     // Operational health must never affect a customer request.
   }
@@ -169,7 +138,7 @@ async function recordFallback(feature: "recommendation" | "feedback", category: 
 async function recordSuccess() {
   try {
     runtimeHealth.consecutiveFallbackCount = 0;
-    await persistRuntimeHealth();
+    enqueueHealthWrite(persistence => persistence.recordSuccess());
   } catch {
     // Operational health must never affect a customer request.
   }
@@ -184,10 +153,21 @@ export function resetCustomerAiRuntimeHealth() {
   runtimeHealth.lastFailureAt = null;
 }
 
-export async function setCustomerAiHealthPersistenceForTests(persistence?: CustomerAiHealthPersistence) {
-  await persistenceQueue;
-  healthPersistence = persistence || databaseHealthPersistence;
-  persistenceQueue = Promise.resolve();
+export async function setCustomerAiHealthPersistenceForTests(
+  persistence?: CustomerAiHealthPersistence | LegacyCustomerAiHealthPersistence,
+) {
+  await pendingHealthWrite;
+  if (!persistence) {
+    configureCustomerAiHealthPersistence(null);
+  } else if ("save" in persistence) {
+    configureCustomerAiHealthPersistence({
+      load: async () => sanitizeCustomerAiRuntimeHealth(await persistence.load()),
+      recordFallback: async () => persistence.save({ ...runtimeHealth }),
+      recordSuccess: async () => persistence.save({ ...runtimeHealth }),
+    });
+  } else {
+    configureCustomerAiHealthPersistence(persistence);
+  }
 }
 
 type SettingValue = { key: string; value: string } | [string, string];
@@ -250,8 +230,17 @@ export function getCustomerAiEngine(config: CustomerAiConfig, featureEnabled = t
   return { requestedProvider, activeProvider: configured ? "replit" : "deterministic", model: config.model, fallback: !configured, configured };
 }
 
-export function getCustomerAiStatus(config: CustomerAiConfig) {
+export async function getCustomerAiStatus(config: CustomerAiConfig) {
   const engine = getCustomerAiEngine(config);
+  let health = runtimeHealth;
+  try {
+    await pendingHealthWrite;
+    health = healthPersistence
+      ? sanitizeCustomerAiRuntimeHealth(await healthPersistence.load())
+      : runtimeHealth;
+  } catch {
+    // Admin health reporting falls back locally when persistence is unavailable.
+  }
   return {
     ...engine,
     enabled: config.enabled,
@@ -263,8 +252,8 @@ export function getCustomerAiStatus(config: CustomerAiConfig) {
       deterministic: true,
     },
     runtimeHealth: {
-      ...runtimeHealth,
-      degraded: runtimeHealth.consecutiveFallbackCount >= 3,
+      ...health,
+      degraded: health.consecutiveFallbackCount >= 3,
     },
   };
 }
@@ -442,3 +431,17 @@ async function guardedProviderCall<T>(provider: RemoteProvider, call: () => Prom
 const providerCircuits = new Map<RemoteProvider, CircuitState>();
 
 class CustomerAiCircuitOpenError extends Error {}
+
+export function configureCustomerAiHealthPersistence(persistence: CustomerAiHealthPersistence | null) {
+  healthPersistence = persistence;
+  pendingHealthWrite = Promise.resolve();
+}
+
+function enqueueHealthWrite(write: (persistence: CustomerAiHealthPersistence) => Promise<void>) {
+  const persistence = healthPersistence;
+  if (!persistence) return;
+  pendingHealthWrite = pendingHealthWrite
+    .catch(() => undefined)
+    .then(() => write(persistence))
+    .catch(() => reportHealthPersistenceFailure("save"));
+}

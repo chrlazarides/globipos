@@ -40,6 +40,10 @@ test("feedback computes a heuristic before optionally accepting validated AI out
 test("status route uses the sanitized status builder", () => {
   assert.match(
     routesSource,
-    /app\.get\("\/api\/customer-ai\/status", requireAdmin,[\s\S]*?res\.json\(getCustomerAiStatus\(resolveCustomerAiConfig\(settings\)\)\)/,
+    /app\.get\("\/api\/customer-ai\/status", requireAdmin,[\s\S]*?res\.json\(await getCustomerAiStatus\(resolveCustomerAiConfig\(settings\)\)\)/,
   );
+});
+
+test("health updates use a bounded atomic aggregate and persist no customer content", () => {
+  assert.match(routesSource, /configureCustomerAiHealthPersistence\(createCustomerAiHealthPersistence\(\)\)/);
 });

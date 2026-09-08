@@ -17,7 +17,6 @@ import {
   setCustomerAiHealthPersistenceForTests,
   type CustomerAiCompletionClient,
   type CustomerAiConfig,
-  type CustomerAiHealthPersistence,
 } from "./customer-ai-service";
 import { setCustomerAiPersistenceAlertTransportForTests } from "./operator-alerting";
 
@@ -137,8 +136,8 @@ test("resolves every provider selection and availability state", async () => {
   ] as const;
 
   for (const state of availabilityStates) {
-    await withProviderEnvironment(state.environment, () => {
-    const status = getCustomerAiStatus(config());
+    await withProviderEnvironment(state.environment, async () => {
+      const status = await getCustomerAiStatus(config());
       assert.equal(status.availability.replit, state.replit);
       assert.equal(status.availability.xai, state.xai);
       assert.equal(getCustomerAiEngine(config({ requestedProvider: "auto" })).activeProvider, state.replit ? "replit" : "deterministic");
@@ -151,7 +150,7 @@ test("resolves every provider selection and availability state", async () => {
   await withProviderEnvironment({
     AI_INTEGRATIONS_OPENAI_BASE_URL: "https://managed.example/v1",
     AI_INTEGRATIONS_OPENAI_API_KEY: "managed-secret",
-  }, () => {
+  }, async () => {
     assert.equal(getCustomerAiEngine(config({ enabled: false, requestedProvider: "replit" })).activeProvider, "deterministic");
     assert.equal(getCustomerAiEngine(config({ recommendationsEnabled: false }), false).activeProvider, "deterministic");
     assert.equal(getCustomerAiEngine(config({ sentimentEnabled: false }), false).activeProvider, "deterministic");
@@ -376,8 +375,8 @@ test("status reports booleans and never exposes credential values", async () => 
     AI_INTEGRATIONS_OPENAI_BASE_URL: "https://managed.example/v1/private",
     AI_INTEGRATIONS_OPENAI_API_KEY: "managed-super-secret",
     XAI_API_KEY: "xai-super-secret",
-  }, () => {
-    const status = getCustomerAiStatus(config());
+  }, async () => {
+    const status = await getCustomerAiStatus(config());
     assert.deepEqual(status.availability, { replit: true, xai: true, deterministic: true });
     const serialized = JSON.stringify(status);
     assert.equal(serialized.includes("managed-super-secret"), false);
@@ -396,7 +395,7 @@ test("runtime health records only sanitized fallback categories and clears degra
       await enhanceCustomerRecommendations(config({ requestedProvider: "xai" }), candidates, {}, failingClient(sensitiveError));
     }
 
-    const degraded = getCustomerAiStatus(config({ requestedProvider: "xai" })).runtimeHealth;
+    const degraded = (await getCustomerAiStatus(config({ requestedProvider: "xai" }))).runtimeHealth;
     assert.equal(degraded.degraded, true);
     assert.equal(degraded.fallbackCount, 3);
     assert.equal(degraded.recommendationFallbackCount, 3);
@@ -416,7 +415,7 @@ test("runtime health records only sanitized fallback categories and clears degra
     } finally {
       Date.now = originalNow;
     }
-    const recovered = getCustomerAiStatus(config({ requestedProvider: "xai" })).runtimeHealth;
+    const recovered = (await getCustomerAiStatus(config({ requestedProvider: "xai" }))).runtimeHealth;
     assert.equal(recovered.degraded, false);
     assert.equal(recovered.consecutiveFallbackCount, 0);
     assert.equal(recovered.fallbackCount, 3);
@@ -426,7 +425,7 @@ test("runtime health records only sanitized fallback categories and clears degra
 test("runtime health survives restart hydration and persists only sanitized fields", async () => {
   let stored: unknown;
   const writes: unknown[] = [];
-  const persistence: CustomerAiHealthPersistence = {
+  const persistence = {
     async load() {
       return stored;
     },
@@ -461,9 +460,8 @@ test("runtime health survives restart hydration and persists only sanitized fiel
       ]);
 
       resetCustomerAiRuntimeHealth();
-      assert.equal(getCustomerAiStatus(config()).runtimeHealth.degraded, false);
       await initializeCustomerAiRuntimeHealth();
-      const restored = getCustomerAiStatus(config()).runtimeHealth;
+      const restored = (await getCustomerAiStatus(config())).runtimeHealth;
       assert.equal(restored.degraded, true);
       assert.equal(restored.fallbackCount, 3);
       assert.equal(restored.lastFailureCategory, "rate_limit");
@@ -476,7 +474,7 @@ test("runtime health survives restart hydration and persists only sanitized fiel
       );
       resetCustomerAiRuntimeHealth();
       await initializeCustomerAiRuntimeHealth();
-      const recovered = getCustomerAiStatus(config()).runtimeHealth;
+      const recovered = (await getCustomerAiStatus(config())).runtimeHealth;
       assert.equal(recovered.degraded, false);
       assert.equal(recovered.consecutiveFallbackCount, 0);
       assert.equal(recovered.fallbackCount, 3);
@@ -524,7 +522,7 @@ test("restart hydration rejects malformed and sensitive persisted values", async
   resetCustomerAiRuntimeHealth();
   try {
     await initializeCustomerAiRuntimeHealth();
-    const restored = getCustomerAiStatus(config()).runtimeHealth;
+    const restored = (await getCustomerAiStatus(config())).runtimeHealth;
     assert.equal(restored.degraded, true);
     assert.equal(restored.lastFailureCategory, "timeout");
     assert.equal(restored.lastFailureAt, "2026-09-08T10:00:00.000Z");
@@ -542,14 +540,10 @@ test("persistence failures emit sanitized, rate-limited operational signals", as
   const originalWarn = console.warn;
   const originalNow = Date.now;
   let now = 1_000_000;
-  console.warn = (...args: unknown[]) => {
-    warnings.push(args);
-  };
   Date.now = () => now;
   setCustomerAiPersistenceAlertTransportForTests(async alert => {
     alerts.push(alert);
   });
-  resetCustomerAiHealthPersistenceSignalsForTests();
   await setCustomerAiHealthPersistenceForTests({
     async load() {
       throw new Error(sensitive);
@@ -558,6 +552,10 @@ test("persistence failures emit sanitized, rate-limited operational signals", as
       throw new Error(sensitive);
     },
   });
+  resetCustomerAiHealthPersistenceSignalsForTests();
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
   resetCustomerAiRuntimeHealth();
 
   try {
@@ -592,12 +590,12 @@ test("persistence failures emit sanitized, rate-limited operational signals", as
       );
     });
     assert.deepEqual(warnings.slice(2), [
-      ["[customer-ai] operational health persistence load failed"],
       ["[customer-ai] operational health persistence save failed"],
+      ["[customer-ai] operational health persistence load failed"],
     ]);
     assert.deepEqual(alerts.slice(2), [
-      { event: "customer_ai_health_persistence_failed", operation: "load" },
       { event: "customer_ai_health_persistence_failed", operation: "save" },
+      { event: "customer_ai_health_persistence_failed", operation: "load" },
     ]);
     assert.equal(JSON.stringify(alerts).includes("secret-value"), false);
   } finally {
