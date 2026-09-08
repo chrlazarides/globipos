@@ -30,6 +30,7 @@ import { isValidIanaTimeZone } from "@shared/quiet-hours";
 import { registerDeploymentControlRoutes } from "./deployment-control";
 import { createPosBuildsResolver } from "./pos-builds";
 import { classifyCustomerFeedback, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "./customer-ai-service";
+import { registerErpIntegrationRoutes } from "./erp-integration";
 function getLogoDataUrl(): string {
   const candidates = [
     path.resolve(process.cwd(), "dist", "public", "logo.png"),
@@ -432,6 +433,7 @@ export async function registerRoutes(
   });
 
   activityMiddleware(app);
+  registerErpIntegrationRoutes(app);
 
   // ─── AUTH ───────────────────────────────────────────────────────────────────
   async function completeLogin(res: Response, user: any, ip: string, ua: string, timestamp: string): Promise<string> {

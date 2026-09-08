@@ -36,6 +36,7 @@
 - [Settings have two default paths](settings-default-paths.md) — audit both startup initialization and the Load Defaults endpoint; startup usually makes the UI endpoint unavailable
 - [Remote alert acknowledgements](remote-alert-acknowledgements.md) — server acknowledgements must survive stale device heartbeats until the device leaves its alert state
 - [Client deployment isolation](client-deployment-isolation.md) — separate backend+DB per client, one shared main codebase, centrally managed profiles and rollouts
+- [ERP sync deployment boundary](erp-sync-deployment-boundary.md) — synchronize business data inside each isolated customer deployment, never from the central control plane
 - [Safe domain readiness checks](domain-readiness-checks.md) — pin HTTPS to the validated public DNS address and use conditional writes so stale checks cannot authorize changed routing
 - [Fleet domain monitoring](fleet-domain-monitoring.md) — use DB leases, bounded probes, and per-target isolation so replicas or hung DNS cannot flood or freeze checks
 - [Concurrent migration numbering](concurrent-migration-numbering.md) — reconcile colliding migration prefixes with a later idempotent migration that repairs every partially applied state

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   ArrowRight,
@@ -22,9 +22,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import type { SystemSetting } from "@shared/schema";
+import { erpProviderBinding } from "@shared/erp-provider-binding";
 
 type EmailStatus = {
   connected: boolean;
@@ -68,29 +70,9 @@ type ErpOption = {
   requirements: string[];
 };
 
-const erpOptions: ErpOption[] = [
-  {
-    id: "softone",
-    name: "SoftOne",
-    description: "Synchronize customers, items, stock, invoices, and payments with SoftOne ERP.",
-    interfaceName: "SoftOne Web Services / REST API",
-    requirements: ["SoftOne service endpoint", "Company or installation identifier", "API-enabled integration account", "Data synchronization scope"],
-  },
-  {
-    id: "sap-b1",
-    name: "SAP Business One",
-    description: "Exchange master data and transactions with SAP Business One.",
-    interfaceName: "SAP Business One Service Layer",
-    requirements: ["Service Layer endpoint", "Company database identifier", "API-enabled integration account", "Data synchronization scope"],
-  },
-  {
-    id: "custom-api",
-    name: "Other ERP / Custom API",
-    description: "Connect another ERP using its supported API, middleware, or webhook interface.",
-    interfaceName: "REST API, SOAP service, or webhooks",
-    requirements: ["ERP API or middleware endpoint", "Authentication method and deployment secret", "Data field mapping", "Synchronization direction and schedule"],
-  },
-];
+type ErpConfig = { provider: "softone" | "sap-b1"; enabled: boolean; policies: Record<string, { enabled: boolean; sourceOfTruth: "globipos" | "erp" }>; lastTestStatus?: string; lastSyncStatus?: string; lastSyncAt?: string };
+type ErpAudit = { id: string; recordType: string; recordId: string; status: string; direction: string; errorMessage?: string; createdAt: string };
+const erpRecordTypes = ["customers", "items", "stock", "invoices", "payments"] as const;
 
 type ErpBusinessRules = {
   itemOwner: "globipos" | "erp";
@@ -109,6 +91,30 @@ const defaultErpRules: ErpBusinessRules = {
   offerOwner: "globipos",
   customerOwner: "globipos",
 };
+
+const erpOptions: ErpOption[] = [
+  {
+    id: "softone",
+    name: "SoftOne",
+    description: "Synchronize customers, items, stock, invoices, and payments with SoftOne ERP.",
+    interfaceName: "SoftOne Web Services / REST API",
+    requirements: ["SoftOne service endpoint", "Company or installation identifier", "API-enabled integration account", "ERP_SOFTONE_WAREHOUSE warehouse code for stock synchronization", "Data synchronization scope"],
+  },
+  {
+    id: "sap-b1",
+    name: "SAP Business One",
+    description: "Exchange master data and transactions with SAP Business One.",
+    interfaceName: "SAP Business One Service Layer",
+    requirements: ["Service Layer endpoint", "Company database identifier", "API-enabled integration account", "ERP_SAP_B1_WAREHOUSE warehouse code for stock synchronization", "U_GlobiPOSKey UDF exposed on every synchronized Service Layer entity", "Data synchronization scope"],
+  },
+  {
+    id: "custom-api",
+    name: "Other ERP / Custom API",
+    description: "Connect another ERP using its supported API, middleware, or webhook interface.",
+    interfaceName: "REST API, SOAP service, or webhooks",
+    requirements: ["ERP API or middleware endpoint", "Authentication method and deployment secret", "Data field mapping", "Synchronization direction and schedule"],
+  },
+];
 
 function IntegrationCard({
   title,
@@ -156,8 +162,10 @@ function IntegrationCard({
 
 export default function IntegrationsPage() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const { toast } = useToast();
   const [selectedErp, setSelectedErp] = useState<ErpOption | null>(null);
+  const [erpSaving, setErpSaving] = useState(false);
   const [erpRules, setErpRules] = useState<ErpBusinessRules>(defaultErpRules);
   const isSuperuser = user?.role === "superuser";
   const email = useQuery<EmailStatus>({ queryKey: ["/api/email-status"] });
@@ -167,6 +175,12 @@ export default function IntegrationsPage() {
   const control = useQuery<{ enabled: boolean; automationDispatch?: string }>({
     queryKey: ["/api/control/status"],
     enabled: isSuperuser,
+    retry: false,
+  });
+  const erpConfigs = useQuery<ErpConfig | null>({ queryKey: ["/api/admin/erp-integrations"], enabled: user?.role === "admin" || isSuperuser, retry: false });
+  const erpAudit = useQuery<ErpAudit[]>({
+    queryKey: ["/api/admin/erp-integrations/audit"],
+    enabled: user?.role === "admin" || isSuperuser,
     retry: false,
   });
 
@@ -179,24 +193,23 @@ export default function IntegrationsPage() {
       : cardProvider === "worldpay"
         ? card.data?.worldpayConfigured
         : false;
-
+  const selectedConfig = erpConfigs.data;
+  const providerBinding = erpProviderBinding(selectedConfig, selectedErp?.id);
+  const matchingConfig = providerBinding.matchingConfig;
   const openErp = (option: ErpOption) => {
-    const saved = settings.data?.find(setting => setting.key === `erp_business_rules_${option.id}`)?.value;
-    if (saved) {
+    if (option.id === "custom-api") {
+      const saved = settings.data?.find(setting => setting.key === `erp_business_rules_${option.id}`)?.value;
       try {
-        setErpRules({ ...defaultErpRules, ...JSON.parse(saved) });
+        setErpRules(saved ? { ...defaultErpRules, ...JSON.parse(saved) } : defaultErpRules);
       } catch {
         setErpRules(defaultErpRules);
       }
-    } else {
-      setErpRules(defaultErpRules);
     }
     setSelectedErp(option);
   };
-
-  const saveErpRules = useMutation({
+  const saveCustomRules = useMutation({
     mutationFn: async () => {
-      if (!selectedErp) return;
+      if (!selectedErp || selectedErp.id !== "custom-api") return;
       await apiRequest("PUT", "/api/settings", {
         settings: [{
           key: `erp_business_rules_${selectedErp.id}`,
@@ -211,13 +224,27 @@ export default function IntegrationsPage() {
       toast({ title: "ERP business rules saved" });
       setSelectedErp(null);
     },
-    onError: (error: Error) => {
-      toast({ title: "Could not save ERP rules", description: error.message, variant: "destructive" });
-    },
+    onError: (error: Error) => toast({ title: "Could not save ERP rules", description: error.message, variant: "destructive" }),
   });
-
   const setRule = <K extends keyof ErpBusinessRules>(key: K, value: ErpBusinessRules[K]) => {
     setErpRules(current => ({ ...current, [key]: value }));
+  };
+  const saveErp = async (body: Record<string, unknown>, endpoint = "") => {
+    setErpSaving(true);
+    try {
+      const response = await fetch(`/api/admin/erp-integrations${endpoint}`, {
+        method: endpoint ? "POST" : "PUT",
+        headers: endpoint ? undefined : { "Content-Type": "application/json" },
+        body: endpoint ? undefined : JSON.stringify(body),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "ERP operation failed");
+      toast({ title: endpoint === "/test" ? "Connection test succeeded" : endpoint === "/sync" ? "Sync completed" : "ERP settings saved", description: endpoint === "/sync" ? `${result.succeeded} synced, ${result.failed} failed, ${result.skipped} skipped.` : undefined });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/erp-integrations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/erp-integrations/audit"] });
+    } catch (error: any) {
+      toast({ title: "ERP operation failed", description: error.message, variant: "destructive" });
+    } finally { setErpSaving(false); }
   };
 
   return (
@@ -351,9 +378,7 @@ export default function IntegrationsPage() {
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Connect {selectedErp?.name}</DialogTitle>
-            <DialogDescription>
-              {selectedErp?.name} is available as an ERP integration option but is not connected in this deployment.
-            </DialogDescription>
+            <DialogDescription>Set which system owns each record type for this customer deployment, then test or trigger synchronization.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="rounded-lg border bg-muted/30 p-4">
@@ -371,65 +396,92 @@ export default function IntegrationsPage() {
                 ))}
               </ul>
             </div>
-            <div className="space-y-4 border-t pt-4">
-              <div>
-                <h3 className="font-semibold">Business rules</h3>
-                <p className="text-sm text-muted-foreground">Choose the source of truth and when item data is synchronized.</p>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>Who creates and maintains items?</Label>
-                  <Select value={erpRules.itemOwner} onValueChange={value => setRule("itemOwner", value as ErpBusinessRules["itemOwner"])}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="erp">{selectedErp?.name || "ERP"}</SelectItem>
-                      <SelectItem value="globipos">GlobiPOS</SelectItem>
-                    </SelectContent>
-                  </Select>
+            {selectedErp?.id === "custom-api" ? (
+              <div className="space-y-4 border-t pt-4">
+                <div>
+                  <h3 className="font-semibold">Business rules</h3>
+                  <p className="text-sm text-muted-foreground">Choose the source of truth and when item data is synchronized.</p>
                 </div>
-                <div className="space-y-2">
-                  <Label>Item synchronization</Label>
-                  <Select value={erpRules.itemSync} onValueChange={value => setRule("itemSync", value as ErpBusinessRules["itemSync"])}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="manual">Manual only</SelectItem>
-                      <SelectItem value="15_minutes">Every 15 minutes</SelectItem>
-                      <SelectItem value="hourly">Hourly</SelectItem>
-                      <SelectItem value="daily">Daily</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {([
-                  ["stockOwner", "Stock quantities"],
-                  ["pricingOwner", "Prices"],
-                  ["offerOwner", "Special offers"],
-                  ["customerOwner", "Customers"],
-                ] as const).map(([key, label]) => (
-                  <div className="space-y-2" key={key}>
-                    <Label>{label} source of truth</Label>
-                    <Select value={erpRules[key]} onValueChange={value => setRule(key, value as "globipos" | "erp")}>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Who creates and maintains items?</Label>
+                    <Select value={erpRules.itemOwner} onValueChange={value => setRule("itemOwner", value as ErpBusinessRules["itemOwner"])}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem value="erp">ERP</SelectItem><SelectItem value="globipos">GlobiPOS</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Item synchronization</Label>
+                    <Select value={erpRules.itemSync} onValueChange={value => setRule("itemSync", value as ErpBusinessRules["itemSync"])}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="erp">{selectedErp?.name || "ERP"}</SelectItem>
-                        <SelectItem value="globipos">GlobiPOS</SelectItem>
+                        <SelectItem value="manual">Manual only</SelectItem>
+                        <SelectItem value="15_minutes">Every 15 minutes</SelectItem>
+                        <SelectItem value="hourly">Hourly</SelectItem>
+                        <SelectItem value="daily">Daily</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                ))}
+                  {([
+                    ["stockOwner", "Stock quantities"],
+                    ["pricingOwner", "Prices"],
+                    ["offerOwner", "Special offers"],
+                    ["customerOwner", "Customers"],
+                  ] as const).map(([key, label]) => (
+                    <div className="space-y-2" key={key}>
+                      <Label>{label} source of truth</Label>
+                      <Select value={erpRules[key]} onValueChange={value => setRule(key, value as "globipos" | "erp")}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent><SelectItem value="erp">ERP</SelectItem><SelectItem value="globipos">GlobiPOS</SelectItem></SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">The selected source of truth wins when the same record changes in both systems. Automatic deletion is never enabled by these rules.</p>
               </div>
-              <p className="text-xs leading-5 text-muted-foreground">
-                The selected source of truth wins when the same record changes in both systems. Automatic deletion is never enabled by these rules.
-              </p>
-            </div>
-            <p className="text-xs leading-5 text-muted-foreground">
-              Connection passwords and API credentials must be stored as deployment secrets, not in the integration profile.
-            </p>
+            ) : (user?.role === "admin" || isSuperuser) ? (
+              <div className="space-y-3">
+                  <>
+                    <div className="flex items-center justify-between rounded-lg border p-3">
+                      <div><p className="text-sm font-medium">Enable connection</p><p className="text-xs text-muted-foreground">Credentials remain in deployment secrets.</p></div>
+                       <Switch checked={selectedConfig?.provider === selectedErp?.id && selectedConfig?.enabled === true} onCheckedChange={enabled => saveErp({
+                         provider: selectedErp!.id, enabled, policies: selectedConfig?.provider === selectedErp?.id ? (selectedConfig?.policies ?? {}) : {},
+                      })} disabled={erpSaving} />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Sync policy</p>
+                      {erpRecordTypes.map(recordType => {
+                         const policy = matchingConfig?.policies?.[recordType] ?? { enabled: false, sourceOfTruth: "globipos" as const };
+                        return <div key={recordType} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 rounded border p-2 text-sm">
+                          <span className="capitalize">{recordType}</span>
+                           <Switch checked={policy.enabled} onCheckedChange={enabled => saveErp({ provider: selectedErp!.id, enabled: matchingConfig?.enabled ?? false, policies: { ...(matchingConfig?.policies ?? {}), [recordType]: { ...policy, enabled } } })} disabled={erpSaving} />
+                           <select aria-label={`${recordType} source of truth`} className="rounded border bg-background p-1 text-xs" value={policy.sourceOfTruth} onChange={event => saveErp({ provider: selectedErp!.id, enabled: matchingConfig?.enabled ?? false, policies: { ...(matchingConfig?.policies ?? {}), [recordType]: { ...policy, sourceOfTruth: event.target.value } } })} disabled={erpSaving}>
+                            <option value="globipos">GlobiPOS</option><option value="erp">ERP</option>
+                          </select>
+                        </div>;
+                      })}
+                    </div>
+                     {providerBinding.mismatchLabel && <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">{providerBinding.mismatchLabel}. Test and sync apply only to that provider.</p>}
+                     <div className="flex gap-2"><Button variant="outline" disabled={!providerBinding.canTest || erpSaving} onClick={() => { if (providerBinding.canTest) void saveErp({}, "/test"); }}>Test connection</Button><Button disabled={!providerBinding.canRun || erpSaving} onClick={() => { if (providerBinding.canRun) void saveErp({}, "/sync"); }}>Run sync</Button></div>
+                     {matchingConfig && <p className="text-xs text-muted-foreground">Last test: {matchingConfig.lastTestStatus || "not run"} · Last sync: {matchingConfig.lastSyncStatus || "not run"}</p>}
+                    <div className="max-h-32 space-y-1 overflow-auto rounded border p-2 text-xs">
+                      <p className="font-medium">Recent sync audit</p>
+                      {erpAudit.data?.length ? erpAudit.data.slice(0, 10).map(entry => <p key={entry.id}>{entry.status} · {entry.direction} · {entry.recordType} {entry.recordId}{entry.errorMessage ? ` — ${entry.errorMessage}` : ""}</p>) : <p className="text-muted-foreground">No sync events for this deployment.</p>}
+                    </div>
+                  </>
+              </div>
+            ) : <p className="text-sm text-muted-foreground">Only administrators can configure ERP synchronization.</p>}
+            <p className="text-xs leading-5 text-muted-foreground">Connection passwords and API credentials are deployment secrets and are never saved in this profile or displayed here.</p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSelectedErp(null)}>Cancel</Button>
-            <Button onClick={() => saveErpRules.mutate()} disabled={saveErpRules.isPending}>
-              {saveErpRules.isPending ? "Saving..." : "Save business rules"}
+            <Button variant={selectedErp?.id === "custom-api" ? "outline" : "default"} onClick={() => setSelectedErp(null)}>
+              {selectedErp?.id === "custom-api" ? "Cancel" : "Close"}
             </Button>
+            {selectedErp?.id === "custom-api" && (
+              <Button onClick={() => saveCustomRules.mutate()} disabled={saveCustomRules.isPending}>
+                {saveCustomRules.isPending ? "Saving..." : "Save business rules"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

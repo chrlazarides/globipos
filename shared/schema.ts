@@ -105,6 +105,24 @@ export const deploymentRollouts = pgTable("deployment_rollouts", {
   updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
+export const erpIntegrationConfigs = pgTable("erp_integration_configs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  // Each application database is one customer deployment. This singleton
+  // scope prevents the running app from addressing another deployment.
+  scope: text("scope").notNull().default("local").unique(),
+  provider: text("provider").notNull(), // softone | sap-b1
+  enabled: boolean("enabled").notNull().default(false),
+  policies: jsonb("policies").notNull().default({}),
+  lastTestedAt: timestamp("last_tested_at"),
+  lastTestStatus: text("last_test_status"),
+  lastSyncAt: timestamp("last_sync_at"),
+  lastSyncStatus: text("last_sync_status"),
+  syncLockedAt: timestamp("sync_locked_at"),
+  syncLockToken: text("sync_lock_token"),
+  generation: integer("generation").notNull().default(1),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
 export const systemSettings = pgTable("system_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   key: text("key").notNull().unique(),
@@ -412,6 +430,7 @@ export const seasonalOfferItems = pgTable("seasonal_offer_items", {
 export const invoices = pgTable("invoices", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   invoiceNumber: text("invoice_number").notNull().unique(),
+  erpExternalRef: text("erp_external_ref").unique(),
   type: text("type").notNull().default("invoice"),
   customerId: varchar("customer_id").notNull(),
   date: date("date").notNull(),
@@ -1441,3 +1460,76 @@ export const expirationBatches = pgTable("expiration_batches", {
 export const insertExpirationBatchSchema = createInsertSchema(expirationBatches).omit({ id: true, createdAt: true, updatedAt: true, promotionId: true });
 export type InsertExpirationBatch = z.infer<typeof insertExpirationBatchSchema>;
 export type ExpirationBatch = typeof expirationBatches.$inferSelect;
+
+export const erpSyncCursors = pgTable("erp_sync_cursors", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+  recordType: text("record_type").notNull(),
+  cursor: text("cursor"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => ({
+  erpCursorUnique: uniqueIndex("erp_sync_cursors_unique").on(table.configId, table.generation, table.recordType),
+}));
+
+export const erpSyncAudits = pgTable("erp_sync_audits", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+  idempotencyKey: text("idempotency_key").notNull(),
+  recordType: text("record_type").notNull(),
+  recordId: text("record_id").notNull(),
+  direction: text("direction").notNull(), // outbound | inbound
+  status: text("status").notNull(), // succeeded | failed | skipped
+  externalId: text("external_id"),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  attempt: integer("attempt").notNull().default(1),
+});
+
+export const erpRecordMappings = pgTable("erp_record_mappings", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+  recordType: text("record_type").notNull(),
+  localId: text("local_id").notNull(),
+  externalId: text("external_id").notNull(),
+  sourceVersion: text("source_version"),
+  lastSyncedAt: timestamp("last_synced_at").defaultNow().notNull(),
+}, (table) => ({
+  erpMappingLocal: uniqueIndex("erp_record_mappings_local").on(table.configId, table.generation, table.recordType, table.localId),
+  erpMappingExternal: uniqueIndex("erp_record_mappings_external").on(table.configId, table.generation, table.recordType, table.externalId),
+}));
+
+export const erpSyncRuns = pgTable("erp_sync_runs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+  initiatedBy: varchar("initiated_by"),
+  recordTypes: jsonb("record_types").notNull().default([]),
+  status: text("status").notNull().default("running"),
+  succeeded: integer("succeeded").notNull().default(0),
+  failed: integer("failed").notNull().default(0),
+  skipped: integer("skipped").notNull().default(0),
+  failureSummary: text("failure_summary"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+});
+
+export const erpStockReconciliations = pgTable("erp_stock_reconciliations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull(),
+  localId: text("local_id").notNull(),
+  cycle: integer("cycle").notNull(),
+  targetQuantity: integer("target_quantity").notNull(),
+  observedQuantity: integer("observed_quantity").notNull(),
+  observedRevision: text("observed_revision").notNull(),
+  correlationKey: text("correlation_key").notNull().unique(),
+  status: text("status").notNull().default("pending"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+}, table => ({
+  erpStockCycle: uniqueIndex("erp_stock_reconciliations_cycle").on(table.configId, table.generation, table.localId, table.cycle),
+}));

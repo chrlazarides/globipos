@@ -990,6 +990,7 @@ export class DatabaseStorage implements IStorage {
       .select({
         id: invoices.id,
         invoiceNumber: invoices.invoiceNumber,
+        erpExternalRef: invoices.erpExternalRef,
         type: invoices.type,
         customerId: invoices.customerId,
         date: invoices.date,
@@ -1024,6 +1025,7 @@ export class DatabaseStorage implements IStorage {
       .select({
         id: invoices.id,
         invoiceNumber: invoices.invoiceNumber,
+        erpExternalRef: invoices.erpExternalRef,
         type: invoices.type,
         customerId: invoices.customerId,
         date: invoices.date,
