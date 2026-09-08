@@ -84,6 +84,20 @@ const databaseHealthPersistence: CustomerAiHealthPersistence = {
 let healthPersistence = databaseHealthPersistence;
 let persistenceQueue = Promise.resolve();
 
+export const CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS = 60_000;
+type HealthPersistenceOperation = "load" | "save";
+const lastHealthPersistenceSignalAt: Record<HealthPersistenceOperation, number> = {
+  load: Number.NEGATIVE_INFINITY,
+  save: Number.NEGATIVE_INFINITY,
+};
+
+function reportHealthPersistenceFailure(operation: HealthPersistenceOperation) {
+  const now = Date.now();
+  if (now - lastHealthPersistenceSignalAt[operation] < CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS) return;
+  lastHealthPersistenceSignalAt[operation] = now;
+  console.warn(`[customer-ai] operational health persistence ${operation} failed`);
+}
+
 function sanitizedCount(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
@@ -113,7 +127,7 @@ function persistRuntimeHealth(): Promise<void> {
   const snapshot = { ...runtimeHealth };
   persistenceQueue = persistenceQueue
     .then(() => healthPersistence.save(snapshot))
-    .catch(() => undefined);
+    .catch(() => reportHealthPersistenceFailure("save"));
   return persistenceQueue;
 }
 
@@ -122,6 +136,7 @@ export async function initializeCustomerAiRuntimeHealth() {
     await persistenceQueue;
     applyRuntimeHealth(sanitizeCustomerAiRuntimeHealth(await healthPersistence.load()));
   } catch {
+    reportHealthPersistenceFailure("load");
     // Operational health must never prevent the server from starting.
   }
 }
@@ -394,6 +409,11 @@ type CircuitState = { consecutiveFailures: number; openUntil: number };
 
 export function resetCustomerAiCircuitBreakersForTests() {
   providerCircuits.clear();
+}
+
+export function resetCustomerAiHealthPersistenceSignalsForTests() {
+  lastHealthPersistenceSignalAt.load = Number.NEGATIVE_INFINITY;
+  lastHealthPersistenceSignalAt.save = Number.NEGATIVE_INFINITY;
 }
 
 async function guardedProviderCall<T>(provider: RemoteProvider, call: () => Promise<T>): Promise<T> {

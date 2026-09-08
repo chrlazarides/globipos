@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   CUSTOMER_AI_CIRCUIT_COOLDOWN_MS,
   CUSTOMER_AI_DEADLINE_MS,
+  CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS,
   classifyCustomerFeedback,
   enhanceCustomerRecommendations,
   getCustomerAiEngine,
@@ -11,6 +12,7 @@ import {
   resetCustomerAiRuntimeHealth,
   resolveCustomerAiConfig,
   resetCustomerAiCircuitBreakersForTests,
+  resetCustomerAiHealthPersistenceSignalsForTests,
   sanitizeCustomerAiRuntimeHealth,
   setCustomerAiHealthPersistenceForTests,
   type CustomerAiCompletionClient,
@@ -528,6 +530,67 @@ test("restart hydration rejects malformed and sensitive persisted values", async
     assert.equal(JSON.stringify(restored).includes("sensitive text"), false);
   } finally {
     resetCustomerAiRuntimeHealth();
+    await setCustomerAiHealthPersistenceForTests();
+  }
+});
+
+test("persistence failures emit sanitized, rate-limited operational signals", async () => {
+  const sensitive = "credential=secret-value prompt=private-customer-text provider-message";
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  const originalNow = Date.now;
+  let now = 1_000_000;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+  Date.now = () => now;
+  resetCustomerAiHealthPersistenceSignalsForTests();
+  await setCustomerAiHealthPersistenceForTests({
+    async load() {
+      throw new Error(sensitive);
+    },
+    async save() {
+      throw new Error(sensitive);
+    },
+  });
+  resetCustomerAiRuntimeHealth();
+
+  try {
+    await initializeCustomerAiRuntimeHealth();
+    await initializeCustomerAiRuntimeHealth();
+
+    await withProviderEnvironment({}, async () => {
+      const candidates = [{ id: "safe-id", name: sensitive, price: "1.00", reason: sensitive }];
+      await enhanceCustomerRecommendations(config(), candidates, { customerText: sensitive });
+      await enhanceCustomerRecommendations(config(), candidates, { customerText: sensitive });
+    });
+
+    assert.deepEqual(warnings, [
+      ["[customer-ai] operational health persistence load failed"],
+      ["[customer-ai] operational health persistence save failed"],
+    ]);
+    assert.equal(JSON.stringify(warnings).includes("secret-value"), false);
+    assert.equal(JSON.stringify(warnings).includes("private-customer-text"), false);
+    assert.equal(JSON.stringify(warnings).includes("provider-message"), false);
+
+    now += CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS;
+    await initializeCustomerAiRuntimeHealth();
+    await withProviderEnvironment({}, async () => {
+      await enhanceCustomerRecommendations(
+        config(),
+        [{ id: "safe-id", name: "Safe", price: "1.00", reason: "Safe" }],
+        {},
+      );
+    });
+    assert.deepEqual(warnings.slice(2), [
+      ["[customer-ai] operational health persistence load failed"],
+      ["[customer-ai] operational health persistence save failed"],
+    ]);
+  } finally {
+    console.warn = originalWarn;
+    Date.now = originalNow;
+    resetCustomerAiRuntimeHealth();
+    resetCustomerAiHealthPersistenceSignalsForTests();
     await setCustomerAiHealthPersistenceForTests();
   }
 });
