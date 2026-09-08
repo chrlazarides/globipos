@@ -9,7 +9,9 @@ import {
   CatalogImportBarcodeAllocator,
   computeGtinCheckDigit,
   isValidGtin,
+  persistBarcodeAssignment,
 } from "./catalog-import-barcodes";
+import { barcodeIssuesToCsv } from "../shared/catalog-import-report";
 
 const withCheckDigit = (data: string) => data + computeGtinCheckDigit(data);
 
@@ -107,6 +109,49 @@ test("valid source GTINs that look like scale labels receive safe internal codes
   assert.equal(assignment.issue?.reason, "scale_pattern");
   assert.match(assignment.barcode, /^04/);
   assert.equal(parseScaleBarcode(assignment.barcode), null);
+});
+
+test("barcode replacement CSV rows exactly reflect the API barcodeIssues fields", () => {
+  const allocator = new CatalogImportBarcodeAllocator([]);
+  const issues = [
+    allocator.assign("", 'SKU-"MISSING"', 2).issue!,
+    allocator.assign("not-a-gtin", "SKU-INVALID", 3).issue!,
+  ];
+
+  assert.equal(
+    barcodeIssuesToCsv(issues),
+    [
+      '"Source barcode","SKU","Reason","Assigned barcode"',
+      `"","SKU-""MISSING""","Missing barcode","${issues[0].assignedBarcode}"`,
+      `"not-a-gtin","SKU-INVALID","Invalid barcode","${issues[1].assignedBarcode}"`,
+    ].join("\r\n"),
+  );
+});
+
+test("barcode replacement CSV neutralizes spreadsheet formulas from imported fields", () => {
+  const allocator = new CatalogImportBarcodeAllocator([]);
+  const issue = allocator.assign("=HYPERLINK(\"https://example.test\")", "+cmd", 2).issue!;
+
+  const csv = barcodeIssuesToCsv([issue]);
+  assert.equal(
+    csv.split("\r\n")[1],
+    `"'=HYPERLINK(""https://example.test"")","'+cmd","Invalid barcode","${issue.assignedBarcode}"`,
+  );
+  assert.doesNotMatch(csv, /,"[=+]/);
+});
+
+test("failed import persistence does not report an uncommitted barcode replacement", async () => {
+  const allocator = new CatalogImportBarcodeAllocator([]);
+  const assignment = allocator.assign("", "SKU-FAILED", 2);
+  const barcodeIssues: NonNullable<typeof assignment.issue>[] = [];
+
+  await assert.rejects(
+    persistBarcodeAssignment(assignment, barcodeIssues, async () => {
+      throw new Error("database rejected row");
+    }),
+    /database rejected row/,
+  );
+  assert.deepEqual(barcodeIssues, []);
 });
 
 test("every persisted imported barcode resolves to exactly one product", async () => {

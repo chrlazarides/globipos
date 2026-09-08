@@ -1,15 +1,7 @@
 import { parseScaleBarcode } from "./barcode-utils";
+import type { BarcodeIssue, BarcodeIssueReason } from "../shared/catalog-import-report";
 
-export type BarcodeIssueReason = "missing" | "invalid" | "duplicate" | "scale_pattern";
-
-export interface BarcodeIssue {
-  row: number;
-  sku: string;
-  sourceBarcode: string | null;
-  assignedBarcode: string;
-  reason: BarcodeIssueReason;
-  message: string;
-}
+export type { BarcodeIssue, BarcodeIssueReason } from "../shared/catalog-import-report";
 
 export interface ExistingBarcodeOwner {
   barcode: string | null;
@@ -115,4 +107,14 @@ export class CatalogImportBarcodeAllocator {
     }
     throw new Error("Internal EAN-13 restricted-circulation range is exhausted");
   }
+}
+
+export async function persistBarcodeAssignment<T>(
+  assignment: { barcode: string; issue?: BarcodeIssue },
+  barcodeIssues: BarcodeIssue[],
+  persist: (barcode: string) => Promise<T>,
+): Promise<T> {
+  const result = await persist(assignment.barcode);
+  if (assignment.issue) barcodeIssues.push(assignment.issue);
+  return result;
 }

@@ -26,7 +26,7 @@ import QRCode from "qrcode";
 
 // ─── LOGO BASE64 (embedded so it shows in emails, print, and offline) ────────
 import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScaleBarcode, parseScaleBarcodeAfterVariantLookup, resolveScaleBarcodeExactFirst } from "./barcode-utils";
-import { CatalogImportBarcodeAllocator } from "./catalog-import-barcodes";
+import { CatalogImportBarcodeAllocator, persistBarcodeAssignment, type BarcodeIssue } from "./catalog-import-barcodes";
 import { pool } from "./db";
 import { isValidIanaTimeZone } from "@shared/quiet-hours";
 import { registerDeploymentControlRoutes } from "./deployment-control";
@@ -1617,7 +1617,7 @@ export async function registerRoutes(
         })),
       ]);
 
-      const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: any[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
+      const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: BarcodeIssue[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
 
       for (let i = 0; i < rows.length; i++) {
         try {
@@ -1660,7 +1660,6 @@ export async function registerRoutes(
             i + 2,
             provisionalOwnerKey,
           );
-          if (barcodeAssignment.issue) results.barcodeIssues.push(barcodeAssignment.issue);
           const itemData = {
             name,
             sku,
@@ -1700,10 +1699,14 @@ export async function registerRoutes(
             for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
               if (getValue(f)) updateData[f] = (itemData as any)[f];
             }
-            await storage.updateItem(existing.id, updateData);
+            await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
+              storage.updateItem(existing.id, updateData)
+            );
             results.updated++;
           } else {
-            const created = await storage.createItem(itemData);
+            const created = await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, (barcode) =>
+              storage.createItem({ ...itemData, barcode })
+            );
             barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
             if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
             results.success++;
@@ -1756,7 +1759,7 @@ export async function registerRoutes(
           ownerKey: `item:${alias.itemId}`,
         })),
       ]);
-      const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: any[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
+      const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: BarcodeIssue[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
 
       const clean = (v: any): string => {
         const s = v === null || v === undefined ? "" : String(v).trim();
@@ -1802,7 +1805,6 @@ export async function registerRoutes(
             i + 1,
             provisionalOwnerKey,
           );
-          if (barcodeAssignment.issue) results.barcodeIssues.push(barcodeAssignment.issue);
           const itemData = {
             name,
             sku,
@@ -1842,10 +1844,14 @@ export async function registerRoutes(
             for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
               if (clean((row as any)[f])) updateData[f] = (itemData as any)[f];
             }
-            await storage.updateItem(existing.id, updateData);
+            await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
+              storage.updateItem(existing.id, updateData)
+            );
             results.updated++;
           } else {
-            const created = await storage.createItem(itemData);
+            const created = await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, (barcode) =>
+              storage.createItem({ ...itemData, barcode })
+            );
             barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
             if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
             results.success++;

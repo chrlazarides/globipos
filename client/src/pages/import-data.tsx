@@ -23,10 +23,18 @@ import {
   Check,
   Palette,
   Ruler,
+  Download,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
 import ExcelJS from "exceljs";
+import {
+  BARCODE_ISSUE_REASON_LABELS,
+  barcodeIssuesToCsv,
+  summarizeBarcodeIssues,
+  type BarcodeIssue,
+  type BarcodeIssueReason,
+} from "@shared/catalog-import-report";
 
 type CellGrid = (string | number | null)[][];
 
@@ -196,6 +204,7 @@ type SheetResult = {
   success: number;
   updated: number;
   errors: { row: number; message: string }[];
+  barcodeIssues: BarcodeIssue[];
 };
 
 const IMPORT_ORDER: Record<Exclude<EntityType, "skip">, number> = {
@@ -763,6 +772,7 @@ export default function ImportData() {
           success: data.success || 0,
           updated: data.updated || 0,
           errors: data.errors || [],
+          barcodeIssues: data.barcodeIssues || [],
         });
       } catch (err: any) {
         results.push({
@@ -771,6 +781,7 @@ export default function ImportData() {
           success: 0,
           updated: 0,
           errors: [{ row: 0, message: err.message || "Import failed" }],
+          barcodeIssues: [],
         });
       }
       setImportProgress(Math.round(((i + 1) / sheetsToImport.length) * 100));
@@ -790,6 +801,19 @@ export default function ImportData() {
   const totalSuccess = importResults.reduce((sum, r) => sum + r.success, 0);
   const totalUpdated = importResults.reduce((sum, r) => sum + r.updated, 0);
   const totalErrors = importResults.reduce((sum, r) => sum + r.errors.length, 0);
+  const barcodeIssues = importResults.flatMap((result) => result.barcodeIssues);
+  const barcodeIssueSummary = summarizeBarcodeIssues(barcodeIssues);
+
+  const downloadBarcodeReport = () => {
+    const csv = barcodeIssuesToCsv(barcodeIssues);
+    const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${fileName.replace(/\.[^.]+$/, "") || "catalog-import"}-barcode-replacements.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const currentSheet = sheets.find((s) => s.sheetName === activeSheet);
 
@@ -1211,6 +1235,36 @@ export default function ImportData() {
               </div>
             </CardContent>
           </Card>
+
+          {barcodeIssues.length > 0 && (
+            <Card data-testid="barcode-replacement-summary">
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div className="space-y-1">
+                    <CardTitle className="text-base">Barcode replacements</CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      {barcodeIssues.length} barcode{barcodeIssues.length === 1 ? " was" : "s were"} replaced. Download the report to relabel stock and update source mappings.
+                    </p>
+                  </div>
+                  <Button variant="outline" onClick={downloadBarcodeReport} data-testid="button-download-barcode-report">
+                    <Download className="w-4 h-4 mr-2" />
+                    Download CSV
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2">
+                  {(Object.keys(BARCODE_ISSUE_REASON_LABELS) as BarcodeIssueReason[]).map((reason) =>
+                    barcodeIssueSummary[reason] > 0 ? (
+                      <Badge key={reason} variant="secondary">
+                        {BARCODE_ISSUE_REASON_LABELS[reason]}: {barcodeIssueSummary[reason]}
+                      </Badge>
+                    ) : null
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {importResults.map((result) => (
             <Card key={result.sheetName}>
