@@ -74,11 +74,11 @@ const reportNav = [
 const systemNav = [
   { title: "Import Data", url: "/import", icon: Upload, module: "import" },
   { title: "Settings", url: "/settings", icon: Settings, module: "_settings" },
+  { title: "Version Control", url: "/version-control", icon: GitBranch, module: "_admin" },
 ];
 
 const adminNav = [
   { title: "Activity Log", url: "/activity-logs", icon: Activity, module: "_admin" },
-  { title: "Version Control", url: "/version-control", icon: GitBranch, module: "_admin" },
   { title: "PDA Operations", url: "/pda-operations", icon: Smartphone, module: "_admin" },
 ];
 const superuserNav = [
@@ -283,13 +283,27 @@ export function AppSidebar() {
           <BookOpen className="w-3.5 h-3.5" />
           <span>User Manual</span>
         </a>
-        <div className="flex items-center gap-2 text-xs text-sidebar-foreground/50">
-          <Wine className="w-3 h-3" />
-          <span>
-            {companyName} v{buildInfo.version}
-            {buildInfo.isDevelopment ? ` · dev ${buildInfo.reference}` : ""}
-          </span>
-        </div>
+        {isAdmin ? (
+          <Link
+            href="/version-control"
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            data-testid="link-sidebar-version-control"
+          >
+            <GitBranch className="w-3.5 h-3.5" />
+            <span>
+              Version Control · v{buildInfo.version}
+              {buildInfo.isDevelopment ? ` · dev ${buildInfo.reference}` : ""}
+            </span>
+          </Link>
+        ) : (
+          <div className="flex items-center gap-2 text-xs text-sidebar-foreground/50">
+            <Wine className="w-3 h-3" />
+            <span>
+              {companyName} v{buildInfo.version}
+              {buildInfo.isDevelopment ? ` · dev ${buildInfo.reference}` : ""}
+            </span>
+          </div>
+        )}
       </SidebarFooter>
     </Sidebar>
   );
