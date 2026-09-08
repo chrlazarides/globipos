@@ -66,7 +66,9 @@ const categoryFormSchema = insertCategorySchema.extend({
 
 export default function Items() {
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
   const [itemDialogOpen, setItemDialogOpen] = useState(false);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -74,10 +76,34 @@ export default function Items() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const { toast } = useToast();
 
-  const [stockSuggestionsOpen, setStockSuggestionsOpen] = useState(true);
-  const { data: items = [], isLoading: itemsLoading } = useQuery<Item[]>({ queryKey: ["/api/items"] });
+  const [stockSuggestionsOpen, setStockSuggestionsOpen] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, categoryFilter]);
+  const itemParams = new URLSearchParams({
+    page: String(page),
+    limit: "100",
+    search: debouncedSearch,
+    categoryId: categoryFilter,
+  });
+  const { data: itemPage, isLoading: itemsLoading } = useQuery<{ items: Item[]; total: number; page: number; pageSize: number }>({
+    queryKey: ["/api/items", "paged", page, debouncedSearch, categoryFilter],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/items?${itemParams.toString()}`);
+      return res.json();
+    },
+    placeholderData: (previous) => previous,
+  });
+  const items = itemPage?.items || [];
+  const totalItems = itemPage?.total || 0;
+  const totalPages = Math.max(1, Math.ceil(totalItems / 100));
   const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
-  const { data: stockSuggestions = [] } = useQuery<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; packSize: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>({ queryKey: ["/api/items/stock-suggestions"] });
+  const { data: stockSuggestions = [] } = useQuery<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; packSize: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>({
+    queryKey: ["/api/items/stock-suggestions"],
+    enabled: stockSuggestionsOpen,
+  });
   const { data: allSettings = [] } = useQuery<{ key: string; value: string }[]>({ queryKey: ["/api/settings"] });
   const weeksOfCover = parseInt(allSettings.find(s => s.key === "reorder_weeks_cover")?.value || "8", 10) || 8;
   const priceLevelNames = usePriceLevels();
@@ -158,12 +184,6 @@ export default function Items() {
     setEditingItem(item);
     setEditDialogOpen(true);
   };
-
-  const filtered = items.filter((item) => {
-    const matchSearch = item.name.toLowerCase().includes(search.toLowerCase()) || item.sku.toLowerCase().includes(search.toLowerCase()) || (item.brand || "").toLowerCase().includes(search.toLowerCase());
-    const matchCategory = categoryFilter === "all" || item.categoryId === categoryFilter;
-    return matchSearch && matchCategory;
-  });
 
   const columns: Column<Item>[] = [
     {
@@ -328,7 +348,20 @@ export default function Items() {
               </SelectContent>
             </Select>
           </div>
-          <DataTable columns={columns} data={filtered} isLoading={itemsLoading} emptyMessage="No items found" onRowClick={handleRowClick} />
+          <DataTable columns={columns} data={items} isLoading={itemsLoading} emptyMessage="No items found" onRowClick={handleRowClick} />
+          <div className="flex items-center justify-between gap-3 pt-4">
+            <p className="text-xs text-muted-foreground">
+              {totalItems.toLocaleString()} products · Page {page.toLocaleString()} of {totalPages.toLocaleString()}
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={page <= 1 || itemsLoading} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+                Previous
+              </Button>
+              <Button variant="outline" size="sm" disabled={page >= totalPages || itemsLoading} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
+                Next
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

@@ -11,7 +11,7 @@ import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail, sendEmailWithContent } from "./email";
 import { db } from "./db";
-import { sql, and, or, eq, gte, lte, gt, desc, isNull, ilike, inArray } from "drizzle-orm";
+import { sql, and, or, eq, gte, lte, gt, desc, isNull, ilike, inArray, count } from "drizzle-orm";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -1571,9 +1571,28 @@ export async function registerRoutes(
   });
 
   // Items
-  app.get("/api/items", async (_req, res) => {
-    const allItems = await storage.getItems();
-    res.json(allItems);
+  app.get("/api/items", async (req, res) => {
+    const paginated = req.query.page !== undefined || req.query.limit !== undefined;
+    if (!paginated) {
+      const allItems = await storage.getItems();
+      return res.json(allItems);
+    }
+    const page = Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number.parseInt(String(req.query.limit || "100"), 10) || 100));
+    const search = String(req.query.search || "").trim();
+    const categoryId = String(req.query.categoryId || "").trim();
+    const filters = [];
+    if (search) {
+      const term = `%${search.replace(/[%_]/g, "\\$&")}%`;
+      filters.push(or(ilike(items.name, term), ilike(items.sku, term), ilike(items.brand, term)));
+    }
+    if (categoryId && categoryId !== "all") filters.push(eq(items.categoryId, categoryId));
+    const where = filters.length ? and(...filters) : undefined;
+    const [[totalRow], rows] = await Promise.all([
+      db.select({ count: count() }).from(items).where(where),
+      db.select().from(items).where(where).orderBy(items.name).limit(pageSize).offset((page - 1) * pageSize),
+    ]);
+    res.json({ items: rows, total: Number(totalRow.count), page, pageSize });
   });
 
   app.get("/api/items/brands", async (_req, res) => {
