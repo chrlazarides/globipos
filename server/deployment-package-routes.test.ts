@@ -35,15 +35,19 @@ async function startTestApp(): Promise<{ server: Server; baseUrl: string }> {
   return { server, baseUrl: `http://127.0.0.1:${port}` };
 }
 
-function superuserHeaders() {
+function roleHeaders(role: "superuser" | "admin" | "staff") {
   const token = signToken({
     id: crypto.randomUUID(),
     username: "deployment-route-test",
     email: null,
-    role: "superuser",
+    role,
     permissions: [],
   });
   return { authorization: `Bearer ${token}` };
+}
+
+function superuserHeaders() {
+  return roleHeaders("superuser");
 }
 
 async function closeServer(server: Server) {
@@ -82,6 +86,43 @@ test("deployment pg_dump passes unusual database URLs as one literal argument", 
     ],
     options: { maxBuffer: 200 * 1024 * 1024 },
   }]);
+});
+
+test("deployment package downloads reject lower-privilege users without running pg_dump", async t => {
+  let dumpCalls = 0;
+  setDeploymentPackageRouteDependenciesForTests({
+    dumpDatabase: async () => {
+      dumpCalls += 1;
+      throw new Error("pg_dump must not run for rejected requests");
+    },
+  });
+  const { server, baseUrl } = await startTestApp();
+  t.after(async () => {
+    await closeServer(server);
+    setDeploymentPackageRouteDependenciesForTests();
+  });
+
+  const routes = ["cpanel-package", "compiled-package", "synology-package"];
+  const callers = [
+    { name: "admin", headers: roleHeaders("admin"), expectedStatus: 403 },
+    { name: "staff", headers: roleHeaders("staff"), expectedStatus: 403 },
+    { name: "unauthenticated", headers: undefined, expectedStatus: 401 },
+  ] as const;
+
+  for (const route of routes) {
+    for (const caller of callers) {
+      const response = await fetch(`${baseUrl}/api/backup/${route}`, {
+        headers: caller.headers,
+      });
+      assert.equal(
+        response.status,
+        caller.expectedStatus,
+        `${caller.name} request to ${route} should be rejected`,
+      );
+    }
+  }
+
+  assert.equal(dumpCalls, 0);
 });
 
 test("superusers can download all deployment package types with usable ZIP headers", async t => {
