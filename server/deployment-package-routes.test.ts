@@ -45,6 +45,58 @@ function assertPm2Config(contents: string) {
   assert.match(contents, /max_memory_restart: "512M"/);
   assert.match(contents, /error_file: "logs\/err\.log"/);
   assert.match(contents, /out_file: "logs\/out\.log"/);
+  execFileSync(process.execPath, ["--check", "-"], {
+    input: contents,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+function assertShellSyntax(contents: string) {
+  execFileSync("bash", ["-n", "-"], {
+    input: contents,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+function assertDockerfileSyntax(contents: string) {
+  const instructions = contents
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith("#"));
+  assert.deepEqual(
+    instructions.map(line => line.match(/^([A-Z]+)(?:\s+|$)/)?.[1]),
+    ["FROM", "WORKDIR", "COPY", "EXPOSE", "CMD"],
+    "Dockerfile must contain only the expected, well-formed instructions",
+  );
+  const cmd = instructions.at(-1)?.replace(/^CMD\s+/, "");
+  assert.ok(cmd, "Dockerfile must end with CMD");
+  assert.deepEqual(JSON.parse(cmd), ["node", "dist/index.cjs"]);
+}
+
+function assertComposeSyntax(contents: string) {
+  assert.doesNotMatch(contents, /\t/, "Compose YAML must use spaces, not tabs");
+  assert.match(contents, /^services:\n  app:\n/m);
+  assert.match(contents, /^  db:\n/m);
+  assert.match(contents, /^volumes:\n  postgres_data:\s*$/m);
+  assert.match(contents, /^networks:\n  globipos-net:\s*$/m);
+  assert.match(contents, /^\s+- "\$\{APP_PORT:-3000\}:3000"$/m);
+
+  try {
+    execFileSync("docker", ["compose", "version"], { stdio: "ignore" });
+  } catch {
+    return;
+  }
+
+  execFileSync("docker", ["compose", "--ansi", "never", "-f", "-", "config", "--quiet"], {
+    input: contents,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      APP_PORT: "3000",
+      DB_PASSWORD: "deployment-test-password",
+      SESSION_SECRET: "deployment-test-session-secret",
+    },
+  });
 }
 
 async function startTestApp(): Promise<{ server: Server; baseUrl: string }> {
@@ -227,6 +279,7 @@ test("superusers can download all deployment package types with usable ZIP heade
       assertSharedEnvironmentTemplate(envExample);
 
       const setupScript = archiveText(entries, "setup.sh");
+      assertShellSyntax(setupScript);
       const installCommand = setupScript.match(/^npm install(?<flags>.*)$/m);
       assert.ok(installCommand?.groups);
       assert.match(setupScript, /cp \.env\.example \.env/);
@@ -271,6 +324,7 @@ test("superusers can download all deployment package types with usable ZIP heade
       assertPm2Config(archiveText(entries, "ecosystem.config.js"));
 
       const startScript = archiveText(entries, "start.sh");
+      assertShellSyntax(startScript);
       assert.match(startScript, /No npm install or build step required/);
       assert.doesNotMatch(startScript, /^npm install/m);
       assert.doesNotMatch(startScript, /^npm run build/m);
@@ -289,12 +343,14 @@ test("superusers can download all deployment package types with usable ZIP heade
       assert.match(archiveText(entries, "Caddyfile"), /reverse_proxy localhost:3000/);
     } else {
       const dockerfile = archiveText(entries, "Dockerfile");
+      assertDockerfileSyntax(dockerfile);
       assert.match(dockerfile, /^FROM node:20-alpine$/m);
       assert.match(dockerfile, /^COPY dist\/ \.\/dist\/$/m);
       assert.match(dockerfile, /^EXPOSE 3000$/m);
       assert.match(dockerfile, /^CMD \["node", "dist\/index\.cjs"\]$/m);
 
       const compose = archiveText(entries, "docker-compose.yml");
+      assertComposeSyntax(compose);
       assert.match(compose, /DATABASE_URL=postgresql:\/\/globipos:\$\{DB_PASSWORD:-globipos\}@db:5432\/globipos/);
       assert.match(compose, /SESSION_SECRET=\$\{SESSION_SECRET\}/);
       assert.match(compose, /condition: service_healthy/);
@@ -309,6 +365,7 @@ test("superusers can download all deployment package types with usable ZIP heade
       assert.match(envTemplate, /^SESSION_SECRET=REPLACE_WITH_64_CHAR_RANDOM_HEX$/m);
 
       const setupScript = archiveText(entries, "setup.sh");
+      assertShellSyntax(setupScript);
       assert.match(setupScript, /Install Container Manager from Synology Package Center/);
       assert.match(setupScript, /cp \.env\.template \.env/);
       assert.match(setupScript, /DC="docker compose"/);
