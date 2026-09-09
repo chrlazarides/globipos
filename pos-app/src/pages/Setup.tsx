@@ -53,13 +53,13 @@ export function Setup({ onComplete }: SetupProps) {
             <div className="text-center py-4">
               <CheckCircleIcon className="w-16 h-16 text-green-400 mx-auto mb-3" />
               <p className="text-white font-semibold text-lg">Terminal registered!</p>
-              <p className="text-gray-400 text-sm mt-1">Loading POS…</p>
+               <p className="text-gray-400 text-sm mt-1">Catalog ready — loading POS…</p>
             </div>
           ) : step === "testing" ? (
             <div className="text-center py-4">
               <Loader2Icon className="w-12 h-12 text-burgundy-400 mx-auto mb-3 animate-spin" />
               <p className="text-white font-medium">Connecting to server…</p>
-              <p className="text-gray-400 text-sm mt-1">Downloading catalog and layout</p>
+               <p className="text-gray-400 text-sm mt-1">Registering terminal and downloading catalog in safe pages…</p>
             </div>
           ) : (
             <>

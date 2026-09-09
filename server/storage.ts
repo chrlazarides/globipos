@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, and, gte, lte, lt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
+import { eq, and, gte, lte, lt, gt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeQrCode, synthesizeSequentialCode } from "./barcode-utils";
 import {
   users, categories, colors, sizes, items, itemShelfPriceHistory, itemVariants, itemBarcodes, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
@@ -87,6 +87,7 @@ export interface IStorage {
   getItemByAnyBarcode(barcode: string): Promise<Item | undefined>;
 
   getItems(): Promise<Item[]>;
+  getCatalogPage(options: { limit: number; cursor?: { name: string; id: string }; since?: Date }): Promise<Item[]>;
   getItem(id: string): Promise<Item | undefined>;
   getItemByBarcode(barcode: string): Promise<Item | undefined>;
   createItem(data: InsertItem): Promise<Item>;
@@ -472,6 +473,17 @@ export class DatabaseStorage implements IStorage {
 
   async getItems() {
     return db.select().from(items).orderBy(items.name);
+  }
+  async getCatalogPage({ limit, cursor, since }: { limit: number; cursor?: { name: string; id: string }; since?: Date }) {
+    const conditions = [];
+    if (since) conditions.push(gt(items.updatedAt, since));
+    if (cursor) {
+      conditions.push(or(gt(items.name, cursor.name), and(eq(items.name, cursor.name), gt(items.id, cursor.id))));
+    }
+    return db.select().from(items)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(items.name, items.id)
+      .limit(Math.max(1, Math.min(limit, 500)));
   }
   async getItem(id: string) {
     const [item] = await db.select().from(items).where(eq(items.id, id));

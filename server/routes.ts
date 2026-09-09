@@ -9922,18 +9922,19 @@ export async function registerRoutes(
         while (await storage.getSignageScreenByCode(pairingCode)) pairingCode = generatePairingCode();
         await storage.createSignageScreen({ name: `${terminal.name} — Customer Display`, screenType: "pos_customer_display", posTerminalId: terminal.id, playlistId: null, pairingCode });
       }
-      const [location, layoutButtons, inboxItems, allItems, cats, syncCfg, cashiers] = await Promise.all([
+      const [location, layoutButtons, inboxItems, cats, syncCfg, cashiers] = await Promise.all([
         storage.getPosLocation(terminal.locationId),
         terminal.layoutSetId ? storage.getPosLayoutButtons(terminal.layoutSetId) : Promise.resolve([]),
         storage.getPosInbox(terminal.id),
-        storage.getItems(),
         storage.getCategories(),
         storage.getPosSyncConfig(),
         storage.getPosCashiers(terminal.locationId),
       ]);
       // Send SHA-256 hash of PIN (never plaintext). Terminal stores hash directly.
       const cashierPayload = cashiers.map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role }));
-      res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: allItems, categories: cats }, syncConfig: syncCfg, cashiers: cashierPayload });
+      // Catalog is bootstrapped separately through the authenticated, bounded sync endpoint.
+      // Keep the catalog shape for older clients, but never put the full item table in registration.
+      res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: [], categories: cats }, syncConfig: syncCfg, cashiers: cashierPayload });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -10409,23 +10410,40 @@ export async function registerRoutes(
       const terminal = (req as any).terminal;
       const since = req.query.since as string | undefined;
       const sinceDate = since ? new Date(since) : null;
+      if (sinceDate && Number.isNaN(sinceDate.getTime())) return res.status(400).json({ message: "Invalid since timestamp" });
+      const rawLimit = Number.parseInt(String(req.query.limit || "250"), 10);
+      const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(rawLimit, 500)) : 250;
+      let cursor: { name: string; id: string } | undefined;
+      if (req.query.cursor) {
+        try {
+          const decoded = Buffer.from(String(req.query.cursor), "base64url").toString("utf8");
+          const parsed = JSON.parse(decoded);
+          if (typeof parsed.name !== "string" || typeof parsed.id !== "string") throw new Error("invalid");
+          cursor = { name: parsed.name, id: parsed.id };
+        } catch {
+          return res.status(400).json({ message: "Invalid catalog cursor" });
+        }
+      }
       await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), lastSyncAt: new Date() });
-      const [allItems, cats, offers] = await Promise.all([
-        storage.getItems(),
+      const [pageItems, cats, offers] = await Promise.all([
+        storage.getCatalogPage({ limit: limit + 1, cursor, since: sinceDate || undefined }),
         storage.getCategories(),
         storage.getSeasonalOffers(),
       ]);
-      // Delta: only items/categories updated since sinceDate
-      const items = sinceDate
-        ? allItems.filter(item => item.updatedAt && new Date(item.updatedAt) > sinceDate)
-        : allItems;
+      const done = pageItems.length <= limit;
+      const items = pageItems.slice(0, limit);
       const categories = sinceDate
         ? cats.filter(cat => cat.updatedAt && new Date(cat.updatedAt) > sinceDate)
         : cats;
       // Filter to only currently active seasonal offers
       const today = new Date().toISOString().slice(0, 10);
       const activeOffers = offers.filter(o => o.active && o.startDate <= today && o.endDate >= today);
-      res.json({ items, categories, seasonalOffers: activeOffers, syncedAt: new Date().toISOString(), full: !sinceDate, since: since || null });
+      const last = items[items.length - 1];
+      const nextCursor = !done && last
+        ? Buffer.from(JSON.stringify({ name: last.name, id: last.id })).toString("base64url")
+        : null;
+      res.json({ items, categories: cursor ? [] : categories, seasonalOffers: cursor ? [] : activeOffers,
+        syncedAt: new Date().toISOString(), full: !sinceDate, since: since || null, nextCursor, done });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 

@@ -118,15 +118,20 @@ const PUBLIC_PATHS = [
   "/api/public",
   "/api/customer",
   "/api/pos/terminals/register", // bootstrap — no session cookie on first launch
-  "/api/pos/sync/audit-logs", // terminal audit-log push — authenticated via X-Terminal-Code (requireTerminal)
+  "/api/pos/sync", // native terminal routes authenticate with X-Terminal-Code (requireTerminal)
+  "/api/sync", // legacy native terminal routes authenticate with X-Terminal-Code (requireTerminal)
   "/api/orders", // Click & Collect lookup/collect — authenticated via X-Terminal-Code (requireTerminal)
   "/api/signage/play", // screen-facing player, keyed by pairing code, no session
   "/api/webhooks/whatsapp", // Meta webhook — no session; verified via hub.verify_token (GET) / X-Hub-Signature-256 (POST)
   "/api/control/heartbeat", // deployment agent authenticates with its own bearer credential
 ];
 
+export function isPublicPath(path: string) {
+  return PUBLIC_PATHS.some(p => path === p || path.startsWith(p + "/"));
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  if (PUBLIC_PATHS.some(p => req.path === p || req.path.startsWith(p + "/"))) {
+  if (isPublicPath(req.path)) {
     return next();
   }
   if (!req.path.startsWith("/api/")) {
