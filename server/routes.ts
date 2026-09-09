@@ -49,6 +49,33 @@ import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhance
 import { createCustomerAiHealthPersistence } from "./customer-ai-health-persistence";
 import { registerErpIntegrationRoutes } from "./erp-integration";
 
+type DeploymentPackageRouteDependencies = {
+  getCompanyName: () => Promise<string>;
+  dumpDatabase: (databaseUrl: string) => Buffer;
+  compiledBuildExists: (distPath: string) => boolean;
+  workingDirectory: () => string;
+};
+
+const defaultDeploymentPackageRouteDependencies: DeploymentPackageRouteDependencies = {
+  getCompanyName: async () => (await storage.getSetting("company_name"))?.value || "Company",
+  dumpDatabase: (databaseUrl) => execSync(
+    `pg_dump "${databaseUrl}" --no-password --format=plain --no-owner --no-acl --quote-all-identifiers`,
+    { maxBuffer: 200 * 1024 * 1024 },
+  ),
+  compiledBuildExists: fs.existsSync,
+  workingDirectory: process.cwd,
+};
+
+let deploymentPackageRouteDependencies = defaultDeploymentPackageRouteDependencies;
+
+export function setDeploymentPackageRouteDependenciesForTests(
+  overrides?: Partial<DeploymentPackageRouteDependencies>,
+) {
+  deploymentPackageRouteDependencies = overrides
+    ? { ...defaultDeploymentPackageRouteDependencies, ...overrides }
+    : defaultDeploymentPackageRouteDependencies;
+}
+
 function getLogoDataUrl(): string {
   const candidates = [
     path.resolve(process.cwd(), "dist", "public", "logo.png"),
@@ -393,7 +420,8 @@ const CHARGE_IN_PROGRESS_WINDOW_MS = 90_000;
 
 export async function registerRoutes(
   httpServer: Server,
-  app: Express
+  app: Express,
+  options: { skipBackgroundJobs?: boolean } = {},
 ): Promise<Server> {
   configureCustomerAiHealthPersistence(createCustomerAiHealthPersistence());
   registerDeploymentControlRoutes(app);
@@ -404,7 +432,7 @@ export async function registerRoutes(
   // "held" order whose charge attempt is still within the in-progress window is
   // logged here so ops can see it, and the /api/pos/card-terminal/charge-status
   // endpoint will independently report it to the POS UI as "still being verified".
-  storage.getHeldOrdersWithRecentChargeAttempt(CHARGE_IN_PROGRESS_WINDOW_MS).then(orders => {
+  if (!options.skipBackgroundJobs) storage.getHeldOrdersWithRecentChargeAttempt(CHARGE_IN_PROGRESS_WINDOW_MS).then(orders => {
     if (orders.length > 0) {
       console.warn(
         `[card-terminal] Server restarted with ${orders.length} held order(s) whose card charge may still be in-flight: ` +
@@ -5130,18 +5158,14 @@ export async function registerRoutes(
   // ─── cPANEL DEPLOYMENT PACKAGE (superuser only) ─────────────────────────────
   app.get("/api/backup/cpanel-package", requireSuperuser, async (_req, res) => {
     try {
-      const companySetting = await storage.getSetting("company_name");
-      const companyName = companySetting?.value || "Company";
+      const companyName = await deploymentPackageRouteDependencies.getCompanyName();
       const slug = fileSlug(companyName);
       const date = new Date().toISOString().split("T")[0];
       const dbUrl = process.env.DATABASE_URL;
       if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
 
       // Generate SQL dump via pg_dump
-      const sqlDump = execSync(
-        `pg_dump "${dbUrl}" --no-password --format=plain --no-owner --no-acl --quote-all-identifiers`,
-        { maxBuffer: 200 * 1024 * 1024 }
-      );
+      const sqlDump = deploymentPackageRouteDependencies.dumpDatabase(dbUrl);
 
       // .env.example
       const envExample = [
@@ -5480,24 +5504,20 @@ export async function registerRoutes(
 
   app.get("/api/backup/compiled-package", requireSuperuser, async (_req, res) => {
     try {
-      const companySetting = await storage.getSetting("company_name");
-      const companyName = companySetting?.value || "Company";
+      const companyName = await deploymentPackageRouteDependencies.getCompanyName();
       const slug = fileSlug(companyName);
       const date = new Date().toISOString().split("T")[0];
       const dbUrl = process.env.DATABASE_URL;
       if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
 
       // Check dist/ exists
-      const distPath = path.join(process.cwd(), "dist");
-      if (!fs.existsSync(distPath)) {
+      const distPath = path.join(deploymentPackageRouteDependencies.workingDirectory(), "dist");
+      if (!deploymentPackageRouteDependencies.compiledBuildExists(distPath)) {
         throw new Error("Compiled build not found. Run 'npm run build' first.");
       }
 
       // SQL dump
-      const sqlDump = execSync(
-        `pg_dump "${dbUrl}" --no-password --format=plain --no-owner --no-acl --quote-all-identifiers`,
-        { maxBuffer: 200 * 1024 * 1024 }
-      );
+      const sqlDump = deploymentPackageRouteDependencies.dumpDatabase(dbUrl);
 
       // .env.example
       const envExample = [
@@ -5721,23 +5741,19 @@ export async function registerRoutes(
 
   app.get("/api/backup/synology-package", requireSuperuser, async (_req, res) => {
     try {
-      const companySetting = await storage.getSetting("company_name");
-      const companyName = companySetting?.value || "Company";
+      const companyName = await deploymentPackageRouteDependencies.getCompanyName();
       const slug = fileSlug(companyName);
       const date = new Date().toISOString().split("T")[0];
       const dbUrl = process.env.DATABASE_URL;
       if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
 
-      const distPath = path.join(process.cwd(), "dist");
-      if (!fs.existsSync(distPath)) {
+      const distPath = path.join(deploymentPackageRouteDependencies.workingDirectory(), "dist");
+      if (!deploymentPackageRouteDependencies.compiledBuildExists(distPath)) {
         throw new Error("Compiled build not found. Run 'npm run build' first.");
       }
 
       // SQL dump
-      const sqlDump = execSync(
-        `pg_dump "${dbUrl}" --no-password --format=plain --no-owner --no-acl --quote-all-identifiers`,
-        { maxBuffer: 200 * 1024 * 1024 }
-      );
+      const sqlDump = deploymentPackageRouteDependencies.dumpDatabase(dbUrl);
 
       // Dockerfile — minimal Node.js image, copies pre-built dist/
       const dockerfile = [
@@ -12187,10 +12203,12 @@ export async function registerRoutes(
     } catch { /* non-fatal */ }
   }
   // Fire once on startup (after a short delay), then every 24 hours
-  setTimeout(() => {
-    sendOverduePushReminders();
-    setInterval(sendOverduePushReminders, 24 * 60 * 60 * 1000);
-  }, 30 * 1000);
+  if (!options.skipBackgroundJobs) {
+    setTimeout(() => {
+      sendOverduePushReminders();
+      setInterval(sendOverduePushReminders, 24 * 60 * 60 * 1000);
+    }, 30 * 1000);
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // Phase 5: WhatsApp Chatbot & Voice Ordering

@@ -13,7 +13,7 @@
     "test:customer-ai": "tsx --test server/customer-ai-service.test.ts server/customer-ai-routes.test.ts server/customer-ai-health-persistence.test.ts server/operator-alerting.test.ts server/operator-alerting-database.test.ts",
     "test:operator-alerting-db": "tsx --test server/operator-alerting-database.test.ts",
     "test:pos-version": "node --test scripts/pos-version.test.mjs",
-    "test:deployment-packages": "tsx --test server/deployment-package-archive.test.ts",
+    "test:deployment-packages": "tsx --test server/deployment-package-archive.test.ts server/deployment-package-routes.test.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
