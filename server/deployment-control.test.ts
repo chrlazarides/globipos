@@ -8,6 +8,7 @@ import {
   applyDomainIncidentTransition,
   appendDomainNotificationDelivery,
   appendOperatorAlertRetryHistory,
+  customerDeploymentHostname,
   csvCell,
   domainIncidentTransition,
   domainNotificationKind,
@@ -26,6 +27,10 @@ import { requireAuth, requireSuperuser, signToken } from "./auth";
 import { setCustomerAiPersistenceAlertClaimerForTests } from "./operator-alerting";
 
 const now = Date.parse("2026-09-08T12:00:00.000Z");
+
+test("customer deployment hostnames use the connected globipos.shop domain", () => {
+  assert.equal(customerDeploymentHostname("acme-market"), "acme-market.globipos.shop");
+});
 
 test("active connected domains are checked every six hours", () => {
   assert.equal(isActiveDomainCheckDue({

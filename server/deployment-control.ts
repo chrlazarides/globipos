@@ -12,6 +12,14 @@ import { activityLogs, deploymentDomainIncidents, deploymentProfiles, deployment
 const statusSchema = z.enum(["draft", "active", "suspended"]);
 const healthStatusSchema = z.enum(["unknown", "healthy", "warning", "offline", "error"]);
 const automationSchema = z.enum(["manual", "github", "replit"]);
+export const CUSTOMER_DEPLOYMENT_BASE_DOMAIN = "globipos.shop";
+const RESERVED_CUSTOMER_SUBDOMAINS = new Set([
+  "admin", "api", "app", "assets", "mail", "pos", "status", "support", "web", "www",
+]);
+
+export function customerDeploymentHostname(slug: string): string {
+  return `${slug}.${CUSTOMER_DEPLOYMENT_BASE_DOMAIN}`;
+}
 const urlSchema = z.string().url().refine(
   value => {
     const protocol = new URL(value).protocol;
@@ -34,7 +42,8 @@ const brandingSchema = z.object({
 }).strict();
 
 const profileBaseSchema = z.object({
-  slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case").min(2).max(80),
+  slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case").min(2).max(63)
+    .refine(value => !RESERVED_CUSTOMER_SUBDOMAINS.has(value), "This subdomain is reserved"),
   clientName: z.string().trim().min(1).max(200),
   status: statusSchema.default("draft"),
   backOfficeUrl: urlSchema,
@@ -649,7 +658,15 @@ export function registerDeploymentControlRoutes(app: Express) {
   });
 
   app.post("/api/control/deployments", requireSuperuser, async (req, res) => {
-    const parsed = profileCreateSchema.safeParse(req.body);
+    const requestedSlug = typeof req.body?.slug === "string" ? req.body.slug.trim() : "";
+    const generatedHostname = requestedSlug ? customerDeploymentHostname(requestedSlug) : "";
+    const parsed = profileCreateSchema.safeParse(generatedHostname ? {
+      ...req.body,
+      customerDomain: generatedHostname,
+      posDomain: null,
+      backOfficeUrl: `https://${generatedHostname}`,
+      posServerUrl: `https://${generatedHostname}`,
+    } : req.body);
     if (!parsed.success) return validationError(res, parsed.error);
     const { overrideDomainWarning, ...profileValues } = parsed.data;
     if (profileValues.status === "active" && !overrideDomainWarning) {
@@ -660,6 +677,15 @@ export function registerDeploymentControlRoutes(app: Express) {
       });
     }
     try {
+      const [domainOwner] = await db.select({ id: deploymentProfiles.id }).from(deploymentProfiles)
+        .where(or(
+          eq(deploymentProfiles.customerDomain, profileValues.customerDomain!),
+          eq(deploymentProfiles.posDomain, profileValues.customerDomain!),
+        ))
+        .limit(1);
+      if (domainOwner) {
+        return res.status(409).json({ message: `The hostname ${profileValues.customerDomain} is already assigned to another deployment`, code: "DOMAIN_ALREADY_ASSIGNED" });
+      }
       const [profile] = await db.insert(deploymentProfiles).values(profileValues).returning();
       await logControlActivity(req, overrideDomainWarning ? "override_domain_activation" : "create", "deployment_profile", profile.id, overrideDomainWarning ? `Created and activated ${profile.slug} with an explicit domain warning override` : `Created deployment profile ${profile.slug}`);
       res.status(201).json(safeProfile(profile));
@@ -670,7 +696,15 @@ export function registerDeploymentControlRoutes(app: Express) {
   });
 
   app.patch("/api/control/deployments/:id", requireSuperuser, async (req, res) => {
-    const parsed = profilePatchSchema.safeParse(req.body);
+    const requestedSlug = typeof req.body?.slug === "string" ? req.body.slug.trim() : "";
+    const generatedHostname = requestedSlug ? customerDeploymentHostname(requestedSlug) : "";
+    const parsed = profilePatchSchema.safeParse(generatedHostname ? {
+      ...req.body,
+      customerDomain: generatedHostname,
+      posDomain: null,
+      backOfficeUrl: `https://${generatedHostname}`,
+      posServerUrl: `https://${generatedHostname}`,
+    } : req.body);
     if (!parsed.success) return validationError(res, parsed.error);
     if (Object.keys(parsed.data).length === 0) return res.status(400).json({ message: "No updates supplied" });
     const id = String(req.params.id);
@@ -685,6 +719,20 @@ export function registerDeploymentControlRoutes(app: Express) {
       updates.posDomain !== undefined && updates.posDomain !== currentProfile.posDomain
     );
     const targetStatus = updates.status ?? currentProfile.status;
+    if (routingChanged) {
+      const nextCustomerDomain = updates.customerDomain ?? currentProfile.customerDomain;
+      if (nextCustomerDomain) {
+        const [domainOwner] = await db.select({ id: deploymentProfiles.id }).from(deploymentProfiles)
+          .where(or(
+            eq(deploymentProfiles.customerDomain, nextCustomerDomain),
+            eq(deploymentProfiles.posDomain, nextCustomerDomain),
+          ))
+          .limit(1);
+        if (domainOwner && domainOwner.id !== id) {
+          return res.status(409).json({ message: `The hostname ${nextCustomerDomain} is already assigned to another deployment`, code: "DOMAIN_ALREADY_ASSIGNED" });
+        }
+      }
+    }
     const needsActivationApproval = targetStatus === "active" && (
       currentProfile.status !== "active" || routingChanged
     );
