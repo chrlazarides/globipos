@@ -5,6 +5,7 @@ import { apiFetch } from "../lib/queryClient";
 import { queryClient } from "../lib/queryClient";
 import { type CustomerSession } from "../lib/auth";
 import { cn } from "../lib/cn";
+import type { BrandingConfig } from "../lib/branding";
 import { ShoppingCart, Plus, Minus, X, Truck, Store, WifiOff, RefreshCw, Wallet } from "lucide-react";
 
 export interface BasketItem {
@@ -25,6 +26,7 @@ interface BasketProps {
   customer: CustomerSession;
   basket: BasketItem[];
   setBasket: React.Dispatch<React.SetStateAction<BasketItem[]>>;
+  branding?: BrandingConfig;
 }
 
 const OFFLINE_QUEUE_KEY = "globi_offline_orders";
@@ -98,7 +100,7 @@ async function registerBackgroundSync() {
   } catch {}
 }
 
-export default function Basket({ customer, basket, setBasket }: BasketProps) {
+export default function Basket({ customer, basket, setBasket, branding }: BasketProps) {
   const [, navigate] = useLocation();
   const [notes, setNotes] = useState("");
   const [deliveryType, setDeliveryType] = useState<"delivery" | "collection">("delivery");
@@ -171,7 +173,7 @@ export default function Basket({ customer, basket, setBasket }: BasketProps) {
   const cashbackDeduction = useCashback ? Math.min(availableCashback, grossTotal) : 0;
   const total = Math.max(0, grossTotal - cashbackDeduction);
 
-  const fmt = (v: number) => `€${v.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`;
+  const fmt = (v: number) => `${branding?.currencySymbol || "€"}${v.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`;
 
   function add(index: number) {
     setBasket((prev) => prev.map((b, i) => i === index ? { ...b, quantity: b.quantity + 1 } : b));

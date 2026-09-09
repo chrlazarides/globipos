@@ -7,11 +7,13 @@ import { Search, ScanBarcode, Plus, Minus, X, Package, ChevronDown } from "lucid
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { type ScaleBarcode } from "../lib/scaleBarcode";
 import { apiFetch } from "../lib/queryClient";
+import type { BrandingConfig } from "../lib/branding";
 
 interface CatalogProps {
   customer: CustomerSession;
   basket: BasketItem[];
   setBasket: React.Dispatch<React.SetStateAction<BasketItem[]>>;
+  branding?: BrandingConfig;
 }
 
 interface CatalogItem {
@@ -28,17 +30,22 @@ interface CatalogItem {
   stockQuantity: number;
   customerPrice: number;
   vatRate: string;
+  imageUrl?: string | null;
+  imageThumbnailUrl?: string | null;
+  imageCardUrl?: string | null;
+  imageFullUrl?: string | null;
 }
 
 interface Category { id: string; name: string; }
 
-export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
+export default function Catalog({ customer, basket, setBasket, branding }: CatalogProps) {
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [page, setPage] = useState(1);
   const [scanMode, setScanMode] = useState(false);
   const [scanError, setScanError] = useState("");
   const [manualBarcode, setManualBarcode] = useState("");
+  const [basketFeedback, setBasketFeedback] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const detectorRef = useRef<any>(null);
@@ -69,6 +76,8 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
       if (ex) return prev.map((b) => b === ex ? { ...b, quantity: b.quantity + quantity } : b);
       return [...prev, { item, quantity, barcode }];
     });
+    setBasketFeedback(`${item.name} added to basket`);
+    window.setTimeout(() => setBasketFeedback(""), 1800);
   }
 
   function dec(id: string) {
@@ -167,17 +176,30 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
     streamRef.current?.getTracks().forEach((track) => track.stop());
   }, []);
 
-  const fmt = (v: number) => `€${v.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`;
+  const fmt = (v: number) => `${branding?.currencySymbol || "€"}${v.toLocaleString("el-CY", { minimumFractionDigits: 2 })}`;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Shop</h1>
-        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">Browse our catalog and add items to your basket</p>
+    <div className="space-y-6">
+      {branding?.storefrontTemplate === "fresh-market" && (
+        <section className="relative overflow-hidden rounded-[1.75rem] min-h-[250px] md:min-h-[310px] market-shadow bg-[#e8dfca]">
+          <img src="/images/fresh-market-hero.jpg" alt="Fresh seasonal produce" className="absolute inset-0 w-full h-full object-cover object-right" />
+          <div className="absolute inset-0 bg-gradient-to-r from-[#f0e8d7] via-[#f0e8d7e8] to-transparent" />
+          <div className="relative p-7 md:p-10 max-w-lg">
+            <p className="text-[10px] uppercase tracking-[.22em] font-bold text-[hsl(var(--primary))] mb-3">From our market to your table</p>
+            <h1 className="font-display text-4xl md:text-6xl leading-[.96] text-[hsl(var(--foreground))]">Good food,<br /><em className="text-[hsl(var(--primary))]">no fuss.</em></h1>
+            <p className="mt-4 text-sm md:text-base max-w-xs text-[hsl(var(--muted-foreground))]">Fresh picks, fair prices, and a basket ready when you are.</p>
+            <a href="#catalog" className="inline-flex mt-5 rounded-full px-5 py-2.5 text-sm font-bold text-white hover:translate-y-[-1px] transition-transform" style={{ background: "hsl(var(--primary))" }}>Shop the market</a>
+          </div>
+        </section>
+      )}
+      <div id="catalog" className="flex items-end justify-between">
+        <div><p className="text-[10px] uppercase tracking-[.2em] font-bold text-[hsl(var(--primary))]">The daily shop</p><h2 className="text-3xl font-display">What are you cooking?</h2></div>
+        <span className="hidden sm:block text-xs text-[hsl(var(--muted-foreground))]">{total ? `${total} market picks` : "Open today"}</span>
       </div>
+      <div aria-live="polite" className={`fixed z-50 left-1/2 -translate-x-1/2 bottom-24 md:bottom-8 rounded-full bg-[hsl(var(--foreground))] text-[hsl(var(--background))] px-4 py-2 text-xs font-semibold shadow-xl transition-opacity ${basketFeedback ? "opacity-100" : "opacity-0 pointer-events-none"}`}>{basketFeedback}</div>
 
       {/* Search + scan row */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 max-w-2xl">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[hsl(var(--muted-foreground))]" />
           <input
@@ -262,7 +284,7 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
 
       {/* Product grid */}
       {isLoading ? (
-        <div className="grid grid-cols-2 gap-3">
+       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="h-36 rounded-xl bg-[hsl(var(--muted))] animate-pulse" />
           ))}
@@ -273,15 +295,31 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
           <p className="text-sm">No products found</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
           {items.map((item) => {
             const qty = getQty(item.id);
             return (
               <div
                 key={item.id}
-                className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-3 flex flex-col gap-2"
+                className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-2xl p-3 flex flex-col gap-2 market-shadow hover:-translate-y-1 transition-transform"
                 data-testid={`card-product-${item.id}`}
               >
+                <div className="h-32 rounded-xl bg-[hsl(var(--muted))] overflow-hidden mb-1 flex items-center justify-center">
+                  {item.imageUrl ? (
+                    <img
+                      src={item.imageCardUrl || item.imageUrl}
+                      srcSet={[
+                        item.imageThumbnailUrl && `${item.imageThumbnailUrl} 240w`,
+                        (item.imageCardUrl || item.imageUrl) && `${item.imageCardUrl || item.imageUrl} 720w`,
+                        item.imageFullUrl && `${item.imageFullUrl} 1600w`,
+                      ].filter(Boolean).join(", ")}
+                      sizes="(min-width: 1024px) 260px, (min-width: 768px) 33vw, 50vw"
+                      alt={item.name}
+                      loading="lazy"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : <div className="text-center opacity-60"><div className="mx-auto w-16 h-16 rounded-full bg-[#d6dfbb] relative"><span className="absolute inset-2 rounded-full border-4 border-[#a9bb84]" /></div><span className="text-[10px] uppercase tracking-widest">Market pick</span></div>}
+                </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-semibold leading-tight line-clamp-2" data-testid={`text-product-name-${item.id}`}>
                     {item.name}
@@ -289,7 +327,7 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
                   {item.brand && (
                     <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-0.5">{item.brand}</p>
                   )}
-                  {item.volume && (
+                   {item.volume && (
                     <p className="text-[10px] text-[hsl(var(--muted-foreground))]">{item.volume}</p>
                   )}
                 </div>
@@ -319,8 +357,8 @@ export default function Catalog({ customer, basket, setBasket }: CatalogProps) {
                     </div>
                   )}
                 </div>
-                {item.stockQuantity <= 0 && (
-                  <span className="text-[10px] text-red-500 font-medium">Out of stock</span>
+                 {item.stockQuantity <= 0 && (
+                   <span className="text-[10px] text-red-500 font-medium">Currently unavailable</span>
                 )}
               </div>
             );

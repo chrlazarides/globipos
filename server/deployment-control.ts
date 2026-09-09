@@ -39,6 +39,7 @@ const brandingSchema = z.object({
   primaryColor: z.string().regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "Invalid hexadecimal color").optional(),
   legalAddress: z.string().trim().max(1000).optional(),
   taxId: z.string().trim().max(100).optional(),
+  storefrontTemplate: z.enum(["classic", "fresh-market"]).optional(),
 }).strict();
 
 const profileBaseSchema = z.object({

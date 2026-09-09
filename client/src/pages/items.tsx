@@ -17,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Search, Package, Upload, History, Download, RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Pencil, Trash2, Layers, Barcode, Globe, Star } from "lucide-react";
+import { Plus, Search, Package, Upload, History, Download, RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Pencil, Trash2, Layers, Barcode, Globe, Star, ImageIcon } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertItemSchema, insertItemVariantSchema, insertCategorySchema, type Item, type ItemVariant, type Category, type ProductFamily, type Color, type Size, type ItemBarcode } from "@shared/schema";
@@ -573,6 +573,7 @@ export default function Items() {
                 families={families}
               priceLevelNames={priceLevelNames}
               itemId={editingItem.id}
+              initialImageUrl={editingItem.imageCardUrl || editingItem.imageUrl}
               defaultValues={{
                 name: editingItem.name,
                 sku: editingItem.sku,
@@ -1199,7 +1200,90 @@ function BarcodesTab({ itemId }: { itemId: string }) {
   );
 }
 
-function ItemForm({ onSubmit, isPending, categories, families, defaultValues, priceLevelNames, itemId }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; families: ProductFamily[]; defaultValues?: any; priceLevelNames: string[]; itemId?: string }) {
+function ItemPhotoManager({ itemId, initialImageUrl }: { itemId: string; initialImageUrl?: string | null }) {
+  const { toast } = useToast();
+  const [imageUrl, setImageUrl] = useState(initialImageUrl || "");
+  const [isUploading, setIsUploading] = useState(false);
+
+  async function uploadPhoto(file: File) {
+    setIsUploading(true);
+    try {
+      const body = new FormData();
+      body.append("photo", file);
+      const response = await fetch(`/api/items/${itemId}/photo`, { method: "POST", body });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Could not upload photo");
+      setImageUrl(data.imageCardUrl || data.imageUrl || "");
+      await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({ title: "Item photo synchronized", description: "Storefront image sizes were generated automatically." });
+    } catch (error: any) {
+      toast({ title: "Photo upload failed", description: error.message, variant: "destructive" });
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  async function removePhoto() {
+    setIsUploading(true);
+    try {
+      const response = await fetch(`/api/items/${itemId}/photo`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Could not remove photo");
+      setImageUrl("");
+      await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({ title: "Item photo removed" });
+    } catch (error: any) {
+      toast({ title: "Could not remove photo", description: error.message, variant: "destructive" });
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-5 sm:grid-cols-[220px_1fr]">
+      <div className="aspect-square overflow-hidden rounded-xl border bg-muted">
+        {imageUrl ? (
+          <img src={imageUrl} alt="Current item" className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+            <ImageIcon className="h-10 w-10 opacity-40" />
+            <span className="text-xs">No storefront photo</span>
+          </div>
+        )}
+      </div>
+      <div className="space-y-4">
+        <div>
+          <h3 className="font-medium">Storefront photo</h3>
+          <p className="mt-1 text-sm text-muted-foreground">Upload one clear product photo. GlobiPOS automatically rotates, crops, compresses, and synchronizes thumbnail, catalog-card, and full-size WebP versions with the e-shop.</p>
+        </div>
+        <label className="block">
+          <Input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            disabled={isUploading}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void uploadPhoto(file);
+              event.currentTarget.value = "";
+            }}
+            data-testid="input-item-photo"
+          />
+          <span className="mt-1 block text-xs text-muted-foreground">JPEG, PNG, WebP, HEIC, or HEIF. Maximum 12 MB.</span>
+        </label>
+        <div className="flex gap-2">
+          {isUploading && <span className="inline-flex items-center gap-2 text-sm text-muted-foreground"><RefreshCw className="h-4 w-4 animate-spin" />Processing photo…</span>}
+          {imageUrl && !isUploading && (
+            <Button type="button" variant="outline" size="sm" onClick={removePhoto} data-testid="button-remove-item-photo">
+              <Trash2 className="mr-1.5 h-4 w-4" />Remove photo
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ItemForm({ onSubmit, isPending, categories, families, defaultValues, priceLevelNames, itemId, initialImageUrl }: { onSubmit: (d: any) => void; isPending: boolean; categories: Category[]; families: ProductFamily[]; defaultValues?: any; priceLevelNames: string[]; itemId?: string; initialImageUrl?: string | null }) {
   const isEditing = !!defaultValues;
   const form = useForm({
     resolver: zodResolver(itemFormSchema),
@@ -1261,6 +1345,11 @@ function ItemForm({ onSubmit, isPending, categories, families, defaultValues, pr
             <TabsTrigger value="basic" className="flex-1" data-testid="tab-basic">Basic</TabsTrigger>
             <TabsTrigger value="pricing" className="flex-1" data-testid="tab-pricing">Pricing</TabsTrigger>
             <TabsTrigger value="details" className="flex-1" data-testid="tab-details">Details</TabsTrigger>
+            {itemId && (
+              <TabsTrigger value="photo" className="flex-1" data-testid="tab-photo">
+                <ImageIcon className="w-3.5 h-3.5 mr-1" />Photo
+              </TabsTrigger>
+            )}
             {itemId && (
               <TabsTrigger value="variants" className="flex-1" data-testid="tab-variants">
                 <Layers className="w-3.5 h-3.5 mr-1" />Variants
@@ -1384,6 +1473,11 @@ function ItemForm({ onSubmit, isPending, categories, families, defaultValues, pr
               </FormItem>
             )} />
           </TabsContent>
+          {itemId && (
+            <TabsContent value="photo" className="mt-4">
+              <ItemPhotoManager itemId={itemId} initialImageUrl={initialImageUrl} />
+            </TabsContent>
+          )}
           <TabsContent value="pricing" className="space-y-4 mt-4">
             <p className="text-sm text-muted-foreground">Set up to 5 price levels for different customer tiers</p>
             <div className="grid grid-cols-2 gap-4">

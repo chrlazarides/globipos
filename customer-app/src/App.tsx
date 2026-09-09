@@ -6,6 +6,7 @@ import { getCustomer, getToken, type CustomerSession } from "./lib/auth";
 import Login from "./pages/Login";
 import Layout from "./pages/Layout";
 import type { BasketItem } from "./pages/Basket";
+import { defaultBranding, type BrandingConfig } from "./lib/branding";
 
 const BASKET_KEY = "globi_basket";
 
@@ -29,11 +30,11 @@ function hexToHsl(hex: string): string | null {
   return `${h} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
 }
 
-async function applyBranding() {
+async function applyBranding(): Promise<BrandingConfig> {
   try {
     const res = await fetch("/api/public/branding");
-    if (!res.ok) return;
-    const data = await res.json();
+    if (!res.ok) return defaultBranding;
+    const data = await res.json() as Partial<BrandingConfig>;
     if (data.primaryColor) {
       const hsl = hexToHsl(data.primaryColor);
       if (hsl) {
@@ -41,13 +42,16 @@ async function applyBranding() {
         document.documentElement.style.setProperty("--primary-dark", hsl);
       }
     }
-    if (data.companyName) document.title = data.companyName + " Shop";
+    if (data.companyName) document.title = data.companyName + " Market";
+    return { ...defaultBranding, ...data, storefrontTemplate: data.storefrontTemplate === "classic" ? "classic" : "fresh-market" };
   } catch { /* branding load failure is non-fatal */ }
+  return defaultBranding;
 }
 
 export default function App() {
   const [customer, setCustomer] = useState<CustomerSession | null>(null);
   const [ready, setReady] = useState(false);
+  const [branding, setBranding] = useState<BrandingConfig>(defaultBranding);
   const [basket, setBasketState] = useState<BasketItem[]>(() => loadBasket());
 
   const setBasket: React.Dispatch<React.SetStateAction<BasketItem[]>> = useCallback((action) => {
@@ -59,7 +63,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    applyBranding();
+    applyBranding().then(setBranding);
     // Restore session from localStorage on mount
     if (getToken() && getCustomer()) {
       setCustomer(getCustomer());
@@ -79,13 +83,14 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <Router>
         {!customer ? (
-          <Login onLogin={(c) => setCustomer(c)} />
+          <Login onLogin={(c) => setCustomer(c)} branding={branding} />
         ) : (
           <Layout
             customer={customer}
             onLogout={() => { setCustomer(null); setBasket([]); }}
             basket={basket}
             setBasket={setBasket}
+            branding={branding}
           />
         )}
       </Router>

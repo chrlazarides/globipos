@@ -32,6 +32,7 @@ import { pool } from "./db";
 import { isValidIanaTimeZone } from "@shared/quiet-hours";
 import { registerDeploymentControlRoutes } from "./deployment-control";
 import { registerDeploymentPackageRoutes } from "./deployment-package-routes";
+import { createItemImageSet, deleteItemImageSet, downloadItemImage, ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_MIME_TYPES, type ItemImageSize, uploadItemImageSet } from "./item-images";
 
 import { createPosBuildsResolver } from "./pos-builds";
 import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "./customer-ai-service";
@@ -312,6 +313,7 @@ export async function generateBackupJson(since?: string): Promise<string> {
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const catalogUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const itemPhotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: ITEM_IMAGE_MAX_BYTES, files: 1 } });
 const gunzipCatalog = promisify(gunzip);
 
 async function autoCreateJournalEntry(opts: {
@@ -1944,6 +1946,11 @@ export async function registerRoutes(
   app.post("/api/items", async (req, res) => {
     let releaseBarcodeLock: (() => Promise<void>) | undefined;
     try {
+      delete req.body.imageUrl;
+      delete req.body.imageThumbnailUrl;
+      delete req.body.imageCardUrl;
+      delete req.body.imageFullUrl;
+      delete req.body.imageVersion;
       normalizeAndValidateItemDetails(req.body);
       sanitizeItemNumericFields(req.body);
       const data = insertItemSchema.parse(req.body);
@@ -1965,6 +1972,11 @@ export async function registerRoutes(
       const itemId = req.params.id as string;
       const existingItem = await storage.getItem(itemId);
       if (!existingItem) return res.status(404).json({ message: "Item not found" });
+      delete req.body.imageUrl;
+      delete req.body.imageThumbnailUrl;
+      delete req.body.imageCardUrl;
+      delete req.body.imageFullUrl;
+      delete req.body.imageVersion;
       normalizeAndValidateItemDetails(req.body, existingItem);
       sanitizeItemNumericFields(req.body, true);
       if (req.body.categoryId === "") req.body.categoryId = null;
@@ -1978,6 +1990,76 @@ export async function registerRoutes(
     } catch (e: any) {
       res.status(400).json({ message: e.message });
     } finally { await releaseBarcodeLock?.(); }
+  });
+
+  app.post("/api/items/:id/photo", itemPhotoUpload.single("photo"), async (req, res) => {
+    const itemId = req.params.id as string;
+    try {
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      if (!req.file) return res.status(400).json({ message: "Choose a photo to upload" });
+      if (!ITEM_IMAGE_MIME_TYPES.has(req.file.mimetype)) {
+        return res.status(415).json({ message: "Use a JPEG, PNG, WebP, HEIC, or HEIF photo" });
+      }
+
+      const imageSet = await createItemImageSet(req.file.buffer);
+      await uploadItemImageSet(itemId, imageSet);
+      const base = `/api/public/items/${encodeURIComponent(itemId)}/images/${imageSet.version}`;
+      const updated = await storage.updateItem(itemId, {
+        imageUrl: `${base}/card.webp`,
+        imageThumbnailUrl: `${base}/thumbnail.webp`,
+        imageCardUrl: `${base}/card.webp`,
+        imageFullUrl: `${base}/full.webp`,
+        imageVersion: imageSet.version,
+      });
+      if (!updated) {
+        await deleteItemImageSet(itemId, imageSet.version);
+        return res.status(404).json({ message: "Item not found" });
+      }
+      if (item.imageVersion && item.imageVersion !== imageSet.version) {
+        void deleteItemImageSet(itemId, item.imageVersion);
+      }
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message || "Could not process item photo" });
+    }
+  });
+
+  app.delete("/api/items/:id/photo", async (req, res) => {
+    const itemId = req.params.id as string;
+    try {
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      const updated = await storage.updateItem(itemId, {
+        imageUrl: null,
+        imageThumbnailUrl: null,
+        imageCardUrl: null,
+        imageFullUrl: null,
+        imageVersion: null,
+      });
+      if (item.imageVersion) void deleteItemImageSet(itemId, item.imageVersion);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Could not remove item photo" });
+    }
+  });
+
+  app.get("/api/public/items/:id/images/:version/:filename", async (req, res) => {
+    try {
+      const itemId = req.params.id as string;
+      const version = req.params.version as string;
+      const size = String(req.params.filename).replace(/\.webp$/i, "") as ItemImageSize;
+      if (!["thumbnail", "card", "full"].includes(size)) return res.status(404).end();
+      const item = await storage.getItem(itemId);
+      if (!item || item.imageVersion !== version) return res.status(404).end();
+      const bytes = await downloadItemImage(itemId, version, size);
+      if (!bytes) return res.status(404).end();
+      res.setHeader("Content-Type", "image/webp");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.send(bytes);
+    } catch {
+      res.status(404).end();
+    }
   });
 
   // --- Item Variants (color/size/textile/quality etc.) ---
@@ -4976,6 +5058,7 @@ export async function registerRoutes(
         { key: "reorder_weeks_cover", value: "8", label: "Reorder Weeks of Cover", group: "inventory" },
         { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
         { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
+        { key: "customer_storefront_template", value: "fresh-market", label: "Customer Storefront Template", group: "portal" },
         { key: "loyalty_enabled", value: "true", label: "Loyalty Points Enabled", group: "loyalty" },
         { key: "cashback_enabled", value: "true", label: "Cashback Enabled", group: "loyalty" },
         { key: "loyalty_points_per_euro", value: "1", label: "Loyalty Points per €1 Spent", group: "loyalty" },
@@ -6700,6 +6783,13 @@ export async function registerRoutes(
         vatRate: parseFloat(get("default_vat_rate") || "19"),
         logoUrl: "/api/public/logo",
         portalEnabled: get("portal_enabled") !== "false",
+        storefrontTemplate: ["classic", "fresh-market"].includes(get("customer_storefront_template"))
+          ? get("customer_storefront_template")
+          : "fresh-market",
+        storefrontTemplates: [
+          { id: "fresh-market", name: "Fresh Market", description: "Produce-led grocery storefront with prominent search, categories, and offers." },
+          { id: "classic", name: "Classic", description: "Compact mobile-first catalog and customer portal." },
+        ],
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

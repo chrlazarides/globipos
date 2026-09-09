@@ -24,7 +24,7 @@ type Profile = {
   domainNotificationDeliveryMessage: string | null;
   domainNotificationDeliveryAttemptedAt: string | null;
   domainNotificationDeliveryHistory: Array<{ status: "sent" | "failed" | "skipped"; kind: "outage" | "recovery"; message: string; attemptedAt: string }>;
-  branding: { companyName?: string; legalName?: string; logoUrl?: string; primaryColor?: string; legalAddress?: string; taxId?: string };
+  branding: { companyName?: string; legalName?: string; logoUrl?: string; primaryColor?: string; legalAddress?: string; taxId?: string; storefrontTemplate?: "classic" | "fresh-market" };
   enabledFeatures: string[]; paymentProvider: string | null; emailProvider: string | null; whatsappProvider: string | null;
   backOfficeVersion: string | null; posVersion: string | null; targetBackOfficeVersion: string | null; targetPosVersion: string | null;
   automationProvider: "manual" | "github" | "replit"; externalProjectId: string | null; lastHeartbeatAt: string | null; healthStatus: "unknown" | "healthy" | "warning" | "offline" | "error"; healthMessage: string | null; createdAt: string; updatedAt: string;
@@ -65,7 +65,7 @@ type ResolvedOperatorAlert = {
 class ControlApiError extends Error {
   constructor(message: string, readonly code?: string) { super(message); }
 }
-const emptyForm: FormState = { slug: "", clientName: "", status: "draft", backOfficeUrl: "", posServerUrl: "", customerDomain: "", posDomain: "", branding: { companyName: "", legalName: "", logoUrl: "", primaryColor: "#1f6f78", legalAddress: "", taxId: "" }, enabledFeatures: [], paymentProvider: "", emailProvider: "", whatsappProvider: "", backOfficeVersion: "", posVersion: "", targetBackOfficeVersion: "", targetPosVersion: "", automationProvider: "manual", externalProjectId: "" };
+const emptyForm: FormState = { slug: "", clientName: "", status: "draft", backOfficeUrl: "", posServerUrl: "", customerDomain: "", posDomain: "", branding: { companyName: "", legalName: "", logoUrl: "", primaryColor: "#1f6f78", legalAddress: "", taxId: "", storefrontTemplate: "fresh-market" }, enabledFeatures: [], paymentProvider: "", emailProvider: "", whatsappProvider: "", backOfficeVersion: "", posVersion: "", targetBackOfficeVersion: "", targetPosVersion: "", automationProvider: "manual", externalProjectId: "" };
 const CUSTOMER_DEPLOYMENT_BASE_DOMAIN = "globipos.shop";
 function customerHostname(slug: string) {
   const normalized = slug.trim().toLowerCase();
@@ -113,7 +113,7 @@ function reconcileForm(base: FormState, draft: FormState, latest: FormState) {
   }
   for (const key of Object.keys(base.branding) as Array<keyof FormState["branding"]>) {
     const userChanged = !valuesEqual(draft.branding[key], base.branding[key]), serverChanged = !valuesEqual(latest.branding[key], base.branding[key]);
-    if (userChanged && !serverChanged) { next.branding[key] = draft.branding[key]; preserved.push(`branding: ${key}`); }
+    if (userChanged && !serverChanged) { (next.branding as Record<string, string | undefined>)[key] = draft.branding[key]; preserved.push(`branding: ${key}`); }
     else if (userChanged && serverChanged && !valuesEqual(draft.branding[key], latest.branding[key])) replaced.push(`branding: ${key}`);
   }
   return { form: next, preserved, replaced };

@@ -11,12 +11,14 @@ import Notifications, { type CustomerNotification } from "./Notifications";
 import PushNotificationBanner from "../components/PushNotificationBanner";
 import { ShoppingCart, Package, Receipt, User, Sparkles, LogOut, Bell } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import type { BrandingConfig } from "../lib/branding";
 
 interface LayoutProps {
   customer: CustomerSession;
   onLogout: () => void;
   basket: BasketItem[];
   setBasket: React.Dispatch<React.SetStateAction<BasketItem[]>>;
+  branding: BrandingConfig;
 }
 
 const navItems = [
@@ -27,7 +29,7 @@ const navItems = [
   { label: "Account", path: "/account",  icon: User     },
 ];
 
-export default function Layout({ customer, onLogout, basket, setBasket }: LayoutProps) {
+export default function Layout({ customer, onLogout, basket, setBasket, branding }: LayoutProps) {
   const [location] = useLocation();
 
   const totalItems = basket.reduce((s, i) => s + i.quantity, 0);
@@ -41,19 +43,22 @@ export default function Layout({ customer, onLogout, basket, setBasket }: Layout
   }
 
   return (
-    <div className="min-h-screen bg-[hsl(var(--background))] flex flex-col">
+    <div className={`min-h-[100dvh] bg-[hsl(var(--background))] flex flex-col grain ${branding.storefrontTemplate === "classic" ? "classic-storefront" : "fresh-storefront"}`}>
       <PushNotificationBanner />
       {/* Top header */}
       <header className="sticky top-0 z-40 bg-[hsl(var(--card))] border-b border-[hsl(var(--border))] safe-top">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto w-full px-4 md:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div
               className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
               style={{ background: "hsl(var(--primary))" }}
             >
-              <span className="text-xs font-bold text-white">G</span>
+              {branding.logoUrl ? <img src={branding.logoUrl} alt="" className="w-7 h-7 object-contain" /> : <span className="text-xs font-bold text-white">G</span>}
             </div>
-            <span className="text-sm font-semibold truncate max-w-[160px]">{customer.name}</span>
+            <div>
+              <span className="font-display text-lg font-bold leading-none block">{branding.companyName}</span>
+              <span className="text-[10px] uppercase tracking-[.18em] text-[hsl(var(--muted-foreground))]">Good food, close to home</span>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <Link href="/notifications" className="relative p-1 text-[hsl(var(--muted-foreground))]" aria-label="Notifications">
@@ -68,10 +73,10 @@ export default function Layout({ customer, onLogout, basket, setBasket }: Layout
       </header>
 
       {/* Page content */}
-      <main className="flex-1 max-w-2xl mx-auto w-full px-4 pb-24 pt-4">
+      <main className="flex-1 max-w-6xl mx-auto w-full px-4 md:px-8 pb-24 pt-5 md:pt-8">
         <Switch>
-          <Route path="/"        component={() => <Catalog customer={customer} basket={basket} setBasket={setBasket} />} />
-          <Route path="/basket"  component={() => <Basket  customer={customer} basket={basket} setBasket={setBasket} />} />
+           <Route path="/"        component={() => <Catalog customer={customer} basket={basket} setBasket={setBasket} branding={branding} />} />
+           <Route path="/basket"  component={() => <Basket  customer={customer} basket={basket} setBasket={setBasket} branding={branding} />} />
           <Route path="/orders"  component={() => <Orders  customer={customer} />} />
           <Route path="/discover" component={() => <Discover basket={basket} setBasket={setBasket} />} />
           <Route path="/notifications" component={Notifications} />
@@ -81,7 +86,7 @@ export default function Layout({ customer, onLogout, basket, setBasket }: Layout
       </main>
 
       {/* Bottom nav */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-[hsl(var(--card))] border-t border-[hsl(var(--border))] bottom-nav" data-testid="nav-bottom">
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-[hsl(var(--card))]/95 backdrop-blur border-t border-[hsl(var(--border))] bottom-nav md:top-20 md:bottom-auto md:left-auto md:right-8 md:border md:rounded-full md:shadow-lg md:px-2" data-testid="nav-bottom">
         <div className="max-w-2xl mx-auto flex">
           {navItems.map((item) => {
             const isActive = item.path === "/"
@@ -89,9 +94,7 @@ export default function Layout({ customer, onLogout, basket, setBasket }: Layout
               : location.startsWith(item.path);
             const isBasket = item.path === "/basket";
             return (
-              <Link key={item.path} href={item.path} className="flex-1">
-                <button
-                  className={`w-full flex flex-col items-center py-2.5 gap-0.5 text-xs transition-colors relative ${
+              <Link key={item.path} href={item.path} className={`flex-1 flex flex-col items-center py-2.5 px-3 gap-0.5 text-xs transition-colors relative ${
                     isActive
                       ? "text-[hsl(var(--primary))]"
                       : "text-[hsl(var(--muted-foreground))]"
@@ -107,7 +110,6 @@ export default function Layout({ customer, onLogout, basket, setBasket }: Layout
                     )}
                   </div>
                   <span className="font-medium">{item.label}</span>
-                </button>
               </Link>
             );
           })}

@@ -2,14 +2,16 @@ import { useState } from "react";
 import { apiFetch } from "../lib/queryClient";
 import { setToken, setCustomer, type CustomerSession } from "../lib/auth";
 import { cn } from "../lib/cn";
+import type { BrandingConfig } from "../lib/branding";
 
 interface LoginProps {
   onLogin: (c: CustomerSession) => void;
+  branding: BrandingConfig;
 }
 
 type Step = "method" | "email" | "code" | "password";
 
-export default function Login({ onLogin }: LoginProps) {
+export default function Login({ onLogin, branding }: LoginProps) {
   const [step, setStep] = useState<Step>("method");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -63,18 +65,20 @@ export default function Login({ onLogin }: LoginProps) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm">
+    <div className="min-h-[100dvh] flex flex-col items-center justify-center bg-[#e9e1d0] p-4 relative overflow-hidden">
+      <div className="absolute -right-24 -top-24 w-80 h-80 rounded-full bg-[#d2dfbd]" />
+      <div className="absolute -left-28 -bottom-28 w-96 h-96 rounded-full bg-[#efc7a7]" />
+      <div className="w-full max-w-sm relative">
         {/* Logo area */}
         <div className="text-center mb-8">
           <div
             className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
             style={{ background: "hsl(var(--primary))" }}
           >
-            <span className="text-2xl font-bold text-white">G</span>
+             {branding.logoUrl ? <img src={branding.logoUrl} alt="" className="h-12 w-12 object-contain" /> : <span className="text-2xl font-bold text-white">{branding.companyName.charAt(0).toUpperCase()}</span>}
           </div>
-          <h1 className="text-2xl font-bold">GlobiPOS Shop</h1>
-          <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">Sign in to your account</p>
+           <h1 className="font-display text-4xl font-bold">Welcome to {branding.companyName}</h1>
+          <p className="text-sm text-[hsl(var(--muted-foreground))] mt-2">Your neighborhood basket, ready in a few taps.</p>
         </div>
 
         <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-6 shadow-sm">
@@ -86,7 +90,7 @@ export default function Login({ onLogin }: LoginProps) {
                 className="w-full py-3 px-4 rounded-lg border border-[hsl(var(--border))] text-sm font-medium hover:bg-[hsl(var(--muted))] transition-colors text-left"
                 data-testid="button-login-otp"
               >
-                📧 Email one-time code
+                Email one-time code
                 <span className="block text-xs text-[hsl(var(--muted-foreground))] font-normal mt-0.5">We'll send a 6-digit code to your email</span>
               </button>
               <button
@@ -94,7 +98,7 @@ export default function Login({ onLogin }: LoginProps) {
                 className="w-full py-3 px-4 rounded-lg border border-[hsl(var(--border))] text-sm font-medium hover:bg-[hsl(var(--muted))] transition-colors text-left"
                 data-testid="button-login-code"
               >
-                🔑 Customer code + access code
+                Customer code + access code
                 <span className="block text-xs text-[hsl(var(--muted-foreground))] font-normal mt-0.5">Use your customer code and portal password</span>
               </button>
             </div>
