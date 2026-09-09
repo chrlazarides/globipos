@@ -71,5 +71,9 @@
     "vaul": "^1.1.2",
     "vite": "^7.3.0",
     "zod": "^3.25.76"
+  },
+  "overrides": {
+    "browserslist": "^4.28.7",
+    "postcss": "^8.5.24"
   }
 }
