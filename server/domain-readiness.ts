@@ -4,7 +4,7 @@ import net from "net";
 
 export type DomainCheck = {
   hostname: string;
-  role: "customer" | "pos";
+  role: "customer" | "pos" | "eshop";
   status: "connected" | "failed";
   dnsAddresses: string[];
   reason: string;

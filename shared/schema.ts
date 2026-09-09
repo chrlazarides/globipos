@@ -45,10 +45,15 @@ export const deploymentProfiles = pgTable("deployment_profiles", {
   posServerUrl: text("pos_server_url").notNull(),
   customerDomain: text("customer_domain"),
   posDomain: text("pos_domain"),
+  eShopDomain: text("e_shop_domain"),
   domainStatus: text("domain_status").notNull().default("pending"),
   domainMessage: text("domain_message"),
   domainChecks: jsonb("domain_checks").notNull().default([]),
   domainCheckedAt: timestamp("domain_checked_at"),
+  eShopDomainStatus: text("e_shop_domain_status").notNull().default("pending"),
+  eShopDomainMessage: text("e_shop_domain_message"),
+  eShopDomainCheck: jsonb("e_shop_domain_check"),
+  eShopDomainCheckedAt: timestamp("e_shop_domain_checked_at"),
   domainFailureStartedAt: timestamp("domain_failure_started_at"),
   domainFailureCount: integer("domain_failure_count").notNull().default(0),
   domainCheckClaimedAt: timestamp("domain_check_claimed_at"),
@@ -56,6 +61,7 @@ export const deploymentProfiles = pgTable("deployment_profiles", {
   domainNotificationPending: text("domain_notification_pending"),
   domainNotificationMessage: text("domain_notification_message"),
   domainNotificationCreatedAt: timestamp("domain_notification_created_at"),
+  domainNotificationQueue: jsonb("domain_notification_queue").notNull().default([]),
   domainNotificationDeliveryStatus: text("domain_notification_delivery_status"),
   domainNotificationDeliveryKind: text("domain_notification_delivery_kind"),
   domainNotificationDeliveryMessage: text("domain_notification_delivery_message"),
@@ -86,10 +92,11 @@ export const deploymentDomainIncidents = pgTable("deployment_domain_incidents", 
   startedAt: timestamp("started_at").notNull(),
   recoveredAt: timestamp("recovered_at"),
   reason: text("reason").notNull(),
+  role: text("role").notNull().default("main"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, table => [
-  uniqueIndex("deployment_domain_incidents_one_open")
-    .on(table.deploymentId)
+  uniqueIndex("deployment_domain_incidents_one_open_per_role")
+    .on(table.deploymentId, table.role)
     .where(sql`${table.recoveredAt} IS NULL`),
 ]);
 

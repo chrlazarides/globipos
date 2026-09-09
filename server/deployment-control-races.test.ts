@@ -24,6 +24,9 @@ const activationGuard: DeploymentWriteGuard = {
   status: "draft",
   domainStatus: "connected",
   domainCheckedAt: checkedAt,
+  eShopDomain: "web-shop.example.com",
+  eShopDomainStatus: "connected",
+  eShopDomainCheckedAt: checkedAt,
 };
 
 describe("deployment domain compare-and-set guards", () => {
@@ -86,5 +89,13 @@ describe("deployment domain compare-and-set guards", () => {
       status: "draft",
     };
     assert.equal(deploymentWriteStillValid(explicitOverrideGuard, afterNewerFailedCheck), true);
+  });
+
+  it("prevents activation when the e-shop readiness changes in flight", () => {
+    assert.equal(deploymentWriteStillValid(activationGuard, profile({
+      eShopDomain: "web-shop.example.com",
+      eShopDomainStatus: "failed",
+      eShopDomainCheckedAt: new Date("2026-09-08T10:05:00.000Z"),
+    })), false);
   });
 });

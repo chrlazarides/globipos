@@ -20,6 +20,10 @@ const RESERVED_CUSTOMER_SUBDOMAINS = new Set([
 export function customerDeploymentHostname(slug: string): string {
   return `${slug}.${CUSTOMER_DEPLOYMENT_BASE_DOMAIN}`;
 }
+
+export function customerEShopHostname(slug: string): string {
+  return `web-${slug}.${CUSTOMER_DEPLOYMENT_BASE_DOMAIN}`;
+}
 const urlSchema = z.string().url().refine(
   value => {
     const protocol = new URL(value).protocol;
@@ -51,6 +55,7 @@ const profileBaseSchema = z.object({
   posServerUrl: urlSchema,
   customerDomain: hostnameSchema.nullable().optional(),
   posDomain: hostnameSchema.nullable().optional(),
+  eShopDomain: hostnameSchema.nullable().optional(),
   branding: brandingSchema.default({}),
   enabledFeatures: z.array(z.string().trim().min(1).max(100)).max(100).default([]),
   paymentProvider: z.string().trim().min(1).max(100).default("none"),
@@ -69,6 +74,9 @@ function validateProfileRouting(value: z.infer<typeof profileBaseSchema>, ctx: z
   const posDomain = value.posDomain?.toLowerCase() || null;
   const backOfficeHost = new URL(value.backOfficeUrl).hostname.toLowerCase();
   const posHost = new URL(value.posServerUrl).hostname.toLowerCase();
+  if (value.enabledFeatures.includes("customer-portal") && value.slug.length > 59) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["slug"], message: "Slug must be at most 59 characters when the customer e-shop is enabled" });
+  }
 
   if (customerDomain && backOfficeHost !== customerDomain) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["backOfficeUrl"], message: "Back office URL must use the customer domain" });
@@ -78,6 +86,9 @@ function validateProfileRouting(value: z.infer<typeof profileBaseSchema>, ctx: z
   }
   if (customerDomain && !posDomain && posHost !== customerDomain) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["posServerUrl"], message: "POS URL must use the customer domain when no POS override is set" });
+  }
+  if (value.eShopDomain && value.eShopDomain.toLowerCase() !== customerEShopHostname(value.slug)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["eShopDomain"], message: "E-shop hostname must use web-<slug>.globipos.shop" });
   }
 }
 
@@ -163,6 +174,9 @@ function editableProfile(profile: typeof deploymentProfiles.$inferSelect) {
   );
 }
 
+export function isReservedDeploymentSlug(slug: string) {
+  return RESERVED_CUSTOMER_SUBDOMAINS.has(slug) || RESERVED_CUSTOMER_SUBDOMAINS.has(`web-${slug}`);
+}
 function safeProfile(profile: typeof deploymentProfiles.$inferSelect) {
   const {
     credentialHash: _credentialHash,
@@ -215,6 +229,15 @@ export type DomainNotificationDelivery = {
   message: string;
   attemptedAt: string;
 };
+
+export type QueuedDomainNotification = {
+  id: string;
+  role: "main" | "eshop";
+  kind: Exclude<DomainNotificationKind, null>;
+  hostname: string;
+  message: string;
+  createdAt: string;
+};
 export function domainNotificationKind(
   previousStatus: string,
   nextStatus: string,
@@ -234,15 +257,18 @@ export function nextPendingDomainNotification(
 
 type DeploymentWriteSnapshot = Pick<
   typeof deploymentProfiles.$inferSelect,
-  "customerDomain" | "posDomain" | "status" | "domainStatus" | "domainCheckedAt"
+  "customerDomain" | "posDomain" | "eShopDomain" | "status" | "domainStatus" | "domainCheckedAt" | "eShopDomainStatus" | "eShopDomainCheckedAt"
 >;
 
 export type DeploymentWriteGuard = {
   customerDomain: string | null;
   posDomain: string | null;
+  eShopDomain?: string | null;
   status?: DeploymentWriteSnapshot["status"];
   domainStatus?: DeploymentWriteSnapshot["domainStatus"];
   domainCheckedAt?: Date | null;
+  eShopDomainStatus?: DeploymentWriteSnapshot["eShopDomainStatus"];
+  eShopDomainCheckedAt?: Date | null;
 };
 
 export function deploymentWriteStillValid(
@@ -251,10 +277,14 @@ export function deploymentWriteStillValid(
 ) {
   return current.customerDomain === guard.customerDomain
     && current.posDomain === guard.posDomain
+    && (guard.eShopDomain === undefined || current.eShopDomain === guard.eShopDomain)
     && (guard.status === undefined || current.status === guard.status)
     && (guard.domainStatus === undefined || current.domainStatus === guard.domainStatus)
     && (guard.domainCheckedAt === undefined
-      || current.domainCheckedAt?.getTime() === guard.domainCheckedAt?.getTime());
+      || current.domainCheckedAt?.getTime() === guard.domainCheckedAt?.getTime())
+    && (guard.eShopDomainStatus === undefined || current.eShopDomainStatus === guard.eShopDomainStatus)
+    && (guard.eShopDomainCheckedAt === undefined
+      || current.eShopDomainCheckedAt?.getTime() === guard.eShopDomainCheckedAt?.getTime());
 }
 
 function deploymentWritePredicate(guard: DeploymentWriteGuard) {
@@ -265,6 +295,11 @@ function deploymentWritePredicate(guard: DeploymentWriteGuard) {
     guard.posDomain === null
       ? isNull(deploymentProfiles.posDomain)
       : eq(deploymentProfiles.posDomain, guard.posDomain),
+    guard.eShopDomain === undefined
+      ? undefined
+      : guard.eShopDomain === null
+        ? isNull(deploymentProfiles.eShopDomain)
+        : eq(deploymentProfiles.eShopDomain, guard.eShopDomain),
     guard.status === undefined ? undefined : eq(deploymentProfiles.status, guard.status),
     guard.domainStatus === undefined ? undefined : eq(deploymentProfiles.domainStatus, guard.domainStatus),
     guard.domainCheckedAt === undefined
@@ -272,17 +307,29 @@ function deploymentWritePredicate(guard: DeploymentWriteGuard) {
       : guard.domainCheckedAt === null
         ? isNull(deploymentProfiles.domainCheckedAt)
         : eq(deploymentProfiles.domainCheckedAt, guard.domainCheckedAt),
+    guard.eShopDomainStatus === undefined
+      ? undefined
+      : eq(deploymentProfiles.eShopDomainStatus, guard.eShopDomainStatus),
+    guard.eShopDomainCheckedAt === undefined
+      ? undefined
+      : guard.eShopDomainCheckedAt === null
+        ? isNull(deploymentProfiles.eShopDomainCheckedAt)
+        : eq(deploymentProfiles.eShopDomainCheckedAt, guard.eShopDomainCheckedAt),
   );
 }
 
 export function isActiveDomainCheckDue(
-  profile: Pick<typeof deploymentProfiles.$inferSelect, "status" | "customerDomain" | "domainStatus" | "domainCheckedAt">,
+  profile: Pick<typeof deploymentProfiles.$inferSelect, "status" | "customerDomain" | "domainStatus" | "domainCheckedAt">
+    & Partial<Pick<typeof deploymentProfiles.$inferSelect, "eShopDomain" | "eShopDomainStatus" | "eShopDomainCheckedAt">>,
   now = Date.now(),
 ) {
   if (profile.status !== "active" || !profile.customerDomain) return false;
-  if (!profile.domainCheckedAt) return true;
-  const interval = profile.domainStatus === "failed" ? FAILED_DOMAIN_RETRY_MS : ACTIVE_DOMAIN_RECHECK_MS;
-  return now - profile.domainCheckedAt.getTime() >= interval;
+  const mainDue = !profile.domainCheckedAt || now - profile.domainCheckedAt.getTime() >= (profile.domainStatus === "failed" ? FAILED_DOMAIN_RETRY_MS : ACTIVE_DOMAIN_RECHECK_MS);
+  const eShopDue = !!profile.eShopDomain && (
+    !profile.eShopDomainCheckedAt
+    || now - profile.eShopDomainCheckedAt.getTime() >= (profile.eShopDomainStatus === "failed" ? FAILED_DOMAIN_RETRY_MS : ACTIVE_DOMAIN_RECHECK_MS)
+  );
+  return mainDue || eShopDue;
 }
 
 export function domainIncidentTransition(
@@ -300,24 +347,36 @@ export async function applyDomainIncidentTransition(
   transition: ReturnType<typeof domainIncidentTransition>,
   checkedAt: Date,
   reason: string,
+  role: "main" | "eshop" = "main",
 ) {
   if (transition === "start") {
     await tx.insert(deploymentDomainIncidents).values({
       deploymentId,
       startedAt: checkedAt,
       reason,
+      role,
     }).onConflictDoNothing();
   } else if (transition === "recover") {
     await tx.update(deploymentDomainIncidents).set({ recoveredAt: checkedAt }).where(and(
       eq(deploymentDomainIncidents.deploymentId, deploymentId),
+      eq(deploymentDomainIncidents.role, role),
       isNull(deploymentDomainIncidents.recoveredAt),
     ));
   }
 }
-function hasFreshConnectedDomains(profile: typeof deploymentProfiles.$inferSelect) {
-  return profile.domainStatus === "connected"
+export function hasFreshConnectedDomains(profile: Pick<
+  typeof deploymentProfiles.$inferSelect,
+  "domainStatus" | "domainCheckedAt" | "eShopDomain" | "eShopDomainStatus" | "eShopDomainCheckedAt"
+>) {
+  const mainReady = profile.domainStatus === "connected"
     && profile.domainCheckedAt instanceof Date
     && Date.now() - profile.domainCheckedAt.getTime() <= DOMAIN_CHECK_MAX_AGE_MS;
+  const eShopReady = !profile.eShopDomain || (
+    profile.eShopDomainStatus === "connected"
+    && profile.eShopDomainCheckedAt instanceof Date
+    && Date.now() - profile.eShopDomainCheckedAt.getTime() <= DOMAIN_CHECK_MAX_AGE_MS
+  );
+  return mainReady && eShopReady;
 }
 
 function domainTargets(profile: typeof deploymentProfiles.$inferSelect) {
@@ -344,7 +403,8 @@ export function withDeadline<T>(promise: Promise<T>, timeoutMs: number, timeoutV
 }
 
 async function checkProfileDomains(currentProfile: typeof deploymentProfiles.$inferSelect, claimToken?: string) {
-  const checks = await Promise.all(domainTargets(currentProfile).map(target => withDeadline(
+  const [checks, eShopCheck] = await Promise.all([
+    Promise.all(domainTargets(currentProfile).map(target => withDeadline(
     checkDomain(target.hostname, target.role),
     DOMAIN_PROBE_TIMEOUT_MS,
     {
@@ -354,23 +414,57 @@ async function checkProfileDomains(currentProfile: typeof deploymentProfiles.$in
       dnsAddresses: [],
       reason: `Domain probe timed out after ${DOMAIN_PROBE_TIMEOUT_MS / 1000} seconds`,
     },
-  )));
+    ))),
+    currentProfile.eShopDomain
+      ? withDeadline(checkDomain(currentProfile.eShopDomain, "eshop"), DOMAIN_PROBE_TIMEOUT_MS, {
+          hostname: currentProfile.eShopDomain,
+          role: "eshop" as const,
+          status: "failed" as const,
+          dnsAddresses: [],
+          reason: `Domain probe timed out after ${DOMAIN_PROBE_TIMEOUT_MS / 1000} seconds`,
+        })
+      : Promise.resolve(null),
+  ]);
   const failures = checks.filter(check => check.status === "failed");
   const domainStatus = failures.length ? "failed" : "connected";
   const domainMessage = failures.length
     ? failures.map(check => `${check.hostname}: ${check.reason}`).join("; ")
     : `All ${checks.length} required hostname${checks.length === 1 ? "" : "s"} passed DNS and HTTPS checks.`;
   const checkedAt = new Date();
-  const notificationKind = domainNotificationKind(currentProfile.domainStatus, domainStatus);
-  const pendingNotification = nextPendingDomainNotification(
-    currentProfile.domainStatus,
-    domainStatus,
-    currentProfile.domainNotificationPending as DomainNotificationKind,
-  );
+  const mainNotificationKind = domainNotificationKind(currentProfile.domainStatus, domainStatus);
+  const eShopDomainStatus = eShopCheck?.status ?? "pending";
+  const eShopNotificationKind = eShopCheck
+    ? domainNotificationKind(currentProfile.eShopDomainStatus, eShopDomainStatus)
+    : null;
+  const notificationKind = mainNotificationKind ?? eShopNotificationKind;
+  const notificationMessage = mainNotificationKind
+    ? domainMessage
+    : eShopCheck ? `${eShopCheck.hostname}: ${eShopCheck.reason}` : domainMessage;
+  const newNotifications: QueuedDomainNotification[] = [
+    ...(mainNotificationKind ? [{
+      id: crypto.randomUUID(),
+      role: "main" as const,
+      kind: mainNotificationKind,
+      hostname: currentProfile.customerDomain!,
+      message: domainMessage,
+      createdAt: checkedAt.toISOString(),
+    }] : []),
+    ...(eShopNotificationKind && eShopCheck ? [{
+      id: crypto.randomUUID(),
+      role: "eshop" as const,
+      kind: eShopNotificationKind,
+      hostname: eShopCheck.hostname,
+      message: `${eShopCheck.hostname}: ${eShopCheck.reason}`,
+      createdAt: checkedAt.toISOString(),
+    }] : []),
+  ];
+  const firstNotification = newNotifications[0];
   const writePredicate = deploymentWritePredicate({
     customerDomain: currentProfile.customerDomain,
     posDomain: currentProfile.posDomain,
+    eShopDomain: currentProfile.eShopDomain,
     domainCheckedAt: currentProfile.domainCheckedAt,
+    eShopDomainCheckedAt: currentProfile.eShopDomainCheckedAt,
   });
   const claimPredicate = claimToken
     ? eq(deploymentProfiles.domainCheckClaimToken, claimToken)
@@ -381,11 +475,18 @@ async function checkProfileDomains(currentProfile: typeof deploymentProfiles.$in
       domainMessage,
       domainChecks: checks,
       domainCheckedAt: checkedAt,
+      eShopDomainStatus,
+      eShopDomainMessage: eShopCheck?.reason ?? null,
+      eShopDomainCheck: eShopCheck,
+      eShopDomainCheckedAt: eShopCheck ? checkedAt : null,
       domainFailureStartedAt: failures.length ? (currentProfile.domainFailureStartedAt ?? checkedAt) : null,
       domainFailureCount: failures.length ? currentProfile.domainFailureCount + 1 : 0,
-      domainNotificationPending: pendingNotification,
+      ...(newNotifications.length ? {
+        domainNotificationQueue: appendDomainNotificationsValue(newNotifications),
+        domainNotificationPending: firstNotification.kind,
+      } : {}),
       ...(notificationKind ? {
-        domainNotificationMessage: domainMessage,
+        domainNotificationMessage: notificationMessage,
         domainNotificationCreatedAt: checkedAt,
       } : {}),
       ...(claimToken ? { domainCheckClaimedAt: null, domainCheckClaimToken: null } : {}),
@@ -400,6 +501,16 @@ async function checkProfileDomains(currentProfile: typeof deploymentProfiles.$in
       checkedAt,
       domainMessage,
     );
+    if (eShopCheck) {
+      await applyDomainIncidentTransition(
+        tx,
+        currentProfile.id,
+        domainIncidentTransition(currentProfile.eShopDomainStatus, eShopCheck.status),
+        checkedAt,
+        `${eShopCheck.hostname}: ${eShopCheck.reason}`,
+        "eshop",
+      );
+    }
     return updated;
   });
   return { profile, domainStatus, domainMessage };
@@ -416,8 +527,10 @@ async function claimProfileDomainCheck(profile: typeof deploymentProfiles.$infer
     deploymentWritePredicate({
       customerDomain: profile.customerDomain,
       posDomain: profile.posDomain,
+      eShopDomain: profile.eShopDomain,
       status: "active",
       domainCheckedAt: profile.domainCheckedAt,
+      eShopDomainCheckedAt: profile.eShopDomainCheckedAt,
     }),
     or(isNull(deploymentProfiles.domainCheckClaimedAt), lt(deploymentProfiles.domainCheckClaimedAt, staleBefore)),
   )).returning();
@@ -446,62 +559,57 @@ export function startActiveDomainMonitor() {
           } else if (notificationKind === "recovery") {
             console.info(`[domain-monitor] Active deployment ${profile.slug} recovered`);
           }
-          const pendingNotification = result.profile.domainNotificationPending as DomainNotificationKind;
-          if (pendingNotification) {
+          const eShopTransition = result.profile.eShopDomain
+            ? domainNotificationKind(profile.eShopDomainStatus, result.profile.eShopDomainStatus)
+            : null;
+          if (eShopTransition === "outage") {
+            console.error(`[domain-monitor] Active e-shop ${profile.slug} failed: ${result.profile.eShopDomainMessage}`);
+          } else if (eShopTransition === "recovery") {
+            console.info(`[domain-monitor] Active e-shop ${profile.slug} recovered`);
+          }
+          const notificationQueue = Array.isArray(result.profile.domainNotificationQueue)
+            ? result.profile.domainNotificationQueue as QueuedDomainNotification[]
+            : [];
+          let remainingNotifications = notificationQueue;
+          let deliveryHistory = result.profile.domainNotificationDeliveryHistory;
+          for (const pending of notificationQueue) {
             const notificationResult = await sendDomainStatusNotification({
               clientName: result.profile.clientName,
               slug: result.profile.slug,
-              customerDomain: result.profile.customerDomain!,
-              posDomain: result.profile.posDomain,
-              status: pendingNotification === "outage" ? "failed" : "recovered",
-              message: result.profile.domainNotificationMessage ?? result.domainMessage,
-              failureStartedAt: result.profile.domainFailureStartedAt,
-              checkedAt: result.profile.domainNotificationCreatedAt ?? result.profile.domainCheckedAt!,
+              customerDomain: pending.hostname,
+              posDomain: pending.role === "main" ? result.profile.posDomain : null,
+              status: pending.kind === "outage" ? "failed" : "recovered",
+              message: pending.message,
+              failureStartedAt: pending.role === "main" ? result.profile.domainFailureStartedAt : null,
+              checkedAt: new Date(pending.createdAt),
             });
             const attemptedAt = new Date();
             const deliveryStatus = notificationResult.success
               ? "sent"
               : notificationResult.skipped ? "skipped" : "failed";
             const deliveryMessage = notificationResult.success
-              ? `${pendingNotification === "outage" ? "Outage" : "Recovery"} notification delivered to support`
+              ? `${pending.role === "eshop" ? "E-shop " : ""}${pending.kind === "outage" ? "outage" : "recovery"} notification delivered to support`
               : notificationResult.error ?? "Domain notification could not be delivered";
             const delivery: DomainNotificationDelivery = {
               status: deliveryStatus,
-              kind: pendingNotification,
+              kind: pending.kind,
               message: deliveryMessage,
               attemptedAt: attemptedAt.toISOString(),
             };
+            deliveryHistory = appendDomainNotificationDelivery(deliveryHistory, delivery);
             const deliveryUpdate = {
               domainNotificationDeliveryStatus: deliveryStatus,
-              domainNotificationDeliveryKind: pendingNotification,
+              domainNotificationDeliveryKind: pending.kind,
               domainNotificationDeliveryMessage: deliveryMessage,
               domainNotificationDeliveryAttemptedAt: attemptedAt,
-              domainNotificationDeliveryHistory: appendDomainNotificationDelivery(
-                result.profile.domainNotificationDeliveryHistory,
-                delivery,
-              ),
+              domainNotificationDeliveryHistory: deliveryHistory,
             };
             if (notificationResult.success) {
-              await db.update(deploymentProfiles).set({
-                ...deliveryUpdate,
-                domainNotificationPending: null,
-                domainNotificationMessage: null,
-                domainNotificationCreatedAt: null,
-              }).where(and(
-                eq(deploymentProfiles.id, result.profile.id),
-                eq(deploymentProfiles.domainNotificationPending, pendingNotification),
-                result.profile.domainNotificationCreatedAt
-                  ? eq(deploymentProfiles.domainNotificationCreatedAt, result.profile.domainNotificationCreatedAt)
-                  : isNull(deploymentProfiles.domainNotificationCreatedAt),
-              ));
+              remainingNotifications = remainingNotifications.filter(entry => entry !== pending);
+              await acknowledgeDomainNotification(result.profile.id, pending.id, deliveryUpdate);
             } else {
-              await db.update(deploymentProfiles).set(deliveryUpdate).where(and(
-                eq(deploymentProfiles.id, result.profile.id),
-                eq(deploymentProfiles.domainNotificationPending, pendingNotification),
-                result.profile.domainNotificationCreatedAt
-                  ? eq(deploymentProfiles.domainNotificationCreatedAt, result.profile.domainNotificationCreatedAt)
-                  : isNull(deploymentProfiles.domainNotificationCreatedAt),
-              ));
+              await db.update(deploymentProfiles).set(deliveryUpdate)
+                .where(eq(deploymentProfiles.id, result.profile.id));
               if (!notificationResult.skipped) {
                 console.error(`[domain-monitor] Notification failed for ${profile.slug}: ${notificationResult.error}`);
               }
@@ -517,8 +625,10 @@ export function startActiveDomainMonitor() {
       domainMonitorRunning = false;
     }
   };
-  setTimeout(run, 60_000);
-  setInterval(run, DOMAIN_MONITOR_TICK_MS);
+  const startupTimer = setTimeout(run, 60_000);
+  const monitorTimer = setInterval(run, DOMAIN_MONITOR_TICK_MS);
+  startupTimer.unref();
+  monitorTimer.unref();
 }
 
 export async function loadActiveOperatorAlertFailures() {
@@ -669,7 +779,13 @@ export function registerDeploymentControlRoutes(app: Express) {
       posServerUrl: `https://${generatedHostname}`,
     } : req.body);
     if (!parsed.success) return validationError(res, parsed.error);
-    const { overrideDomainWarning, ...profileValues } = parsed.data;
+    const { overrideDomainWarning, ...requestedValues } = parsed.data;
+    const profileValues = {
+      ...requestedValues,
+      eShopDomain: requestedValues.enabledFeatures.includes("customer-portal")
+        ? customerEShopHostname(requestedValues.slug)
+        : null,
+    };
     if (profileValues.status === "active" && !overrideDomainWarning) {
       return res.status(409).json({
         message: "A new deployment cannot be active before its domains are checked. Create it as a draft, run the domain check, then activate it.",
@@ -678,12 +794,13 @@ export function registerDeploymentControlRoutes(app: Express) {
       });
     }
     try {
-      const [domainOwner] = await db.select({ id: deploymentProfiles.id }).from(deploymentProfiles)
+      const requestedDomains = [profileValues.customerDomain, profileValues.posDomain, profileValues.eShopDomain].filter((value): value is string => !!value);
+      const [domainOwner] = requestedDomains.length ? await db.select({ id: deploymentProfiles.id }).from(deploymentProfiles)
         .where(or(
-          eq(deploymentProfiles.customerDomain, profileValues.customerDomain!),
-          eq(deploymentProfiles.posDomain, profileValues.customerDomain!),
-        ))
-        .limit(1);
+          inArray(deploymentProfiles.customerDomain, requestedDomains),
+          inArray(deploymentProfiles.posDomain, requestedDomains),
+          inArray(deploymentProfiles.eShopDomain, requestedDomains),
+        )).limit(1) : [];
       if (domainOwner) {
         return res.status(409).json({ message: `The hostname ${profileValues.customerDomain} is already assigned to another deployment`, code: "DOMAIN_ALREADY_ASSIGNED" });
       }
@@ -691,7 +808,13 @@ export function registerDeploymentControlRoutes(app: Express) {
       await logControlActivity(req, overrideDomainWarning ? "override_domain_activation" : "create", "deployment_profile", profile.id, overrideDomainWarning ? `Created and activated ${profile.slug} with an explicit domain warning override` : `Created deployment profile ${profile.slug}`);
       res.status(201).json(safeProfile(profile));
     } catch (error: any) {
-      if (error?.code === "23505") return res.status(409).json({ message: "Deployment slug already exists" });
+      if (error?.code === "23505") {
+        const domainCollision = String(error?.message || "").includes("deployment hostname");
+        return res.status(409).json({
+          message: domainCollision ? "One of these hostnames is already assigned to another deployment" : "Deployment slug already exists",
+          code: domainCollision ? "DOMAIN_ALREADY_ASSIGNED" : "SLUG_ALREADY_ASSIGNED",
+        });
+      }
       throw error;
     }
   });
@@ -711,26 +834,41 @@ export function registerDeploymentControlRoutes(app: Express) {
     const id = String(req.params.id);
     const [currentProfile] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, id));
     if (!currentProfile) return res.status(404).json({ message: "Deployment profile not found" });
-    const { overrideDomainWarning, ...updates } = parsed.data;
+    const { overrideDomainWarning, ...parsedUpdates } = parsed.data;
+    const updates = { ...parsedUpdates };
+    if (updates.slug !== undefined || updates.enabledFeatures !== undefined) {
+      const targetSlug = updates.slug ?? currentProfile.slug;
+      const targetFeatures = updates.enabledFeatures ?? currentProfile.enabledFeatures as string[];
+      updates.eShopDomain = targetFeatures.includes("customer-portal")
+        ? customerEShopHostname(targetSlug)
+        : null;
+    }
     const merged = profileSchema.safeParse({ ...editableProfile(currentProfile), ...updates });
     if (!merged.success) return validationError(res, merged.error);
     const routingChanged = (
       updates.customerDomain !== undefined && updates.customerDomain !== currentProfile.customerDomain
     ) || (
       updates.posDomain !== undefined && updates.posDomain !== currentProfile.posDomain
+    ) || (
+      updates.eShopDomain !== undefined && updates.eShopDomain !== currentProfile.eShopDomain
     );
     const targetStatus = updates.status ?? currentProfile.status;
     if (routingChanged) {
-      const nextCustomerDomain = updates.customerDomain ?? currentProfile.customerDomain;
-      if (nextCustomerDomain) {
+      const nextDomains = [
+        updates.customerDomain ?? currentProfile.customerDomain,
+        updates.posDomain ?? currentProfile.posDomain,
+        updates.eShopDomain ?? currentProfile.eShopDomain,
+      ].filter((value): value is string => !!value);
+      if (nextDomains.length) {
         const [domainOwner] = await db.select({ id: deploymentProfiles.id }).from(deploymentProfiles)
           .where(or(
-            eq(deploymentProfiles.customerDomain, nextCustomerDomain),
-            eq(deploymentProfiles.posDomain, nextCustomerDomain),
+            inArray(deploymentProfiles.customerDomain, nextDomains),
+            inArray(deploymentProfiles.posDomain, nextDomains),
+            inArray(deploymentProfiles.eShopDomain, nextDomains),
           ))
           .limit(1);
         if (domainOwner && domainOwner.id !== id) {
-          return res.status(409).json({ message: `The hostname ${nextCustomerDomain} is already assigned to another deployment`, code: "DOMAIN_ALREADY_ASSIGNED" });
+          return res.status(409).json({ message: "One of these hostnames is already assigned to another deployment", code: "DOMAIN_ALREADY_ASSIGNED" });
         }
       }
     }
@@ -743,21 +881,26 @@ export function registerDeploymentControlRoutes(app: Express) {
         code: "DOMAIN_NOT_READY",
         domainStatus: currentProfile.domainStatus,
         domainMessage: currentProfile.domainMessage,
+        eShopDomainStatus: currentProfile.eShopDomainStatus,
+        eShopDomainMessage: currentProfile.eShopDomainMessage,
       });
     }
     const writeGuard: DeploymentWriteGuard = {
       customerDomain: currentProfile.customerDomain,
       posDomain: currentProfile.posDomain,
+      eShopDomain: currentProfile.eShopDomain,
       ...((routingChanged || updates.status !== undefined) ? { status: currentProfile.status } : {}),
       ...(needsActivationApproval && !overrideDomainWarning ? {
         domainStatus: currentProfile.domainStatus,
         domainCheckedAt: currentProfile.domainCheckedAt,
+        eShopDomainStatus: currentProfile.eShopDomainStatus,
+        eShopDomainCheckedAt: currentProfile.eShopDomainCheckedAt,
       } : {}),
     };
     const [profile] = await db.update(deploymentProfiles)
       .set(withoutUndefined({
         ...updates,
-        ...(routingChanged ? { domainStatus: "pending", domainMessage: "Hostname changed; run the domain check again.", domainChecks: [], domainCheckedAt: null, domainFailureStartedAt: null, domainFailureCount: 0, domainCheckClaimedAt: null, domainCheckClaimToken: null, domainNotificationPending: null, domainNotificationMessage: null, domainNotificationCreatedAt: null } : {}),
+        ...(routingChanged ? { domainStatus: "pending", domainMessage: "Hostname changed; run the domain check again.", domainChecks: [], domainCheckedAt: null, eShopDomainStatus: "pending", eShopDomainMessage: updates.eShopDomain === null ? null : "E-shop hostname changed; run the domain check again.", eShopDomainCheck: null, eShopDomainCheckedAt: null, domainFailureStartedAt: null, domainFailureCount: 0, domainCheckClaimedAt: null, domainCheckClaimToken: null, domainNotificationPending: null, domainNotificationMessage: null, domainNotificationCreatedAt: null } : {}),
         updatedAt: new Date(),
       }))
       .where(and(eq(deploymentProfiles.id, id), deploymentWritePredicate(writeGuard)))
@@ -998,4 +1141,34 @@ export async function retryOperatorAlert(req: Request, res: Response) {
   await logControlActivity(req, "retry", "operator_alert", alertKey, `Retried customer AI history ${operation.data} alert delivery: ${outcome}`);
   const failure = await loadOperatorAlertForRetry(alertKey);
   res.status(outcome === "delivered" ? 200 : 502).json({ outcome, alert: failure ?? null });
+}
+
+export function appendDomainNotificationsValue(notifications: QueuedDomainNotification[]) {
+  return sql`${deploymentProfiles.domainNotificationQueue} || ${JSON.stringify(notifications)}::jsonb`;
+}
+
+export function appendQueuedDomainNotifications(
+  queue: unknown,
+  notifications: QueuedDomainNotification[],
+) {
+  const existing = Array.isArray(queue) ? queue as QueuedDomainNotification[] : [];
+  return [...existing, ...notifications].slice(-20);
+}
+
+export async function acknowledgeDomainNotification(
+  deploymentId: string,
+  notificationId: string,
+  deliveryUpdate: Record<string, unknown>,
+) {
+  const [updated] = await db.update(deploymentProfiles).set({
+    ...deliveryUpdate,
+    domainNotificationQueue: sql`coalesce((
+      select jsonb_agg(entry)
+      from jsonb_array_elements(${deploymentProfiles.domainNotificationQueue}) entry
+      where entry->>'id' <> ${notificationId}
+    ), '[]'::jsonb)`,
+  }).where(eq(deploymentProfiles.id, deploymentId)).returning({
+    domainNotificationQueue: deploymentProfiles.domainNotificationQueue,
+  });
+  return updated;
 }

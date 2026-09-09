@@ -6,14 +6,19 @@ import test from "node:test";
 import express from "express";
 import {
   applyDomainIncidentTransition,
+  acknowledgeDomainNotification,
   appendDomainNotificationDelivery,
+  appendDomainNotificationsValue,
+  appendQueuedDomainNotifications,
   appendOperatorAlertRetryHistory,
   customerDeploymentHostname,
+  customerEShopHostname,
   csvCell,
   domainIncidentTransition,
   domainNotificationKind,
   isActiveDomainCheckDue,
   loadDeploymentProfilesWithIncidents,
+  registerDeploymentControlRoutes,
   nextPendingDomainNotification,
   retryOperatorAlert,
   sanitizeResolvedOperatorAlert,
@@ -30,6 +35,7 @@ const now = Date.parse("2026-09-08T12:00:00.000Z");
 
 test("customer deployment hostnames use the connected globipos.shop domain", () => {
   assert.equal(customerDeploymentHostname("acme-market"), "acme-market.globipos.shop");
+  assert.equal(customerEShopHostname("acme-market"), "web-acme-market.globipos.shop");
 });
 
 test("active connected domains are checked every six hours", () => {
@@ -133,6 +139,18 @@ test("notification delivery history is bounded to the latest 50 attempts", () =>
   assert.equal(result.length, 50);
   assert.equal(result[0].message, "Attempt 1");
   assert.deepEqual(result.at(-1), latest);
+});
+
+test("simultaneous main recovery and e-shop outage are both queued", () => {
+  const createdAt = "2026-09-09T10:00:00.000Z";
+  const queue = appendQueuedDomainNotifications([], [
+    { id: "main-recovery", role: "main", kind: "recovery", hostname: "acme.globipos.shop", message: "Main recovered", createdAt },
+    { id: "eshop-outage", role: "eshop", kind: "outage", hostname: "web-acme.globipos.shop", message: "E-shop failed", createdAt },
+  ]);
+  assert.deepEqual(queue.map(entry => [entry.role, entry.kind]), [
+    ["main", "recovery"],
+    ["eshop", "outage"],
+  ]);
 });
 
 test("domain incidents are created and recovered only on status transitions", () => {
@@ -323,6 +341,164 @@ test("database incident lifecycle keeps one open incident and closes it once", a
     .where(eq(deploymentDomainIncidents.deploymentId, profile.id));
   assert.equal(incidents.length, 1);
   assert.equal(incidents[0].recoveredAt?.toISOString(), recoveredAt.toISOString());
+});
+
+test("database rejects a storefront hostname reused by another deployment role", async t => {
+  const ownerSlug = `eshop-owner-${crypto.randomUUID()}`;
+  const collisionSlug = `eshop-collision-${crypto.randomUUID()}`;
+  const storefront = customerEShopHostname(ownerSlug);
+  const owner = await createDeployment(ownerSlug);
+  await db.update(deploymentProfiles).set({ eShopDomain: storefront }).where(eq(deploymentProfiles.id, owner.id));
+  t.after(async () => {
+    await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, owner.id));
+  });
+
+  await assert.rejects(
+    db.insert(deploymentProfiles).values({
+      slug: collisionSlug,
+      clientName: "Collision test",
+      backOfficeUrl: `https://${storefront}`,
+      posServerUrl: `https://${storefront}`,
+      customerDomain: storefront.toUpperCase(),
+    }),
+    (error: any) => error?.cause?.code === "23505" || error?.code === "23505",
+  );
+});
+
+test("existing deployments remain valid without an e-shop hostname", async t => {
+  const slug = `no-eshop-${crypto.randomUUID()}`;
+  const profile = await createDeployment(slug);
+  t.after(async () => {
+    await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, profile.id));
+  });
+  assert.equal(profile.eShopDomain, null);
+  assert.equal(profile.eShopDomainStatus, "pending");
+});
+
+test("activation rejects a failed e-shop check unless explicitly overridden", async t => {
+  const slug = `eshop-activation-${crypto.randomUUID()}`;
+  const profile = await createDeployment(slug);
+  const checkedAt = new Date();
+  await db.update(deploymentProfiles).set({
+    enabledFeatures: ["customer-portal"],
+    eShopDomain: customerEShopHostname(slug),
+    domainStatus: "connected",
+    domainCheckedAt: checkedAt,
+    eShopDomainStatus: "failed",
+    eShopDomainCheckedAt: checkedAt,
+    eShopDomainMessage: "HTTPS failed",
+  }).where(eq(deploymentProfiles.id, profile.id));
+  const app = express();
+  app.use(express.json());
+  app.use(requireAuth);
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "development";
+  registerDeploymentControlRoutes(app);
+  process.env.NODE_ENV = previousNodeEnv;
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  t.after(async () => {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, profile.id));
+  });
+  const token = signToken({ id: crypto.randomUUID(), username: "superuser", email: null, role: "superuser", permissions: [] });
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/control/deployments/${profile.id}`;
+  const patch = (body: unknown) => fetch(url, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const rejected = await patch({ status: "active" });
+  const rejectionBody = await rejected.json();
+  assert.equal(rejected.status, 409, JSON.stringify(rejectionBody));
+  assert.equal(rejectionBody.code, "DOMAIN_NOT_READY");
+  const overridden = await patch({ status: "active", overrideDomainWarning: true });
+  assert.equal(overridden.status, 200);
+});
+
+test("main and e-shop outages retain independent incident lifecycles", async t => {
+  const slug = `independent-incidents-${crypto.randomUUID()}`;
+  const profile = await createDeployment(slug);
+  t.after(async () => {
+    await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, profile.id));
+  });
+  const startedAt = new Date("2026-09-09T08:00:00.000Z");
+  await applyDomainIncidentTransition(db, profile.id, "start", startedAt, "Main domain failed");
+  await applyDomainIncidentTransition(db, profile.id, "start", startedAt, "E-shop failed", "eshop");
+  await applyDomainIncidentTransition(db, profile.id, "recover", new Date("2026-09-09T08:10:00.000Z"), "Main recovered");
+
+  const incidents = await db.select().from(deploymentDomainIncidents)
+    .where(eq(deploymentDomainIncidents.deploymentId, profile.id));
+  assert.equal(incidents.length, 2);
+  assert.ok(incidents.find(incident => incident.role === "main")?.recoveredAt);
+  assert.equal(incidents.find(incident => incident.role === "eshop")?.recoveredAt, null);
+});
+
+test("acknowledging one notification preserves a concurrently appended notification", async t => {
+  const slug = `notification-race-${crypto.randomUUID()}`;
+  const profile = await createDeployment(slug);
+  t.after(async () => {
+    await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, profile.id));
+  });
+  const original = {
+    id: crypto.randomUUID(),
+    role: "main" as const,
+    kind: "recovery" as const,
+    hostname: `${slug}.example.com`,
+    message: "Main recovered",
+    createdAt: new Date().toISOString(),
+  };
+  const appended = {
+    id: crypto.randomUUID(),
+    role: "eshop" as const,
+    kind: "outage" as const,
+    hostname: customerEShopHostname(slug),
+    message: "E-shop failed",
+    createdAt: new Date().toISOString(),
+  };
+  await db.update(deploymentProfiles).set({ domainNotificationQueue: [original] })
+    .where(eq(deploymentProfiles.id, profile.id));
+  await db.update(deploymentProfiles).set({ domainNotificationQueue: [original, appended] })
+    .where(eq(deploymentProfiles.id, profile.id));
+  const result = await acknowledgeDomainNotification(profile.id, original.id, {
+    domainNotificationDeliveryStatus: "sent",
+  });
+  assert.deepEqual(result.domainNotificationQueue, [appended]);
+});
+
+test("a slow check appends new notifications without restoring an acknowledged snapshot", async t => {
+  const slug = `notification-enqueue-race-${crypto.randomUUID()}`;
+  const profile = await createDeployment(slug);
+  t.after(async () => {
+    await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, profile.id));
+  });
+  const acknowledged = {
+    id: crypto.randomUUID(),
+    role: "main" as const,
+    kind: "recovery" as const,
+    hostname: `${slug}.example.com`,
+    message: "Main recovered",
+    createdAt: new Date().toISOString(),
+  };
+  const newlyDetected = {
+    id: crypto.randomUUID(),
+    role: "eshop" as const,
+    kind: "outage" as const,
+    hostname: customerEShopHostname(slug),
+    message: "E-shop failed",
+    createdAt: new Date().toISOString(),
+  };
+  await db.update(deploymentProfiles).set({ domainNotificationQueue: [acknowledged] })
+    .where(eq(deploymentProfiles.id, profile.id));
+  await acknowledgeDomainNotification(profile.id, acknowledged.id, {
+    domainNotificationDeliveryStatus: "sent",
+  });
+  const [updated] = await db.update(deploymentProfiles).set({
+    domainNotificationQueue: appendDomainNotificationsValue([newlyDetected]),
+  }).where(eq(deploymentProfiles.id, profile.id)).returning({
+    domainNotificationQueue: deploymentProfiles.domainNotificationQueue,
+  });
+  assert.deepEqual(updated.domainNotificationQueue, [newlyDetected]);
 });
 
 test("deployment API grouping returns only the five newest incidents", async t => {

@@ -18,12 +18,14 @@ test("incident history renders start, recovery, duration, reason, and ongoing la
       startedAt: "2026-09-08T10:00:00.000Z",
       recoveredAt: "2026-09-08T10:42:00.000Z",
       reason: "DNS resolution failed",
+      role: "main",
     },
     {
       id: "ongoing",
       startedAt: "2026-09-08T11:00:00.000Z",
       recoveredAt: null,
       reason: "HTTPS certificate expired",
+      role: "eshop",
     },
   ]} />);
 
