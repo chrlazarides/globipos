@@ -18,7 +18,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import webpush from "web-push";
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { createDeploymentPackageArchive } from "./deployment-package-archive";
 import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, sign2faRecoveryToken, verify2faRecoveryToken, sign2faRecoverySetupToken, verify2faRecoverySetupToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser, requireStaff, requireModule } from "./auth";
 import jwt from "jsonwebtoken";
@@ -56,12 +56,29 @@ type DeploymentPackageRouteDependencies = {
   workingDirectory: () => string;
 };
 
+type PgDumpRunner = typeof execFileSync;
+
+export function runDeploymentPgDump(
+  databaseUrl: string,
+  runner: PgDumpRunner = execFileSync,
+): Buffer {
+  return runner(
+    "pg_dump",
+    [
+      databaseUrl,
+      "--no-password",
+      "--format=plain",
+      "--no-owner",
+      "--no-acl",
+      "--quote-all-identifiers",
+    ],
+    { maxBuffer: 200 * 1024 * 1024 },
+  );
+}
+
 const defaultDeploymentPackageRouteDependencies: DeploymentPackageRouteDependencies = {
   getCompanyName: async () => (await storage.getSetting("company_name"))?.value || "Company",
-  dumpDatabase: (databaseUrl) => execSync(
-    `pg_dump "${databaseUrl}" --no-password --format=plain --no-owner --no-acl --quote-all-identifiers`,
-    { maxBuffer: 200 * 1024 * 1024 },
-  ),
+  dumpDatabase: runDeploymentPgDump,
   compiledBuildExists: fs.existsSync,
   workingDirectory: process.cwd,
 };

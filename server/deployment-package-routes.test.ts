@@ -10,6 +10,7 @@ import express from "express";
 import { requireAuth, signToken } from "./auth";
 import {
   registerRoutes,
+  runDeploymentPgDump,
   setDeploymentPackageRouteDependenciesForTests,
 } from "./routes";
 
@@ -44,6 +45,38 @@ async function closeServer(server: Server) {
     server.close(error => error ? reject(error) : resolve()),
   );
 }
+
+test("deployment pg_dump passes unusual database URLs as one literal argument", () => {
+  const databaseUrl = `postgresql://admin:p a's"s$word;$(touch /tmp/nope)&|<>@database.internal:5432/production`;
+  const calls: Array<{
+    file: string;
+    args: readonly string[];
+    options: { maxBuffer?: number };
+  }> = [];
+
+  const output = runDeploymentPgDump(databaseUrl, ((file, args, options) => {
+    calls.push({
+      file,
+      args: args ?? [],
+      options: options ?? {},
+    });
+    return Buffer.from("-- safe dump");
+  }) as typeof import("node:child_process").execFileSync);
+
+  assert.equal(output.toString(), "-- safe dump");
+  assert.deepEqual(calls, [{
+    file: "pg_dump",
+    args: [
+      databaseUrl,
+      "--no-password",
+      "--format=plain",
+      "--no-owner",
+      "--no-acl",
+      "--quote-all-identifiers",
+    ],
+    options: { maxBuffer: 200 * 1024 * 1024 },
+  }]);
+});
 
 test("superusers can download all deployment package types with usable ZIP headers", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deployment-route-"));
