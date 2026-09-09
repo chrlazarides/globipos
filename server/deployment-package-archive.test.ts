@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { strFromU8, unzipSync } from "fflate";
 import {
+  cpanelDeploymentSourceDirectories,
+  cpanelDeploymentSourceFiles,
   createDeploymentPackageArchive,
   requiredDeploymentPackageFiles,
   type DeploymentPackageKind,
@@ -15,8 +17,10 @@ const packageKinds: DeploymentPackageKind[] = ["cpanel", "compiled", "synology"]
 function supportFiles(kind: DeploymentPackageKind) {
   return Object.fromEntries(
     requiredDeploymentPackageFiles[kind]
-      .filter((name) => !name.endsWith("/"))
-      .map((name) => [name, `fixture:${name}`]),
+      .map((name) => [
+        name.endsWith("/") ? `${name}fixture.txt` : name,
+        `fixture:${name}`,
+      ]),
   );
 }
 
@@ -51,6 +55,59 @@ test("all deployment package types produce valid archives with required files", 
         assert.equal(entries["dist/unsafe-link"], undefined);
       }
     }
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("cPanel archives contain build prerequisites and exclude secrets, local data, and symlinks", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "cpanel-package-"));
+  try {
+    for (const name of cpanelDeploymentSourceFiles) {
+      fs.writeFileSync(path.join(temp, name), `fixture:${name}`);
+    }
+    for (const name of cpanelDeploymentSourceDirectories) {
+      fs.mkdirSync(path.join(temp, name));
+      fs.writeFileSync(path.join(temp, name, "deployment-source.txt"), name);
+    }
+    fs.writeFileSync(path.join(temp, ".env"), "SESSION_SECRET=do-not-package");
+    fs.writeFileSync(path.join(temp, "local.sqlite"), "local data");
+    fs.mkdirSync(path.join(temp, "node_modules"));
+    fs.writeFileSync(path.join(temp, "node_modules", "dependency.js"), "local dependency");
+    fs.symlinkSync(
+      path.join(temp, "package.json"),
+      path.join(temp, "server", "unsafe-package-link"),
+    );
+
+    const files = {
+      ...supportFiles("cpanel"),
+      ...Object.fromEntries(
+        cpanelDeploymentSourceFiles.map((name) => [
+          name,
+          fs.readFileSync(path.join(temp, name)),
+        ]),
+      ),
+    };
+    const archive = createDeploymentPackageArchive(
+      "cpanel",
+      files,
+      cpanelDeploymentSourceDirectories.map((name) => ({
+        source: path.join(temp, name),
+        prefix: name,
+      })),
+    );
+    const entries = unzipSync(archive);
+
+    for (const name of cpanelDeploymentSourceFiles) {
+      assert.equal(strFromU8(entries[name]), `fixture:${name}`);
+    }
+    for (const name of cpanelDeploymentSourceDirectories) {
+      assert.equal(strFromU8(entries[`${name}/deployment-source.txt`]), name);
+    }
+    assert.equal(entries[".env"], undefined);
+    assert.equal(entries["local.sqlite"], undefined);
+    assert.equal(entries["node_modules/dependency.js"], undefined);
+    assert.equal(entries["server/unsafe-package-link"], undefined);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

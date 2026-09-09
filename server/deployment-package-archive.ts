@@ -4,8 +4,28 @@ import { strToU8, zipSync } from "fflate";
 
 export type DeploymentPackageKind = "cpanel" | "compiled" | "synology";
 
+export const cpanelDeploymentSourceFiles = [
+  "package.json",
+  "package-lock.json",
+  "tsconfig.json",
+  "vite.config.ts",
+  "postcss.config.js",
+  "tailwind.config.ts",
+  "drizzle.config.ts",
+] as const;
+
+export const cpanelDeploymentSourceDirectories = [
+  "client",
+  "server",
+  "shared",
+  "script",
+  "migrations",
+] as const;
+
 export const requiredDeploymentPackageFiles: Record<DeploymentPackageKind, readonly string[]> = {
   cpanel: [
+    ...cpanelDeploymentSourceFiles,
+    ...cpanelDeploymentSourceDirectories.map((directory) => `${directory}/`),
     "database.sql",
     ".env.example",
     "ecosystem.config.js",

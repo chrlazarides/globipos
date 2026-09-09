@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -7,7 +8,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import express from "express";
+import { strFromU8, unzipSync } from "fflate";
 import { requireAuth, signToken } from "./auth";
+import {
+  cpanelDeploymentSourceDirectories,
+  cpanelDeploymentSourceFiles,
+} from "./deployment-package-archive";
 import {
   registerRoutes,
   runDeploymentPgDump,
@@ -82,6 +88,17 @@ test("superusers can download all deployment package types with usable ZIP heade
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deployment-route-"));
   fs.mkdirSync(path.join(root, "dist"));
   fs.writeFileSync(path.join(root, "dist", "index.cjs"), "compiled server");
+  for (const name of cpanelDeploymentSourceFiles) {
+    fs.writeFileSync(path.join(root, name), `route fixture:${name}`);
+  }
+  for (const name of cpanelDeploymentSourceDirectories) {
+    fs.mkdirSync(path.join(root, name));
+    fs.writeFileSync(path.join(root, name, "source.txt"), `route fixture:${name}`);
+  }
+  fs.writeFileSync(path.join(root, ".env"), "SESSION_SECRET=must-not-leak");
+  fs.writeFileSync(path.join(root, "local.sqlite"), "must-not-leak");
+  fs.symlinkSync(path.join(root, "package.json"), path.join(root, "server", "unsafe-link"));
+
   const dumpedUrls: string[] = [];
   const previousDatabaseUrl = process.env.DATABASE_URL;
   process.env.DATABASE_URL = "postgresql://test.invalid/deployment";
@@ -111,22 +128,62 @@ test("superusers can download all deployment package types with usable ZIP heade
     const response = await fetch(`${baseUrl}/api/backup/${route}`, {
       headers: superuserHeaders(),
     });
+    const archive = new Uint8Array(await response.arrayBuffer());
+
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "application/zip");
     assert.equal(
       response.headers.get("content-disposition"),
       `attachment; filename="route-test-co-${kind}-${expectedDate()}.zip"`,
     );
-    assert.deepEqual(
-      [...new Uint8Array(await response.arrayBuffer()).subarray(0, 4)],
-      [0x50, 0x4b, 0x03, 0x04],
-    );
+    assert.deepEqual([...archive.subarray(0, 4)], [0x50, 0x4b, 0x03, 0x04]);
+
+    if (kind === "cpanel") {
+      const entries = unzipSync(archive);
+      for (const name of cpanelDeploymentSourceFiles) {
+        assert.equal(strFromU8(entries[name]), `route fixture:${name}`);
+      }
+      for (const name of cpanelDeploymentSourceDirectories) {
+        assert.equal(
+          strFromU8(entries[`${name}/source.txt`]),
+          `route fixture:${name}`,
+        );
+      }
+      assert.equal(entries[".env"], undefined);
+      assert.equal(entries["local.sqlite"], undefined);
+      assert.equal(entries["server/unsafe-link"], undefined);
+
+      const setupScript = strFromU8(entries["setup.sh"]);
+      const installCommand = setupScript.match(/^npm install(?<flags>.*)$/m);
+      assert.ok(installCommand?.groups);
+      assert.match(setupScript, /\nnpm run build\n/);
+      const npmCli = process.env.npm_execpath;
+      assert.ok(npmCli, "npm_execpath must be available when tests run through npm");
+      const effectiveOmit = execFileSync(
+        process.execPath,
+        [
+          npmCli,
+          "config",
+          "get",
+          "omit",
+          ...installCommand.groups.flags.trim().split(/\s+/).filter(Boolean),
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, NODE_ENV: "production" },
+        },
+      ).trim();
+      assert.equal(effectiveOmit, "", "setup must install build tools in production mode");
+      assert.match(strFromU8(entries["ecosystem.config.js"]), /dist\/index\.cjs/);
+      assert.match(strFromU8(entries["README-DEPLOY.md"]), /dist\/index\.cjs/);
+    }
   }
   assert.deepEqual(dumpedUrls, Array(3).fill(process.env.DATABASE_URL));
 });
 
 test("compiled deployment routes explain when build output is missing", async t => {
-  process.env.DATABASE_URL ||= "postgresql://test.invalid/deployment";
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = "postgresql://test.invalid/deployment";
   setDeploymentPackageRouteDependenciesForTests({
     getCompanyName: async () => "Test Company",
     compiledBuildExists: () => false,
@@ -138,6 +195,8 @@ test("compiled deployment routes explain when build output is missing", async t 
   t.after(async () => {
     await closeServer(server);
     setDeploymentPackageRouteDependenciesForTests();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
   });
 
   for (const route of ["compiled-package", "synology-package"]) {
@@ -150,7 +209,6 @@ test("compiled deployment routes explain when build output is missing", async t 
     });
   }
 });
-
 
 test("deployment routes sanitize credential-bearing pg_dump failures", async t => {
   const previousDatabaseUrl = process.env.DATABASE_URL;
