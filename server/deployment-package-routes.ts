@@ -94,6 +94,12 @@ async function dumpDatabaseForDeployment(databaseUrl: string, signal: AbortSigna
 const fileSlug = (name: string) =>
   (name || "backup").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "backup";
 
+const shellDisplayText = (value: string) =>
+  value.replace(/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+/g, " ");
+
+const shellDoubleQuotedText = (value: string) =>
+  shellDisplayText(value).replace(/[\\"`$]/g, "\\$&");
+
 export function registerDeploymentPackageRoutes(app: Express) {
 // ─── cPANEL DEPLOYMENT PACKAGE (superuser only) ─────────────────────────────
 app.get("/api/backup/cpanel-package", requireSuperuser, async (req, res) => {
@@ -115,6 +121,8 @@ app.get("/api/backup/cpanel-package", requireSuperuser, async (req, res) => {
   try {
     const companyName = await deploymentPackageRouteDependencies.getCompanyName();
     const slug = fileSlug(companyName);
+    const shellCompanyName = shellDisplayText(companyName);
+    const shellQuotedCompanyName = shellDoubleQuotedText(companyName);
     const date = new Date().toISOString().split("T")[0];
     const dbUrl = process.env.DATABASE_URL;
     if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
@@ -128,13 +136,13 @@ app.get("/api/backup/cpanel-package", requireSuperuser, async (req, res) => {
     // setup.sh
     const setupSh = [
       "#!/bin/bash",
-      "# VinTrade / " + companyName + " — automated cPanel/VPS setup",
+      "# VinTrade / " + shellCompanyName + " — automated cPanel/VPS setup",
       "# Generated: " + date,
       "set -e",
       "",
       "echo \"\"",
       "echo \"--------------------------------------------------------\"",
-      "echo \" " + companyName + " — Deployment Setup\"",
+      "echo \" " + shellQuotedCompanyName + " — Deployment Setup\"",
       "echo \"--------------------------------------------------------\"",
       "echo \"\"",
       "",
@@ -466,6 +474,8 @@ app.get("/api/backup/compiled-package", requireSuperuser, async (req, res) => {
   try {
     const companyName = await deploymentPackageRouteDependencies.getCompanyName();
     const slug = fileSlug(companyName);
+    const shellCompanyName = shellDisplayText(companyName);
+    const shellQuotedCompanyName = shellDoubleQuotedText(companyName);
     const date = new Date().toISOString().split("T")[0];
     const dbUrl = process.env.DATABASE_URL;
     if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
@@ -485,7 +495,7 @@ app.get("/api/backup/compiled-package", requireSuperuser, async (req, res) => {
     // start.sh — no build step needed (app is pre-compiled)
     const startSh = [
       "#!/bin/bash",
-      "# " + companyName + " — Pre-compiled VPS/cPanel Startup Script",
+      "# " + shellCompanyName + " — Pre-compiled VPS/cPanel Startup Script",
       "# Generated: " + date,
       "# This package contains the pre-compiled application.",
       "# No npm install or build step required.",
@@ -493,7 +503,7 @@ app.get("/api/backup/compiled-package", requireSuperuser, async (req, res) => {
       "",
       "echo \"\"",
       "echo \"--------------------------------------------------------\"",
-      "echo \" " + companyName + " — Startup\"",
+      "echo \" " + shellQuotedCompanyName + " — Startup\"",
       "echo \"--------------------------------------------------------\"",
       "echo \"\"",
       "",
@@ -695,6 +705,8 @@ app.get("/api/backup/synology-package", requireSuperuser, async (req, res) => {
   try {
     const companyName = await deploymentPackageRouteDependencies.getCompanyName();
     const slug = fileSlug(companyName);
+    const shellCompanyName = shellDisplayText(companyName);
+    const shellQuotedCompanyName = shellDoubleQuotedText(companyName);
     const date = new Date().toISOString().split("T")[0];
     const dbUrl = process.env.DATABASE_URL;
     if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
@@ -782,14 +794,14 @@ app.get("/api/backup/synology-package", requireSuperuser, async (req, res) => {
     // setup.sh for SSH deployment on Synology
     const setupSh = [
       "#!/bin/bash",
-      "# " + companyName + " — Synology NAS Docker Setup",
+      "# " + shellCompanyName + " — Synology NAS Docker Setup",
       "# Generated: " + date,
       "# Run this via SSH on your Synology (or manually follow the README steps).",
       "set -e",
       "",
       "echo \"\"",
       "echo \"--------------------------------------------------------\"",
-      "echo \" " + companyName + " — Synology Docker Setup\"",
+      "echo \" " + shellQuotedCompanyName + " — Synology Docker Setup\"",
       "echo \"--------------------------------------------------------\"",
       "echo \"\"",
       "",

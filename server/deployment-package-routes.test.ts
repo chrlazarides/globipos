@@ -40,8 +40,8 @@ function assertSharedEnvironmentTemplate(contents: string) {
   assert.match(contents, /randomBytes\(64\)\.toString\('hex'\)/);
 }
 
-function assertPm2Config(contents: string) {
-  assert.match(contents, /name: "route-test-co"/);
+function assertPm2Config(contents: string, processName = "route-test-co") {
+  assert.match(contents, new RegExp(`name: ${JSON.stringify(processName)}`));
   assert.match(contents, /script: "dist\/index\.cjs"/);
   assert.match(contents, /NODE_ENV: "production"/);
   assert.match(contents, /PORT: 3000/);
@@ -394,6 +394,72 @@ test("superusers can download all deployment package types with usable ZIP heade
     }
   }
   assert.deepEqual(dumpedUrls, Array(3).fill(process.env.DATABASE_URL));
+});
+
+test("unusual company names cannot inject shell commands or PM2 statements", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deployment-route-unusual-name-"));
+  fs.mkdirSync(path.join(root, "dist"));
+  fs.writeFileSync(path.join(root, "dist", "index.cjs"), "compiled server");
+  for (const name of cpanelDeploymentSourceFiles) {
+    fs.writeFileSync(path.join(root, name), `route fixture:${name}`);
+  }
+  for (const name of cpanelDeploymentSourceDirectories) {
+    fs.mkdirSync(path.join(root, name));
+    fs.writeFileSync(path.join(root, name, "source.txt"), `route fixture:${name}`);
+  }
+
+  const companyName = "O'Reilly \"Market\" `touch /tmp/company-name-pwned` $HOME $(id)\nprintf COMPANY_NAME_INJECTED";
+  const slug = "o-reilly-market-touch-tmp-company-name-pwned-home-id-printf-company-name-injected";
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = "postgresql://test.invalid/deployment";
+  setDeploymentPackageRouteDependenciesForTests({
+    getCompanyName: async () => companyName,
+    workingDirectory: () => root,
+    compiledBuildExists: () => true,
+    dumpDatabase: async () => {
+      const dumpPath = path.join(root, `database-${crypto.randomUUID()}.sql`);
+      fs.writeFileSync(dumpPath, "-- controlled pg_dump output");
+      return {
+        path: dumpPath,
+        cleanup: () => fs.promises.rm(dumpPath, { force: true }),
+      };
+    },
+  });
+  const { server, baseUrl } = await startTestApp();
+  t.after(async () => {
+    await closeServer(server);
+    setDeploymentPackageRouteDependenciesForTests();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  for (const [route, kind, scriptName] of [
+    ["cpanel-package", "cpanel", "setup.sh"],
+    ["compiled-package", "compiled", "start.sh"],
+    ["synology-package", "synology", "setup.sh"],
+  ] as const) {
+    const response = await fetch(`${baseUrl}/api/backup/${route}`, {
+      headers: superuserHeaders(),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.headers.get("content-disposition"),
+      `attachment; filename="${slug}-${kind}-${expectedDate()}.zip"`,
+    );
+    const entries = unzipSync(new Uint8Array(await response.arrayBuffer()));
+    const script = archiveText(entries, scriptName);
+    assertShellSyntax(script);
+    assert.doesNotMatch(script, /^printf COMPANY_NAME_INJECTED$/m);
+    assert.doesNotMatch(script, /^touch \/tmp\/company-name-pwned$/m);
+
+    if (kind !== "synology") {
+      const pm2Config = archiveText(entries, "ecosystem.config.js");
+      assertPm2Config(pm2Config, slug);
+      assert.equal(pm2Config, buildDeploymentPm2Config(slug));
+      assert.doesNotMatch(pm2Config, /COMPANY_NAME_INJECTED/);
+    }
+  }
 });
 
 test("compiled deployment routes explain when build output is missing", async t => {
