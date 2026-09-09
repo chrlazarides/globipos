@@ -76,6 +76,14 @@ export function setDeploymentPackageRouteDependenciesForTests(
     : defaultDeploymentPackageRouteDependencies;
 }
 
+function dumpDatabaseForDeployment(databaseUrl: string): Buffer {
+  try {
+    return deploymentPackageRouteDependencies.dumpDatabase(databaseUrl);
+  } catch {
+    throw new Error("Database export failed. Check the database connection and try again.");
+  }
+}
+
 function getLogoDataUrl(): string {
   const candidates = [
     path.resolve(process.cwd(), "dist", "public", "logo.png"),
@@ -5165,7 +5173,7 @@ export async function registerRoutes(
       if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
 
       // Generate SQL dump via pg_dump
-      const sqlDump = deploymentPackageRouteDependencies.dumpDatabase(dbUrl);
+      const sqlDump = dumpDatabaseForDeployment(dbUrl);
 
       // .env.example
       const envExample = [
@@ -5517,7 +5525,7 @@ export async function registerRoutes(
       }
 
       // SQL dump
-      const sqlDump = deploymentPackageRouteDependencies.dumpDatabase(dbUrl);
+      const sqlDump = dumpDatabaseForDeployment(dbUrl);
 
       // .env.example
       const envExample = [
@@ -5753,7 +5761,7 @@ export async function registerRoutes(
       }
 
       // SQL dump
-      const sqlDump = deploymentPackageRouteDependencies.dumpDatabase(dbUrl);
+      const sqlDump = dumpDatabaseForDeployment(dbUrl);
 
       // Dockerfile — minimal Node.js image, copies pre-built dist/
       const dockerfile = [

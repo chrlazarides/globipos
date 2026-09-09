@@ -118,26 +118,39 @@ test("compiled deployment routes explain when build output is missing", async t 
   }
 });
 
-test("deployment routes return the pg_dump failure message", async t => {
-  process.env.DATABASE_URL ||= "postgresql://test.invalid/deployment";
+
+test("deployment routes sanitize credential-bearing pg_dump failures", async t => {
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  const credentialBearingUrl = "postgresql://admin:super-secret-password@database.internal:5432/production";
+  process.env.DATABASE_URL = credentialBearingUrl;
   setDeploymentPackageRouteDependenciesForTests({
     getCompanyName: async () => "Test Company",
     compiledBuildExists: () => true,
     dumpDatabase: () => {
-      throw new Error("pg_dump failed: database unavailable");
+      throw new Error(
+        `Command failed: pg_dump "${credentialBearingUrl}" --no-password --format=plain`,
+      );
     },
   });
   const { server, baseUrl } = await startTestApp();
   t.after(async () => {
     await closeServer(server);
     setDeploymentPackageRouteDependenciesForTests();
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
   });
 
-  const response = await fetch(`${baseUrl}/api/backup/cpanel-package`, {
-    headers: superuserHeaders(),
-  });
-  assert.equal(response.status, 500);
-  assert.deepEqual(await response.json(), {
-    message: "pg_dump failed: database unavailable",
-  });
+  for (const route of ["cpanel-package", "compiled-package", "synology-package"]) {
+    const response = await fetch(`${baseUrl}/api/backup/${route}`, {
+      headers: superuserHeaders(),
+    });
+    assert.equal(response.status, 500);
+    const responseBody = await response.text();
+    assert.deepEqual(JSON.parse(responseBody), {
+      message: "Database export failed. Check the database connection and try again.",
+    });
+    assert.equal(responseBody.includes(credentialBearingUrl), false);
+    assert.equal(responseBody.includes("super-secret-password"), false);
+    assert.equal(responseBody.includes("--no-password"), false);
+  }
 });
