@@ -106,9 +106,14 @@ test("superusers can download all deployment package types with usable ZIP heade
     getCompanyName: async () => "Route Test & Co",
     workingDirectory: () => root,
     compiledBuildExists: () => true,
-    dumpDatabase: databaseUrl => {
+    dumpDatabase: async databaseUrl => {
       dumpedUrls.push(databaseUrl);
-      return Buffer.from("-- controlled pg_dump output");
+      const dumpPath = path.join(root, `database-${dumpedUrls.length}.sql`);
+      fs.writeFileSync(dumpPath, "-- controlled pg_dump output");
+      return {
+        path: dumpPath,
+        cleanup: () => fs.promises.rm(dumpPath, { force: true }),
+      };
     },
   });
   const { server, baseUrl } = await startTestApp();
@@ -187,7 +192,7 @@ test("compiled deployment routes explain when build output is missing", async t 
   setDeploymentPackageRouteDependenciesForTests({
     getCompanyName: async () => "Test Company",
     compiledBuildExists: () => false,
-    dumpDatabase: () => {
+    dumpDatabase: async () => {
       throw new Error("pg_dump should not run without a build");
     },
   });
@@ -217,7 +222,7 @@ test("deployment routes sanitize credential-bearing pg_dump failures", async t =
   setDeploymentPackageRouteDependenciesForTests({
     getCompanyName: async () => "Test Company",
     compiledBuildExists: () => true,
-    dumpDatabase: () => {
+    dumpDatabase: async () => {
       throw new Error(
         `Command failed: pg_dump "${credentialBearingUrl}" --no-password --format=plain`,
       );

@@ -18,7 +18,14 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import webpush from "web-push";
-import { execFileSync, execSync } from "child_process";
+import { execFileSync } from "node:child_process";
+import {
+  cpanelDeploymentSourceDirectories,
+  cpanelDeploymentSourceFiles,
+  createDatabaseDump,
+  createDeploymentPackageArchive,
+  type DeploymentPackageArchive,
+} from "./deployment-package-archive";
 import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, sign2faRecoveryToken, verify2faRecoveryToken, sign2faRecoverySetupToken, verify2faRecoverySetupToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser, requireStaff, requireModule } from "./auth";
 import jwt from "jsonwebtoken";
 import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
@@ -32,22 +39,44 @@ import { CatalogImportBarcodeAllocator, persistBarcodeAssignment, type BarcodeIs
 import { pool } from "./db";
 import { isValidIanaTimeZone } from "@shared/quiet-hours";
 import { registerDeploymentControlRoutes } from "./deployment-control";
-import {
-  cpanelDeploymentSourceDirectories,
-  cpanelDeploymentSourceFiles,
-  createDeploymentPackageArchive,
-} from "./deployment-package-archive";
+
+function addDirectoryToZip(entries: Record<string, Uint8Array>, directory: string, prefix: string) {
+  for (const name of fs.readdirSync(directory)) {
+    const source = path.join(directory, name);
+    const relative = `${prefix}/${name}`.replace(/^\/+/, "");
+    const stat = fs.lstatSync(source);
+    if (stat.isSymbolicLink()) continue;
+    if (stat.isDirectory()) addDirectoryToZip(entries, source, relative);
+    else if (stat.isFile()) entries[relative] = new Uint8Array(fs.readFileSync(source));
+  }
+}
+
+function downloadDeploymentPackage(
+  res: Response,
+  archive: DeploymentPackageArchive,
+  filename: string,
+) {
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () => {
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = archive.cleanup().catch((error) => {
+      cleanupPromise = undefined;
+      console.error("Failed to clean temporary deployment package:", error);
+    });
+    return cleanupPromise;
+  };
+  res.once("close", () => void cleanup());
+  res.download(archive.path, filename, async (error) => {
+    await cleanup();
+    if (error && !res.headersSent) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+}
 import { createPosBuildsResolver } from "./pos-builds";
 import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "./customer-ai-service";
 import { createCustomerAiHealthPersistence } from "./customer-ai-health-persistence";
 import { registerErpIntegrationRoutes } from "./erp-integration";
-
-type DeploymentPackageRouteDependencies = {
-  getCompanyName: () => Promise<string>;
-  dumpDatabase: (databaseUrl: string) => Buffer;
-  compiledBuildExists: (distPath: string) => boolean;
-  workingDirectory: () => string;
-};
 
 type PgDumpRunner = typeof execFileSync;
 
@@ -69,9 +98,16 @@ export function runDeploymentPgDump(
   );
 }
 
+type DeploymentPackageRouteDependencies = {
+  getCompanyName: () => Promise<string>;
+  dumpDatabase: typeof createDatabaseDump;
+  compiledBuildExists: (distPath: string) => boolean;
+  workingDirectory: () => string;
+};
+
 const defaultDeploymentPackageRouteDependencies: DeploymentPackageRouteDependencies = {
   getCompanyName: async () => (await storage.getSetting("company_name"))?.value || "Company",
-  dumpDatabase: runDeploymentPgDump,
+  dumpDatabase: createDatabaseDump,
   compiledBuildExists: fs.existsSync,
   workingDirectory: process.cwd,
 };
@@ -86,9 +122,9 @@ export function setDeploymentPackageRouteDependenciesForTests(
     : defaultDeploymentPackageRouteDependencies;
 }
 
-function dumpDatabaseForDeployment(databaseUrl: string): Buffer {
+async function dumpDatabaseForDeployment(databaseUrl: string, signal: AbortSignal) {
   try {
-    return deploymentPackageRouteDependencies.dumpDatabase(databaseUrl);
+    return await deploymentPackageRouteDependencies.dumpDatabase(databaseUrl, signal);
   } catch {
     throw new Error("Database export failed. Check the database connection and try again.");
   }
@@ -5174,7 +5210,22 @@ export async function registerRoutes(
   });
 
   // ─── cPANEL DEPLOYMENT PACKAGE (superuser only) ─────────────────────────────
-  app.get("/api/backup/cpanel-package", requireSuperuser, async (_req, res) => {
+  app.get("/api/backup/cpanel-package", requireSuperuser, async (req, res) => {
+    let databaseDump: Awaited<ReturnType<typeof createDatabaseDump>> | undefined;
+    let archive: DeploymentPackageArchive | undefined;
+    const abortController = new AbortController();
+    const cleanupUnclaimedArchive = async () => {
+      const current = archive;
+      if (!current) return;
+      await current.cleanup();
+      if (archive === current) archive = undefined;
+    };
+    req.once("aborted", () => {
+      abortController.abort(new Error("Download cancelled"));
+      void cleanupUnclaimedArchive().catch((error) => {
+        console.error("Failed to clean cancelled deployment package:", error);
+      });
+    });
     try {
       const companyName = await deploymentPackageRouteDependencies.getCompanyName();
       const slug = fileSlug(companyName);
@@ -5183,7 +5234,7 @@ export async function registerRoutes(
       if (!dbUrl) throw new Error("DATABASE_URL environment variable not configured");
 
       // Generate SQL dump via pg_dump
-      const sqlDump = dumpDatabaseForDeployment(dbUrl);
+      databaseDump = await dumpDatabaseForDeployment(dbUrl, abortController.signal);
 
       // .env.example
       const envExample = [
@@ -5264,7 +5315,7 @@ export async function registerRoutes(
         "echo \"✓ .env loaded\"",
         "",
         "# ── 3. Install dependencies ───────────────────────────────",
-        "echo \"Installing npm packages...\"",
+        "echo \"Installing npm packages (production)...\"",
         "npm install --include=dev",
         "echo \"✓ Dependencies installed\"",
         "",
@@ -5508,7 +5559,7 @@ export async function registerRoutes(
       const applicationFiles = Object.fromEntries(
         cpanelDeploymentSourceFiles.map((name) => [
           name,
-          new Uint8Array(fs.readFileSync(path.join(workingDirectory, name))),
+          { source: path.join(workingDirectory, name) },
         ]),
       );
       const applicationDirectories = cpanelDeploymentSourceDirectories.map((name) => ({
@@ -5516,24 +5567,53 @@ export async function registerRoutes(
         prefix: name,
       }));
 
-      const zipBuffer = createDeploymentPackageArchive("cpanel", {
+      archive = await createDeploymentPackageArchive("cpanel", {
         ...applicationFiles,
-        "database.sql": new Uint8Array(sqlDump),
+        "database.sql": { source: databaseDump.path },
         ".env.example": envExample,
         "ecosystem.config.js": ecosystem,
         "setup.sh": setupSh,
         "Caddyfile": caddyfile,
         "README-DEPLOY.md": readme,
-      }, applicationDirectories);
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="${slug}-cpanel-${date}.zip"`);
-      res.send(zipBuffer);
+      }, applicationDirectories, abortController.signal);
+      if (abortController.signal.aborted) {
+        await cleanupUnclaimedArchive();
+        throw abortController.signal.reason;
+      }
+      await databaseDump.cleanup();
+      databaseDump = undefined;
+      downloadDeploymentPackage(res, archive, `${slug}-cpanel-${date}.zip`);
+      archive = undefined;
     } catch (e: any) {
-      res.status(500).json({ message: e.message });
+      const cleanupResults = await Promise.allSettled([
+        databaseDump?.cleanup(),
+        cleanupUnclaimedArchive(),
+      ]);
+      for (const result of cleanupResults) {
+        if (result.status === "rejected") {
+          console.error("Failed to clean deployment package resource:", result.reason);
+        }
+      }
+      if (!res.headersSent) res.status(500).json({ message: e.message });
     }
   });
 
-  app.get("/api/backup/compiled-package", requireSuperuser, async (_req, res) => {
+  app.get("/api/backup/compiled-package", requireSuperuser, async (req, res) => {
+    let databaseDump: Awaited<ReturnType<typeof createDatabaseDump>> | undefined;
+    let archive: DeploymentPackageArchive | undefined;
+    const abortController = new AbortController();
+    const cleanupUnclaimedArchive = async () => {
+      const current = archive;
+      if (!current) return;
+      await current.cleanup();
+      if (archive === current) archive = undefined;
+    };
+    req.once("aborted", () => {
+      abortController.abort(new Error("Download cancelled"));
+      void cleanupUnclaimedArchive().catch((error) => {
+        console.error("Failed to clean cancelled deployment package:", error);
+      });
+    });
     try {
       const companyName = await deploymentPackageRouteDependencies.getCompanyName();
       const slug = fileSlug(companyName);
@@ -5548,7 +5628,7 @@ export async function registerRoutes(
       }
 
       // SQL dump
-      const sqlDump = dumpDatabaseForDeployment(dbUrl);
+      databaseDump = await dumpDatabaseForDeployment(dbUrl, abortController.signal);
 
       // .env.example
       const envExample = [
@@ -5754,23 +5834,52 @@ export async function registerRoutes(
         "*Generated by " + companyName + " GlobiPOS ERP — " + date + "*",
       ].join("\n");
 
-      const zipBuffer = createDeploymentPackageArchive("compiled", {
-        "database.sql": new Uint8Array(sqlDump),
+      archive = await createDeploymentPackageArchive("compiled", {
+        "database.sql": { source: databaseDump.path },
         ".env.example": envExample,
         "ecosystem.config.js": ecosystem,
         "start.sh": startSh,
         "Caddyfile": caddyfile,
         "README-DEPLOY.md": readme,
-      }, [{ source: distPath, prefix: "dist" }]);
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="${slug}-compiled-${date}.zip"`);
-      res.send(zipBuffer);
+      }, [{ source: distPath, prefix: "dist" }], abortController.signal);
+      if (abortController.signal.aborted) {
+        await cleanupUnclaimedArchive();
+        throw abortController.signal.reason;
+      }
+      await databaseDump.cleanup();
+      databaseDump = undefined;
+      downloadDeploymentPackage(res, archive, `${slug}-compiled-${date}.zip`);
+      archive = undefined;
     } catch (e: any) {
-      res.status(500).json({ message: e.message });
+      const cleanupResults = await Promise.allSettled([
+        databaseDump?.cleanup(),
+        cleanupUnclaimedArchive(),
+      ]);
+      for (const result of cleanupResults) {
+        if (result.status === "rejected") {
+          console.error("Failed to clean deployment package resource:", result.reason);
+        }
+      }
+      if (!res.headersSent) res.status(500).json({ message: e.message });
     }
   });
 
-  app.get("/api/backup/synology-package", requireSuperuser, async (_req, res) => {
+  app.get("/api/backup/synology-package", requireSuperuser, async (req, res) => {
+    let databaseDump: Awaited<ReturnType<typeof createDatabaseDump>> | undefined;
+    let archive: DeploymentPackageArchive | undefined;
+    const abortController = new AbortController();
+    const cleanupUnclaimedArchive = async () => {
+      const current = archive;
+      if (!current) return;
+      await current.cleanup();
+      if (archive === current) archive = undefined;
+    };
+    req.once("aborted", () => {
+      abortController.abort(new Error("Download cancelled"));
+      void cleanupUnclaimedArchive().catch((error) => {
+        console.error("Failed to clean cancelled deployment package:", error);
+      });
+    });
     try {
       const companyName = await deploymentPackageRouteDependencies.getCompanyName();
       const slug = fileSlug(companyName);
@@ -5784,7 +5893,7 @@ export async function registerRoutes(
       }
 
       // SQL dump
-      const sqlDump = dumpDatabaseForDeployment(dbUrl);
+      databaseDump = await dumpDatabaseForDeployment(dbUrl, abortController.signal);
 
       // Dockerfile — minimal Node.js image, copies pre-built dist/
       const dockerfile = [
@@ -6057,19 +6166,33 @@ export async function registerRoutes(
         "*Generated by " + companyName + " GlobiPOS ERP — " + date + "*",
       ].join("\n");
 
-      const zipBuffer = createDeploymentPackageArchive("synology", {
-        "database.sql": new Uint8Array(sqlDump),
+      archive = await createDeploymentPackageArchive("synology", {
+        "database.sql": { source: databaseDump.path },
         "Dockerfile": dockerfile,
         "docker-compose.yml": dockerCompose,
         ".env.template": envFile,
         "setup.sh": setupSh,
         "README-SYNOLOGY.md": readme,
-      }, [{ source: distPath, prefix: "dist" }]);
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="${slug}-synology-${date}.zip"`);
-      res.send(zipBuffer);
+      }, [{ source: distPath, prefix: "dist" }], abortController.signal);
+      if (abortController.signal.aborted) {
+        await cleanupUnclaimedArchive();
+        throw abortController.signal.reason;
+      }
+      await databaseDump.cleanup();
+      databaseDump = undefined;
+      downloadDeploymentPackage(res, archive, `${slug}-synology-${date}.zip`);
+      archive = undefined;
     } catch (e: any) {
-      res.status(500).json({ message: e.message });
+      const cleanupResults = await Promise.allSettled([
+        databaseDump?.cleanup(),
+        cleanupUnclaimedArchive(),
+      ]);
+      for (const result of cleanupResults) {
+        if (result.status === "rejected") {
+          console.error("Failed to clean deployment package resource:", result.reason);
+        }
+      }
+      if (!res.headersSent) res.status(500).json({ message: e.message });
     }
   });
 

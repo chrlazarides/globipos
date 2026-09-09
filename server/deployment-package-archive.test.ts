@@ -24,7 +24,7 @@ function supportFiles(kind: DeploymentPackageKind) {
   );
 }
 
-test("all deployment package types produce valid archives with required files", () => {
+test("all deployment package types produce valid archives with required files", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "deployment-package-"));
   try {
     fs.mkdirSync(path.join(temp, "assets"));
@@ -34,14 +34,15 @@ test("all deployment package types produce valid archives with required files", 
 
     for (const kind of packageKinds) {
       const needsDist = kind !== "cpanel";
-      const archive = createDeploymentPackageArchive(
+      const archive = await createDeploymentPackageArchive(
         kind,
         supportFiles(kind),
         needsDist ? [{ source: temp, prefix: "dist" }] : [],
       );
-      assert.deepEqual([...archive.subarray(0, 4)], [0x50, 0x4b, 0x03, 0x04]);
+      const archiveBytes = fs.readFileSync(archive.path);
+      assert.deepEqual([...archiveBytes.subarray(0, 4)], [0x50, 0x4b, 0x03, 0x04]);
 
-      const entries = unzipSync(archive);
+      const entries = unzipSync(archiveBytes);
       for (const required of requiredDeploymentPackageFiles[kind]) {
         if (required.endsWith("/")) {
           assert.ok(Object.keys(entries).some((name) => name.startsWith(required)));
@@ -54,13 +55,14 @@ test("all deployment package types produce valid archives with required files", 
         assert.equal(strFromU8(entries["dist/assets/app.js"]), "client");
         assert.equal(entries["dist/unsafe-link"], undefined);
       }
+      await archive.cleanup();
     }
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
 
-test("cPanel archives contain build prerequisites and exclude secrets, local data, and symlinks", () => {
+test("cPanel archives contain build prerequisites and exclude secrets, local data, and symlinks", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "cpanel-package-"));
   try {
     for (const name of cpanelDeploymentSourceFiles) {
@@ -84,11 +86,11 @@ test("cPanel archives contain build prerequisites and exclude secrets, local dat
       ...Object.fromEntries(
         cpanelDeploymentSourceFiles.map((name) => [
           name,
-          fs.readFileSync(path.join(temp, name)),
+          { source: path.join(temp, name) },
         ]),
       ),
     };
-    const archive = createDeploymentPackageArchive(
+    const archive = await createDeploymentPackageArchive(
       "cpanel",
       files,
       cpanelDeploymentSourceDirectories.map((name) => ({
@@ -96,7 +98,7 @@ test("cPanel archives contain build prerequisites and exclude secrets, local dat
         prefix: name,
       })),
     );
-    const entries = unzipSync(archive);
+    const entries = unzipSync(fs.readFileSync(archive.path));
 
     for (const name of cpanelDeploymentSourceFiles) {
       assert.equal(strFromU8(entries[name]), `fixture:${name}`);
@@ -108,16 +110,75 @@ test("cPanel archives contain build prerequisites and exclude secrets, local dat
     assert.equal(entries["local.sqlite"], undefined);
     assert.equal(entries["node_modules/dependency.js"], undefined);
     assert.equal(entries["server/unsafe-package-link"], undefined);
+    await archive.cleanup();
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
 
-test("package creation fails explicitly when a required file is missing", () => {
+test("package creation fails explicitly when a required file is missing", async () => {
   const files = supportFiles("cpanel");
   delete files["database.sql"];
-  assert.throws(
-    () => createDeploymentPackageArchive("cpanel", files),
+  await assert.rejects(
+    createDeploymentPackageArchive("cpanel", files),
     /missing required entry: database\.sql/,
   );
+});
+
+test("large database and dist fixtures are streamed from disk", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "deployment-package-large-"));
+  try {
+    const databasePath = path.join(temp, "database.sql");
+    const distPath = path.join(temp, "dist");
+    fs.mkdirSync(distPath);
+    fs.closeSync(fs.openSync(databasePath, "w"));
+    fs.closeSync(fs.openSync(path.join(distPath, "app.cjs"), "w"));
+    const fixtureSize = 64 * 1024 * 1024;
+    fs.truncateSync(databasePath, fixtureSize);
+    fs.truncateSync(path.join(distPath, "app.cjs"), fixtureSize);
+
+    const originalReadFileSync = fs.readFileSync;
+    fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...args: any[]) => {
+      if (file === databasePath || file === path.join(distPath, "app.cjs")) {
+        throw new Error("large fixtures must not be read into one buffer");
+      }
+      return (originalReadFileSync as any)(file, ...args);
+    }) as typeof fs.readFileSync;
+    let archive;
+    try {
+      archive = await createDeploymentPackageArchive(
+        "compiled",
+        {
+          ...supportFiles("compiled"),
+          "database.sql": { source: databasePath },
+        },
+        [{ source: distPath, prefix: "dist" }],
+      );
+    } finally {
+      fs.readFileSync = originalReadFileSync;
+    }
+    const stats = fs.statSync(archive.path);
+    assert.ok(stats.size > 0, "streamed ZIP should be written to disk");
+    await archive.cleanup();
+    assert.equal(fs.existsSync(archive.path), false);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("archive generation failures clean temporary output", async () => {
+  const before = new Set(
+    fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("deployment-package-")),
+  );
+  await assert.rejects(
+    createDeploymentPackageArchive("cpanel", {
+      ...supportFiles("cpanel"),
+      "database.sql": { source: path.join(os.tmpdir(), "missing-deployment-database.sql") },
+    }),
+    /ENOENT/,
+  );
+  const after = fs.readdirSync(os.tmpdir()).filter(
+    (name) => name.startsWith("deployment-package-") && !before.has(name),
+  );
+  assert.deepEqual(after, []);
 });
