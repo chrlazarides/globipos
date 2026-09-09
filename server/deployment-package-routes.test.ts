@@ -15,10 +15,10 @@ import {
   cpanelDeploymentSourceFiles,
 } from "./deployment-package-archive";
 import {
-  registerRoutes,
+  registerDeploymentPackageRoutes,
   runDeploymentPgDump,
   setDeploymentPackageRouteDependenciesForTests,
-} from "./routes";
+} from "./deployment-package-routes";
 
 const expectedDate = () => new Date().toISOString().split("T")[0];
 
@@ -26,7 +26,7 @@ async function startTestApp(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(requireAuth);
   const server = createServer(app);
-  await registerRoutes(server, app, { skipBackgroundJobs: true });
+  registerDeploymentPackageRoutes(app);
   await new Promise<void>((resolve, reject) => {
     server.listen(0, "127.0.0.1", resolve);
     server.once("error", reject);
@@ -120,7 +120,6 @@ test("superusers can download all deployment package types with usable ZIP heade
   t.after(async () => {
     await closeServer(server);
     setDeploymentPackageRouteDependenciesForTests();
-    fs.rmSync(root, { recursive: true, force: true });
     if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = previousDatabaseUrl;
   });
