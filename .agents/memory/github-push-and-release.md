@@ -27,3 +27,16 @@ secrets. **Why:** unsigned release APKs cannot be installed normally, and future
 versions must use the same signing identity or devices require reinstalling.
 Never regenerate the keystore casually.
 Signed assets are named `app-{abi}-release-signed.apk`.
+
+## Release download cache
+
+Treat persisted GitHub release metadata as an optional resilience layer, not a
+dependency of the live release lookup.
+
+**Why:** Production schema drift can leave the cache table unavailable even
+while GitHub releases and their signed installer assets are healthy. Failing the
+whole request on cache read/write hides valid downloads from administrators.
+
+**How to apply:** Isolate cache read and write failures from the verified GitHub
+request. Continue with live verification when cache reads fail, and return a
+successful verified response even when persisting it fails.

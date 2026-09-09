@@ -278,3 +278,29 @@ test("returns no direct download links when GitHub is unavailable without a cach
   assert.equal("releases" in result.body, false);
   assert.equal(result.body.message.includes("download"), false);
 });
+
+test("uses live GitHub releases when the optional persisted cache table is unavailable", async () => {
+  const fake = createFakeFetch([
+    { ok: true, status: 200, body: [githubRelease(repoA, "live")] },
+  ]);
+  const resolve = createPosBuildsResolver({
+    getSettings: async () => settingsFor(repoA),
+    fetchFn: fake.fetchFn,
+    getPersistedCache: async () => {
+      throw new Error('relation "pos_release_caches" does not exist');
+    },
+    savePersistedCache: async () => {
+      throw new Error('relation "pos_release_caches" does not exist');
+    },
+  });
+
+  const result = await resolve();
+
+  assert.equal(result.status, 200);
+  const body = releasesFrom(result);
+  assert.equal(body.stale, false);
+  assert.equal(body.releases[0].tag, "v1.0.0-live");
+  assert.deepEqual(fake.requests, [
+    "https://api.github.com/repos/example/pos-a/releases?per_page=5",
+  ]);
+});

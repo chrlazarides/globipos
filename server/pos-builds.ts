@@ -145,14 +145,19 @@ export function createPosBuildsResolver({
 
       const [, owner, repo] = match;
       if ((!cache || cache.repoUrl !== repoUrl) && getPersistedCache) {
-        const persisted = await getPersistedCache(repoUrl);
-        if (persisted) {
-          cache = {
-            repoUrl,
-            releases: persisted.releases,
-            fetchedAt: 0,
-            verifiedAt: new Date(persisted.verifiedAt).toISOString(),
-          };
+        try {
+          const persisted = await getPersistedCache(repoUrl);
+          if (persisted) {
+            cache = {
+              repoUrl,
+              releases: persisted.releases,
+              fetchedAt: 0,
+              verifiedAt: new Date(persisted.verifiedAt).toISOString(),
+            };
+          }
+        } catch {
+          // The release cache is optional. Older production databases may not
+          // have its table yet, so continue with a live GitHub verification.
         }
       }
       const headers: Record<string, string> = {
@@ -211,8 +216,15 @@ export function createPosBuildsResolver({
 
       const fetchedAt = now();
       const verifiedAt = new Date(fetchedAt);
-      await savePersistedCache?.(repoUrl, releases, verifiedAt);
       cache = { repoUrl, releases, fetchedAt, verifiedAt: verifiedAt.toISOString() };
+      if (savePersistedCache) {
+        try {
+          await savePersistedCache(repoUrl, releases, verifiedAt);
+        } catch {
+          // A successful GitHub response must remain usable even when the
+          // optional persisted cache is unavailable or not migrated yet.
+        }
+      }
       return { status: 200, body: { releases, stale: false, verifiedAt: cache.verifiedAt } };
     } catch (error: any) {
       if (requestedRepoUrl && cache?.repoUrl === requestedRepoUrl) {
