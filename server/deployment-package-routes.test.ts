@@ -22,6 +22,31 @@ import {
 
 const expectedDate = () => new Date().toISOString().split("T")[0];
 
+function archiveText(entries: ReturnType<typeof unzipSync>, name: string) {
+  const entry = entries[name];
+  assert.ok(entry, `expected deployment archive to contain ${name}`);
+  return strFromU8(entry);
+}
+
+function assertSharedEnvironmentTemplate(contents: string) {
+  assert.match(contents, /^DATABASE_URL=postgresql:\/\/DB_USER:DB_PASSWORD@localhost:5432\/DB_NAME$/m);
+  assert.match(contents, /^SESSION_SECRET=REPLACE_WITH_64_CHAR_RANDOM_HEX$/m);
+  assert.match(contents, /^NODE_ENV=production$/m);
+  assert.match(contents, /^PORT=3000$/m);
+  assert.match(contents, /randomBytes\(64\)\.toString\('hex'\)/);
+}
+
+function assertPm2Config(contents: string) {
+  assert.match(contents, /name: "route-test-co"/);
+  assert.match(contents, /script: "dist\/index\.cjs"/);
+  assert.match(contents, /NODE_ENV: "production"/);
+  assert.match(contents, /PORT: 3000/);
+  assert.match(contents, /autorestart: true/);
+  assert.match(contents, /max_memory_restart: "512M"/);
+  assert.match(contents, /error_file: "logs\/err\.log"/);
+  assert.match(contents, /out_file: "logs\/out\.log"/);
+}
+
 async function startTestApp(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(requireAuth);
@@ -182,9 +207,9 @@ test("superusers can download all deployment package types with usable ZIP heade
       `attachment; filename="route-test-co-${kind}-${expectedDate()}.zip"`,
     );
     assert.deepEqual([...archive.subarray(0, 4)], [0x50, 0x4b, 0x03, 0x04]);
+    const entries = unzipSync(archive);
 
     if (kind === "cpanel") {
-      const entries = unzipSync(archive);
       for (const name of cpanelDeploymentSourceFiles) {
         assert.equal(strFromU8(entries[name]), `route fixture:${name}`);
       }
@@ -198,10 +223,18 @@ test("superusers can download all deployment package types with usable ZIP heade
       assert.equal(entries["local.sqlite"], undefined);
       assert.equal(entries["server/unsafe-link"], undefined);
 
-      const setupScript = strFromU8(entries["setup.sh"]);
+      const envExample = archiveText(entries, ".env.example");
+      assertSharedEnvironmentTemplate(envExample);
+
+      const setupScript = archiveText(entries, "setup.sh");
       const installCommand = setupScript.match(/^npm install(?<flags>.*)$/m);
       assert.ok(installCommand?.groups);
+      assert.match(setupScript, /cp \.env\.example \.env/);
+      assert.match(setupScript, /psql "\$DATABASE_URL" < database\.sql/);
       assert.match(setupScript, /\nnpm run build\n/);
+      assert.match(setupScript, /\nnpm run db:push\n/);
+      assert.match(setupScript, /pm2 start ecosystem\.config\.js/);
+      assert.match(setupScript, /pm2 save/);
       const npmCli = process.env.npm_execpath;
       assert.ok(npmCli, "npm_execpath must be available when tests run through npm");
       const effectiveOmit = execFileSync(
@@ -219,8 +252,77 @@ test("superusers can download all deployment package types with usable ZIP heade
         },
       ).trim();
       assert.equal(effectiveOmit, "", "setup must install build tools in production mode");
-      assert.match(strFromU8(entries["ecosystem.config.js"]), /dist\/index\.cjs/);
-      assert.match(strFromU8(entries["README-DEPLOY.md"]), /dist\/index\.cjs/);
+      assertPm2Config(archiveText(entries, "ecosystem.config.js"));
+
+      const caddyfile = archiveText(entries, "Caddyfile");
+      assert.match(caddyfile, /yourdomain\.com \{/);
+      assert.match(caddyfile, /reverse_proxy localhost:3000/);
+
+      const readme = archiveText(entries, "README-DEPLOY.md");
+      assert.match(readme, /cPanel \/ VPS Deployment Guide/);
+      assert.match(readme, /cPanel > PostgreSQL Databases/);
+      assert.match(readme, /npm install --include=dev/);
+      assert.match(readme, /npm run build/);
+      assert.match(readme, /npm run db:push/);
+      assert.match(readme, /Application startup file: `dist\/index\.cjs`/);
+      assert.match(readme, /pm2 start ecosystem\.config\.js/);
+    } else if (kind === "compiled") {
+      assertSharedEnvironmentTemplate(archiveText(entries, ".env.example"));
+      assertPm2Config(archiveText(entries, "ecosystem.config.js"));
+
+      const startScript = archiveText(entries, "start.sh");
+      assert.match(startScript, /No npm install or build step required/);
+      assert.doesNotMatch(startScript, /^npm install/m);
+      assert.doesNotMatch(startScript, /^npm run build/m);
+      assert.match(startScript, /cp \.env\.example \.env/);
+      assert.match(startScript, /psql "\$DATABASE_URL" < database\.sql/);
+      assert.match(startScript, /pm2 start ecosystem\.config\.js/);
+      assert.match(startScript, /node dist\/index\.cjs/);
+
+      const readme = archiveText(entries, "README-DEPLOY.md");
+      assert.match(readme, /Pre-Compiled Deployment Package/);
+      assert.match(readme, /No `npm install` or `npm run build` step is required/);
+      assert.match(readme, /unzip route-test-co-compiled-/);
+      assert.match(readme, /psql "\$DATABASE_URL" < database\.sql/);
+      assert.match(readme, /pm2 start ecosystem\.config\.js/);
+      assert.match(readme, /node dist\/index\.cjs/);
+      assert.match(archiveText(entries, "Caddyfile"), /reverse_proxy localhost:3000/);
+    } else {
+      const dockerfile = archiveText(entries, "Dockerfile");
+      assert.match(dockerfile, /^FROM node:20-alpine$/m);
+      assert.match(dockerfile, /^COPY dist\/ \.\/dist\/$/m);
+      assert.match(dockerfile, /^EXPOSE 3000$/m);
+      assert.match(dockerfile, /^CMD \["node", "dist\/index\.cjs"\]$/m);
+
+      const compose = archiveText(entries, "docker-compose.yml");
+      assert.match(compose, /DATABASE_URL=postgresql:\/\/globipos:\$\{DB_PASSWORD:-globipos\}@db:5432\/globipos/);
+      assert.match(compose, /SESSION_SECRET=\$\{SESSION_SECRET\}/);
+      assert.match(compose, /condition: service_healthy/);
+      assert.match(compose, /image: postgres:16-alpine/);
+      assert.match(compose, /\.\/database\.sql:\/docker-entrypoint-initdb\.d\/01-init\.sql/);
+      assert.match(compose, /postgres_data:\/var\/lib\/postgresql\/data/);
+      assert.match(compose, /restart: unless-stopped/);
+
+      const envTemplate = archiveText(entries, ".env.template");
+      assert.match(envTemplate, /^APP_PORT=3000$/m);
+      assert.match(envTemplate, /^DB_PASSWORD=globipos_CHANGE_ME$/m);
+      assert.match(envTemplate, /^SESSION_SECRET=REPLACE_WITH_64_CHAR_RANDOM_HEX$/m);
+
+      const setupScript = archiveText(entries, "setup.sh");
+      assert.match(setupScript, /Install Container Manager from Synology Package Center/);
+      assert.match(setupScript, /cp \.env\.template \.env/);
+      assert.match(setupScript, /DC="docker compose"/);
+      assert.match(setupScript, /\$DC build/);
+      assert.match(setupScript, /\$DC up -d/);
+
+      const readme = archiveText(entries, "README-SYNOLOGY.md");
+      assert.match(readme, /Synology NAS Deployment Guide/);
+      assert.match(readme, /Container Manager UI/);
+      assert.match(readme, /docker-compose\.yml/);
+      assert.match(readme, /docker compose logs -f app/);
+      assert.match(readme, /docker compose build && docker compose up -d/);
+      assert.match(readme, /database is NOT re-imported on updates/);
+      assert.match(readme, /Control Panel → Login Portal → Advanced → Reverse Proxy/);
     }
   }
   assert.deepEqual(dumpedUrls, Array(3).fill(process.env.DATABASE_URL));
