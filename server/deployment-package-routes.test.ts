@@ -19,6 +19,10 @@ import {
   runDeploymentPgDump,
   setDeploymentPackageRouteDependenciesForTests,
 } from "./deployment-package-routes";
+import {
+  buildDeploymentEnvironmentTemplate,
+  buildDeploymentPm2Config,
+} from "./deployment-package-templates";
 
 const expectedDate = () => new Date().toISOString().split("T")[0];
 
@@ -277,6 +281,7 @@ test("superusers can download all deployment package types with usable ZIP heade
 
       const envExample = archiveText(entries, ".env.example");
       assertSharedEnvironmentTemplate(envExample);
+      assert.equal(envExample, buildDeploymentEnvironmentTemplate());
 
       const setupScript = archiveText(entries, "setup.sh");
       assertShellSyntax(setupScript);
@@ -305,7 +310,9 @@ test("superusers can download all deployment package types with usable ZIP heade
         },
       ).trim();
       assert.equal(effectiveOmit, "", "setup must install build tools in production mode");
-      assertPm2Config(archiveText(entries, "ecosystem.config.js"));
+      const pm2Config = archiveText(entries, "ecosystem.config.js");
+      assertPm2Config(pm2Config);
+      assert.equal(pm2Config, buildDeploymentPm2Config("route-test-co"));
 
       const caddyfile = archiveText(entries, "Caddyfile");
       assert.match(caddyfile, /yourdomain\.com \{/);
@@ -320,8 +327,12 @@ test("superusers can download all deployment package types with usable ZIP heade
       assert.match(readme, /Application startup file: `dist\/index\.cjs`/);
       assert.match(readme, /pm2 start ecosystem\.config\.js/);
     } else if (kind === "compiled") {
-      assertSharedEnvironmentTemplate(archiveText(entries, ".env.example"));
-      assertPm2Config(archiveText(entries, "ecosystem.config.js"));
+      const envExample = archiveText(entries, ".env.example");
+      assertSharedEnvironmentTemplate(envExample);
+      assert.equal(envExample, buildDeploymentEnvironmentTemplate());
+      const pm2Config = archiveText(entries, "ecosystem.config.js");
+      assertPm2Config(pm2Config);
+      assert.equal(pm2Config, buildDeploymentPm2Config("route-test-co"));
 
       const startScript = archiveText(entries, "start.sh");
       assertShellSyntax(startScript);

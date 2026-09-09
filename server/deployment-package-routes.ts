@@ -11,6 +11,10 @@ import {
   createDeploymentPackageArchive,
   type DeploymentPackageArchive,
 } from "./deployment-package-archive";
+import {
+  buildDeploymentEnvironmentTemplate,
+  buildDeploymentPm2Config,
+} from "./deployment-package-templates";
 
 function downloadDeploymentPackage(
   res: Response,
@@ -118,45 +122,8 @@ app.get("/api/backup/cpanel-package", requireSuperuser, async (req, res) => {
     // Generate SQL dump via pg_dump
     databaseDump = await dumpDatabaseForDeployment(dbUrl, abortController.signal);
 
-    // .env.example
-    const envExample = [
-      "# ── Database ────────────────────────────────────────────────────────────",
-      "DATABASE_URL=postgresql://DB_USER:DB_PASSWORD@localhost:5432/DB_NAME",
-      "",
-      "# ── Session ─────────────────────────────────────────────────────────────",
-      "# Generate with: node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\"",
-      "SESSION_SECRET=REPLACE_WITH_64_CHAR_RANDOM_HEX",
-      "",
-      "# ── App ─────────────────────────────────────────────────────────────────",
-      "NODE_ENV=production",
-      "PORT=3000",
-      "",
-      "# ── Email (Resend) ───────────────────────────────────────────────────────",
-      "# Optional — can also be configured from Settings > Email inside the app",
-      "# RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx",
-    ].join("\n");
-
-    // ecosystem.config.js (PM2)
-    const ecosystem = [
-      "module.exports = {",
-      "  apps: [{",
-      `    name: "${slug}",`,
-      "    script: \"dist/index.cjs\",",
-      "    interpreter: \"node\",",
-      "    env: {",
-      "      NODE_ENV: \"production\",",
-      "      PORT: 3000",
-      "    },",
-      "    instances: 1,",
-      "    autorestart: true,",
-      "    watch: false,",
-      "    max_memory_restart: \"512M\",",
-      "    error_file: \"logs/err.log\",",
-      "    out_file: \"logs/out.log\",",
-      "    log_date_format: \"YYYY-MM-DD HH:mm:ss\"",
-      "  }]",
-      "};",
-    ].join("\n");
+    const envExample = buildDeploymentEnvironmentTemplate();
+    const ecosystem = buildDeploymentPm2Config(slug);
 
     // setup.sh
     const setupSh = [
@@ -512,45 +479,8 @@ app.get("/api/backup/compiled-package", requireSuperuser, async (req, res) => {
     // SQL dump
     databaseDump = await dumpDatabaseForDeployment(dbUrl, abortController.signal);
 
-    // .env.example
-    const envExample = [
-      "# ── Database ────────────────────────────────────────────────────────────",
-      "DATABASE_URL=postgresql://DB_USER:DB_PASSWORD@localhost:5432/DB_NAME",
-      "",
-      "# ── Session ─────────────────────────────────────────────────────────────",
-      "# Generate with: node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\"",
-      "SESSION_SECRET=REPLACE_WITH_64_CHAR_RANDOM_HEX",
-      "",
-      "# ── App ─────────────────────────────────────────────────────────────────",
-      "NODE_ENV=production",
-      "PORT=3000",
-      "",
-      "# ── Email (Resend) ───────────────────────────────────────────────────────",
-      "# Optional — can also be configured from Settings > Email inside the app",
-      "# RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx",
-    ].join("\n");
-
-    // ecosystem.config.js (PM2)
-    const ecosystem = [
-      "module.exports = {",
-      "  apps: [{",
-      `    name: "${slug}",`,
-      "    script: \"dist/index.cjs\",",
-      "    interpreter: \"node\",",
-      "    env: {",
-      "      NODE_ENV: \"production\",",
-      "      PORT: 3000",
-      "    },",
-      "    instances: 1,",
-      "    autorestart: true,",
-      "    watch: false,",
-      "    max_memory_restart: \"512M\",",
-      "    error_file: \"logs/err.log\",",
-      "    out_file: \"logs/out.log\",",
-      "    log_date_format: \"YYYY-MM-DD HH:mm:ss\"",
-      "  }]",
-      "};",
-    ].join("\n");
+    const envExample = buildDeploymentEnvironmentTemplate();
+    const ecosystem = buildDeploymentPm2Config(slug);
 
     // start.sh — no build step needed (app is pre-compiled)
     const startSh = [
