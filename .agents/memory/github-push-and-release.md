@@ -24,20 +24,6 @@ the supported protocol version and make the server reject older clients with an
 explicit minimum-version response. Never let an old client appear connected with
 an incomplete local catalog.
 
-## Release-only API uploads
-
-When Git histories have diverged and release files must be overlaid through the
-GitHub Contents API, read each source file directly from the filesystem and
-verify the decoded remote content byte-for-byte before moving the release tag.
-
-**Why:** Capturing a large source file through shell stdout can silently produce
-partial content even when the command reports success, leaving a tag that looks
-correct but cannot build.
-
-**How to apply:** Use direct file reads with an explicit byte budget, compare the
-uploaded content (or cryptographic hashes), and only then create or move the tag.
-Also reject any lockfile containing Replit-internal registry URLs before upload.
-
 ## GitHub connection preflight
 
 Validate both Git transport and API access before mutating release versions.
