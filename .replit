@@ -1,6 +1,21 @@
 modules = ["nodejs-20", "web", "python-3.11", "rust-stable", "postgresql-16"]
 run = "npm run dev"
-hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
+hidden = [
+  ".agents",
+  ".cache",
+  ".config",
+  ".git",
+  ".local",
+  "artifacts",
+  "attached_assets",
+  "customer-app/node_modules",
+  "dist",
+  "generated-icon.png",
+  "node_modules",
+  "pda-app/node_modules",
+  "pos-app/node_modules",
+  "pos-app/src-tauri/target"
+]
 
 [nix]
 channel = "stable-24_05"

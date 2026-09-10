@@ -51,3 +51,4 @@
 - [Tauri POS indexed search](tauri-pos-indexed-search.md) — use exact barcode/SKU indexes plus FTS5 prefix search; hydrate layout items separately from bounded browse pages
 - [Promotional shelf-label prior prices](promotional-shelf-label-prior-prices.md) — keep prior-price provenance explicit; legacy attestation must never masquerade as complete 30-day history
 - [Item image storage fallback](item-image-storage-fallback.md) — App Storage needs an attached bucket; item renditions must retain a deployment-local durable fallback
+- [Deployment image exclusions](deployment-image-exclusions.md) — Git-ignored native targets and caches still need explicit .replit hidden entries or web images can exceed 8 GiB
