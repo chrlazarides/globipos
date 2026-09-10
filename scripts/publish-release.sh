@@ -129,7 +129,7 @@ run_windows_preflight() {
     read -r status conclusion < <(node -e '
       const fs = require("fs");
       const run = JSON.parse(fs.readFileSync(0, "utf8"));
-      process.stdout.write(`${run.status} ${run.conclusion || "-"}`);
+      process.stdout.write(`${run.status} ${run.conclusion || "-"}\n`);
     ' <<<"$run_json")
     [[ "$status" == "completed" ]] && break
     sleep 15

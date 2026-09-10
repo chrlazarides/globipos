@@ -49,6 +49,120 @@ async function runHelper(root, ...args) {
   return execFileAsync(process.execPath, [helper, ...args], { cwd: root });
 }
 
+async function createWindowsPreflightFixture(scenario) {
+  const root = await createFixture();
+  const scriptsDir = path.join(root, "scripts");
+  const binDir = path.join(root, "test-bin");
+  const gitLog = path.join(root, "git.log");
+  await mkdir(scriptsDir, { recursive: true });
+  await mkdir(binDir);
+  await cp(helper, path.join(scriptsDir, "pos-version.mjs"));
+  await cp(publishScript, path.join(scriptsDir, "publish-release.sh"));
+
+  const commands = {
+    git: `#!/usr/bin/env bash
+echo "$*" >>"$TEST_GIT_LOG"
+case "$1 $2" in
+  "remote -v") echo "origin https://github.com/example/globipos.git (fetch)" ;;
+  "remote get-url") echo "https://github.com/example/globipos.git" ;;
+  "branch --show-current") echo "main" ;;
+  "status --porcelain") ;;
+  "rev-parse HEAD") echo "release-head-sha" ;;
+  "rev-parse "*) exit 1 ;;
+  "diff --cached") exit 1 ;;
+esac
+exit 0
+`,
+    curl: `#!/usr/bin/env bash
+url="\${!#}"
+case "$url" in
+  */dispatches) exit 0 ;;
+  *"/runs?event="*)
+    if [[ "$TEST_SCENARIO" == "missing" ]]; then
+      printf '{"workflow_runs":[]}'
+    else
+      printf '{"workflow_runs":[{"id":4242,"head_sha":"release-head-sha","created_at":"2026-09-10T12:00:01Z"}]}'
+    fi
+    ;;
+  */actions/runs/4242)
+    case "$TEST_SCENARIO" in
+      success) printf '{"status":"completed","conclusion":"success"}' ;;
+      failed) printf '{"status":"completed","conclusion":"failure"}' ;;
+      cancelled) printf '{"status":"completed","conclusion":"cancelled"}' ;;
+      timeout) printf '{"status":"in_progress","conclusion":null}' ;;
+    esac
+    ;;
+esac
+`,
+    date: `#!/usr/bin/env bash
+printf '2026-09-10T12:00:00Z\\n'
+`,
+    sleep: "#!/usr/bin/env bash\nexit 0\n",
+    npm: "#!/usr/bin/env bash\nexit 0\n",
+    npx: "#!/usr/bin/env bash\nexit 0\n",
+  };
+  await Promise.all(Object.entries(commands).map(async ([name, contents]) => {
+    const file = path.join(binDir, name);
+    await writeFile(file, contents);
+    await chmod(file, 0o755);
+  }));
+
+  return {
+    root,
+    gitLog,
+    run: () => execFileAsync(
+      "bash",
+      ["-c", 'printf "yes\\n" | bash scripts/publish-release.sh "$1"', "release-test", originalVersion],
+      {
+      cwd: root,
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        GLOBISYNC: "test-token",
+        TEST_GIT_LOG: gitLog,
+        TEST_SCENARIO: scenario,
+      },
+      },
+    ),
+  };
+}
+
+async function readGitOperations(gitLog) {
+  return readFile(gitLog, "utf8");
+}
+
+for (const [scenario, expectedMessage] of [
+  ["failed", "Windows release preflight failed"],
+  ["cancelled", "Windows release preflight failed"],
+  ["timeout", "Windows release preflight did not finish within 60 minutes"],
+  ["missing", "Windows release preflight did not appear in GitHub Actions"],
+]) {
+  test(`does not create or push a tag when Windows preflight is ${scenario}`, async (t) => {
+    const fixture = await createWindowsPreflightFixture(scenario);
+    t.after(() => rm(fixture.root, { recursive: true, force: true }));
+
+    await assert.rejects(
+      fixture.run(),
+      (error) => error.code === 1 && error.stderr.includes(expectedMessage),
+    );
+
+    const operations = await readGitOperations(fixture.gitLog);
+    assert.doesNotMatch(operations, /^tag -a /m);
+    assert.doesNotMatch(operations, /^push origin v1\.2\.3$/m);
+  });
+}
+
+test("creates and pushes the tag after a matching Windows preflight succeeds", async (t) => {
+  const fixture = await createWindowsPreflightFixture("success");
+  t.after(() => rm(fixture.root, { recursive: true, force: true }));
+
+  await fixture.run();
+
+  const operations = await readGitOperations(fixture.gitLog);
+  assert.match(operations, /^tag -a v1\.2\.3 -m GlobiPOS Terminal v1\.2\.3$/m);
+  assert.match(operations, /^push origin v1\.2\.3$/m);
+});
+
 async function readFixtureVersions(root) {
   const packageJson = JSON.parse(await readFile(path.join(root, "pos-app/package.json"), "utf8"));
   const lockJson = JSON.parse(await readFile(path.join(root, "pos-app/package-lock.json"), "utf8"));
