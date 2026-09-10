@@ -21,12 +21,38 @@ warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 RELEASE_ASKPASS=""
+RELEASE_VERSION_BACKUP=""
+RELEASE_VERSION_FILES=(
+  pos-app/package.json
+  pos-app/package-lock.json
+  pos-app/src-tauri/Cargo.toml
+  pos-app/src-tauri/Cargo.lock
+  pos-app/src-tauri/tauri.conf.json
+)
+RELEASE_VERSION_MUTATED=0
 cleanup_release_auth() {
   if [[ -n "$RELEASE_ASKPASS" ]]; then
     rm -f "$RELEASE_ASKPASS"
   fi
 }
-trap cleanup_release_auth EXIT
+
+cleanup_release() {
+  local status=$?
+  if [[ "$status" -ne 0 && "$RELEASE_VERSION_MUTATED" -eq 1 && -n "$RELEASE_VERSION_BACKUP" ]]; then
+    warn "Release preflight failed; restoring POS version files…"
+    local file
+    for file in "${RELEASE_VERSION_FILES[@]}"; do
+      cp "$RELEASE_VERSION_BACKUP/$file" "$file"
+    done
+    success "Restored all POS version files"
+  fi
+  if [[ -n "$RELEASE_VERSION_BACKUP" ]]; then
+    rm -rf "$RELEASE_VERSION_BACKUP"
+  fi
+  cleanup_release_auth
+  return "$status"
+}
+trap cleanup_release EXIT
 
 configure_github_auth() {
   if git ls-remote --exit-code "$GITHUB_REMOTE" HEAD >/dev/null 2>&1; then
@@ -185,13 +211,20 @@ esac
 
 # ── Update and verify every compiled version source ───────────────────────────
 info "Updating all POS version files…"
+RELEASE_VERSION_BACKUP=$(mktemp -d)
+for file in "${RELEASE_VERSION_FILES[@]}"; do
+  mkdir -p "$RELEASE_VERSION_BACKUP/$(dirname "$file")"
+  cp "$file" "$RELEASE_VERSION_BACKUP/$file"
+done
+RELEASE_VERSION_MUTATED=1
 node scripts/pos-version.mjs --set "$VERSION"
 node scripts/pos-version.mjs --check "$TAG"
 success "Package, Cargo, Tauri, lockfile, and tag versions agree at $VERSION"
 
 info "Running deterministic frontend and native preflight checks…"
-(cd pos-app && npm ci && npx tauri build --no-bundle -- --locked)
+(cd pos-app && npm ci && npm run build && npx tauri build --no-bundle -- --locked)
 success "Frontend and native POS checks passed"
+RELEASE_VERSION_MUTATED=0
 
 # ── Commit the version bump ───────────────────────────────────────────────────
 info "Committing version bump…"

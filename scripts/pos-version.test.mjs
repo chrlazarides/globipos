@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 const helper = fileURLToPath(new URL("./pos-version.mjs", import.meta.url));
+const publishScript = fileURLToPath(new URL("./publish-release.sh", import.meta.url));
 const originalVersion = "1.2.3";
 const updatedVersion = "2.4.6";
 
@@ -65,6 +66,87 @@ async function readFixtureVersions(root) {
       ?.match(/^version\s*=\s*"([^"]+)"/m)?.[1],
     tauri: tauri.version,
   };
+}
+
+async function createReleaseFixture() {
+  const root = await createFixture();
+  await mkdir(path.join(root, "scripts"), { recursive: true });
+  await cp(helper, path.join(root, "scripts", "pos-version.mjs"));
+  await cp(publishScript, path.join(root, "scripts", "publish-release.sh"));
+  await mkdir(path.join(root, "fake-bin"));
+  const gitLog = path.join(root, "git.log");
+  await writeFile(
+    path.join(root, "fake-bin", "git"),
+    `#!/usr/bin/env bash
+echo "$*" >> "$GIT_LOG"
+case "$1" in
+  remote)
+    if [[ "$2" == "-v" ]]; then echo "origin https://github.com/example/globipos.git (fetch)"; else echo "https://github.com/example/globipos.git"; fi ;;
+  branch) echo "main" ;;
+  status) exit 0 ;;
+  show-ref|merge-base|push|fetch|ls-remote) exit 0 ;;
+  rev-parse) exit 1 ;;
+  *) exit 0 ;;
+esac
+`,
+  );
+  await writeFile(
+    path.join(root, "fake-bin", "npm"),
+    `#!/usr/bin/env bash
+echo "npm $*" >> "$COMMAND_LOG"
+[[ "$FAIL_STAGE" == "install" && "$1" == "ci" ]] && exit 41
+[[ "$FAIL_STAGE" == "frontend" && "$1 $2" == "run build" ]] && exit 42
+exit 0
+`,
+  );
+  await writeFile(
+    path.join(root, "fake-bin", "npx"),
+    `#!/usr/bin/env bash
+echo "npx $*" >> "$COMMAND_LOG"
+[[ "$FAIL_STAGE" == "native" && "$1 $2" == "tauri build" ]] && exit 43
+exit 0
+`,
+  );
+  await Promise.all(["git", "npm", "npx"].map((name) => chmod(path.join(root, "fake-bin", name), 0o755)));
+  return { root, gitLog };
+}
+
+for (const failStage of ["install", "frontend", "native"]) {
+  test(`release script restores all version files when ${failStage} preflight fails`, async (t) => {
+    const { root, gitLog } = await createReleaseFixture();
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const versionFiles = [
+      "pos-app/package.json",
+      "pos-app/package-lock.json",
+      "pos-app/src-tauri/Cargo.toml",
+      "pos-app/src-tauri/Cargo.lock",
+      "pos-app/src-tauri/tauri.conf.json",
+    ];
+    const originals = new Map(await Promise.all(versionFiles.map(async (file) => [
+      file,
+      await readFile(path.join(root, file), "utf8"),
+    ])));
+
+    await assert.rejects(
+      execFileAsync("bash", ["-c", `printf 'y\\n' | bash scripts/publish-release.sh ${updatedVersion}`], {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${path.join(root, "fake-bin")}:${process.env.PATH}`,
+          FAIL_STAGE: failStage,
+          GIT_LOG: gitLog,
+          COMMAND_LOG: path.join(root, "commands.log"),
+        },
+      }),
+      (error) => error.code === { install: 41, frontend: 42, native: 43 }[failStage],
+    );
+
+    for (const [file, contents] of originals) {
+      assert.equal(await readFile(path.join(root, file), "utf8"), contents);
+    }
+    const gitCalls = await readFile(gitLog, "utf8");
+    assert.doesNotMatch(gitCalls, /(^|\n)(commit|tag) /);
+  });
 }
 
 test("updates package, lockfile, Cargo, and Tauri versions together", async (t) => {
