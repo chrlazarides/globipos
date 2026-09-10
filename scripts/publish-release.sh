@@ -20,6 +20,35 @@ success() { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
+RELEASE_ASKPASS=""
+cleanup_release_auth() {
+  if [[ -n "$RELEASE_ASKPASS" ]]; then
+    rm -f "$RELEASE_ASKPASS"
+  fi
+}
+trap cleanup_release_auth EXIT
+
+configure_github_auth() {
+  if git ls-remote --exit-code "$GITHUB_REMOTE" HEAD >/dev/null 2>&1; then
+    return
+  fi
+  [[ -n "${GLOBISYNC:-}" ]] || error \
+    "Cannot authenticate to GitHub. Reconnect GitHub or configure the project-scoped GLOBISYNC secret."
+  RELEASE_ASKPASS=$(mktemp)
+  chmod 700 "$RELEASE_ASKPASS"
+  cat >"$RELEASE_ASKPASS" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  *Username*) printf '%s\n' "x-access-token" ;;
+  *) printf '%s\n' "$GLOBISYNC" ;;
+esac
+EOF
+  export GIT_ASKPASS="$RELEASE_ASKPASS"
+  export GIT_TERMINAL_PROMPT=0
+  git ls-remote --exit-code "$GITHUB_REMOTE" HEAD >/dev/null \
+    || error "Project-scoped GitHub authentication failed. Refresh GLOBISYNC before releasing."
+}
+
 echo ""
 echo "  ╔══════════════════════════════════════════════╗"
 echo "  ║  GlobiPOS Terminal — Publish GitHub Release  ║"
@@ -43,8 +72,7 @@ CURRENT_BRANCH=$(git branch --show-current)
 [[ -z "$(git status --porcelain)" ]] || error "Working tree is not clean. Commit or stash all changes before releasing."
 
 info "Checking GitHub connectivity and remote branch alignment…"
-git ls-remote --exit-code "$GITHUB_REMOTE" HEAD >/dev/null \
-  || error "Cannot read the GitHub repository. Repair the GitHub connection before releasing."
+configure_github_auth
 git fetch --quiet "$GITHUB_REMOTE" main --tags \
   || error "Cannot fetch GitHub main and tags. Repair the GitHub connection before releasing."
 REMOTE_MAIN="$GITHUB_REMOTE/main"
