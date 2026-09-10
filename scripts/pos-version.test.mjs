@@ -178,3 +178,22 @@ test("rejects lockfiles that point at a Replit-internal registry", async (t) => 
     (error) => error.code === 1 && error.stderr.includes("unavailable to GitHub Actions"),
   );
 });
+
+test("rejects Cargo.lock entries that point at a Replit-internal registry", async (t) => {
+  const root = await createFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const lockFile = path.join(root, "pos-app", "src-tauri", "Cargo.lock");
+  const lockText = await readFile(lockFile, "utf8");
+  await writeFile(
+    lockFile,
+    `${lockText}\n[[package]]\nname = "internal-only-dependency"\nversion = "1.0.0"\nsource = "sparse+https://cargo-cache.replit.internal/index/"\n`,
+  );
+
+  await assert.rejects(
+    runHelper(root, "--check", originalVersion),
+    (error) =>
+      error.code === 1 &&
+      error.stderr.includes("pos-app/src-tauri/Cargo.lock") &&
+      error.stderr.includes("unavailable to GitHub Actions"),
+  );
+});

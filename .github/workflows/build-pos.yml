@@ -80,12 +80,9 @@ jobs:
       - name: Install frontend dependencies deterministically
         working-directory: pos-app
         run: npm ci
-      - name: Build frontend
+      - name: Compile native Tauri application
         working-directory: pos-app
-        run: npm run build
-      - name: Compile native application
-        working-directory: pos-app/src-tauri
-        run: cargo check --locked
+        run: npx tauri build --no-bundle -- --locked
 
   # ── Desktop: Windows, macOS, Linux ─────────────────────────────────────────
   build-desktop:

@@ -122,8 +122,7 @@ node scripts/pos-version.mjs --check "$TAG"
 success "Package, Cargo, Tauri, lockfile, and tag versions agree at $VERSION"
 
 info "Running deterministic frontend and native preflight checks…"
-(cd pos-app && npm ci && npm run build)
-(cd pos-app/src-tauri && cargo check --locked)
+(cd pos-app && npm ci && npx tauri build --no-bundle -- --locked)
 success "Frontend and native POS checks passed"
 
 # ── Commit the version bump ───────────────────────────────────────────────────

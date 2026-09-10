@@ -76,24 +76,30 @@ async function readVersions() {
   };
 }
 
-function assertPortableLockfile(lockText) {
-  const blockedHosts = [
-    "package-firewall.replit.internal",
-    "localhost",
-    "127.0.0.1",
+function assertPortableLockfile(lockText, lockfileName) {
+  const blockedHostPatterns = [
+    /(?:[a-z0-9-]+\.)*replit\.internal/gi,
+    /\blocalhost\b/gi,
+    /\b127\.0\.0\.1\b/g,
   ];
-  const matches = blockedHosts.filter((host) => lockText.includes(host));
+  const matches = [
+    ...new Set(blockedHostPatterns.flatMap((pattern) => lockText.match(pattern) ?? [])),
+  ];
   if (matches.length) {
     throw new Error(
-      `POS lockfile contains registry URLs unavailable to GitHub Actions: ${matches.join(", ")}. ` +
-      "Regenerate it with the public npm registry before releasing.",
+      `${lockfileName} contains registry URLs unavailable to GitHub Actions: ${matches.join(", ")}. ` +
+      "Regenerate it with public registries before releasing.",
     );
   }
 }
 
 async function check(expectedValue) {
-  const lockText = await readFile(files.lock, "utf8");
-  assertPortableLockfile(lockText);
+  const [lockText, cargoLockText] = await Promise.all([
+    readFile(files.lock, "utf8"),
+    readFile(files.cargoLock, "utf8"),
+  ]);
+  assertPortableLockfile(lockText, "pos-app/package-lock.json");
+  assertPortableLockfile(cargoLockText, "pos-app/src-tauri/Cargo.lock");
   const versions = await readVersions();
   const expected = expectedValue ? normalizeVersion(expectedValue) : versions.package;
   const mismatches = Object.entries(versions).filter(([, version]) => version !== expected);
@@ -136,7 +142,8 @@ async function setVersion(value) {
   ]);
 
   if (original.has(files.lock)) {
-    assertPortableLockfile(original.get(files.lock));
+    assertPortableLockfile(original.get(files.lock), "pos-app/package-lock.json");
+    assertPortableLockfile(original.get(files.cargoLock), "pos-app/src-tauri/Cargo.lock");
     const lockJson = JSON.parse(original.get(files.lock));
     lockJson.version = version;
     if (lockJson.packages?.[""]) lockJson.packages[""].version = version;
