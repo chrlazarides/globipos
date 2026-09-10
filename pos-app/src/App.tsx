@@ -13,6 +13,7 @@ import { POS } from "./pages/POS";
 import { useSync } from "./hooks/useSync";
 import { useUpdater } from "./hooks/useUpdater";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { BuildBadge } from "./components/BuildBadge";
 
 type Screen = "loading" | "setup" | "login" | "pos";
 
@@ -27,6 +28,12 @@ export function App() {
   // On mount: init SQLite and check if we have a stored config
   useEffect(() => {
     async function init() {
+      // The browser development preview has no Tauri runtime or SQLite bridge.
+      // Show the setup screen without emitting a misleading native-app error.
+      if (!("__TAURI_INTERNALS__" in window)) {
+        setScreen("setup");
+        return;
+      }
       try {
         const cfg = await getConfig();
         if (cfg) {
@@ -65,6 +72,7 @@ export function App() {
           <div className="w-10 h-10 border-2 border-burgundy-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
           <p className="text-gray-500 text-sm">Starting GlobiPOS…</p>
         </div>
+        <BuildBadge />
       </div>
     );
   }
@@ -74,6 +82,7 @@ export function App() {
       <>
         <Setup onComplete={handleSetupComplete} />
         <UpdateBanner state={updateState} />
+        <BuildBadge />
       </>
     );
   }
@@ -83,6 +92,7 @@ export function App() {
       <>
         <Login config={config} onLogin={handleLogin} />
         <UpdateBanner state={updateState} />
+        <BuildBadge />
       </>
     );
   }
@@ -92,10 +102,16 @@ export function App() {
       <>
         <POS config={config} session={session} sync={sync} onLogout={handleLogout} />
         <UpdateBanner state={updateState} />
+        <BuildBadge />
       </>
     );
   }
 
   // Fallback — shouldn't reach here
-  return <Setup onComplete={handleSetupComplete} />;
+  return (
+    <>
+      <Setup onComplete={handleSetupComplete} />
+      <BuildBadge />
+    </>
+  );
 }
