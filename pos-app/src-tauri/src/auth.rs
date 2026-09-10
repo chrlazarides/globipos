@@ -31,16 +31,27 @@ pub async fn validate_pin(pool: &SqlitePool, pin: &str) -> Result<Option<Cashier
     }))
 }
 
+pub async fn authorize_pin(
+    pool: &SqlitePool,
+    pin: &str,
+    required_permission: &str,
+) -> Result<Option<CashierSession>, sqlx::Error> {
+    Ok(validate_pin(pool, pin)
+        .await?
+        .filter(|session| session.permissions.iter().any(|permission| permission == required_permission)))
+}
+
 fn default_permissions(role: &str) -> Vec<String> {
     match role {
         "manager" => vec![
             "sell","void_order","void_line","price_override","discount",
             "hold","recall","refund","promo_code","open_drawer",
-            "reports","manage_cashiers","end_shift",
+            "reports","manage_cashiers","end_shift","reconcile_card_payment",
         ],
         "supervisor" => vec![
             "sell","void_line","price_override","discount",
             "hold","recall","promo_code","open_drawer","end_shift",
+            "reconcile_card_payment",
         ],
         _ => vec!["sell","hold","recall"],
     }

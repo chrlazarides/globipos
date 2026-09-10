@@ -35,6 +35,10 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         run_v4(pool).await?;
         set_version(pool, 4).await?;
     }
+    if current < 5 {
+        run_v5(pool).await?;
+        set_version(pool, 5).await?;
+    }
 
     Ok(())
 }
@@ -227,6 +231,49 @@ async fn run_v4(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let _ = sqlx::query("ALTER TABLE audit_log ADD COLUMN pushed INTEGER NOT NULL DEFAULT 0")
         .execute(pool)
         .await;
+    Ok(())
+}
+
+async fn run_v5(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let statements = [
+        "CREATE INDEX IF NOT EXISTS idx_products_active_category_name ON local_products(category_id, name) WHERE active = 1",
+        "CREATE INDEX IF NOT EXISTS idx_products_active_name ON local_products(name) WHERE active = 1",
+        "CREATE INDEX IF NOT EXISTS idx_categories_active_name ON local_categories(name) WHERE active = 1",
+        "CREATE INDEX IF NOT EXISTS idx_orders_status_created ON pos_orders(status, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_price_overrides_current ON price_overrides(product_id, valid_from DESC, created_at DESC, valid_until)",
+        "CREATE INDEX IF NOT EXISTS idx_outbox_ready ON pos_outbox(status, next_attempt_at, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_inbox_processed_created ON pos_inbox(processed, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_unpushed ON audit_log(pushed, id)",
+        r#"CREATE VIRTUAL TABLE IF NOT EXISTS local_products_fts USING fts5(
+            name, sku, barcode,
+            content='local_products',
+            content_rowid='rowid',
+            tokenize='unicode61 remove_diacritics 2',
+            prefix='2 3 4'
+        )"#,
+        r#"CREATE TRIGGER IF NOT EXISTS local_products_fts_insert AFTER INSERT ON local_products BEGIN
+            INSERT INTO local_products_fts(rowid, name, sku, barcode)
+            VALUES (new.rowid, new.name, new.sku, coalesce(new.barcode, ''));
+        END"#,
+        r#"CREATE TRIGGER IF NOT EXISTS local_products_fts_delete AFTER DELETE ON local_products BEGIN
+            INSERT INTO local_products_fts(local_products_fts, rowid, name, sku, barcode)
+            VALUES ('delete', old.rowid, old.name, old.sku, coalesce(old.barcode, ''));
+        END"#,
+        r#"CREATE TRIGGER IF NOT EXISTS local_products_fts_update AFTER UPDATE OF name, sku, barcode ON local_products BEGIN
+            INSERT INTO local_products_fts(local_products_fts, rowid, name, sku, barcode)
+            VALUES ('delete', old.rowid, old.name, old.sku, coalesce(old.barcode, ''));
+            INSERT INTO local_products_fts(rowid, name, sku, barcode)
+            VALUES (new.rowid, new.name, new.sku, coalesce(new.barcode, ''));
+        END"#,
+    ];
+    for statement in statements {
+        sqlx::query(statement).execute(&mut *tx).await?;
+    }
+    sqlx::query("INSERT INTO local_products_fts(local_products_fts) VALUES ('rebuild')")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(())
 }
 

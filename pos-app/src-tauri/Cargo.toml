@@ -1,6 +1,6 @@
 [package]
 name = "globipos-terminal"
-version = "1.0.6"
+version = "1.0.8"
 description = "GlobiPOS Terminal — offline-first POS app"
 authors = ["GlobiPOS"]
 license = "UNLICENSED"
@@ -22,7 +22,7 @@ tauri-plugin-shell  = "2"
 tauri-plugin-updater = "2"
 
 # SQLite via sqlx (Rust-side DB access)
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 
 sha2       = "0.10"
 serde      = { version = "1", features = ["derive"] }

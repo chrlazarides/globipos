@@ -30,7 +30,12 @@ export function computeLineAmounts(line: Omit<OrderLine, "line_total" | "vat_amo
   // Apply line discount (% first, then fixed)
   const pctDiscount = round2(lineSubtotal * (line.line_discount_pct / 100));
   const lineDiscount = round2(pctDiscount + line.line_discount_fixed);
-  let lineNet = Math.max(0, round2(lineSubtotal - lineDiscount));
+  // For normal sale lines (positive price) clamp to 0 so over-discounting is safe.
+  // For adjustment / refund / promo lines (negative unit_price) allow the full
+  // negative value through so they actually reduce the order total.
+  let lineNet = effectiveUnitPrice >= 0
+    ? Math.max(0, round2(lineSubtotal - lineDiscount))
+    : round2(lineSubtotal - lineDiscount);
 
   // "Pagomena" — per-item surcharge/cover charge %, applied after discount, before VAT
   const surchargePct = line.line_surcharge_pct ?? 0;
