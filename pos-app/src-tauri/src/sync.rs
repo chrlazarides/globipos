@@ -120,14 +120,27 @@ async fn fetch_catalog_pages(
         url.query_pairs_mut().append_pair("limit", "250");
         if let Some(s) = since { url.query_pairs_mut().append_pair("since", s); }
         if let Some(c) = cursor.as_deref() { url.query_pairs_mut().append_pair("cursor", c); }
-        let resp = client.get(url).header("X-Terminal-Code", terminal_code).send().await
+        let resp = client
+            .get(url.clone())
+            .header("X-Terminal-Code", terminal_code)
+            // reqwest is built without compression features. Prevent an intermediary from
+            // returning compressed bytes that serde_json would otherwise try to parse.
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .send().await
             .map_err(|e| format!("Catalog sync network error: {}", e))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             return Err(format!("Catalog sync server error {}: {}", status, body));
         }
-        let data: Value = resp.json().await.map_err(|e| format!("Catalog sync parse error: {}", e))?;
+        let content_type = resp.headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("missing")
+            .to_string();
+        let body = resp.bytes().await
+            .map_err(|e| format!("Catalog sync response read error from {}: {}", url, e))?;
+        let data = decode_catalog_body(&body, &content_type, url.as_str())?;
         let items = data["items"].as_array().cloned().unwrap_or_default();
         let cats = data["categories"].as_array().cloned().unwrap_or_default();
         db::upsert_catalog_page(pool, &items, &cats).await.map_err(|e| e.to_string())?;
@@ -153,6 +166,21 @@ async fn fetch_catalog_pages(
         }
     }
     Ok(total)
+}
+
+fn decode_catalog_body(body: &[u8], content_type: &str, url: &str) -> Result<Value, String> {
+    serde_json::from_slice(body).map_err(|error| {
+        let preview = String::from_utf8_lossy(&body[..body.len().min(160)])
+            .replace(['\r', '\n'], " ");
+        format!(
+            "Catalog sync parse error from {} (content-type {}, {} bytes): {}; body starts with: {}",
+            url,
+            content_type,
+            body.len(),
+            error,
+            preview
+        )
+    })
 }
 
 struct CatalogScope {
@@ -192,6 +220,18 @@ mod cursor_tests {
         assert_eq!(decode_scoped_cursor(&saved.to_string(), &scope).as_deref(), Some("opaque"));
         let other = catalog_scope("https://pos.example", "t02");
         assert!(decode_scoped_cursor(&saved.to_string(), &other).is_none());
+    }
+
+    #[test]
+    fn catalog_parse_error_includes_bounded_response_diagnostics() {
+        let body = vec![b'<'; 300];
+        let error = decode_catalog_body(&body, "text/html", "https://pos.example/api/sync/catalog")
+            .expect_err("HTML must not parse as catalog JSON");
+
+        assert!(error.contains("content-type text/html"));
+        assert!(error.contains("300 bytes"));
+        assert!(error.contains(&"<".repeat(160)));
+        assert!(!error.contains(&"<".repeat(161)));
     }
 }
 

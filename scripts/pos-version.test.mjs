@@ -54,6 +54,7 @@ async function createWindowsPreflightFixture(scenario) {
   const scriptsDir = path.join(root, "scripts");
   const binDir = path.join(root, "test-bin");
   const gitLog = path.join(root, "git.log");
+  const curlLog = path.join(root, "curl.log");
   await mkdir(scriptsDir, { recursive: true });
   await mkdir(binDir);
   await cp(helper, path.join(scriptsDir, "pos-version.mjs"));
@@ -75,8 +76,15 @@ exit 0
 `,
     curl: `#!/usr/bin/env bash
 url="\${!#}"
+echo "$url" >>"$TEST_CURL_LOG"
 case "$url" in
-  */dispatches) exit 0 ;;
+  */dispatches)
+    if [[ "$TEST_SCENARIO" == "dispatch-failed" ]]; then
+      printf '{"message":"workflow dispatch rejected"}' >&2
+      exit 22
+    fi
+    exit 0
+    ;;
   *"/runs?event="*)
     if [[ "$TEST_SCENARIO" == "missing" ]]; then
       printf '{"workflow_runs":[]}'
@@ -110,6 +118,7 @@ printf '2026-09-10T12:00:00Z\\n'
   return {
     root,
     gitLog,
+    curlLog,
     run: () => execFileAsync(
       "bash",
       ["-c", 'printf "yes\\n" | bash scripts/publish-release.sh "$1"', "release-test", originalVersion],
@@ -120,6 +129,7 @@ printf '2026-09-10T12:00:00Z\\n'
         PATH: `${binDir}:${process.env.PATH}`,
         GLOBISYNC: "test-token",
         TEST_GIT_LOG: gitLog,
+        TEST_CURL_LOG: curlLog,
         TEST_SCENARIO: scenario,
       },
       },
@@ -130,6 +140,28 @@ printf '2026-09-10T12:00:00Z\\n'
 async function readGitOperations(gitLog) {
   return readFile(gitLog, "utf8");
 }
+
+test("does not create or push a tag when GitHub rejects the Windows preflight dispatch", async (t) => {
+  const fixture = await createWindowsPreflightFixture("dispatch-failed");
+  t.after(() => rm(fixture.root, { recursive: true, force: true }));
+
+  await assert.rejects(
+    fixture.run(),
+    (error) =>
+      error.code === 1 &&
+      error.stderr.includes("workflow dispatch rejected") &&
+      error.stderr.includes("Could not start the Windows release preflight"),
+  );
+
+  const operations = await readGitOperations(fixture.gitLog);
+  assert.doesNotMatch(operations, /^tag -a /m);
+  assert.doesNotMatch(operations, /^push origin v1\.2\.3$/m);
+
+  const requests = (await readFile(fixture.curlLog, "utf8")).trim().split("\n");
+  assert.deepEqual(requests, [
+    "https://api.github.com/repos/example/globipos/actions/workflows/build-pos.yml/dispatches",
+  ]);
+});
 
 for (const [scenario, expectedMessage] of [
   ["failed", "Windows release preflight failed"],
