@@ -709,10 +709,6 @@ export default function PosRegister() {
     .sort((a, b) => a.position - b.position);
   const layoutItems = registerLayout?.items || [];
   const hasAssignedLayout = !!currentLayout && currentLayoutButtons.length > 0;
-  const supportedLayoutActions = new Set(["PAY_CASH", "PAY_CARD", "VOID_SALE", "CANCEL_BILL", "CLEAR_CART"]);
-  const isLayoutButtonSupported = (button: PosLayoutButton) =>
-    button.buttonType !== "action" || (!!button.actionCode && supportedLayoutActions.has(button.actionCode.toUpperCase()));
-
   const handleLayoutButton = (button: PosLayoutButton) => {
     if (button.buttonType === "item" && button.itemId) {
       const item = layoutItems.find(row => row.id === button.itemId);
@@ -841,9 +837,8 @@ export default function PosRegister() {
                     <button
                       key={button.id}
                       onClick={() => handleLayoutButton(button)}
-                      disabled={!isLayoutButtonSupported(button) || createOrderMutation.isPending}
-                      aria-disabled={!isLayoutButtonSupported(button) || createOrderMutation.isPending}
-                      title={!isLayoutButtonSupported(button) ? "This action is not available in Quick Sale" : undefined}
+                      disabled={createOrderMutation.isPending}
+                      aria-disabled={createOrderMutation.isPending}
                       className="min-h-16 px-2 py-3 text-sm font-semibold text-white shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
                       style={{
                         backgroundColor: button.color || "#6b7280",

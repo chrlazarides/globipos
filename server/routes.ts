@@ -9439,6 +9439,33 @@ export async function registerRoutes(
   app.get("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
     try { res.json(await storage.getPosLayoutButtons((req.params.id as string))); } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
+  app.get("/api/pos/layouts/:id/simulation-items", requireAdmin, async (req, res) => {
+    try {
+      const itemIds = new Set<string>();
+      const pending = [req.params.id as string];
+      const visited = new Set<string>();
+      while (pending.length && visited.size < 20) {
+        const layoutId = pending.shift()!;
+        if (visited.has(layoutId)) continue;
+        visited.add(layoutId);
+        const layout = await storage.getPosLayoutSet(layoutId);
+        if (!layout?.active) continue;
+        const layoutButtons = await storage.getPosLayoutButtons(layoutId);
+        for (const button of layoutButtons) {
+          if (button.buttonType === "item" && button.itemId) itemIds.add(button.itemId);
+          if (button.buttonType === "sublayout" && button.sublayoutId && !visited.has(button.sublayoutId)) {
+            pending.push(button.sublayoutId);
+          }
+        }
+      }
+      const rows = itemIds.size
+        ? await db.select().from(items).where(inArray(items.id, [...itemIds]))
+        : [];
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
 
   app.get("/api/pos/register/layout", requireStaff, async (req, res) => {
     try {

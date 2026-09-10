@@ -423,8 +423,11 @@ export default function PosSimulate() {
     },
     enabled: allLayouts.length > 0,
   });
-  const { data: items = EMPTY_ITEMS } = useQuery<Item[]>({ queryKey: ["/api/items"] });
-  const { data: allVariants = EMPTY_VARIANTS } = useQuery<ItemVariant[]>({ queryKey: ["/api/item-variants"] });
+  const { data: layoutItems = EMPTY_ITEMS } = useQuery<Item[]>({
+    queryKey: ["/api/pos/layouts", rootLayoutId, "simulation-items"],
+    queryFn: () => apiRequest("GET", `/api/pos/layouts/${rootLayoutId}/simulation-items`).then(response => response.json()),
+    enabled: !!rootLayoutId,
+  });
   const { data: categories = EMPTY_CATEGORIES } = useQuery<{ id: string; name: string }[]>({
     queryKey: ["/api/categories"],
   });
@@ -441,6 +444,8 @@ export default function PosSimulate() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [dialog, setDialog] = useState<DialogKind>(null);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [categoryPage, setCategoryPage] = useState(1);
+  const [variantPickerItem, setVariantPickerItem] = useState<Item | null>(null);
   const [feedbacks, setFeedbacks] = useState<FeedbackMsg[]>([]);
   const [numpadVal, setNumpadVal] = useState("0");
   const [customerSearch, setCustomerSearch] = useState("");
@@ -466,6 +471,35 @@ export default function PosSimulate() {
 
   // Reset layout stack when rootLayoutId changes
   useEffect(() => { setLayoutStack([rootLayoutId]); }, [rootLayoutId]);
+  useEffect(() => { setCategoryPage(1); }, [categoryFilter]);
+
+  const categoryParams = new URLSearchParams({
+    page: String(categoryPage),
+    limit: "60",
+    categoryId: categoryFilter || "all",
+  });
+  const {
+    data: categoryItemPage,
+    isLoading: loadingCategoryItems,
+    isError: categoryItemsFailed,
+  } = useQuery<{ items: Item[]; total: number; page: number; pageSize: number }>({
+    queryKey: ["/api/items", "pos-simulator-category", categoryFilter, categoryPage],
+    queryFn: () => apiRequest("GET", `/api/items?${categoryParams}`).then(response => response.json()),
+    enabled: dialog === "category" && !!categoryFilter,
+    staleTime: 30000,
+  });
+  const { data: allVariants = EMPTY_VARIANTS } = useQuery<ItemVariant[]>({
+    queryKey: ["/api/items", variantPickerItem?.id, "variants", "pos-simulator"],
+    queryFn: () => apiRequest("GET", `/api/items/${variantPickerItem!.id}/variants`).then(response => response.json()),
+    enabled: !!variantPickerItem,
+    staleTime: 60000,
+  });
+  const items = useMemo(() => {
+    const merged = new Map<string, Item>();
+    for (const item of layoutItems) merged.set(item.id, item);
+    for (const item of categoryItemPage?.items ?? []) merged.set(item.id, item);
+    return [...merged.values()];
+  }, [layoutItems, categoryItemPage?.items]);
 
   // ── Feedback toast ─────────────────────────────────────────────────────────
   const showFeedback = useCallback((text: string, ok = true) => {
@@ -491,7 +525,6 @@ export default function PosSimulate() {
     setSelectedLine(null);
   }, []);
 
-  const [variantPickerItem, setVariantPickerItem] = useState<Item | null>(null);
   const variantsForSimItem = useCallback(
     (itemId: string) => allVariants.filter(v => v.itemId === itemId && v.active),
     [allVariants]
@@ -914,9 +947,9 @@ export default function PosSimulate() {
   const vatAmt  = cartVat(cart);
 
   // Category items
-  const categoryItems = dialog === "category"
-    ? items.filter(it => (it as any).categoryId === categoryFilter)
-    : [];
+  const categoryItems = categoryItemPage?.items ?? [];
+  const categoryItemTotal = categoryItemPage?.total ?? 0;
+  const categoryPageCount = Math.max(1, Math.ceil(categoryItemTotal / 60));
 
   // ── Device frame sizing ────────────────────────────────────────────────────
   const gridPanelClass =
@@ -1434,28 +1467,47 @@ export default function PosSimulate() {
               {categories.find(c => c.id === categoryFilter)?.name ?? "Category Items"}
             </DialogTitle>
           </DialogHeader>
-          {categoryItems.length === 0 ? (
+          {loadingCategoryItems ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : categoryItemsFailed ? (
+            <p className="text-sm text-destructive py-4 text-center">Could not load items for this category</p>
+          ) : categoryItems.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">No items in this category</p>
           ) : (
-            <div className="grid grid-cols-3 gap-2 max-h-80 overflow-y-auto">
-              {categoryItems.map(item => (
-                <button key={item.id}
-                  onClick={() => {
-                    if ((item as any).hasVariants) {
-                      setVariantPickerItem(item);
-                      setDialog(null);
-                    } else {
-                      addItem(item);
-                      setDialog(null);
-                      showFeedback(`Added: ${item.name}`, true);
-                    }
-                  }}
-                  className="rounded-xl border bg-primary/5 hover:bg-primary/15 p-2 text-left transition-colors"
-                  data-testid={`cat-item-${item.id}`}>
-                  <p className="text-xs font-semibold truncate">{item.name}</p>
-                  <p className="text-[10px] text-muted-foreground">€{fmt(parseFloat(String(item.price1 || "0")))}</p>
-                </button>
-              ))}
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2 max-h-80 overflow-y-auto">
+                {categoryItems.map(item => (
+                  <button key={item.id}
+                    onClick={() => {
+                      if ((item as any).hasVariants) {
+                        setVariantPickerItem(item);
+                        setDialog(null);
+                      } else {
+                        addItem(item);
+                        setDialog(null);
+                        showFeedback(`Added: ${item.name}`, true);
+                      }
+                    }}
+                    className="rounded-xl border bg-primary/5 hover:bg-primary/15 p-2 text-left transition-colors"
+                    data-testid={`cat-item-${item.id}`}>
+                    <p className="text-xs font-semibold truncate">{item.name}</p>
+                    <p className="text-[10px] text-muted-foreground">€{fmt(parseFloat(String(item.price1 || "0")))}</p>
+                  </button>
+                ))}
+              </div>
+              {categoryPageCount > 1 && (
+                <div className="flex items-center justify-between">
+                  <Button variant="outline" size="sm" disabled={categoryPage <= 1} onClick={() => setCategoryPage(page => page - 1)}>
+                    Previous
+                  </Button>
+                  <span className="text-xs text-muted-foreground">Page {categoryPage} of {categoryPageCount}</span>
+                  <Button variant="outline" size="sm" disabled={categoryPage >= categoryPageCount} onClick={() => setCategoryPage(page => page + 1)}>
+                    Next
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </DialogContent>

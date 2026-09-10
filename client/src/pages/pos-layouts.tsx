@@ -34,7 +34,12 @@ function LayoutForm({ initial, onClose }: { initial?: PosLayoutSet; onClose: () 
       description: initial?.description ?? "",
       locationId: initial?.locationId ?? undefined,
       columns: initial?.columns ?? 4,
+      colsTablet: initial?.colsTablet ?? 3,
+      colsMobile: initial?.colsMobile ?? 2,
+      colsLarge: initial?.colsLarge ?? 6,
+      colsTV: initial?.colsTV ?? 8,
       rows: initial?.rows ?? 5,
+      buttonRadius: initial?.buttonRadius ?? "rounded",
       colorTheme: initial?.colorTheme ?? "standard",
       active: initial?.active ?? true,
     },
@@ -86,6 +91,33 @@ function LayoutForm({ initial, onClose }: { initial?: PosLayoutSet; onClose: () 
             <FormItem><FormLabel>Rows</FormLabel><FormControl><Input {...field} type="number" min={1} max={20} onChange={e => field.onChange(parseInt(e.target.value) || 5)} /></FormControl><FormMessage /></FormItem>
           )} />
         </div>
+        <div className="grid grid-cols-2 gap-4">
+          <FormField control={form.control} name="colsMobile" render={({ field }) => (
+            <FormItem><FormLabel>Phone columns</FormLabel><FormControl><Input {...field} value={field.value ?? 2} type="number" min={1} max={10} onChange={e => field.onChange(parseInt(e.target.value) || 2)} /></FormControl><FormMessage /></FormItem>
+          )} />
+          <FormField control={form.control} name="colsTablet" render={({ field }) => (
+            <FormItem><FormLabel>Tablet columns</FormLabel><FormControl><Input {...field} value={field.value ?? 3} type="number" min={1} max={10} onChange={e => field.onChange(parseInt(e.target.value) || 3)} /></FormControl><FormMessage /></FormItem>
+          )} />
+          <FormField control={form.control} name="colsLarge" render={({ field }) => (
+            <FormItem><FormLabel>Large-screen columns</FormLabel><FormControl><Input {...field} value={field.value ?? 6} type="number" min={1} max={12} onChange={e => field.onChange(parseInt(e.target.value) || 6)} /></FormControl><FormMessage /></FormItem>
+          )} />
+          <FormField control={form.control} name="colsTV" render={({ field }) => (
+            <FormItem><FormLabel>TV / 4K columns</FormLabel><FormControl><Input {...field} value={field.value ?? 8} type="number" min={1} max={16} onChange={e => field.onChange(parseInt(e.target.value) || 8)} /></FormControl><FormMessage /></FormItem>
+          )} />
+        </div>
+        <FormField control={form.control} name="buttonRadius" render={({ field }) => (
+          <FormItem>
+            <FormLabel>Button shape</FormLabel>
+            <Select value={field.value ?? "rounded"} onValueChange={field.onChange}>
+              <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+              <SelectContent>
+                <SelectItem value="square">Square</SelectItem>
+                <SelectItem value="rounded">Rounded</SelectItem>
+                <SelectItem value="round">Round</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormItem>
+        )} />
         <FormField control={form.control} name="colorTheme" render={({ field }) => (
           <FormItem>
             <FormLabel>POS theme</FormLabel>
