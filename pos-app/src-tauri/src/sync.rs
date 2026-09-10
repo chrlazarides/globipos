@@ -35,17 +35,13 @@ pub async fn register_terminal(
         .await
         .map_err(|e| format!("Parse error: {}", e))?;
 
-    // Seed catalog
-    for item in &data.catalog.items {
-        db::upsert_product(pool, item)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
+    // Registration intentionally contains no products. Bootstrap through bounded pages.
     for cat in &data.catalog.categories {
         db::upsert_category(pool, cat)
             .await
             .map_err(|e| e.to_string())?;
     }
+    let catalog_count = fetch_catalog_pages(pool, server_url, terminal_code, None).await?;
 
     // Seed layout
     let btns: Vec<Value> = data
@@ -68,7 +64,7 @@ pub async fn register_terminal(
     sqlx::query(
         "INSERT INTO sync_log (sync_type, status, message, items_synced) VALUES ('register','ok','Initial registration',?)"
     )
-    .bind(data.catalog.items.len() as i32)
+    .bind(catalog_count as i32)
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -84,32 +80,7 @@ pub async fn sync_catalog(
     terminal_code: &str,
     since: Option<&str>,
 ) -> Result<usize, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let base = format!("{}/api/sync/catalog", server_url.trim_end_matches('/'));
-    let url = if let Some(s) = since { format!("{}?since={}", base, s) } else { base };
-
-    let resp = client
-        .get(&url)
-        .header("X-Terminal-Code", terminal_code)
-        .send()
-        .await
-        .map_err(|e| format!("Catalog sync error: {}", e))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("Catalog sync server error: {}", resp.status()));
-    }
-
-    let data: Value = resp.json().await.map_err(|e| e.to_string())?;
-    let items = data["items"].as_array().cloned().unwrap_or_default();
-    let cats  = data["categories"].as_array().cloned().unwrap_or_default();
-    let total = items.len() + cats.len();
-
-    for item in &items { db::upsert_product(pool, item).await.map_err(|e| e.to_string())?; }
-    for cat  in &cats  { db::upsert_category(pool, cat).await.map_err(|e| e.to_string())?; }
+    let total = fetch_catalog_pages(pool, server_url, terminal_code, since).await?;
 
     sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('last_catalog_sync', datetime('now'))")
         .execute(pool).await.map_err(|e| e.to_string())?;
@@ -120,6 +91,105 @@ pub async fn sync_catalog(
         .execute(pool).await.map_err(|e| e.to_string())?;
 
     Ok(total)
+}
+
+/// Fetches deterministic, bounded pages. The cursor is persisted after each page so a
+/// failed request can safely restart without losing already-upserted rows.
+async fn fetch_catalog_pages(
+    pool: &SqlitePool,
+    server_url: &str,
+    terminal_code: &str,
+    since: Option<&str>,
+) -> Result<usize, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()
+        .map_err(|e| e.to_string())?;
+    let base = format!("{}/api/sync/catalog", server_url.trim_end_matches('/'));
+    let scope = catalog_scope(server_url, terminal_code);
+    let mut cursor: Option<String> = if since.is_none() {
+        sqlx::query("SELECT value FROM schema_meta WHERE key = 'catalog_bootstrap_cursor'")
+            .fetch_optional(pool).await.map_err(|e| e.to_string())?
+            .and_then(|r| r.try_get::<String, _>("value").ok())
+            .and_then(|value| decode_scoped_cursor(&value, &scope))
+    } else { None };
+    let mut total = 0usize;
+    loop {
+        let mut url = reqwest::Url::parse(&base).map_err(|e| e.to_string())?;
+        url.query_pairs_mut().append_pair("limit", "250");
+        if let Some(s) = since { url.query_pairs_mut().append_pair("since", s); }
+        if let Some(c) = cursor.as_deref() { url.query_pairs_mut().append_pair("cursor", c); }
+        let resp = client.get(url).header("X-Terminal-Code", terminal_code).send().await
+            .map_err(|e| format!("Catalog sync network error: {}", e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Catalog sync server error {}: {}", status, body));
+        }
+        let data: Value = resp.json().await.map_err(|e| format!("Catalog sync parse error: {}", e))?;
+        let items = data["items"].as_array().cloned().unwrap_or_default();
+        let cats = data["categories"].as_array().cloned().unwrap_or_default();
+        db::upsert_catalog_page(pool, &items, &cats).await.map_err(|e| e.to_string())?;
+        total += items.len() + cats.len();
+        if data["done"].as_bool().unwrap_or(true) {
+            if since.is_none() {
+                sqlx::query("DELETE FROM schema_meta WHERE key = 'catalog_bootstrap_cursor'")
+                    .execute(pool).await.map_err(|e| e.to_string())?;
+            }
+            break;
+        }
+        let next = data["nextCursor"].as_str().filter(|c| !c.is_empty())
+            .ok_or_else(|| "Catalog sync response missing nextCursor".to_string())?;
+        cursor = Some(next.to_string());
+        if since.is_none() {
+            sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('catalog_bootstrap_cursor', ?)")
+                .bind(serde_json::json!({
+                    "serverUrl": &scope.server_url,
+                    "terminalCode": &scope.terminal_code,
+                    "cursor": next
+                }).to_string())
+                .execute(pool).await.map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(total)
+}
+
+struct CatalogScope {
+    server_url: String,
+    terminal_code: String,
+}
+
+fn catalog_scope(server_url: &str, terminal_code: &str) -> CatalogScope {
+    CatalogScope {
+        server_url: server_url.trim_end_matches('/').to_ascii_lowercase(),
+        terminal_code: terminal_code.trim().to_ascii_uppercase(),
+    }
+}
+
+fn decode_scoped_cursor(value: &str, scope: &CatalogScope) -> Option<String> {
+    let saved: Value = serde_json::from_str(value).ok()?;
+    if saved["serverUrl"].as_str() != Some(scope.server_url.as_str())
+        || saved["terminalCode"].as_str() != Some(scope.terminal_code.as_str())
+    {
+        return None;
+    }
+    saved["cursor"].as_str().filter(|cursor| !cursor.is_empty()).map(str::to_owned)
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+
+    #[test]
+    fn cursor_scope_normalizes_and_rejects_other_terminal() {
+        let scope = catalog_scope("HTTPS://POS.EXAMPLE///", " t01 ");
+        let saved = serde_json::json!({
+            "serverUrl": scope.server_url,
+            "terminalCode": scope.terminal_code,
+            "cursor": "opaque"
+        });
+        assert_eq!(decode_scoped_cursor(&saved.to_string(), &scope).as_deref(), Some("opaque"));
+        let other = catalog_scope("https://pos.example", "t02");
+        assert!(decode_scoped_cursor(&saved.to_string(), &other).is_none());
+    }
 }
 
 // ── Inbox sync ────────────────────────────────────────────────────────────────
@@ -173,13 +243,15 @@ pub async fn sync_inbox(
                 let price = item["price"].as_f64()
                     .or_else(|| item["price"].as_str().and_then(|s| s.parse().ok()))
                     .unwrap_or(0.0);
-                let valid_until = item["validUntil"].as_str().unwrap_or("").to_string();
+                let valid_from = item["validFrom"].as_str().filter(|value| !value.is_empty());
+                let valid_until = item["validUntil"].as_str().filter(|value| !value.is_empty());
 
                 sqlx::query(
-                    "INSERT OR REPLACE INTO price_overrides (product_id, override_price, valid_until, reason) VALUES (?,?,?,'inbox')"
+                    "INSERT OR REPLACE INTO price_overrides (product_id, override_price, valid_from, valid_until, reason) VALUES (?,?,?,?,'inbox')"
                 )
                 .bind(product_id)
                 .bind(price)
+                .bind(valid_from)
                 .bind(valid_until)
                 .execute(pool).await.map_err(|e| e.to_string())?;
 

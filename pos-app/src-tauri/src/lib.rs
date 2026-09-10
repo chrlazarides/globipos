@@ -1,5 +1,6 @@
 mod auth;
 mod barcode_config;
+mod receipt_config;
 mod db;
 mod hardware;
 mod vfd;
@@ -11,6 +12,7 @@ mod sync;
 mod tests;
 
 use barcode_config::BarcodeConfig;
+use receipt_config::ReceiptConfig;
 use db::row_to_json;
 use hardware::{HardwareConfig, PaymentConfig, ScaleWeight};
 use models::*;
@@ -97,6 +99,46 @@ async fn validate_pin(state: State<'_, AppState>, pin: String) -> Result<Option<
 }
 
 #[tauri::command]
+async fn reconcile_card_payment(
+    state: State<'_, AppState>,
+    pin: String,
+    order: Order,
+    lines: Vec<OrderLine>,
+) -> Result<CashierSession, String> {
+    let session = auth::authorize_pin(&state.db, &pin, "reconcile_card_payment")
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Supervisor or manager PIN required".to_string())?;
+    let payment_ref = order.payment_ref.as_deref().map(str::trim).unwrap_or("");
+    if order.status != "completed"
+        || !order.payment_method.as_deref().unwrap_or("").starts_with("card")
+        || payment_ref.is_empty()
+    {
+        return Err("A completed card order with a terminal reference is required".to_string());
+    }
+    let (terminal_id, location_id) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.terminal_id.clone(), c.location_id.clone())
+    };
+    auth::audit(
+        &state.db,
+        Some(&session.cashier_id),
+        Some(&session.cashier_name),
+        "card_payment_reference_reconciled",
+        Some("order"),
+        Some(&order.id),
+        Some(payment_ref),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    orders::save_order(&state.db, &order, &lines, &terminal_id, &location_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(session)
+}
+
+#[tauri::command]
 async fn upsert_cashier(
     state: State<'_, AppState>,
     id: String, name: String, pin: String, role: String,
@@ -113,35 +155,67 @@ async fn get_products(
     search: Option<String>,
 ) -> Result<Vec<Value>, String> {
     let rows = if let Some(q) = &search {
-        let like = format!("%{}%", q);
+        let exact = q.trim();
+        let fts_query = exact
+            .split_whitespace()
+            .map(|token| {
+                let escaped = token.replace('"', "\"\"");
+                format!("\"{}\"*", escaped)
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        if exact.is_empty() || fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
         sqlx::query(
-            r#"SELECT p.*, po.override_price as timed_price
+            r#"WITH matches AS (
+                 SELECT rowid, 0 AS priority FROM local_products WHERE barcode = ?
+                 UNION
+                 SELECT rowid, 1 AS priority FROM local_products WHERE sku = ?
+                 UNION
+                 SELECT rowid, 2 AS priority FROM (
+                   SELECT rowid FROM local_products_fts
+                   WHERE local_products_fts MATCH ? LIMIT 100
+                 )
+               )
+               SELECT p.*,
+                 (SELECT po.override_price FROM price_overrides po
+                  WHERE po.product_id = p.server_id
+                    AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                    AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+                  ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
                FROM local_products p
-               LEFT JOIN price_overrides po ON po.product_id = p.server_id
-                   AND (po.valid_until IS NULL OR po.valid_until > datetime('now'))
-               WHERE p.active = 1 AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)
-               ORDER BY p.name LIMIT 50"#
+               JOIN (SELECT rowid, min(priority) AS priority FROM matches GROUP BY rowid) m
+                 ON m.rowid = p.rowid
+               WHERE p.active = 1
+               ORDER BY m.priority, p.name LIMIT 50"#
         )
-        .bind(&like).bind(&like).bind(&like)
+        .bind(exact).bind(exact).bind(&fts_query)
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?
     } else if let Some(cat) = &category_id {
         sqlx::query(
-            r#"SELECT p.*, po.override_price as timed_price
+            r#"SELECT p.*,
+                 (SELECT po.override_price FROM price_overrides po
+                  WHERE po.product_id = p.server_id
+                    AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                    AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+                  ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
                FROM local_products p
-               LEFT JOIN price_overrides po ON po.product_id = p.server_id
-                   AND (po.valid_until IS NULL OR po.valid_until > datetime('now'))
                WHERE p.active = 1 AND p.category_id = ?
-               ORDER BY p.name"#
+               ORDER BY p.name LIMIT 250"#
         )
         .bind(cat)
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?
     } else {
         sqlx::query(
-            r#"SELECT p.*, po.override_price as timed_price
+            r#"SELECT p.*,
+                 (SELECT po.override_price FROM price_overrides po
+                  WHERE po.product_id = p.server_id
+                    AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                    AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+                  ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
                FROM local_products p
-               LEFT JOIN price_overrides po ON po.product_id = p.server_id
-                   AND (po.valid_until IS NULL OR po.valid_until > datetime('now'))
-               WHERE p.active = 1 ORDER BY p.name"#
+               WHERE p.active = 1 ORDER BY p.name LIMIT 250"#
         )
         .fetch_all(&state.db).await.map_err(|e| e.to_string())?
     };
@@ -150,17 +224,67 @@ async fn get_products(
 }
 
 #[tauri::command]
+async fn get_products_by_ids(
+    state: State<'_, AppState>,
+    item_ids: Vec<String>,
+) -> Result<Vec<Value>, String> {
+    if item_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        r#"SELECT p.*,
+             (SELECT po.override_price FROM price_overrides po
+              WHERE po.product_id = p.server_id
+                AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+              ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
+           FROM local_products p
+           WHERE p.active = 1 AND p.server_id IN ("#,
+    );
+    {
+        let mut separated = query.separated(", ");
+        for id in item_ids.iter().take(1000) {
+            separated.push_bind(id);
+        }
+    }
+    query.push(") ORDER BY p.name");
+    let rows = query
+        .build()
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_active_products_count(state: State<'_, AppState>) -> Result<i64, String> {
+    sqlx::query_scalar("SELECT count(*) FROM local_products WHERE active = 1")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_product_by_barcode(
     state: State<'_, AppState>,
     barcode: String,
 ) -> Result<Option<Value>, String> {
     let row = sqlx::query(
-        r#"SELECT p.*, po.override_price as timed_price
+        r#"WITH match AS (
+             SELECT rowid, 0 AS priority FROM local_products WHERE barcode = ?
+             UNION ALL
+             SELECT rowid, 1 AS priority FROM local_products WHERE sku = ?
+           )
+           SELECT p.*,
+             (SELECT po.override_price FROM price_overrides po
+              WHERE po.product_id = p.server_id
+                AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+              ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
            FROM local_products p
-           LEFT JOIN price_overrides po ON po.product_id = p.server_id
-               AND (po.valid_until IS NULL OR po.valid_until > datetime('now'))
-           WHERE p.active = 1 AND (p.barcode = ? OR p.sku = ?)
-           LIMIT 1"#
+           JOIN match m ON m.rowid = p.rowid
+           WHERE p.active = 1
+           ORDER BY m.priority LIMIT 1"#
     )
     .bind(&barcode).bind(&barcode)
     .fetch_optional(&state.db)
@@ -202,7 +326,7 @@ async fn save_order(
 #[tauri::command]
 async fn get_held_orders(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     let rows = sqlx::query(
-        "SELECT * FROM pos_orders WHERE status = 'held' ORDER BY created_at DESC"
+        "SELECT * FROM pos_orders WHERE status = 'held' ORDER BY created_at DESC LIMIT 250"
     )
     .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(row_to_json).collect())
@@ -214,6 +338,23 @@ async fn get_order_lines(state: State<'_, AppState>, order_id: String) -> Result
         "SELECT * FROM pos_order_lines WHERE order_id = ? ORDER BY sort_order"
     )
     .bind(&order_id)
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_recent_orders(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<Value>, String> {
+    let safe_limit = limit.unwrap_or(100).clamp(1, 250);
+    let rows = sqlx::query(
+        "SELECT * FROM pos_orders
+         WHERE status IN ('completed', 'voided')
+         ORDER BY created_at DESC
+         LIMIT ?"
+    )
+    .bind(safe_limit)
     .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(row_to_json).collect())
 }
@@ -529,7 +670,16 @@ async fn create_stock_transfer(
 #[tauri::command]
 async fn get_active_price_overrides(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     let rows = sqlx::query(
-        "SELECT * FROM price_overrides WHERE valid_until IS NULL OR valid_until > datetime('now')"
+        r#"SELECT po.* FROM price_overrides po
+           WHERE (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+             AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+             AND po.rowid = (
+               SELECT current.rowid FROM price_overrides current
+               WHERE current.product_id = po.product_id
+                 AND (current.valid_from IS NULL OR datetime(current.valid_from) <= datetime('now'))
+                 AND (current.valid_until IS NULL OR datetime(current.valid_until) > datetime('now'))
+               ORDER BY datetime(current.valid_from) DESC, datetime(current.created_at) DESC, current.rowid DESC LIMIT 1
+             )"#
     )
     .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(row_to_json).collect())
@@ -594,6 +744,28 @@ async fn get_outbox_counts(state: State<'_, AppState>) -> Result<Value, String> 
 }
 
 #[tauri::command]
+async fn set_sco_heartbeat_state(
+    state: State<'_, AppState>,
+    sco_mode: String,
+    sco_items: i64,
+    sco_total: f64,
+    sco_attendant_reason: Option<String>,
+) -> Result<(), String> {
+    let value = serde_json::json!({
+        "sco_mode": sco_mode,
+        "sco_items": sco_items,
+        "sco_total": sco_total,
+        "sco_attendant_reason": sco_attendant_reason,
+    });
+    sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('sco_heartbeat_state', ?)")
+        .bind(value.to_string())
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn send_heartbeat(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     let (server_url, terminal_code, terminal_id) = {
         let cfg = state.config.lock().unwrap();
@@ -628,9 +800,19 @@ async fn send_heartbeat(app: AppHandle, state: State<'_, AppState>) -> Result<Va
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
-    let peripheral_status = hardware::build_peripheral_status(
+    let mut peripheral_status = hardware::build_peripheral_status(
         &app, &hw_cfg, &payment_cfg, cashier_name, shift_open,
     ).await;
+    if let Some(sco_state) = sqlx::query("SELECT value FROM schema_meta WHERE key = 'sco_heartbeat_state'")
+        .fetch_optional(&state.db).await.ok().flatten()
+        .and_then(|r| r.try_get::<String, _>("value").ok())
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+    {
+        if let Some(status) = peripheral_status.as_object_mut() {
+            status.extend(sco_state);
+        }
+    }
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -952,7 +1134,7 @@ async fn get_produce_items(state: State<'_, AppState>) -> Result<Vec<Value>, Str
     let rows = sqlx::query(
         r#"SELECT * FROM local_products
            WHERE active = 1 AND (weight_based = 1 OR plu_code IS NOT NULL)
-           ORDER BY name"#
+           ORDER BY name LIMIT 250"#
     )
     .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
     Ok(rows.into_iter().map(row_to_json).collect())
@@ -1247,9 +1429,85 @@ async fn redeem_gift_voucher(
     Ok(row_to_json(updated))
 }
 
-// ── Phase 3: Hardware commands ────────────────────────────────────────────────
+// ── Phase 3: Payment config commands ─────────────────────────────────────────
 
 #[tauri::command]
+async fn get_payment_config(state: State<'_, AppState>) -> Result<PaymentConfig, String> {
+    let row = sqlx::query("SELECT value FROM schema_meta WHERE key = 'payment_config'")
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(row
+        .and_then(|r| r.try_get::<String, _>("value").ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+async fn save_payment_config(
+    state:  State<'_, AppState>,
+    config: PaymentConfig,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('payment_config', ?)")
+        .bind(json)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Returns unprocessed click_collect inbox items (pending pickup orders).
+#[tauri::command]
+async fn get_click_collect_orders(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query(
+        r#"SELECT * FROM pos_inbox WHERE processed = 0
+           AND message_type = 'click_collect'
+           ORDER BY created_at DESC LIMIT 50"#
+    )
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+async fn find_click_collect_order(
+    state: State<'_, AppState>,
+    order_number: String,
+) -> Result<Value, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let encoded = order_number.trim().trim_start_matches('#');
+    let url = format!(
+        "{}/api/orders/{}",
+        server_url.trim_end_matches('/'),
+        encoded
+    );
+    let resp = client
+        .get(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .send()
+        .await
+        .map_err(|e| format!("Unable to reach the server: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let message = resp
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("message")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| format!("Server error {}", status));
+        return Err(message);
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
 async fn get_hardware_config(state: State<'_, AppState>) -> Result<HardwareConfig, String> {
     Ok(hardware::load_hardware_config(&state.db).await)
 }
@@ -1275,6 +1533,21 @@ async fn save_barcode_config(
     config: BarcodeConfig,
 ) -> Result<(), String> {
     barcode_config::save_barcode_config(&state.db, &config).await
+}
+
+// ── Receipt design configuration (header/footer text and section toggles) ─────
+
+#[tauri::command]
+async fn get_receipt_config(state: State<'_, AppState>) -> Result<ReceiptConfig, String> {
+    Ok(receipt_config::load_receipt_config(&state.db).await)
+}
+
+#[tauri::command]
+async fn save_receipt_config(
+    state:  State<'_, AppState>,
+    config: ReceiptConfig,
+) -> Result<(), String> {
+    receipt_config::save_receipt_config(&state.db, &config).await
 }
 
 #[tauri::command]
@@ -1420,14 +1693,18 @@ pub fn run() {
             get_config,
             register_terminal,
             validate_pin,
+            reconcile_card_payment,
             upsert_cashier,
             get_products,
+            get_products_by_ids,
+            get_active_products_count,
             get_product_by_barcode,
             get_layout,
             get_categories,
             save_order,
             get_held_orders,
             get_order_lines,
+            get_recent_orders,
             next_order_number,
             sync_catalog,
             sync_inbox,
@@ -1445,6 +1722,7 @@ pub fn run() {
             mark_inbox_processed,
             write_audit,
             get_outbox_counts,
+            set_sco_heartbeat_state,
             send_heartbeat,
             // ── Phase 3: Shift management ────────────────────────────────────
             open_shift,
@@ -1471,10 +1749,17 @@ pub fn run() {
             find_gift_voucher,
             redeem_gift_voucher,
             // ── Phase 3: Hardware ────────────────────────────────────────────
+            get_payment_config,
+            save_payment_config,
+            get_click_collect_orders,
+            find_click_collect_order,
+            mark_click_collect_order_collected,
             get_hardware_config,
             save_hardware_config,
             get_barcode_config,
             save_barcode_config,
+            get_receipt_config,
+            save_receipt_config,
             scale_read_weight,
             scale_tare,
             print_receipt,
@@ -1487,4 +1772,46 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+async fn mark_click_collect_order_collected(
+    state: State<'_, AppState>,
+    order_number: String,
+) -> Result<(), String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let encoded = order_number.trim().trim_start_matches('#');
+    let url = format!(
+        "{}/api/orders/{}/collect",
+        server_url.trim_end_matches('/'),
+        encoded
+    );
+    let resp = client
+        .post(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .send()
+        .await
+        .map_err(|e| format!("Unable to mark the order collected: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let message = resp
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("message")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| format!("Server error {}", status));
+        return Err(message);
+    }
+    Ok(())
 }

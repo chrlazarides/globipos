@@ -291,6 +291,24 @@ mod db {
     }
 
     #[tokio::test]
+    async fn cashier_cannot_authorize_card_reconciliation() {
+        let pool = setup().await;
+        auth::upsert_cashier(&pool, "c-cashier", "Cashier", "1111", "cashier").await.unwrap();
+
+        let session = auth::authorize_pin(&pool, "1111", "reconcile_card_payment").await.unwrap();
+        assert!(session.is_none(), "cashier PIN must not authorize card reconciliation");
+    }
+
+    #[tokio::test]
+    async fn supervisor_can_authorize_card_reconciliation() {
+        let pool = setup().await;
+        auth::upsert_cashier(&pool, "c-supervisor", "Supervisor", "2222", "supervisor").await.unwrap();
+
+        let session = auth::authorize_pin(&pool, "2222", "reconcile_card_payment").await.unwrap();
+        assert_eq!(session.expect("supervisor should be authorized").role, "supervisor");
+    }
+
+    #[tokio::test]
     async fn pre_hashed_cashier_validates_correctly() {
         let pool = setup().await;
         let hash = auth::hash_pin("7777");

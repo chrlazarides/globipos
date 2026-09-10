@@ -389,7 +389,7 @@ pub struct PaymentResult {
 /// Payment configuration (from schema_meta 'payment_config').
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PaymentConfig {
-    pub provider:    String,   // "mock" | "jcc" | "viva" | "worldpay"
+    pub provider:    String,   // "mock" | "jcc" | "viva" | "worldpay" | "payabl" | "pbt"
     pub endpoint:    String,
     pub merchant_id: String,
     pub api_key:     String,
@@ -402,6 +402,11 @@ pub struct PaymentConfig {
     pub viva_client_secret: Option<String>,
     // Worldpay-specific
     pub worldpay_entity: Option<String>,
+    // Payabl-specific
+    pub payabl_terminal_id: Option<String>,
+    // PBT / Planet PAX-specific
+    pub pbt_terminal_ip: Option<String>,   // e.g. "192.168.1.100"
+    pub pbt_terminal_port: Option<u16>,    // defaults to 10009
 }
 
 /// Route a card payment request to the appropriate provider adapter.
@@ -416,6 +421,8 @@ pub async fn process_payment(
         "jcc"      => pay_jcc(cfg, amount, currency).await,
         "viva"     => pay_viva(cfg, amount, currency).await,
         "worldpay" => pay_worldpay(cfg, amount, currency).await,
+        "payabl"   => pay_payabl(cfg, amount, currency).await,
+        "pbt"      => pay_pbt(cfg, amount, currency).await,
         // "mock" is permitted only in explicit dev/test mode
         "mock"     => Ok(mock_approve(amount, currency)),
         // Fail closed for any unknown or unconfigured provider — never auto-approve
@@ -653,6 +660,211 @@ async fn pay_worldpay(cfg: &PaymentConfig, amount: f64, currency: &str) -> Resul
     }
 
     Ok(PaymentResult { approved: true, reference, amount, currency: currency.into(), error: None, provider: "worldpay".into() })
+}
+
+// ── Payabl adapter ────────────────────────────────────────────────────────────
+//
+// Payabl gateway (https://payabl.com) — server-to-server REST API.
+// Flow (card-present / POS terminal driven):
+//   POST /api/v1/pos/payment          →  201 { paymentId, status:"PENDING" }
+//   GET  /api/v1/pos/payment/{id}     (poll every 2s, up to 90s)
+//   → final status: "COMPLETED" | "DECLINED" | "FAILED" | "CANCELLED"
+// Auth: Bearer {api_key}
+// Amounts in minor units (cents).
+// Sandbox: https://pay4.sandbox.payabl.com
+// Production: https://pay4.payabl.com
+// Reference: Payabl. API Integration docs (docs.payabl.com/docs/pos)
+
+async fn pay_payabl(cfg: &PaymentConfig, amount: f64, currency: &str) -> Result<PaymentResult, String> {
+    if cfg.endpoint.is_empty() || cfg.merchant_id.is_empty() || cfg.api_key.is_empty() {
+        return Err("Payabl: endpoint, merchant_id and api_key are required".into());
+    }
+
+    let client       = http_client(90)?;
+    let cents        = (amount * 100.0).round() as i64;
+    let terminal_id  = cfg.payabl_terminal_id.as_deref().unwrap_or("01");
+    let order_ref    = format!("POS-{}", &uuid::Uuid::new_v4().to_string()[..12].to_uppercase());
+
+    // Step 1: initiate payment on the Payabl terminal
+    let init_url = format!("{}/api/v1/pos/payment", cfg.endpoint.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "merchantId":   cfg.merchant_id,
+        "terminalId":   terminal_id,
+        "amount":       cents,
+        "currency":     currency.to_uppercase(),
+        "orderReference": order_ref,
+        "transactionType": "PURCHASE",
+    });
+
+    let resp = client.post(&init_url)
+        .bearer_auth(&cfg.api_key)
+        .json(&body)
+        .send().await
+        .map_err(|e| format!("Payabl initiate error: {}", e))?;
+
+    if !resp.status().is_success() && resp.status().as_u16() != 201 {
+        let err = extract_error(resp).await;
+        return Ok(PaymentResult {
+            approved: false, reference: String::new(), amount,
+            currency: currency.into(), error: Some(err), provider: "payabl".into(),
+        });
+    }
+
+    let init_body: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let payment_id = init_body.get("paymentId")
+        .or_else(|| init_body.get("payment_id"))
+        .or_else(|| init_body.get("id"))
+        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    if payment_id.is_empty() {
+        return Ok(PaymentResult {
+            approved: false, reference: String::new(), amount,
+            currency: currency.into(),
+            error: Some("Payabl: no paymentId in initiation response".into()),
+            provider: "payabl".into(),
+        });
+    }
+
+    // Step 2: poll for terminal result (up to 90s — customer must present card)
+    let status_url = format!("{}/api/v1/pos/payment/{}", cfg.endpoint.trim_end_matches('/'), payment_id);
+    for _ in 0..45 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let poll = client.get(&status_url)
+            .bearer_auth(&cfg.api_key)
+            .send().await;
+        match poll {
+            Ok(r) if r.status().is_success() => {
+                let body: Value = r.json().await.unwrap_or_default();
+                let status = body.get("status").and_then(|v| v.as_str()).unwrap_or("PENDING");
+                match status {
+                    "COMPLETED" | "APPROVED" | "AUTHORISED" => {
+                        let reference = body.get("authCode")
+                            .or_else(|| body.get("auth_code"))
+                            .or_else(|| body.get("rrn"))
+                            .or_else(|| body.get("reference"))
+                            .and_then(|v| v.as_str()).unwrap_or(&payment_id).to_string();
+                        return Ok(PaymentResult {
+                            approved: true, reference, amount,
+                            currency: currency.into(), error: None, provider: "payabl".into(),
+                        });
+                    }
+                    "DECLINED" | "FAILED" | "CANCELLED" | "REFUSED" => {
+                        let msg = body.get("errorMessage")
+                            .or_else(|| body.get("message"))
+                            .or_else(|| body.get("responseText"))
+                            .and_then(|v| v.as_str()).unwrap_or("Declined").to_string();
+                        return Ok(PaymentResult {
+                            approved: false, reference: payment_id, amount,
+                            currency: currency.into(), error: Some(msg), provider: "payabl".into(),
+                        });
+                    }
+                    "PENDING" | "IN_PROGRESS" | "PROCESSING" => { /* continue polling */ }
+                    _ => { /* unknown status — keep polling */ }
+                }
+            }
+            _ => { /* transient network error — keep polling */ }
+        }
+    }
+
+    Ok(PaymentResult {
+        approved: false, reference: payment_id, amount,
+        currency: currency.into(),
+        error: Some("Payabl: timeout waiting for terminal response".into()),
+        provider: "payabl".into(),
+    })
+}
+
+// ── PBT / Planet PAX adapter ──────────────────────────────────────────────────
+//
+// PBT Payment Solutions (pbt.com.cy) is a Cyprus acquirer that deploys Planet
+// PAX terminals.  The PAX terminal hosts a local REST service (Planet Integra)
+// on the LAN.  The POS sends a sale command to the terminal's local IP and the
+// terminal handles card interaction autonomously.
+//
+// Flow:
+//   POST http://{terminal_ip}:{port}/v1/payment/sale
+//     Body: { amount (cents), currency, reference }
+//     → 200 { approved, authCode, reference, responseCode, cardBrand, cardLast4 }
+// No polling required — the request blocks until the customer completes (or
+// declines) the card interaction on the physical terminal (up to 120s).
+//
+// terminal_ip  : LAN IP of the PAX device (e.g. "192.168.1.100")
+// pbt_terminal_port: defaults to 10009 (Planet Integra default)
+// merchant_id  : merchant reference printed on terminal configuration slip
+// api_key      : leave blank (local network, no bearer auth required)
+// Reference: Planet Integra local API v2 (weareplanet.com developer docs).
+
+async fn pay_pbt(cfg: &PaymentConfig, amount: f64, currency: &str) -> Result<PaymentResult, String> {
+    let terminal_ip = cfg.pbt_terminal_ip.as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| cfg.endpoint.trim_start_matches("http://").trim_start_matches("https://"))
+        .trim_end_matches('/');
+
+    if terminal_ip.is_empty() {
+        return Err("PBT/Planet: terminal IP address is required (set in 'PBT terminal IP' or endpoint field)".into());
+    }
+
+    let port      = cfg.pbt_terminal_port.unwrap_or(10009);
+    let cents     = (amount * 100.0).round() as i64;
+    let reference = format!("POS-{}", &uuid::Uuid::new_v4().to_string()[..8].to_uppercase());
+
+    // Single blocking call — the PAX terminal manages card interaction internally
+    let client  = http_client(120)?;
+    let sale_url = format!("http://{}:{}/v1/payment/sale", terminal_ip, port);
+    let body = serde_json::json!({
+        "merchantId": cfg.merchant_id,
+        "amount":     cents,
+        "currency":   currency.to_uppercase(),
+        "reference":  reference,
+        "transactionType": "SALE",
+    });
+
+    let mut req = client.post(&sale_url).json(&body);
+    // Attach bearer auth only if a key was supplied (future Planet cloud option)
+    if !cfg.api_key.is_empty() {
+        req = req.bearer_auth(&cfg.api_key);
+    }
+
+    let resp = req.send().await
+        .map_err(|e| format!("PBT/Planet terminal unreachable ({}:{}): {}", terminal_ip, port, e))?;
+
+    let status = resp.status();
+    let body: Value = resp.json().await.unwrap_or_default();
+
+    // Planet Integra response fields
+    let approved = body.get("approved").and_then(|v| v.as_bool())
+        .or_else(|| {
+            body.get("responseCode").and_then(|v| v.as_str())
+                .map(|s| s == "00" || s == "APPROVED")
+        })
+        .or_else(|| body.get("status").and_then(|v| v.as_str()).map(|s| s == "APPROVED"))
+        .unwrap_or(false);
+
+    let auth_code = body.get("authCode")
+        .or_else(|| body.get("auth_code"))
+        .or_else(|| body.get("rrn"))
+        .or_else(|| body.get("reference"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(&reference)
+        .to_string();
+
+    if !status.is_success() || !approved {
+        let msg = body.get("responseText")
+            .or_else(|| body.get("message"))
+            .or_else(|| body.get("description"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("Declined by terminal")
+            .to_string();
+        return Ok(PaymentResult {
+            approved: false, reference: auth_code, amount,
+            currency: currency.into(), error: Some(msg), provider: "pbt".into(),
+        });
+    }
+
+    Ok(PaymentResult {
+        approved: true, reference: auth_code, amount,
+        currency: currency.into(), error: None, provider: "pbt".into(),
+    })
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
