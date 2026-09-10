@@ -1,8 +1,9 @@
-import { PlusIcon, MinusIcon, TrashIcon, StickyNoteIcon, MessageSquareIcon } from "lucide-react";
+import { PlusIcon, MinusIcon, TrashIcon, StickyNoteIcon, MessageSquareIcon, TagIcon } from "lucide-react";
 import { SubtotalIcon, PayIcon } from "./icons/PosIcons";
 import type { OrderLine, Order } from "../types";
 import { formatCurrency, computeLineAmounts } from "../lib/pricing";
 import type { PosUiTheme } from "../hooks/usePosTheme";
+import type { AppliedPromo } from "../hooks/useMultiBuy";
 
 interface OrderTicketProps {
   order: Order;
@@ -16,6 +17,8 @@ interface OrderTicketProps {
   onPay: () => void;
   onClear: () => void;
   theme?: PosUiTheme;
+  appliedPromos?: AppliedPromo[];
+  totalSavings?: number;
 }
 
 export function OrderTicket({
@@ -30,6 +33,8 @@ export function OrderTicket({
   onPay,
   onClear,
   theme = "light",
+  appliedPromos = [],
+  totalSavings = 0,
 }: OrderTicketProps) {
   const activeLines = lines.filter((l) => !l.voided);
   const voidedLines = lines.filter((l) => l.voided);
@@ -185,6 +190,26 @@ export function OrderTicket({
 
       {/* Totals */}
       <div className={totalsBorderClass}>
+        {/* Applied promotions */}
+        {appliedPromos.length > 0 && (
+          <div className="space-y-1 mb-2 pb-2 border-b border-emerald-800/40">
+            {appliedPromos.map((p) => (
+              <div key={p.promo_id} className="flex items-start justify-between text-xs text-emerald-500 gap-1">
+                <span className="flex items-center gap-1 min-w-0">
+                  <TagIcon className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{p.description}</span>
+                </span>
+                <span className="shrink-0 font-semibold">-{formatCurrency(p.discount_amount)}</span>
+              </div>
+            ))}
+            {totalSavings > 0 && (
+              <div className="flex justify-between text-xs font-semibold text-emerald-400 pt-0.5">
+                <span>Total savings</span>
+                <span>-{formatCurrency(totalSavings)}</span>
+              </div>
+            )}
+          </div>
+        )}
         {order.discount_amount > 0 && (
           <>
             <div className={`flex justify-between text-sm ${totalsMutedClass}`}>
