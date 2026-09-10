@@ -125,7 +125,8 @@ run_windows_preflight() {
 
   info "Waiting for Windows release preflight run $run_id…"
   for _ in {1..240}; do
-    run_json=$(github_api GET "/actions/runs/$run_id")
+    run_json=$(github_api GET "/actions/runs/$run_id") \
+      || error "Could not fetch the Windows release preflight status; no release tag was created."
     read -r status conclusion < <(node -e '
       const fs = require("fs");
       const run = JSON.parse(fs.readFileSync(0, "utf8"));

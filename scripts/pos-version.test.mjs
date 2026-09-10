@@ -98,6 +98,10 @@ case "$url" in
       failed) printf '{"status":"completed","conclusion":"failure"}' ;;
       cancelled) printf '{"status":"completed","conclusion":"cancelled"}' ;;
       timeout) printf '{"status":"in_progress","conclusion":null}' ;;
+      status-http-failed)
+        printf '{"message":"run status unavailable"}' >&2
+        exit 22
+        ;;
     esac
     ;;
 esac
@@ -160,6 +164,30 @@ test("does not create or push a tag when GitHub rejects the Windows preflight di
   const requests = (await readFile(fixture.curlLog, "utf8")).trim().split("\n");
   assert.deepEqual(requests, [
     "https://api.github.com/repos/example/globipos/actions/workflows/build-pos.yml/dispatches",
+  ]);
+});
+
+test("does not create or push a tag when GitHub rejects the Windows run-status request", async (t) => {
+  const fixture = await createWindowsPreflightFixture("status-http-failed");
+  t.after(() => rm(fixture.root, { recursive: true, force: true }));
+
+  await assert.rejects(
+    fixture.run(),
+    (error) =>
+      error.code === 1 &&
+      error.stderr.includes("run status unavailable") &&
+      error.stderr.includes("Could not fetch the Windows release preflight status"),
+  );
+
+  const operations = await readGitOperations(fixture.gitLog);
+  assert.doesNotMatch(operations, /^tag -a /m);
+  assert.doesNotMatch(operations, /^push origin v1\.2\.3$/m);
+
+  const requests = (await readFile(fixture.curlLog, "utf8")).trim().split("\n");
+  assert.deepEqual(requests, [
+    "https://api.github.com/repos/example/globipos/actions/workflows/build-pos.yml/dispatches",
+    "https://api.github.com/repos/example/globipos/actions/workflows/build-pos.yml/runs?event=workflow_dispatch&branch=main&per_page=20",
+    "https://api.github.com/repos/example/globipos/actions/runs/4242",
   ]);
 });
 
