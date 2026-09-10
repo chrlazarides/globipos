@@ -32,7 +32,8 @@ export interface UseSyncReturn {
 const CATALOG_INTERVAL_MS   = 15 * 60 * 1000;  // 15 min
 const INBOX_INTERVAL_MS     =  5 * 60 * 1000;  // 5 min
 const OUTBOX_INTERVAL_MS    = 30 * 1000;        // 30 s
-const HEARTBEAT_INTERVAL_MS = 60 * 1000;        // 1 min
+// SCO Monitor polls every 10 seconds, so publish lane changes at the same cadence.
+const HEARTBEAT_INTERVAL_MS = 10 * 1000;
 
 export function useSync(isConfigured: boolean, config: TerminalConfig | null = null): UseSyncReturn {
   const [status, setStatus] = useState<SyncStatus>({
