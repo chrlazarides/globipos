@@ -1,3 +1,1149 @@
+/**
+ * Main POS selling screen.
+ * Layout: [Category Nav + ScaleBar + Layout Grid] | [Order Ticket]
+ * Bottom: Action Bar
+ * Top: Sync Header
+ *
+ * Phase 3 components wired:
+ *  - PaymentDialog  — full split-payment flow (cash/card/voucher/loyalty)
+ *  - RefundDialog   — return by receipt or manual item entry
+ *  - ShiftManager   — shift open/close, X-report, end-of-day Z-report
+ *  - SelfCheckout   — dedicated self-service checkout mode
+ *  - ScaleBar       — live weight display when scale is connected
+ *  - CustomerDisplay — pole display overlay when enabled
+ *  - useHardware    — receipt printing + cash drawer on payment complete
+ */
+import { useState, useEffect, useCallback, useRef } from "react";
+import { load as loadStore } from "@tauri-apps/plugin-store";
+import { open as openShell } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  Product, Category, LayoutButton, CashierSession, TerminalConfig,
+  NumpadMode, Order as OrderType, OrderLine as OrderLineType,
+} from "../types";
+import { getProducts, getProductsByIds, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher, getStockByLocation, getPosLocations, createStockTransfer, getCustomerLive } from "../lib/db";
+import { formatCurrency } from "../lib/pricing";
+import {
+  requestProductAddition,
+  resolveAgeCheck,
+  type PendingAgeCheck,
+} from "../lib/ageRestrictedSale";
+import { useOrder } from "../hooks/useOrder";
+import { useBarcode } from "../hooks/useBarcode";
+import { usePermissions } from "../hooks/usePermissions";
+import { useHardware } from "../hooks/useHardware";
+import { useShift } from "../hooks/useShift";
+import { usePosTheme } from "../hooks/usePosTheme";
+import { useMultiBuy } from "../hooks/useMultiBuy";
+import type { AppliedPromo } from "../hooks/useMultiBuy";
+import type { PromoLineInput } from "../hooks/useOrder";
+import { useResponsiveColumns, type LayoutColumnConfig } from "../hooks/useWindowSize";
+import { SyncHeader } from "../components/SyncHeader";
+import { CategoryNav } from "../components/CategoryNav";
+import { LayoutGrid } from "../components/LayoutGrid";
+import { OrderTicket } from "../components/OrderTicket";
+import { CorrectionsPanel } from "../components/CorrectionsPanel";
+import { PriceCheckDialog } from "../components/PriceCheckDialog";
+import { StockTransferDialog } from "../components/StockTransferDialog";
+import { Numpad } from "../components/Numpad";
+import { ActionBar } from "../components/ActionBar";
+import { TransactionReviewDialog } from "../components/TransactionReviewDialog";
+import { PinPrompt } from "../components/PinPrompt";
+import ScaleBar from "../components/ScaleBar";
+import CustomerDisplay from "../components/CustomerDisplay";
+import PaymentDialog from "../components/PaymentDialog";
+import RefundDialog from "../components/RefundDialog";
+import AgeVerificationDialog from "../components/AgeVerificationDialog";
+import ProduceGrid from "../components/ProduceGrid";
+import type { PaymentResult } from "../hooks/usePayment";
+import { FallbackRules } from "./FallbackRules";
+import { BarcodeConfig } from "./BarcodeConfig";
+import { ReceiptDesigner } from "./ReceiptDesigner";
+import ScoMonitor from "./ScoMonitor";
+import HardwareConfigPage from "./HardwareConfigPage";
+import type { BarcodeConfig as BarcodeConfigType, ReceiptConfig as ReceiptConfigType } from "../types";
+import { DEFAULT_RECEIPT_CONFIG } from "../types";
+import ShiftManager from "./ShiftManager";
+import SelfCheckout from "./SelfCheckout";
+import type { UseSyncReturn } from "../hooks/useSync";
+import { buildReceiptLines } from "../lib/receipt";
+
+interface POSProps {
+  config: TerminalConfig;
+  session: CashierSession;
+  sync: UseSyncReturn;
+  onLogout: () => void;
+}
+
+// ── Note input dialog ─────────────────────────────────────────────────────────
+
+function NoteDialog({
+  title, initial, onConfirm, onClose,
+}: { title: string; initial?: string; onConfirm: (note: string) => void; onClose: () => void; }) {
+  const [note, setNote] = useState(initial ?? "");
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">{title}</h2>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={3}
+          autoFocus
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-burgundy-500 placeholder:text-gray-600"
+          placeholder="Enter note…"
+          data-testid="input-note"
+        />
+        <div className="flex gap-3 mt-4">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Cancel</button>
+          <button onClick={() => { onConfirm(note); onClose(); }}
+            className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors"
+            data-testid="button-save-note">
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Promo code dialog ─────────────────────────────────────────────────────────
+
+function PromoDialog({
+  onApply, onClose,
+}: { onApply: (code: string) => { success: boolean; message: string }; onClose: () => void; }) {
+  const [code, setCode] = useState("");
+  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  function handleApply() {
+    const r = onApply(code.trim().toUpperCase());
+    setResult(r);
+    if (r.success) setTimeout(onClose, 1200);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-xs p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">Apply Promo Code</h2>
+        <input
+          type="text"
+          value={code}
+          onChange={(e) => { setCode(e.target.value.toUpperCase()); setResult(null); }}
+          placeholder="Enter promo code"
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 text-sm font-mono uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-burgundy-500 placeholder:text-gray-600"
+          data-testid="input-promo-code"
+          onKeyDown={(e) => e.key === "Enter" && handleApply()}
+          autoFocus
+        />
+        {result && (
+          <p className={`mt-2 text-sm ${result.success ? "text-green-400" : "text-red-400"}`}>{result.message}</p>
+        )}
+        <div className="flex gap-3 mt-4">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Cancel</button>
+          <button onClick={handleApply} disabled={!code.trim()}
+            className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
+            data-testid="button-apply-promo">
+            Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ManualBarcodeDialog({ onSubmit, onClose }: { onSubmit: (barcode: string) => Promise<void>; onClose: () => void }) {
+  const [barcode, setBarcode] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    const value = barcode.trim();
+    if (!value || busy) return;
+    setBusy(true);
+    try { await onSubmit(value); onClose(); } finally { setBusy(false); }
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-5 shadow-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <div><h2 className="text-white font-semibold">Enter barcode</h2><p className="text-gray-500 text-xs mt-1">Use the same lookup as the scanner.</p></div>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-xl" aria-label="Close">×</button>
+        </div>
+        <input autoFocus value={barcode} onChange={(e) => setBarcode(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} inputMode="numeric" placeholder="Scan or type barcode"
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-xl px-4 py-3.5 text-lg font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="input-manual-barcode" />
+        <div className="flex gap-3 mt-4">
+          <button onClick={onClose} className="flex-1 min-h-12 rounded-xl bg-gray-800 text-gray-300">Cancel</button>
+          <button onClick={submit} disabled={!barcode.trim() || busy} className="flex-1 min-h-12 rounded-xl bg-burgundy-700 text-white font-semibold disabled:opacity-40" data-testid="button-submit-manual-barcode">{busy ? "Looking up…" : "Add item"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Cash journal dialog (cash-in / cash-out / petty cash) ────────────────────
+
+const CASH_DIALOG_LABELS: Record<"cash_in" | "cash_out" | "petty_cash", string> = {
+  cash_in: "Cash In",
+  cash_out: "Cash Out",
+  petty_cash: "Petty Cash",
+};
+
+function CashDialog({
+  mode, onConfirm, onClose,
+}: { mode: "cash_in" | "cash_out" | "petty_cash"; onConfirm: (amount: number, note: string) => void; onClose: () => void; }) {
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const parsed = parseFloat(amount) || 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">{CASH_DIALOG_LABELS[mode]}</h2>
+        <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+        <input
+          type="number"
+          step="0.01"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="0.00"
+          autoFocus
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="input-cash-dialog-amount"
+        />
+        <label className="text-gray-400 text-xs mb-1 block">Note</label>
+        <input
+          type="text"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Reason (optional)"
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="input-cash-dialog-note"
+        />
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Cancel</button>
+          <button
+            onClick={() => { if (parsed > 0) { onConfirm(parsed, note); onClose(); } }}
+            disabled={parsed <= 0}
+            className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
+            data-testid="button-confirm-cash-dialog"
+          >
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Department sale dialog ────────────────────────────────────────────────────
+
+function DeptSaleDialog({
+  categories, onConfirm, onClose,
+}: { categories: Category[]; onConfirm: (category: Category, amount: number) => void; onClose: () => void; }) {
+  const [categoryId, setCategoryId] = useState<string>(categories[0]?.id ?? "");
+  const [amount, setAmount] = useState("");
+  const parsed = parseFloat(amount) || 0;
+  const selected = categories.find((c) => c.id === categoryId);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">Department Sale</h2>
+        <label className="text-gray-400 text-xs mb-1 block">Department</label>
+        <select
+          value={categoryId}
+          onChange={(e) => setCategoryId(e.target.value)}
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="select-dept-sale-category"
+        >
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+        <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+        <input
+          type="number"
+          step="0.01"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="0.00"
+          autoFocus
+          className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+          data-testid="input-dept-sale-amount"
+        />
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Cancel</button>
+          <button
+            onClick={() => { if (selected && parsed > 0) { onConfirm(selected, parsed); onClose(); } }}
+            disabled={!selected || parsed <= 0}
+            className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
+            data-testid="button-confirm-dept-sale"
+          >
+            Add to Order
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Issue credit note dialog ──────────────────────────────────────────────────
+
+function IssueCreditNoteDialog({
+  onIssue, onClose,
+}: { onIssue: (amount: number, reason: string) => Promise<{ code: string }>; onClose: () => void; }) {
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [issuedCode, setIssuedCode] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const parsed = parseFloat(amount) || 0;
+
+  async function handleIssue() {
+    if (parsed <= 0 || busy) return;
+    setBusy(true);
+    try {
+      const result = await onIssue(parsed, reason);
+      setIssuedCode(result.code);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">Issue Credit Note</h2>
+        {issuedCode ? (
+          <div className="text-center py-4">
+            <p className="text-gray-400 text-sm mb-2">Credit note issued</p>
+            <p className="text-2xl font-mono font-bold text-burgundy-400" data-testid="text-issued-credit-note-code">{issuedCode}</p>
+            <p className="text-gray-500 text-xs mt-2">Give this code to the customer for redemption</p>
+          </div>
+        ) : (
+          <>
+            <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+            <input
+              type="number"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+              autoFocus
+              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+              data-testid="input-issue-credit-note-amount"
+            />
+            <label className="text-gray-400 text-xs mb-1 block">Reason</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Reason (optional)"
+              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+              data-testid="input-issue-credit-note-reason"
+            />
+          </>
+        )}
+        <div className="flex gap-3 mt-4">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
+            {issuedCode ? "Done" : "Cancel"}
+          </button>
+          {!issuedCode && (
+            <button
+              onClick={handleIssue}
+              disabled={parsed <= 0 || busy}
+              className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
+              data-testid="button-confirm-issue-credit-note"
+            >
+              {busy ? "Issuing…" : "Issue"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Issue gift voucher dialog ────────────────────────────────────────────────
+
+function IssueVoucherDialog({
+  onIssue, onClose,
+}: { onIssue: (amount: number) => Promise<{ code: string }>; onClose: () => void; }) {
+  const [amount, setAmount] = useState("");
+  const [issuedCode, setIssuedCode] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const parsed = parseFloat(amount) || 0;
+
+  async function handleIssue() {
+    if (parsed <= 0 || busy) return;
+    setBusy(true);
+    try {
+      const result = await onIssue(parsed);
+      setIssuedCode(result.code);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">Sell Gift Voucher</h2>
+        {issuedCode ? (
+          <div className="text-center py-4">
+            <p className="text-gray-400 text-sm mb-2">Gift voucher issued</p>
+            <p className="text-2xl font-mono font-bold text-burgundy-400" data-testid="text-issued-voucher-code">{issuedCode}</p>
+            <p className="text-gray-500 text-xs mt-2">Give this code to the customer for redemption</p>
+          </div>
+        ) : (
+          <>
+            <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+            <input
+              type="number"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+              autoFocus
+              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
+              data-testid="input-issue-voucher-amount"
+            />
+          </>
+        )}
+        <div className="flex gap-3 mt-4">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
+            {issuedCode ? "Done" : "Cancel"}
+          </button>
+          {!issuedCode && (
+            <button
+              onClick={handleIssue}
+              disabled={parsed <= 0 || busy}
+              className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
+              data-testid="button-confirm-issue-voucher"
+            >
+              {busy ? "Issuing…" : "Issue"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Recall dialog ─────────────────────────────────────────────────────────────
+
+function RecallDialog({ onRecall, onClose }: {
+  onRecall: (order: OrderType, lines: OrderLineType[]) => void;
+  onClose: () => void;
+}) {
+  type HeldOrder = { id: string; order_number: string; total: number; created_at: string };
+  const [held, setHeld] = useState<HeldOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getHeldOrders().then((h) => { setHeld(h as HeldOrder[]); }).finally(() => setLoading(false));
+  }, []);
+
+  async function recall(heldOrder: HeldOrder) {
+    const lines = await getOrderLines(heldOrder.id);
+    onRecall(heldOrder as unknown as OrderType, lines);
+    onClose();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+        <h2 className="text-white font-semibold mb-4">Recall Held Order</h2>
+        {loading ? (
+          <div className="text-center text-gray-500 py-8">Loading…</div>
+        ) : held.length === 0 ? (
+          <div className="text-center text-gray-500 py-8">No held orders</div>
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {held.map((h) => (
+              <button
+                key={h.id}
+                onClick={() => recall(h)}
+                className="w-full flex items-center justify-between bg-gray-800 hover:bg-gray-700 rounded-xl px-4 py-3 transition-colors"
+                data-testid={`recall-${h.id}`}
+              >
+                <div className="text-left">
+                  <div className="text-white text-sm font-medium">#{h.order_number}</div>
+                  <div className="text-gray-500 text-xs">{new Date(h.created_at).toLocaleTimeString()}</div>
+                </div>
+                <div className="text-burgundy-400 font-semibold">{formatCurrency(h.total)}</div>
+              </button>
+            ))}
+          </div>
+        )}
+        <button onClick={onClose} className="mt-4 w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Close</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Main POS Screen ───────────────────────────────────────────────────────────
+
+type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "manual_barcode" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "transaction_review" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | "age_check" | "produce" | "bottle_return" | "coupon" | "click_collect" | "customer_lookup" | null;
+
+function CustomerLookupDialog({
+  serverUrl,
+  terminalCode,
+  onSelect,
+  onClose,
+}: {
+  serverUrl: string;
+  terminalCode: string;
+  onSelect: (customer: { id: string; name: string; code: string; phone?: string; loyaltyPoints?: number }) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState("");
+  const [results, setResults] = useState<Array<{ id: string; name: string; code: string; phone?: string; loyaltyPoints?: number }>>([]);
+
+  async function searchCustomers() {
+    const value = query.trim();
+    if (!value) return;
+    setChecking(true);
+    setError("");
+    try {
+      const response = await fetch(`${serverUrl.replace(/\/$/, "")}/api/pos/sync/customer-search?q=${encodeURIComponent(value)}`, {
+        headers: { "X-Terminal-Code": terminalCode },
+      });
+      if (!response.ok) throw new Error("Customer lookup failed.");
+      const matches = await response.json();
+      setResults(matches);
+      if (!matches.length) setError("Customer or loyalty member not found.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Customer lookup failed.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="w-[min(92vw,28rem)] rounded-2xl border border-gray-700 bg-gray-900 p-6 text-white shadow-2xl">
+        <h2 className="text-xl font-bold">Customer / Loyalty Lookup</h2>
+        <p className="mt-1 text-sm text-gray-400">Scan or enter the customer or loyalty member ID.</p>
+        <input
+          autoFocus
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && searchCustomers()}
+          className="mt-4 w-full rounded-xl border border-gray-600 bg-gray-800 px-4 py-3 text-lg outline-none focus:border-burgundy-500"
+          placeholder="Customer / loyalty ID"
+          data-testid="input-customer-lookup"
+        />
+        {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+        {results.length > 0 && (
+          <div className="mt-3 max-h-56 space-y-2 overflow-y-auto">
+            {results.map((customer) => (
+              <button
+                key={customer.id}
+                className="w-full rounded-xl border border-gray-700 bg-gray-800 p-3 text-left hover:border-burgundy-500"
+                onClick={() => { onSelect(customer); onClose(); }}
+              >
+                <span className="block font-semibold">{customer.name}</span>
+                <span className="text-xs text-gray-400">{customer.code}{customer.phone ? ` · ${customer.phone}` : ""} · {customer.loyaltyPoints ?? 0} points</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <button className="rounded-xl bg-gray-700 px-4 py-3 font-semibold hover:bg-gray-600" onClick={onClose}>Cancel</button>
+          <button
+            className="rounded-xl bg-burgundy-600 px-4 py-3 font-semibold hover:bg-burgundy-500 disabled:opacity-50"
+            disabled={!query.trim() || checking}
+            onClick={searchCustomers}
+          >
+            {checking ? "Searching…" : "Search"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+type CashDialogMode = "cash_in" | "cash_out" | "petty_cash";
+type POSMode = "sell" | "sco" | "shift" | "fallback" | "barcode_config" | "receipt_design" | "hardware_config" | "sco_monitor";
+
+interface PaymentSuccessState {
+  total: number;
+  method: string;
+  changeDue: number;
+  tendered: number;
+  orderNumber: string;
+  cardRef?: string;
+}
+
+function PaymentSuccessOverlay({
+  result,
+  onNewOrder,
+  onPrint,
+}: {
+  result: PaymentSuccessState;
+  onNewOrder: () => void;
+  onPrint: () => void;
+}) {
+  const methodLabel = result.method
+    .replace("card_jcc", "Card — JCC")
+    .replace("card_viva", "Card — Viva")
+    .replace("card_worldpay", "Card — Worldpay")
+    .replace("cash", "Cash")
+    .replace("voucher", "Voucher")
+    .replace("loyalty", "Loyalty Points")
+    .replace("account_credit", "Account Credit")
+    .replace("split", "Split Payment");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+      <div className="bg-gray-900 border border-gray-700 rounded-3xl w-full max-w-sm p-8 shadow-2xl flex flex-col items-center gap-4 text-center">
+        {/* Big checkmark */}
+        <div className="w-20 h-20 rounded-full bg-green-700 flex items-center justify-center mb-2 shadow-lg shadow-green-900/60">
+          <svg className="w-10 h-10 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </div>
+
+        <h2 className="text-white text-2xl font-bold">Payment Success!</h2>
+        <p className="text-green-400 text-3xl font-bold">{formatCurrency(result.total)}</p>
+
+        <div className="w-full bg-gray-800 rounded-xl p-4 space-y-2 text-left mt-1">
+          {result.orderNumber && (
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Order</span>
+              <span className="text-gray-200 font-medium">#{result.orderNumber}</span>
+            </div>
+          )}
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-500">Payment</span>
+            <span className="text-gray-200 font-medium">{methodLabel}</span>
+          </div>
+          {result.method === "cash" && result.tendered > 0 && (
+            <>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Tendered</span>
+                <span className="text-gray-200">{formatCurrency(result.tendered)}</span>
+              </div>
+              <div className="flex justify-between text-sm border-t border-gray-700 pt-2 mt-1">
+                <span className="text-gray-300 font-semibold">Change Due</span>
+                <span className="text-green-400 font-bold text-base">{formatCurrency(result.changeDue)}</span>
+              </div>
+            </>
+          )}
+          {result.cardRef && (
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Card Ref</span>
+              <span className="text-gray-200 font-mono" data-testid="text-success-card-ref">{result.cardRef}</span>
+            </div>
+          )}
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-500">Time</span>
+            <span className="text-gray-400">{new Date().toLocaleTimeString()}</span>
+          </div>
+        </div>
+
+        <div className="w-full flex flex-col gap-2.5 mt-2">
+          <button
+            onClick={onNewOrder}
+            className="w-full py-3.5 bg-green-700 hover:bg-green-600 text-white font-bold rounded-xl text-base transition-colors active:scale-[0.98]"
+            data-testid="button-new-order"
+          >
+            New Order
+          </button>
+          <button
+            onClick={onPrint}
+            className="w-full py-3 border border-gray-600 hover:border-gray-500 text-gray-300 hover:text-white font-medium rounded-xl text-sm transition-colors active:scale-[0.98] flex items-center justify-center gap-2"
+            data-testid="button-print-receipt"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
+            </svg>
+            Print Receipt
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function POS({ config, session, sync, onLogout }: POSProps) {
+  const engine    = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
+  const perms     = usePermissions(session);
+  const hw        = useHardware();
+  const shift     = useShift();
+  const multiBuy  = useMultiBuy();
+  const { theme: posTheme, toggleTheme } = usePosTheme();
+
+  const [products, setProducts]           = useState<Product[]>([]);
+  const [layoutProducts, setLayoutProducts] = useState<Product[]>([]);
+  const [categories, setCategories]       = useState<Category[]>([]);
+  const [layoutButtons, setLayoutButtons] = useState<LayoutButton[]>([]);
+  const [layoutConfig, setLayoutConfig]   = useState<LayoutColumnConfig | null>(null);
+  const [maxButtonPos, setMaxButtonPos]   = useState(19); // default 4×5-1
+
+  // ── Phase 3 wiring: age check, multi-buy, click-collect ───────────────────
+  const [ageCheckPending, setAgeCheckPending] = useState<PendingAgeCheck | null>(null);
+  // Coupons applied manually or via barcode scan — persisted across re-evaluations
+  const [appliedCoupons, setAppliedCoupons]   = useState<PromoLineInput[]>([]);
+  // Stable keys to short-circuit the multi-buy useEffect and avoid infinite loops
+  const prevLinesKeyRef  = useRef<string>("");
+  const prevCouponKeyRef = useRef<string>("");
+  type CCOrder = { id: string; order_number?: string; payload: string; created_at?: string };
+  const [ccOrders, setCcOrders] = useState<CCOrder[]>([]);
+  const [ccSearch, setCcSearch] = useState("");
+  const [ccSearchError, setCcSearchError] = useState("");
+  const [ccSearching, setCcSearching] = useState(false);
+
+  // Derived — read from engine.lines so OrderTicket and PaymentDialog share one truth
+  const promoLines = engine.lines.filter((l) => l.id.startsWith("multibuy-") || l.id.startsWith("coupon-"));
+  const appliedPromos: AppliedPromo[] = promoLines.map((l) => ({
+    promo_id:       l.id.replace(/^(multibuy-|coupon-)/, ""),
+    promo_name:     l.description,
+    discount_amount: Math.abs(l.line_total),
+    description:    l.description,
+    affected_line_ids: [],
+  }));
+  const totalSavings = promoLines.reduce((s, l) => s + Math.abs(l.line_total), 0);
+
+  function loadClickCollectLines(lines: any[]) {
+    engine.clearOrder();
+    for (const l of lines) {
+      const p: Product = {
+        id: l.product_id ?? l.id ?? `cc-${Date.now()}`,
+        server_id: l.product_id ?? null,
+        name: l.description ?? l.name ?? "Item",
+        sku: l.sku ?? "",
+        barcode: null,
+        price1: l.unit_price ?? l.price1 ?? 0,
+        price2: l.unit_price ?? 0,
+        price3: l.unit_price ?? 0,
+        price4: l.unit_price ?? 0,
+        price5: l.unit_price ?? 0,
+        category_id: null,
+        vat_rate: l.vat_rate ?? 0,
+        active: true,
+        stock_quantity: 999,
+        unit: l.unit ?? "pcs",
+        has_variants: false,
+      } as unknown as Product;
+      engine.addProduct(p, l.qty ?? 1);
+    }
+  }
+
+  // Responsive column count — recalculates live on window resize.
+  // Depends on layoutConfig state so must be declared after it.
+  const activeColumns = useResponsiveColumns(layoutConfig);
+  const activeRows    = Math.ceil((maxButtonPos + 1) / activeColumns);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [dialog, setDialog]               = useState<Dialog>(null);
+  const [numpadMode, setNumpadModeState]  = useState<NumpadMode>("qty");
+  const [paymentInitialTab, setPaymentInitialTab] = useState<"cash" | "card" | "split">("cash");
+  const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; code: string; phone?: string; loyaltyPoints?: number } | null>(null);
+  const [cashDialogMode, setCashDialogMode] = useState<CashDialogMode>("cash_in");
+  const [deptSaleVatRate, setDeptSaleVatRate] = useState<number | null>(null);
+  const [mode, setMode]                   = useState<POSMode>(config.sco_mode ? "sco" : "sell");
+  const [paymentSuccess, setPaymentSuccess] = useState<PaymentSuccessState | null>(null);
+  const lastReceiptPrinterCallback = useRef<(() => Promise<void>) | null>(null);
+  const barcodeConfigRef = useRef<BarcodeConfigType | null>(null);
+  const receiptConfigRef = useRef<ReceiptConfigType | null>(null);
+  const [receiptLanguage, setReceiptLanguage] = useState<"en" | "el">(
+    () => (localStorage.getItem("pos_receipt_language") as "en" | "el") || "en"
+  );
+  const toggleLanguage = useCallback(() => {
+    setReceiptLanguage((prev) => {
+      const next = prev === "en" ? "el" : "en";
+      localStorage.setItem("pos_receipt_language", next);
+      return next;
+    });
+  }, []);
+
+  // Responsive column config — fetch from server once on mount.
+  // Uses X-Terminal-Code header (no API key needed) to get the layout
+  // set's per-breakpoint column counts. Falls back to defaults silently.
+  useEffect(() => {
+    const base = config.server_url.replace(/\/$/, "");
+    fetch(`${base}/api/pos/sync/layout-config`, {
+      headers: { "X-Terminal-Code": config.terminal_code },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        setLayoutConfig(data);
+        if (Array.isArray(data.buttons)) {
+          const liveButtons: LayoutButton[] = data.buttons.map((button: any) => ({
+            position: button.position,
+            label: button.label,
+            color: button.color,
+            icon: button.icon ?? undefined,
+            button_type: button.buttonType,
+            item_id: button.itemId ?? undefined,
+            category_id: button.categoryId ?? undefined,
+            action_code: button.actionCode ?? undefined,
+            sublayout_id: button.sublayoutId ?? undefined,
+            colspan: button.colspan ?? 1,
+            rowspan: button.rowspan ?? 1,
+          }));
+          setLayoutButtons(liveButtons);
+          if (liveButtons.length > 0) {
+            setMaxButtonPos(Math.max(...liveButtons.map((button) => button.position)));
+            const itemIds = [...new Set(liveButtons.map((button) => button.item_id).filter((id): id is string => !!id))];
+            getProductsByIds(itemIds).then(setLayoutProducts).catch(() => {});
+          }
+        }
+      })
+      .catch(() => {/* no-op: defaults apply */});
+  }, [config.server_url, config.terminal_code]);
+
+  // Load barcode structure + receipt design configs once on mount
+  useEffect(() => {
+    import("../lib/db").then(({ getBarcodeConfig, getReceiptConfig }) => {
+      getBarcodeConfig().then((cfg) => { barcodeConfigRef.current = cfg; }).catch(() => {});
+      getReceiptConfig().then((cfg) => { receiptConfigRef.current = cfg; }).catch(() => {});
+    });
+  }, []);
+
+  // Load local data on mount
+  useEffect(() => {
+    getProducts().then(setProducts).catch(() => {});
+    getCategories().then(setCategories).catch(() => {});
+    getLayout().then((btns) => {
+      setLayoutButtons(btns);
+      const layoutItemIds = [...new Set(btns.map((button) => button.item_id).filter((id): id is string => !!id))];
+      getProductsByIds(layoutItemIds).then(setLayoutProducts).catch(() => {});
+      if (btns.length > 0) {
+        setMaxButtonPos(Math.max(...btns.map((b) => b.position)));
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Apply timed prices whenever sync delivers new overrides
+  useEffect(() => {
+    if (sync.timedPriceOverrides.size > 0) {
+      engine.applyTimedPrices(sync.timedPriceOverrides);
+    }
+  }, [sync.timedPriceOverrides]);
+
+  // Reload products when category changes
+  useEffect(() => {
+    getProducts(selectedCategory ?? undefined).then(setProducts).catch(() => {});
+  }, [selectedCategory]);
+  const productsForLayout = [
+    ...new Map([...products, ...layoutProducts].map((product) => [product.server_id, product])).values(),
+  ];
+
+  // Re-evaluate multi-buy promotions whenever cart product lines or applied coupons change.
+  // Uses stable string keys to short-circuit when only the promo lines changed (our own update),
+  // preventing an infinite update loop.
+  useEffect(() => {
+    const productLines = engine.lines.filter(
+      (l) => !l.id.startsWith("multibuy-") && !l.id.startsWith("coupon-")
+    );
+    const linesKey  = productLines.map((l) => `${l.id}:${l.qty}:${l.unit_price}:${l.override_price ?? ""}:${l.voided ? "v" : ""}:${l.line_discount_pct}:${l.line_discount_fixed}`).join("|");
+    const couponKey = appliedCoupons.map((c) => c.promo_id).join("|");
+
+    // Skip if nothing that affects promo computation changed
+    if (linesKey === prevLinesKeyRef.current && couponKey === prevCouponKeyRef.current) return;
+    prevLinesKeyRef.current  = linesKey;
+    prevCouponKeyRef.current = couponKey;
+
+    if (productLines.length === 0) {
+      engine.applyPromoLines([]);
+      // Also clear any applied coupons when the order is emptied/cleared
+      if (appliedCoupons.length > 0) setAppliedCoupons([]);
+      return;
+    }
+
+    const mbResults  = multiBuy.evaluate(productLines);
+    const allPromos: PromoLineInput[] = [
+      ...mbResults.map((r) => ({ promo_id: r.promo_id,         description: r.description, discount_amount: r.discount_amount })),
+      ...appliedCoupons.map((c) => ({ ...c, promo_id: `coupon-${c.promo_id}` })),
+    ];
+    engine.applyPromoLines(allPromos);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine.lines, appliedCoupons]);
+
+  // ── handleAddProduct — wraps engine.addProduct with age check + deposit ───
+  const handleAddProduct = useCallback((product: Product, qty: number = 1, priceOverride?: number) => {
+    requestProductAddition(
+      { product, qty, priceOverride },
+      engine.addProduct,
+      setAgeCheckPending,
+    );
+  }, [engine.addProduct]);
+
+  // Customer display: publish order state to shared Tauri store on every change.
+  // The CustomerDisplay component (in its own window or same window) polls this store.
+  const cdStoreRef = useRef<Awaited<ReturnType<typeof loadStore>> | null>(null);
+
+  // Signage polling state
+  const [signage, setSignage] = useState<any[]>([]);
+  useEffect(() => {
+    const fetchSignage = async () => {
+      try {
+        const base = config.server_url.replace(/\/$/, "");
+        const resp = await fetch(`${base}/api/pos/signage/playlist`, {
+          headers: { "X-Terminal-Code": config.terminal_code },
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          setSignage(data.items || []);
+        }
+      } catch (err) {
+        console.error("Signage fetch error:", err);
+      }
+    };
+    fetchSignage();
+    const timer = setInterval(fetchSignage, 5 * 60 * 1000); // Poll every 5 minutes
+    return () => clearInterval(timer);
+  }, [config.server_url, config.terminal_code]);
+
+  useEffect(() => {
+    if (!hw.config?.customer_display_enabled && !hw.config?.vfd_enabled) return;
+
+    async function publishDisplayState() {
+      try {
+        if (!cdStoreRef.current) {
+          cdStoreRef.current = await loadStore("customer_display.json");
+        }
+        const store = cdStoreRef.current;
+        const hasLines = engine.lines.length > 0;
+        
+        // Push to secondary screen multimedia display
+        if (hw.config?.customer_display_enabled) {
+          await store.set("state", {
+            mode: hasLines ? "scanning" : "idle",
+            items: engine.lines.map((l) => ({
+              description: l.description,
+              qty: l.qty,
+              unit_price: l.unit_price,
+              line_total: l.line_total,
+            })),
+            subtotal: engine.order.subtotal,
+            vat:      engine.order.vat_amount,
+            total:    engine.order.total,
+            store_name: config.terminal_name,
+            signage,
+          });
+          await store.save();
+        }
+
+        // Push to hardware VFD (serial 2x20)
+        if (hw.config?.vfd_enabled) {
+          if (hasLines) {
+            const lastLine = engine.lines[engine.lines.length - 1];
+            const line1 = lastLine.description.toUpperCase();
+            const line2 = `TOTAL: €${engine.order.total.toFixed(2)}`;
+            hw.writeVfd(line1, line2);
+          } else {
+            hw.writeVfd("WELCOME", config.terminal_name.toUpperCase());
+          }
+        }
+      } catch {
+        // ignore — window may be closing
+      }
+    }
+
+    publishDisplayState();
+  }, [engine.lines, engine.order, hw.config, signage, config.terminal_name]);
+
+  // Start / stop scale weight polling based on config and mode
+  useEffect(() => {
+    if (hw.config?.scale_enabled && mode === "sell") {
+      hw.startWeightPolling(500);
+    } else {
+      hw.stopWeightPolling();
+    }
+    return () => hw.stopWeightPolling();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hw.config?.scale_enabled, mode]);
+
+  // One barcode path for hardware scans and cashier-entered barcodes.
+  const processBarcode = useCallback(async (barcode: string) => {
+      const { getProductByBarcode } = await import("../lib/db");
+      const { parseScaleBarcode, DEFAULT_BARCODE_CONFIG } = await import("../lib/scaleBarcode");
+
+      // ── Coupon / voucher barcode detection ────────────────────────────────
+      // Detect coupon barcodes by common prefixes or the barcode config coupon flag
+      const isLikelyCoupon = /^(CPN|COUP|GV|GVC|VOUCHER|CV)[0-9A-Z\-]+/i.test(barcode)
+        || barcode.startsWith("98") // EAN-13 coupon prefix (ISO standard)
+        || barcode.startsWith("5");  // common GS1 coupon indicator
+
+      if (isLikelyCoupon) {
+        const result = await multiBuy.validateCoupon(barcode);
+        if (result.valid && result.promo) {
+          const productLinesSnap = engine.lines.filter(
+            (l) => !l.id.startsWith("multibuy-") && !l.id.startsWith("coupon-")
+          );
+          const applied = multiBuy.applyCoupon(result.promo, productLinesSnap);
+          if (applied) {
+            // Inject coupon as a real negative line via applyPromoLines (adds to total)
+            setAppliedCoupons((prev) => {
+              const already = prev.find((c) => c.promo_id === applied.promo_id);
+              if (already) return prev; // don't double-apply same coupon
+              return [...prev, {
+                promo_id: applied.promo_id,
+                description: applied.description,
+                discount_amount: applied.discount_amount,
+              }];
+            });
+            await invoke("write_audit", {
+              cashierId: session.cashier_id,
+              cashierName: session.cashier_name,
+              action: "coupon_scanned",
+              entity: "order",
+              detail: `Coupon ${barcode}: -€${applied.discount_amount.toFixed(2)}`,
+            }).catch(() => {});
+          }
+          return;
+        }
+        // Fall through to product lookup if not a known coupon
+      }
+
+      const scale = parseScaleBarcode(barcode, barcodeConfigRef.current ?? DEFAULT_BARCODE_CONFIG);
+
+      if (scale) {
+        // Try the 5-digit PLU first; fall back to the full barcode
+        let product = await getProductByBarcode(scale.plu);
+        if (!product) product = await getProductByBarcode(barcode);
+
+        if (product) {
+          if (scale.type === "weight" && scale.value > 0) {
+            handleAddProduct(product, parseFloat(scale.value.toFixed(3)));
+          } else if (scale.type === "price" && scale.value > 0) {
+            handleAddProduct(product, 1, parseFloat(scale.value.toFixed(2)));
+          } else {
+            handleAddProduct(product);
+          }
+        }
+      } else {
+        // Standard (non-scale) barcode lookup
+        const product = await getProductByBarcode(barcode);
+        if (product) handleAddProduct(product);
+      }
+  }, [engine, multiBuy, session.cashier_id, session.cashier_name, handleAddProduct]);
+
+  // Barcode scanner — active only in sell mode with no dialog open
+  useBarcode({
+    enabled: mode === "sell" && dialog === null,
+    onScan: processBarcode,
+  });
+
+  // ── Action dispatcher ──────────────────────────────────────────────────────
+  const handleAction = useCallback((code: string) => {
+    switch (code) {
+      case "CLEAR_ORDER":
+      case "NEW_SALE":
+      case "CANCEL_BILL":
+      case "CLEAR_CART":          engine.clearOrder(); break;
+      case "VOID_ORDER":
+      case "VOID_SALE":           perms.requestAction("void_order", () => { engine.voidOrder(); }); break;
+      case "VOID_LINE":           perms.requestAction("void_line", engine.voidLine); break;
+      case "HOLD_ORDER":
+      case "HOLD":
+      case "SUSPEND_SALE":        engine.holdOrder(); break;
+      case "RECALL_ORDER":
+      case "RECALL":              setDialog("recall"); break;
+      case "REFUND":
+      case "EXCHANGE":            perms.requestAction("refund", () => setDialog("refund")); break;
+      case "REPEAT_LAST":         engine.repeatLastItem(); break;
+      case "CORRECTION":          engine.correction(); break;
+      case "ADD_LINE_NOTE":       setDialog("note_line"); break;
+      case "ADD_NOTE":            setDialog("note_order"); break;
+      case "PRICE_CHECK":         setDialog("price_check"); break;
+      case "ITEM_SEARCH":         setDialog("price_check"); break;
+      case "BARCODE_SCAN":        setDialog("manual_barcode"); break;
+      case "PLU":
+      case "WEIGHT":              setDialog("produce"); break;
+      case "QTY":                 setNumpadModeState("qty"); setDialog("numpad"); break;
+      case "PROMO_CODE":          setDialog("promo"); break;
+      case "PRICE_OVERRIDE":      perms.requestAction("price_override", () => { setNumpadModeState("price_override"); setDialog("numpad"); }); break;
+      case "LINE_DISCOUNT_PCT":   perms.requestAction("discount", () => { setNumpadModeState("line_discount_pct"); setDialog("numpad"); }); break;
+      case "DISCOUNT_PCT":        perms.requestAction("discount", () => { setNumpadModeState("line_discount_pct"); setDialog("numpad"); }); break;
+      case "LINE_DISCOUNT_FIXED": perms.requestAction("discount", () => { setNumpadModeState("line_discount_fixed"); setDialog("numpad"); }); break;
+      case "DISCOUNT_FIXED":      perms.requestAction("discount", () => { setNumpadModeState("line_discount_fixed"); setDialog("numpad"); }); break;
+      case "ORDER_DISCOUNT_PCT":  perms.requestAction("discount", () => { setNumpadModeState("order_discount_pct"); setDialog("numpad"); }); break;
+      case "ORDER_DISCOUNT_FIXED":perms.requestAction("discount", () => { setNumpadModeState("order_discount_fixed"); setDialog("numpad"); }); break;
+      case "REMOVE_DISCOUNT":     engine.removeDiscount(); break;
+      case "PRICE_LEVEL_1": engine.switchPriceLevel(1); break;
+      case "PRICE_LEVEL_2": engine.switchPriceLevel(2); break;
+      case "PRICE_LEVEL_3": engine.switchPriceLevel(3); break;
+      case "PRICE_LEVEL_4": engine.switchPriceLevel(4); break;
+      case "PRICE_LEVEL_5": engine.switchPriceLevel(5); break;
+      case "FALLBACK_RULES": setMode("fallback"); break;
+      case "BARCODE_CONFIG": setMode("barcode_config"); break;
+      case "RECEIPT_DESIGN": setMode("receipt_design"); break;
+      case "PAY_CASH":            setPaymentInitialTab("cash"); setDialog("payment"); break;
+      case "PAY_CARD":            setPaymentInitialTab("card"); setDialog("payment"); break;
+      case "PAY_SPLIT":           setPaymentInitialTab("split"); setDialog("payment"); break;
+      case "PAY_VOUCHER":
+      case "LOYALTY_POINTS":
+      case "TOTAL":
+      case "SUBTOTAL":            setPaymentInitialTab("split"); setDialog("payment"); break;
+      case "CUSTOMER_LOOKUP":     setDialog("customer_lookup"); break;
+      case "CUSTOMER_CLEAR":      engine.setCustomer(""); setSelectedCustomer(null); break;
+      // ── Quantity multiplier before scan ──────────────────────────────────
+      case "NUMPAD": setNumpadModeState("qty_multiplier"); setDialog("numpad"); break;
+      // ── Cash drawer & journal group ──────────────────────────────────────
+      case "OPEN_DRAWER": perms.requestAction("open_drawer", () => hw.openDrawer()); break;
+      case "NO_SALE": shift.noSale(); break;
+      case "CASH_IN": setCashDialogMode("cash_in"); setDialog("cash_dialog"); break;
+      case "CASH_OUT": setCashDialogMode("cash_out"); setDialog("cash_dialog"); break;
+      case "PETTY_CASH": setCashDialogMode("petty_cash"); setDialog("cash_dialog"); break;
+      case "DECLARE_CASH": setMode("shift"); break;
+      // ── Surcharge % ───────────────────────────────────────────────────────
+      case "SURCHARGE_PCT": perms.requestAction("discount", () => { setNumpadModeState("surcharge_pct"); setDialog("numpad"); }); break;
+      case "LINE_SURCHARGE_PCT": perms.requestAction("discount", () => { setNumpadModeState("line_surcharge_pct"); setDialog("numpad"); }); break;
+      // ── Department-key sale ──────────────────────────────────────────────
+      case "DEPT_SALE": setDialog("dept_sale"); break;
+      case "DEPT_SALE_VAT_19": setDeptSaleVatRate(19); setDialog("dept_sale"); break;
+      case "DEPT_SALE_VAT_5": setDeptSaleVatRate(5); setDialog("dept_sale"); break;
+      case "REVIEW_TRANSACTIONS": setDialog("transaction_review"); break;
+      // ── Credit notes ──────────────────────────────────────────────────────
+      case "ISSUE_CREDIT_NOTE": perms.requestAction("discount", () => { setDialog("issue_credit_note"); }); break;
+      case "REDEEM_CREDIT_NOTE": setDialog("payment"); break;
+      // ── Gift vouchers ────────────────────────────────────────────────────
+      case "ISSUE_VOUCHER": perms.requestAction("discount", () => { setDialog("issue_voucher"); }); break;
+      // ── Re-print last invoice ────────────────────────────────────────────
+      case "REPRINT_LAST":
+        if (lastReceiptPrinterCallback.current) {
+          lastReceiptPrinterCallback.current();
+        } else {
+          alert("No recent receipt available to re-print.");
+        }
+        break;
+      // ── Language switch (receipt labels) ────────────────────────────────
+      case "TOGGLE_LANGUAGE": toggleLanguage(); break;
+      case "MANAGER_OVERRIDE": perms.requestAction("manage_cashiers", () => alert("Manager authorisation granted.")); break;
+      case "CHANGE_CASHIER":
+      case "SIGN_OUT":
+      case "SHIFT_END":
+      case "END_SHIFT": perms.requestAction("end_shift", onLogout); break;
+      // ── Phase 3: New actions ─────────────────────────────────────────────
+      case "PRODUCE":         setDialog("produce"); break;
+      case "PLU_ENTRY":       setDialog("produce"); break;
+      case "BOTTLE_RETURN":   setDialog("bottle_return"); break;
+      case "COUPON":          setDialog("coupon"); break;
+      case "REDEEM_VOUCHER":  setDialog("payment"); break;
+      case "CLICK_COLLECT":
+        invoke<Array<{id:string;order_number?:string;payload:string;created_at?:string}>>("get_click_collect_orders")
+          .then((orders) => { setCcOrders(orders); setDialog("click_collect"); })
+          .catch(() => { setCcOrders([]); setDialog("click_collect"); });
+        break;
+      case "SCO_MONITOR":     setMode("sco_monitor"); break;
+      case "HARDWARE_CONFIG": setMode("hardware_config"); break;
+    }
+  }, [engine, perms, hw, shift, toggleLanguage, multiBuy, session.cashier_id, session.cashier_name, onLogout]);
+
+  // ── Numpad confirm ────────────────────────────────────────────────────────
+  function handleNumpadConfirm(value: number) {
+    switch (numpadMode) {
+      case "qty":                  engine.setQty(value); break;
+      case "price_override":       engine.setPriceOverride(value); break;
+      case "line_discount_pct":    engine.setLinePct(value); break;
+      case "line_discount_fixed":  engine.setLineFixed(value); break;
+      case "order_discount_pct":   engine.setOrderPct(value); break;
+      case "order_discount_fixed": engine.setOrderFixed(value); break;
+      case "qty_multiplier":       engine.setPendingMultiplier(value); break;
       case "surcharge_pct":        engine.setSurchargePct(value); break;
       case "line_surcharge_pct":   engine.setLineSurcharge(value); break;
     }
