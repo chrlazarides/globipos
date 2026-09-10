@@ -1,3 +1,66 @@
+/// Hardware integration module — scale, ESC/POS receipt printer, cash drawer.
+///
+/// Uses tauri_plugin_shell to communicate with serial/USB devices. All device
+/// port paths are validated against a strict allowlist before any use to
+/// prevent command injection. ESC/POS bytes are written via temporary files
+/// and `dd` — no shell string interpolation of data or paths.
+///
+/// Scale:  RS-232/USB-serial (Toledo, Mettler, Digi-SM protocols).
+/// Printer: USB HID (ESC/POS) — /dev/usb/lp0 or Windows USB port.
+/// Drawer:  RJ-11 pulse via printer port (ESC p command).
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sqlx::{Row, SqlitePool};
+use tauri_plugin_shell::ShellExt;
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HardwareConfig {
+    // Scale
+    pub scale_enabled:            bool,
+    pub scale_port:               String,   // "/dev/ttyUSB0" | "COM3"
+    pub scale_baud:               u32,      // default 9600
+    pub scale_protocol:           String,   // "toledo" | "mettler" | "digi"
+    // Printer
+    pub printer_enabled:          bool,
+    pub printer_port:             String,   // "/dev/usb/lp0" | "USB001"
+    pub printer_columns:          u8,       // default 42
+    pub printer_logo:             bool,
+    // Cash drawer
+    pub drawer_enabled:           bool,
+    pub drawer_pulse_ms:          u32,      // default 200
+    // Customer display
+    pub customer_display_enabled: bool,
+    pub customer_display_port:    String,
+    // VFD Display
+    pub vfd_enabled:              bool,
+    pub vfd_port:                 String,
+    pub vfd_baud:                 u32,      // default 9600
+    pub vfd_protocol:             String,   // "generic"
+    // Payment provider (see also schema_meta 'payment_config' for credentials)
+    pub payment_provider:         String,   // "mock" | "jcc" | "viva" | "worldpay"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScaleWeight {
+    pub grams:  f64,
+    pub kg:     f64,
+    pub stable: bool,
+    pub tared:  bool,
+}
+
+impl Default for ScaleWeight {
+    fn default() -> Self { ScaleWeight { grams: 0.0, kg: 0.0, stable: false, tared: false } }
+}
+
+// ── Port safety guard ─────────────────────────────────────────────────────────
+
+/// Validates a device port path against a strict allowlist.
+/// Rejects any string containing shell metacharacters, whitespace, or path traversal.
+/// Allowed: /dev/ttyXxx, /dev/usb/lpN, /dev/lpN, COMn, USBnnn.
+pub fn validate_port(port: &str) -> Result<(), String> {
     if port.is_empty() { return Ok(()); }
 
     // Reject shell metacharacters, whitespace, quotes, and path traversal
