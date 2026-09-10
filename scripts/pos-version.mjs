@@ -76,7 +76,24 @@ async function readVersions() {
   };
 }
 
+function assertPortableLockfile(lockText) {
+  const blockedHosts = [
+    "package-firewall.replit.internal",
+    "localhost",
+    "127.0.0.1",
+  ];
+  const matches = blockedHosts.filter((host) => lockText.includes(host));
+  if (matches.length) {
+    throw new Error(
+      `POS lockfile contains registry URLs unavailable to GitHub Actions: ${matches.join(", ")}. ` +
+      "Regenerate it with the public npm registry before releasing.",
+    );
+  }
+}
+
 async function check(expectedValue) {
+  const lockText = await readFile(files.lock, "utf8");
+  assertPortableLockfile(lockText);
   const versions = await readVersions();
   const expected = expectedValue ? normalizeVersion(expectedValue) : versions.package;
   const mismatches = Object.entries(versions).filter(([, version]) => version !== expected);
@@ -119,6 +136,7 @@ async function setVersion(value) {
   ]);
 
   if (original.has(files.lock)) {
+    assertPortableLockfile(original.get(files.lock));
     const lockJson = JSON.parse(original.get(files.lock));
     lockJson.version = version;
     if (lockJson.packages?.[""]) lockJson.packages[""].version = version;

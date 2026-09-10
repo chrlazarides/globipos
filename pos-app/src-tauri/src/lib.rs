@@ -1467,6 +1467,7 @@ async fn get_click_collect_orders(state: State<'_, AppState>) -> Result<Vec<Valu
     Ok(rows.into_iter().map(row_to_json).collect())
 }
 
+#[tauri::command]
 async fn find_click_collect_order(
     state: State<'_, AppState>,
     order_number: String,
@@ -1508,6 +1509,7 @@ async fn find_click_collect_order(
     }
     resp.json::<Value>().await.map_err(|e| e.to_string())
 }
+#[tauri::command]
 async fn get_hardware_config(state: State<'_, AppState>) -> Result<HardwareConfig, String> {
     Ok(hardware::load_hardware_config(&state.db).await)
 }
@@ -1774,6 +1776,7 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+#[tauri::command]
 async fn mark_click_collect_order_collected(
     state: State<'_, AppState>,
     order_number: String,

@@ -161,3 +161,20 @@ test("recovers original files from an interrupted update before checking", async
     assert.equal(await readFile(file, "utf8"), contents);
   }
 });
+
+test("rejects lockfiles that point at a Replit-internal registry", async (t) => {
+  const root = await createFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const lockFile = path.join(root, "pos-app", "package-lock.json");
+  const lockJson = JSON.parse(await readFile(lockFile, "utf8"));
+  lockJson.packages["node_modules/example"] = {
+    version: "1.0.0",
+    resolved: "http://package-firewall.replit.internal/npm/example/-/example-1.0.0.tgz",
+  };
+  await writeFile(lockFile, `${JSON.stringify(lockJson, null, 2)}\n`);
+
+  await assert.rejects(
+    runHelper(root, "--check", originalVersion),
+    (error) => error.code === 1 && error.stderr.includes("unavailable to GitHub Actions"),
+  );
+});

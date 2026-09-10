@@ -1,5 +1,7 @@
 {pkgs}: {
   deps = [
+    pkgs.rustup
+    pkgs.webkitgtk_4_1
     pkgs.libsoup
     pkgs.libayatana-appindicator
     pkgs.openssl

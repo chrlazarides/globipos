@@ -24,6 +24,36 @@ the supported protocol version and make the server reject older clients with an
 explicit minimum-version response. Never let an old client appear connected with
 an incomplete local catalog.
 
+## Release-only API uploads
+
+When Git histories have diverged and release files must be overlaid through the
+GitHub Contents API, read each source file directly from the filesystem and
+verify the decoded remote content byte-for-byte before moving the release tag.
+
+**Why:** Capturing a large source file through shell stdout can silently produce
+partial content even when the command reports success, leaving a tag that looks
+correct but cannot build.
+
+**How to apply:** Use direct file reads with an explicit byte budget, compare the
+uploaded content (or cryptographic hashes), and only then create or move the tag.
+Also reject any lockfile containing Replit-internal registry URLs before upload.
+
+## GitHub connection preflight
+
+Validate both Git transport and API access before mutating release versions.
+Treat read-only repository access as insufficient proof that a release can be
+pushed, and require remote `main` to be an ancestor of local `main`.
+
+**Why:** A healthy OAuth API connection can coexist with invalid Git push
+credentials, while workflow-file writes may be unavailable through the API
+proxy. Diverged branches then turn an otherwise routine release into a manual
+overlay.
+
+**How to apply:** Before a release, fetch GitHub `main`, run a dry-run push, and
+fail before version changes if either check fails. Keep native compilation,
+portable-lockfile checks, signing-secret preflights, and published-asset
+verification in the GitHub workflow itself.
+
 ## Android APK signing
 Release APKs are signed in CI: `apksigner` + `zipalign` from the newest
 build-tools, using a PKCS12 keystore (alias `globipos`) stored base64 in repo

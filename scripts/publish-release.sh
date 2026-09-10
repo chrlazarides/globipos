@@ -36,6 +36,26 @@ fi
 REPO_URL=$(git remote get-url "$GITHUB_REMOTE" | sed 's/\.git$//' | sed 's|git@github.com:|https://github.com/|')
 success "GitHub remote: $REPO_URL"
 
+# ── Prove repository safety before mutating version files ─────────────────────
+CURRENT_BRANCH=$(git branch --show-current)
+[[ "$CURRENT_BRANCH" == "main" ]] || error "Release from the main branch, not '$CURRENT_BRANCH'."
+
+[[ -z "$(git status --porcelain)" ]] || error "Working tree is not clean. Commit or stash all changes before releasing."
+
+info "Checking GitHub connectivity and remote branch alignment…"
+git ls-remote --exit-code "$GITHUB_REMOTE" HEAD >/dev/null \
+  || error "Cannot read the GitHub repository. Repair the GitHub connection before releasing."
+git fetch --quiet "$GITHUB_REMOTE" main --tags \
+  || error "Cannot fetch GitHub main and tags. Repair the GitHub connection before releasing."
+REMOTE_MAIN="$GITHUB_REMOTE/main"
+git show-ref --verify --quiet "refs/remotes/$REMOTE_MAIN" \
+  || error "GitHub main was not fetched."
+git merge-base --is-ancestor "$REMOTE_MAIN" HEAD \
+  || error "Local main does not contain GitHub main. Reconcile the branches without force-pushing before releasing."
+git push --dry-run "$GITHUB_REMOTE" HEAD:main >/dev/null \
+  || error "GitHub rejected a dry-run push. Repair permissions or branch alignment before releasing."
+success "GitHub connection and branch alignment verified"
+
 # ── Get version ───────────────────────────────────────────────────────────────
 if [[ -z "$VERSION" ]]; then
   CURRENT_VERSION=$(node -p "require('./pos-app/package.json').version")
@@ -72,6 +92,11 @@ info "Updating all POS version files…"
 node scripts/pos-version.mjs --set "$VERSION"
 node scripts/pos-version.mjs --check "$TAG"
 success "Package, Cargo, Tauri, lockfile, and tag versions agree at $VERSION"
+
+info "Running deterministic frontend and native preflight checks…"
+(cd pos-app && npm ci && npm run build)
+(cd pos-app/src-tauri && cargo check --locked)
+success "Frontend and native POS checks passed"
 
 # ── Commit the version bump ───────────────────────────────────────────────────
 info "Committing version bump…"
