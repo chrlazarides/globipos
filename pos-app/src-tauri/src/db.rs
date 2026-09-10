@@ -1,6 +1,7 @@
 use serde_json::{Map, Value};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 use sqlx::sqlite::SqliteRow;
+use sqlx::Acquire;
 
 /// Convert a SqliteRow into a serde_json::Value object.
 /// Handles TEXT, INTEGER, REAL, BOOLEAN, and NULL types.
@@ -129,6 +130,57 @@ pub async fn upsert_category(pool: &sqlx::SqlitePool, c: &Value) -> Result<(), s
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Upsert one downloaded catalog page atomically. Keeping the transaction here
+/// avoids one SQLite commit per row while preserving the simple single-row APIs.
+pub async fn upsert_catalog_page(
+    pool: &sqlx::SqlitePool,
+    products: &[Value],
+    categories: &[Value],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for p in products {
+        let id = uuid_from(p, "id");
+        let server_id = str_val(p, "id");
+        sqlx::query(
+            r#"INSERT INTO local_products
+                (id, server_id, name, sku, barcode, description, category_id,
+                 price1, price2, price3, price4, price5, cost_price, vat_rate,
+                 unit_type, pack_size, stock_quantity, active, updated_at, synced_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+               ON CONFLICT(server_id) DO UPDATE SET
+                name=excluded.name, sku=excluded.sku, barcode=excluded.barcode,
+                description=excluded.description, category_id=excluded.category_id,
+                price1=excluded.price1, price2=excluded.price2, price3=excluded.price3,
+                price4=excluded.price4, price5=excluded.price5, cost_price=excluded.cost_price,
+                vat_rate=excluded.vat_rate, unit_type=excluded.unit_type, pack_size=excluded.pack_size,
+                stock_quantity=excluded.stock_quantity, active=excluded.active,
+                updated_at=excluded.updated_at, synced_at=datetime('now')"#
+        )
+        .bind(id).bind(server_id).bind(str_val(p, "name")).bind(str_val(p, "sku"))
+        .bind(opt_str(p, "barcode")).bind(opt_str(p, "description")).bind(opt_str_key(p, "categoryId"))
+        .bind(f64_val(p, "price1")).bind(f64_val(p, "price2")).bind(f64_val(p, "price3"))
+        .bind(f64_val(p, "price4")).bind(f64_val(p, "price5")).bind(f64_val(p, "costPrice"))
+        .bind(f64_val(p, "vatRate")).bind(p["unitType"].as_str().unwrap_or("pc"))
+        .bind(p["packSize"].as_i64().unwrap_or(1) as i32).bind(p["stockQuantity"].as_i64().unwrap_or(0) as i32)
+        .bind(p["active"].as_bool().unwrap_or(true) as i32).bind(opt_str_key(p, "updatedAt"))
+        .execute(&mut *tx).await?;
+    }
+    for c in categories {
+        sqlx::query(
+            r#"INSERT INTO local_categories (id, server_id, name, description, parent_id, vat_rate, active)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(server_id) DO UPDATE SET
+                name=excluded.name, description=excluded.description,
+                parent_id=excluded.parent_id, vat_rate=excluded.vat_rate, active=excluded.active"#
+        )
+        .bind(uuid_from(c, "id")).bind(str_val(c, "id")).bind(str_val(c, "name"))
+        .bind(opt_str(c, "description")).bind(opt_str_key(c, "parentId"))
+        .bind(f64_val(c, "vatRate")).bind(c["active"].as_bool().unwrap_or(true) as i32)
+        .execute(&mut *tx).await?;
+    }
+    tx.commit().await
 }
 
 /// Replace all layout buttons atomically
