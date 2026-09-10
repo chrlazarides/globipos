@@ -49,6 +49,73 @@ EOF
     || error "Project-scoped GitHub authentication failed. Refresh GLOBISYNC before releasing."
 }
 
+github_api() {
+  local method="$1"
+  local path="$2"
+  local data="${3:-}"
+  local args=(
+    --fail-with-body --silent --show-error
+    --request "$method"
+    --header "Accept: application/vnd.github+json"
+    --header "Authorization: Bearer $GLOBISYNC"
+    --header "X-GitHub-Api-Version: 2022-11-28"
+  )
+  if [[ -n "$data" ]]; then
+    args+=(--header "Content-Type: application/json" --data "$data")
+  fi
+  curl "${args[@]}" "https://api.github.com/repos/${GITHUB_REPOSITORY}${path}"
+}
+
+run_windows_preflight() {
+  local head_sha="$1"
+  local dispatched_at run_json run_id status conclusion
+
+  [[ -n "${GLOBISYNC:-}" ]] || error \
+    "The Windows release preflight requires the project-scoped GLOBISYNC secret."
+
+  dispatched_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  info "Requesting Windows native build preflight for $head_sha…"
+  github_api POST "/actions/workflows/build-pos.yml/dispatches" \
+    "$(printf '{"ref":"main","inputs":{"tag":"%s","preflight_only":"true"}}' "$TAG")" >/dev/null \
+    || error "Could not start the Windows release preflight."
+
+  run_id=""
+  for _ in {1..30}; do
+    run_json=$(github_api GET "/actions/workflows/build-pos.yml/runs?event=workflow_dispatch&branch=main&per_page=20")
+    run_id=$(node -e '
+      const fs = require("fs");
+      const expectedSha = process.argv[1];
+      const dispatchedAt = Date.parse(process.argv[2]);
+      const data = JSON.parse(fs.readFileSync(0, "utf8"));
+      const run = data.workflow_runs.find((item) =>
+        item.head_sha === expectedSha && Date.parse(item.created_at) >= dispatchedAt
+      );
+      if (run) process.stdout.write(String(run.id));
+    ' "$head_sha" "$dispatched_at" <<<"$run_json")
+    [[ -n "$run_id" ]] && break
+    sleep 5
+  done
+  [[ -n "$run_id" ]] || error "Windows release preflight did not appear in GitHub Actions."
+
+  info "Waiting for Windows release preflight run $run_id…"
+  for _ in {1..240}; do
+    run_json=$(github_api GET "/actions/runs/$run_id")
+    read -r status conclusion < <(node -e '
+      const fs = require("fs");
+      const run = JSON.parse(fs.readFileSync(0, "utf8"));
+      process.stdout.write(`${run.status} ${run.conclusion || "-"}`);
+    ' <<<"$run_json")
+    [[ "$status" == "completed" ]] && break
+    sleep 15
+  done
+  [[ "$status" == "completed" ]] || error \
+    "Windows release preflight did not finish within 60 minutes. Inspect ${REPO_URL}/actions/runs/${run_id}; no release tag was created."
+
+  [[ "$conclusion" == "success" ]] || error \
+    "Windows release preflight failed. Inspect ${REPO_URL}/actions/runs/${run_id}; no release tag was created."
+  success "Windows native POS build passed"
+}
+
 echo ""
 echo "  ╔══════════════════════════════════════════════╗"
 echo "  ║  GlobiPOS Terminal — Publish GitHub Release  ║"
@@ -63,6 +130,7 @@ if [[ -z "$GITHUB_REMOTE" ]]; then
   git push -u origin main"
 fi
 REPO_URL=$(git remote get-url "$GITHUB_REMOTE" | sed 's/\.git$//' | sed 's|git@github.com:|https://github.com/|')
+GITHUB_REPOSITORY="${REPO_URL#https://github.com/}"
 success "GitHub remote: $REPO_URL"
 
 # ── Prove repository safety before mutating version files ─────────────────────
@@ -103,9 +171,9 @@ git rev-parse "$TAG" >/dev/null 2>&1 && error "Tag $TAG already exists."
 echo ""
 echo "  This will:"
 echo "   1. Set package, Cargo, Tauri, and lockfile versions to $VERSION"
-echo "   2. Create git tag $TAG"
-echo "   3. Push tag to GitHub"
-echo "   4. GitHub Actions will build Windows (.msi), macOS (.dmg),"
+echo "   2. Push the version commit and require a Windows native build preflight"
+echo "   3. Create and push git tag $TAG only after that check passes"
+echo "   4. GitHub Actions will then build Windows (.msi), macOS (.dmg),"
 echo "      Linux (.AppImage + .deb), and Android (.apk)"
 echo "   5. Compiled files will appear in GitHub Releases"
 echo ""
@@ -133,12 +201,16 @@ git diff --cached --quiet || git commit -m "chore: bump terminal version to $VER
 # Refuse to tag if the staged/committed files no longer match the requested tag.
 node scripts/pos-version.mjs --check "$TAG"
 
-# ── Tag and push ──────────────────────────────────────────────────────────────
+# ── Push commit, require Windows preflight, then create tag ───────────────────
+info "Pushing version commit to GitHub…"
+git push "$GITHUB_REMOTE" main
+
+run_windows_preflight "$(git rev-parse HEAD)"
+
 info "Creating tag $TAG…"
 git tag -a "$TAG" -m "GlobiPOS Terminal $TAG"
 
-info "Pushing to GitHub…"
-git push "$GITHUB_REMOTE" main
+info "Pushing release tag to GitHub…"
 git push "$GITHUB_REMOTE" "$TAG"
 
 # ── Done ──────────────────────────────────────────────────────────────────────

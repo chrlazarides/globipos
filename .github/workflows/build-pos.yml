@@ -15,6 +15,11 @@ on:
         description: 'Release tag (e.g. v1.0.1)'
         required: true
         default: 'v1.0.0'
+      preflight_only:
+        description: 'Run pre-release compile checks without publishing installers'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -35,7 +40,7 @@ jobs:
 
   validate-version:
     name: Validate release version
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)
     needs: test-version-helper
     runs-on: ubuntu-latest
     steps:
@@ -57,7 +62,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.sha || env.TAG_NAME }}
+          ref: ${{ (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.preflight_only)) && github.sha || env.TAG_NAME }}
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -84,10 +89,34 @@ jobs:
         working-directory: pos-app
         run: npx tauri build --no-bundle -- --locked
 
+  windows-native-preflight:
+    name: Validate Windows native POS build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.preflight_only)) && github.sha || env.TAG_NAME }}
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: pos-app/package-lock.json
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Verify portable lockfile and aligned versions
+        run: node scripts/pos-version.mjs --check
+      - name: Install frontend dependencies deterministically
+        working-directory: pos-app
+        run: npm ci
+      - name: Compile unsigned native Tauri application
+        working-directory: pos-app
+        run: npx tauri build --no-bundle -- --locked
+
   # ── Desktop: Windows, macOS, Linux ─────────────────────────────────────────
   build-desktop:
-    if: github.event_name != 'pull_request'
-    needs: [validate-version, native-preflight]
+    if: github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)
+    needs: [validate-version, native-preflight, windows-native-preflight]
     strategy:
       fail-fast: false
       matrix:
@@ -191,8 +220,8 @@ jobs:
   build-android:
     name: Build Android APK
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    needs: [validate-version, native-preflight]
+    if: github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)
+    needs: [validate-version, native-preflight, windows-native-preflight]
 
     steps:
       - uses: actions/checkout@v4
