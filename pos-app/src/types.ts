@@ -157,6 +157,10 @@ export interface PeripheralHealth {
   shift_open?: boolean;
   app_version?: string;
   reported_at?: string;
+  sco_mode?: "idle" | "scanning" | "payment" | "attendant_needed" | "age_check" | "done";
+  sco_items?: number;
+  sco_total?: number;
+  sco_attendant_reason?: string | null;
 }
 
 export interface FallbackRule {
@@ -187,6 +191,38 @@ export interface BarcodeConfig {
   rules: BarcodeRule[];
 }
 
+// ── Receipt design configuration (header/footer text and section toggles) ─────
+
+export interface ReceiptConfig {
+  header_title: string;      // big bold centered title; empty → terminal code
+  header_lines: string[];    // address, phone, tax ID, ...
+  footer_lines: string[];    // thank-you message, return policy, ...
+  show_terminal: boolean;
+  show_cashier: boolean;
+  show_order_number: boolean;
+  show_datetime: boolean;
+  show_subtotal: boolean;
+  show_vat: boolean;
+  show_payment_method: boolean;
+  show_tendered_change: boolean;
+  show_card_ref: boolean;
+}
+
+export const DEFAULT_RECEIPT_CONFIG: ReceiptConfig = {
+  header_title: "",
+  header_lines: [],
+  footer_lines: ["Thank you for your purchase!"],
+  show_terminal: true,
+  show_cashier: true,
+  show_order_number: true,
+  show_datetime: true,
+  show_subtotal: true,
+  show_vat: true,
+  show_payment_method: true,
+  show_tendered_change: true,
+  show_card_ref: true,
+};
+
 // ── Numpad context ────────────────────────────────────────────────────────────
 
 export type NumpadMode =
@@ -210,15 +246,29 @@ export type NumpadMode =
 
 export type ActionCode =
   | "CLEAR_ORDER"
+  | "NEW_SALE"
+  | "CANCEL_BILL"
+  | "CLEAR_CART"
   | "VOID_ORDER"
+  | "VOID_SALE"
+  | "VOID_LINE"
   | "HOLD_ORDER"
+  | "HOLD"
   | "RECALL_ORDER"
+  | "RECALL"
+  | "SUSPEND_SALE"
+  | "REFUND"
+  | "EXCHANGE"
   | "ADD_NOTE"
   | "ADD_LINE_NOTE"
   | "REPEAT_LAST"
   | "PRICE_CHECK"
+  | "QTY"
+  | "WEIGHT"
   | "LINE_DISCOUNT_PCT"
   | "LINE_DISCOUNT_FIXED"
+  | "DISCOUNT_PCT"
+  | "DISCOUNT_FIXED"
   | "ORDER_DISCOUNT_PCT"
   | "ORDER_DISCOUNT_FIXED"
   | "PRICE_OVERRIDE"
@@ -233,10 +283,25 @@ export type ActionCode =
   | "MANUAL_PROMO"
   | "PAY_CASH"
   | "PAY_CARD"
+  | "PAY_SPLIT"
+  | "PAY_VOUCHER"
+  | "TOTAL"
+  | "SUBTOTAL"
+  | "CUSTOMER_LOOKUP"
+  | "CUSTOMER_CLEAR"
+  | "LOYALTY_POINTS"
+  | "ITEM_SEARCH"
+  | "BARCODE_SCAN"
+  | "PLU"
   | "OPEN_DRAWER"
   | "END_SHIFT"
+  | "SHIFT_END"
+  | "CHANGE_CASHIER"
+  | "SIGN_OUT"
+  | "MANAGER_OVERRIDE"
   | "FALLBACK_RULES"
   | "BARCODE_CONFIG"
+  | "RECEIPT_DESIGN"
   | "NUMPAD"
   | "NO_SALE"
   | "CASH_IN"
