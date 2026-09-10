@@ -1,8 +1,10 @@
 {
-  "name": "GlobiPOS",
+  "id": "/pos/register",
+  "name": "GlobiPOS Terminal",
   "short_name": "GlobiPOS",
-  "description": "Wholesale wine and spirits management and multi-location point of sale system",
-  "start_url": "/invoices/new",
+  "description": "GlobiPOS point of sale terminal",
+  "start_url": "/pos/register",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#1a1a1a",
   "theme_color": "#1a1a1a",
@@ -10,51 +12,51 @@
   "categories": ["business", "finance"],
   "icons": [
     {
-      "src": "/icons/icon-72x72.svg",
+      "src": "/icons/globipos-terminal-72.png",
       "sizes": "72x72",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-96x96.svg",
+      "src": "/icons/globipos-terminal-96.png",
       "sizes": "96x96",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-128x128.svg",
+      "src": "/icons/globipos-terminal-128.png",
       "sizes": "128x128",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-144x144.svg",
+      "src": "/icons/globipos-terminal-144.png",
       "sizes": "144x144",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-152x152.svg",
+      "src": "/icons/globipos-terminal-152.png",
       "sizes": "152x152",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-192x192.svg",
+      "src": "/icons/globipos-terminal-192.png",
       "sizes": "192x192",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/icons/icon-384x384.svg",
+      "src": "/icons/globipos-terminal-384.png",
       "sizes": "384x384",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-512x512.svg",
+      "src": "/icons/globipos-terminal-512.png",
       "sizes": "512x512",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ],
@@ -64,19 +66,19 @@
       "name": "New Invoice",
       "short_name": "New Invoice",
       "url": "/invoices/new",
-      "icons": [{ "src": "/icons/icon-96x96.svg", "sizes": "96x96" }]
+      "icons": [{ "src": "/icons/globipos-terminal-96.png", "sizes": "96x96", "type": "image/png" }]
     },
     {
       "name": "All Invoices",
       "short_name": "Invoices",
       "url": "/invoices",
-      "icons": [{ "src": "/icons/icon-96x96.svg", "sizes": "96x96" }]
+      "icons": [{ "src": "/icons/globipos-terminal-96.png", "sizes": "96x96", "type": "image/png" }]
     },
     {
       "name": "Customers",
       "short_name": "Customers",
       "url": "/customers",
-      "icons": [{ "src": "/icons/icon-96x96.svg", "sizes": "96x96" }]
+      "icons": [{ "src": "/icons/globipos-terminal-96.png", "sizes": "96x96", "type": "image/png" }]
     }
   ]
 }

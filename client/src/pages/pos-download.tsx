@@ -15,6 +15,7 @@ import {
   AlertCircle, Rocket,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { usePwaInstall } from "@/hooks/use-pwa-install";
 import type { SystemSetting } from "@shared/schema";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -273,6 +274,7 @@ function formatSize(bytes: number): string {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function PosDownload() {
+  const { isInstallable, isInstalled, install } = usePwaInstall();
   const detected = detectPlatform();
   const [selected, setSelected] = useState<PlatformId>(detected);
   const [copied, setCopied] = useState<string | null>(null);
@@ -305,6 +307,24 @@ export default function PosDownload() {
   const localBuildScript = detected === "windows"
     ? platform.localBuildScriptWin
     : platform.localBuildScript;
+
+  async function installPwa() {
+    if (isInstallable) {
+      const accepted = await install();
+      if (!accepted) {
+        toast({
+          title: "Installation cancelled",
+          description: "You can try again whenever the browser shows the install option.",
+        });
+      }
+      return;
+    }
+
+    const description = selected === "ios"
+      ? 'In Safari, tap Share and then "Add to Home Screen".'
+      : 'Open the browser menu and choose "Install GlobiPOS Terminal" or "Install app".';
+    toast({ title: "Use your browser’s install menu", description });
+  }
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
@@ -455,6 +475,17 @@ export default function PosDownload() {
                   <CardDescription>Follow these steps on your {platform.label} device</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {isInstalled ? (
+                    <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-3 text-sm font-medium text-green-800" data-testid="pwa-installed-status">
+                      <CheckCircle2 className="h-5 w-5 text-green-600" />
+                      GlobiPOS Terminal is installed on this device
+                    </div>
+                  ) : (
+                    <Button className="w-full" size="lg" onClick={installPwa} data-testid="button-install-pwa">
+                      <Download className="mr-2 h-5 w-5" />
+                      {isInstallable ? "Install GlobiPOS Terminal" : `Show ${platform.label} installation steps`}
+                    </Button>
+                  )}
                   <div className="rounded-lg bg-muted/50 border p-3 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Your GlobiPOS URL</p>
                     <div className="flex gap-2">
