@@ -9908,6 +9908,12 @@ export async function registerRoutes(
       const terminal = await storage.getPosTerminalByCode(terminalCode);
       if (!terminal) return res.status(404).json({ message: `Terminal '${terminalCode}' not found. Create it in Admin → POS → Terminals.` });
       if (!terminal.active) return res.status(403).json({ message: "Terminal is not active" });
+      if (req.body.catalogSyncVersion !== 1) {
+        return res.status(426).json({
+          message: "This GlobiPOS Terminal version is no longer supported for large catalogs. Install version 1.0.10 or newer and try again.",
+          minimumTerminalVersion: "1.0.10",
+        });
+      }
       if (locationCode) {
         const locs = await storage.getPosLocations();
         const loc = locs.find(l => l.code === locationCode || l.id === locationCode);

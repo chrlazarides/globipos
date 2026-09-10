@@ -19,6 +19,10 @@ Treat a multi-file version bump as a recoverable transaction: keep the original
 contents until post-write validation succeeds, and retain recovery data if a
 rollback is incomplete. For manually dispatched CI, checkout and verify the
 actual tag commit rather than merely using the supplied tag as an artifact label.
+When a server protocol change requires a newer terminal, have the client declare
+the supported protocol version and make the server reject older clients with an
+explicit minimum-version response. Never let an old client appear connected with
+an incomplete local catalog.
 
 ## Android APK signing
 Release APKs are signed in CI: `apksigner` + `zipalign` from the newest

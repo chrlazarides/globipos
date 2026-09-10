@@ -19,7 +19,10 @@ pub async fn register_terminal(
     let url = format!("{}/api/pos/terminals/register", server_url.trim_end_matches('/'));
     let resp = client
         .post(&url)
-        .json(&serde_json::json!({ "terminalCode": terminal_code }))
+        .json(&serde_json::json!({
+            "terminalCode": terminal_code,
+            "catalogSyncVersion": 1
+        }))
         .send()
         .await
         .map_err(|e| format!("Network error: {}", e))?;
