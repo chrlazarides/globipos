@@ -1,3 +1,874 @@
+mod auth;
+mod barcode_config;
+mod receipt_config;
+mod db;
+mod hardware;
+mod vfd;
+mod migrations;
+mod models;
+mod orders;
+mod sync;
+#[cfg(test)]
+mod tests;
+
+use barcode_config::BarcodeConfig;
+use receipt_config::ReceiptConfig;
+use db::row_to_json;
+use hardware::{HardwareConfig, PaymentConfig, ScaleWeight};
+use models::*;
+use serde_json::Value;
+use sqlx::{Row, SqlitePool};
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager, State};
+
+// ── Shared app state ──────────────────────────────────────────────────────────
+
+pub struct AppState {
+    pub db:          SqlitePool,
+    pub config:      Mutex<Option<TerminalConfig>>,
+    pub session:     Mutex<Option<CashierSession>>,
+    pub sync_status: Mutex<SyncStatus>,
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn cfg_err() -> String { "Terminal not configured".to_string() }
+
+fn store_config(app: &AppHandle, cfg: &TerminalConfig) -> Result<(), String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("config.json").map_err(|e| e.to_string())?;
+    store.set("terminal_config", serde_json::to_value(cfg).map_err(|e| e.to_string())?);
+    store.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn load_cfg_from_store(app: &AppHandle) -> Result<Option<TerminalConfig>, String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("config.json").map_err(|e| e.to_string())?;
+    match store.get("terminal_config") {
+        Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| e.to_string()),
+        None    => Ok(None),
+    }
+}
+
+// ── Original Tauri commands ───────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_config(app: AppHandle, state: State<'_, AppState>) -> Result<Option<TerminalConfig>, String> {
+    if let Some(cfg) = state.config.lock().unwrap().clone() {
+        return Ok(Some(cfg));
+    }
+    let cfg = load_cfg_from_store(&app)?;
+    if let Some(ref c) = cfg {
+        *state.config.lock().unwrap() = Some(c.clone());
+    }
+    Ok(cfg)
+}
+
+#[tauri::command]
+async fn register_terminal(
+    app:           AppHandle,
+    state:         State<'_, AppState>,
+    server_url:    String,
+    terminal_code: String,
+) -> Result<TerminalConfig, String> {
+    let resp = sync::register_terminal(&state.db, &server_url, &terminal_code).await?;
+
+    let cfg = TerminalConfig {
+        server_url:        server_url.clone(),
+        terminal_code:     terminal_code.clone(),
+        terminal_id:       resp.terminal.id.clone(),
+        terminal_name:     resp.terminal.name.clone(),
+        location_id:       resp.location.id.clone(),
+        location_name:     resp.location.name.clone(),
+        price_level:       resp.terminal.price_level.unwrap_or(1),
+        mirror_server_url: None,
+        sco_mode:          None,
+    };
+
+    store_config(&app, &cfg)?;
+    *state.config.lock().unwrap() = Some(cfg.clone());
+    Ok(cfg)
+}
+
+#[tauri::command]
+async fn validate_pin(state: State<'_, AppState>, pin: String) -> Result<Option<CashierSession>, String> {
+    auth::validate_pin(&state.db, &pin)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn reconcile_card_payment(
+    state: State<'_, AppState>,
+    pin: String,
+    order: Order,
+    lines: Vec<OrderLine>,
+) -> Result<CashierSession, String> {
+    let session = auth::authorize_pin(&state.db, &pin, "reconcile_card_payment")
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Supervisor or manager PIN required".to_string())?;
+    let payment_ref = order.payment_ref.as_deref().map(str::trim).unwrap_or("");
+    if order.status != "completed"
+        || !order.payment_method.as_deref().unwrap_or("").starts_with("card")
+        || payment_ref.is_empty()
+    {
+        return Err("A completed card order with a terminal reference is required".to_string());
+    }
+    let (terminal_id, location_id) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.terminal_id.clone(), c.location_id.clone())
+    };
+    auth::audit(
+        &state.db,
+        Some(&session.cashier_id),
+        Some(&session.cashier_name),
+        "card_payment_reference_reconciled",
+        Some("order"),
+        Some(&order.id),
+        Some(payment_ref),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    orders::save_order(&state.db, &order, &lines, &terminal_id, &location_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(session)
+}
+
+#[tauri::command]
+async fn upsert_cashier(
+    state: State<'_, AppState>,
+    id: String, name: String, pin: String, role: String,
+) -> Result<(), String> {
+    auth::upsert_cashier(&state.db, &id, &name, &pin, &role)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_products(
+    state: State<'_, AppState>,
+    category_id: Option<String>,
+    search: Option<String>,
+) -> Result<Vec<Value>, String> {
+    let rows = if let Some(q) = &search {
+        let exact = q.trim();
+        let fts_query = exact
+            .split_whitespace()
+            .map(|token| {
+                let escaped = token.replace('"', "\"\"");
+                format!("\"{}\"*", escaped)
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        if exact.is_empty() || fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
+        sqlx::query(
+            r#"WITH matches AS (
+                 SELECT rowid, 0 AS priority FROM local_products WHERE barcode = ?
+                 UNION
+                 SELECT rowid, 1 AS priority FROM local_products WHERE sku = ?
+                 UNION
+                 SELECT rowid, 2 AS priority FROM (
+                   SELECT rowid FROM local_products_fts
+                   WHERE local_products_fts MATCH ? LIMIT 100
+                 )
+               )
+               SELECT p.*,
+                 (SELECT po.override_price FROM price_overrides po
+                  WHERE po.product_id = p.server_id
+                    AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                    AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+                  ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
+               FROM local_products p
+               JOIN (SELECT rowid, min(priority) AS priority FROM matches GROUP BY rowid) m
+                 ON m.rowid = p.rowid
+               WHERE p.active = 1
+               ORDER BY m.priority, p.name LIMIT 50"#
+        )
+        .bind(exact).bind(exact).bind(&fts_query)
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?
+    } else if let Some(cat) = &category_id {
+        sqlx::query(
+            r#"SELECT p.*,
+                 (SELECT po.override_price FROM price_overrides po
+                  WHERE po.product_id = p.server_id
+                    AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                    AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+                  ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
+               FROM local_products p
+               WHERE p.active = 1 AND p.category_id = ?
+               ORDER BY p.name LIMIT 250"#
+        )
+        .bind(cat)
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?
+    } else {
+        sqlx::query(
+            r#"SELECT p.*,
+                 (SELECT po.override_price FROM price_overrides po
+                  WHERE po.product_id = p.server_id
+                    AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                    AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+                  ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
+               FROM local_products p
+               WHERE p.active = 1 ORDER BY p.name LIMIT 250"#
+        )
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?
+    };
+
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_products_by_ids(
+    state: State<'_, AppState>,
+    item_ids: Vec<String>,
+) -> Result<Vec<Value>, String> {
+    if item_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        r#"SELECT p.*,
+             (SELECT po.override_price FROM price_overrides po
+              WHERE po.product_id = p.server_id
+                AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+              ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
+           FROM local_products p
+           WHERE p.active = 1 AND p.server_id IN ("#,
+    );
+    {
+        let mut separated = query.separated(", ");
+        for id in item_ids.iter().take(1000) {
+            separated.push_bind(id);
+        }
+    }
+    query.push(") ORDER BY p.name");
+    let rows = query
+        .build()
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_active_products_count(state: State<'_, AppState>) -> Result<i64, String> {
+    sqlx::query_scalar("SELECT count(*) FROM local_products WHERE active = 1")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_product_by_barcode(
+    state: State<'_, AppState>,
+    barcode: String,
+) -> Result<Option<Value>, String> {
+    let row = sqlx::query(
+        r#"WITH match AS (
+             SELECT rowid, 0 AS priority FROM local_products WHERE barcode = ?
+             UNION ALL
+             SELECT rowid, 1 AS priority FROM local_products WHERE sku = ?
+           )
+           SELECT p.*,
+             (SELECT po.override_price FROM price_overrides po
+              WHERE po.product_id = p.server_id
+                AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+              ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
+           FROM local_products p
+           JOIN match m ON m.rowid = p.rowid
+           WHERE p.active = 1
+           ORDER BY m.priority LIMIT 1"#
+    )
+    .bind(&barcode).bind(&barcode)
+    .fetch_optional(&state.db)
+    .await.map_err(|e| e.to_string())?;
+
+    Ok(row.map(row_to_json))
+}
+
+#[tauri::command]
+async fn get_layout(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query("SELECT * FROM local_layout ORDER BY position")
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_categories(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query("SELECT * FROM local_categories WHERE active = 1 ORDER BY name")
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn save_order(
+    state: State<'_, AppState>,
+    order: Order,
+    lines: Vec<OrderLine>,
+) -> Result<(), String> {
+    let (terminal_id, location_id) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.terminal_id.clone(), c.location_id.clone())
+    };
+    orders::save_order(&state.db, &order, &lines, &terminal_id, &location_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_held_orders(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query(
+        "SELECT * FROM pos_orders WHERE status = 'held' ORDER BY created_at DESC LIMIT 250"
+    )
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_order_lines(state: State<'_, AppState>, order_id: String) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query(
+        "SELECT * FROM pos_order_lines WHERE order_id = ? ORDER BY sort_order"
+    )
+    .bind(&order_id)
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_recent_orders(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<Value>, String> {
+    let safe_limit = limit.unwrap_or(100).clamp(1, 250);
+    let rows = sqlx::query(
+        "SELECT * FROM pos_orders
+         WHERE status IN ('completed', 'voided')
+         ORDER BY created_at DESC
+         LIMIT ?"
+    )
+    .bind(safe_limit)
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn next_order_number(state: State<'_, AppState>, prefix: String) -> Result<String, String> {
+    orders::next_order_number(&state.db, &prefix)
+        .await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn sync_catalog(state: State<'_, AppState>) -> Result<usize, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let since = sqlx::query("SELECT value FROM schema_meta WHERE key = 'last_catalog_sync'")
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?
+        .and_then(|r| r.try_get::<String, _>("value").ok());
+
+    {
+        let mut s = state.sync_status.lock().unwrap();
+        s.syncing = true;
+    }
+
+    let result = sync::sync_catalog(&state.db, &server_url, &terminal_code, since.as_deref()).await;
+
+    {
+        let mut s = state.sync_status.lock().unwrap();
+        s.syncing = false;
+        s.online  = result.is_ok();
+        if result.is_ok() {
+            s.last_catalog_sync = Some(chrono::Utc::now().to_rfc3339());
+        }
+    }
+
+    result
+}
+
+#[tauri::command]
+async fn sync_inbox(state: State<'_, AppState>) -> Result<usize, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let since = sqlx::query("SELECT value FROM schema_meta WHERE key = 'last_inbox_sync'")
+        .fetch_optional(&state.db).await.map_err(|e| e.to_string())?
+        .and_then(|r| r.try_get::<String, _>("value").ok());
+
+    sync::sync_inbox(&state.db, &server_url, &terminal_code, since.as_deref()).await
+}
+
+#[tauri::command]
+async fn flush_outbox(state: State<'_, AppState>) -> Result<usize, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let result = sync::flush_outbox(&state.db, &server_url, &terminal_code).await?;
+    // Best-effort: also push any un-synced audit-log entries to the back office
+    let _ = sync::push_audit_logs(&state.db, &server_url, &terminal_code).await;
+    update_outbox_counts(&*state).await?;
+    Ok(result)
+}
+
+/// Mirror-first outbox flush.
+///
+/// Tries to flush pending outbox items to `mirror_url` first (a local relay server
+/// for low-latency resilience). If the mirror is unreachable or returns an error,
+/// falls back to the configured primary `server_url` automatically.
+///
+/// Items successfully synced by the mirror are marked as `synced` and will NOT be
+/// retried against the primary, preventing double-delivery.
+#[tauri::command]
+async fn flush_outbox_mirror(
+    state:      State<'_, AppState>,
+    mirror_url: String,
+) -> Result<usize, String> {
+    let (primary_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    // Attempt mirror first; if it fails (network error, non-200, etc.) fall back
+    // to the primary. Any items marked synced by the mirror step are excluded from
+    // the fallback because flush_outbox only processes `status='pending'` rows.
+    let result = match sync::flush_outbox(&state.db, &mirror_url, &terminal_code).await {
+        Ok(n) => Ok(n),
+        Err(_) => {
+            // Mirror unreachable — use primary as fallback
+            sync::flush_outbox(&state.db, &primary_url, &terminal_code).await
+        }
+    }?;
+
+    update_outbox_counts(&*state).await?;
+    Ok(result)
+}
+
+/// Helper: refresh the in-memory outbox_pending / outbox_failed counters.
+async fn update_outbox_counts(state: &AppState) -> Result<(), String> {
+    let pending: i64 = sqlx::query("SELECT COUNT(*) as c FROM pos_outbox WHERE status='pending'")
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?
+        .try_get("c").unwrap_or(0);
+    let failed: i64 = sqlx::query("SELECT COUNT(*) as c FROM pos_outbox WHERE status='failed'")
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?
+        .try_get("c").unwrap_or(0);
+    let mut s = state.sync_status.lock().unwrap();
+    s.outbox_pending = pending as i32;
+    s.outbox_failed  = failed  as i32;
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_sync_status(state: State<'_, AppState>) -> Result<SyncStatus, String> {
+    let pending: i64 = sqlx::query("SELECT COUNT(*) as c FROM pos_outbox WHERE status='pending'")
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?
+        .try_get("c").unwrap_or(0);
+    let failed: i64 = sqlx::query("SELECT COUNT(*) as c FROM pos_outbox WHERE status='failed'")
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?
+        .try_get("c").unwrap_or(0);
+
+    let mut s = state.sync_status.lock().unwrap();
+    s.outbox_pending = pending as i32;
+    s.outbox_failed  = failed  as i32;
+    Ok(s.clone())
+}
+
+#[tauri::command]
+async fn get_fallback_rules(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query("SELECT * FROM sync_fallback_config ORDER BY rule_key")
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn update_fallback_rule(
+    state: State<'_, AppState>,
+    rule_key: String,
+    offline_behavior: String,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE sync_fallback_config SET offline_behavior=?, updated_at=datetime('now') WHERE rule_key=?"
+    )
+    .bind(&offline_behavior)
+    .bind(&rule_key)
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_customer_live(
+    state: State<'_, AppState>,
+    customer_id: String,
+) -> Result<Option<Value>, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let fb_row = sqlx::query(
+        "SELECT offline_behavior FROM sync_fallback_config WHERE rule_key='customer_lookup'"
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let fallback = fb_row
+        .and_then(|r| r.try_get::<String, _>("offline_behavior").ok())
+        .unwrap_or_else(|| "allow".into());
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(800))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/api/customers/{}", server_url.trim_end_matches('/'), customer_id);
+
+    match client.get(&url).header("X-Terminal-Code", &terminal_code).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let v: Value = resp.json().await.unwrap_or(Value::Null);
+            Ok(Some(v))
+        }
+        Ok(_) => Ok(None),
+        Err(_) => match fallback.as_str() {
+            "block"              => Err("Customer lookup unavailable offline".into()),
+            "block_with_message" => Err("Customer lookup requires server. Proceed without customer?".into()),
+            _                    => Ok(None),
+        },
+    }
+}
+
+#[tauri::command]
+async fn get_stock_by_location(
+    state: State<'_, AppState>,
+    item_id: String,
+) -> Result<Vec<Value>, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!(
+        "{}/api/pos/sync/location-stock/{}",
+        server_url.trim_end_matches('/'),
+        item_id
+    );
+
+    let resp = client
+        .get(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error {}", resp.status()));
+    }
+
+    resp.json::<Vec<Value>>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_pos_locations(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/api/pos/sync/locations", server_url.trim_end_matches('/'));
+
+    let resp = client
+        .get(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error {}", resp.status()));
+    }
+
+    resp.json::<Vec<Value>>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn create_stock_transfer(
+    state: State<'_, AppState>,
+    to_location_id: String,
+    cashier_name: Option<String>,
+    items: Vec<Value>,
+) -> Result<Value, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/api/pos/sync/transfers", server_url.trim_end_matches('/'));
+
+    let body = serde_json::json!({
+        "toLocationId": to_location_id,
+        "cashierName": cashier_name,
+        "items": items,
+    });
+
+    let resp = client
+        .post(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let msg = resp
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| "Transfer failed".to_string());
+        return Err(msg);
+    }
+
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_active_price_overrides(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query(
+        r#"SELECT po.* FROM price_overrides po
+           WHERE (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+             AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+             AND po.rowid = (
+               SELECT current.rowid FROM price_overrides current
+               WHERE current.product_id = po.product_id
+                 AND (current.valid_from IS NULL OR datetime(current.valid_from) <= datetime('now'))
+                 AND (current.valid_until IS NULL OR datetime(current.valid_until) > datetime('now'))
+               ORDER BY datetime(current.valid_from) DESC, datetime(current.created_at) DESC, current.rowid DESC LIMIT 1
+             )"#
+    )
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn get_inbox_notifications(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let rows = sqlx::query(
+        r#"SELECT * FROM pos_inbox WHERE processed = 0
+           AND message_type IN ('manager_message','layout_update','alert')
+           ORDER BY created_at DESC LIMIT 20"#
+    )
+    .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(row_to_json).collect())
+}
+
+#[tauri::command]
+async fn mark_inbox_processed(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE pos_inbox SET processed=1, processed_at=datetime('now') WHERE id=?"
+    )
+    .bind(&id)
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn write_audit(
+    state: State<'_, AppState>,
+    cashier_id:   Option<String>,
+    cashier_name: Option<String>,
+    action:       String,
+    entity:       Option<String>,
+    entity_id:    Option<String>,
+    detail:       Option<String>,
+) -> Result<(), String> {
+    auth::audit(
+        &state.db,
+        cashier_id.as_deref(),
+        cashier_name.as_deref(),
+        &action,
+        entity.as_deref(),
+        entity_id.as_deref(),
+        detail.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_outbox_counts(state: State<'_, AppState>) -> Result<Value, String> {
+    let pending: i64 = sqlx::query("SELECT COUNT(*) as c FROM pos_outbox WHERE status='pending'")
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?
+        .try_get("c").unwrap_or(0);
+    let failed: i64 = sqlx::query("SELECT COUNT(*) as c FROM pos_outbox WHERE status='failed'")
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?
+        .try_get("c").unwrap_or(0);
+    let synced: i64 = sqlx::query("SELECT COUNT(*) as c FROM pos_outbox WHERE status='synced'")
+        .fetch_one(&state.db).await.map_err(|e| e.to_string())?
+        .try_get("c").unwrap_or(0);
+    Ok(serde_json::json!({ "pending": pending, "failed": failed, "synced": synced }))
+}
+
+#[tauri::command]
+async fn set_sco_heartbeat_state(
+    state: State<'_, AppState>,
+    sco_mode: String,
+    sco_items: i64,
+    sco_total: f64,
+    sco_attendant_reason: Option<String>,
+) -> Result<(), String> {
+    let value = serde_json::json!({
+        "sco_mode": sco_mode,
+        "sco_items": sco_items,
+        "sco_total": sco_total,
+        "sco_attendant_reason": sco_attendant_reason,
+    });
+    sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('sco_heartbeat_state', ?)")
+        .bind(value.to_string())
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn send_heartbeat(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    let (server_url, terminal_code, terminal_id) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone(), c.terminal_id.clone())
+    };
+
+    // Refresh outbox counters so the reported queue size is current.
+    let _ = update_outbox_counts(&*state).await;
+    let (outbox_pending, outbox_failed) = {
+        let s = state.sync_status.lock().unwrap();
+        (s.outbox_pending, s.outbox_failed)
+    };
+
+    // Cashier / shift context.
+    let cashier_name = {
+        let s = state.session.lock().unwrap();
+        s.as_ref().map(|c| c.cashier_name.clone())
+    };
+    let shift_open: bool = sqlx::query("SELECT COUNT(*) as c FROM pos_shifts WHERE status = 'open'")
+        .fetch_one(&state.db).await
+        .ok()
+        .and_then(|r| r.try_get::<i64, _>("c").ok())
+        .map(|c| c > 0)
+        .unwrap_or(false);
+
+    // Load hardware + payment config and build the peripheral health snapshot.
+    let hw_cfg = hardware::load_hardware_config(&state.db).await;
+    let payment_cfg: PaymentConfig = sqlx::query("SELECT value FROM schema_meta WHERE key = 'payment_config'")
+        .fetch_optional(&state.db).await.ok().flatten()
+        .and_then(|r| r.try_get::<String, _>("value").ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    let mut peripheral_status = hardware::build_peripheral_status(
+        &app, &hw_cfg, &payment_cfg, cashier_name, shift_open,
+    ).await;
+    if let Some(sco_state) = sqlx::query("SELECT value FROM schema_meta WHERE key = 'sco_heartbeat_state'")
+        .fetch_optional(&state.db).await.ok().flatten()
+        .and_then(|r| r.try_get::<String, _>("value").ok())
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+    {
+        if let Some(status) = peripheral_status.as_object_mut() {
+            status.extend(sco_state);
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!(
+        "{}/api/pos/terminals/{}/heartbeat",
+        server_url.trim_end_matches('/'),
+        terminal_id
+    );
+
+    let online = match client
+        .post(&url)
+        .header("X-Terminal-Code", &terminal_code)
+        .json(&serde_json::json!({
+            "status": "online",
+            "outboxQueueSize": (outbox_pending + outbox_failed),
+            "peripheralStatus": peripheral_status,
+        }))
+        .send().await
+    {
+        Ok(resp) => resp.status().is_success(),
+        Err(_)   => false,
+    };
+
+    state.sync_status.lock().unwrap().online = online;
+
+    Ok(serde_json::json!({
+        "online": online,
+        "peripheral_status": peripheral_status,
+    }))
+}
+
+// ── Phase 3: Shift management ─────────────────────────────────────────────────
+
+#[tauri::command]
+async fn open_shift(
+    state:        State<'_, AppState>,
+    cashier_id:   String,
+    cashier_name: String,
+    opening_float: f64,
+) -> Result<Value, String> {
+    let shift_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"INSERT INTO pos_shifts
+           (id, cashier_id, cashier_name, opening_float, status, opened_at)
+           VALUES (?, ?, ?, ?, 'open', datetime('now'))"#
+    )
+    .bind(&shift_id)
+    .bind(&cashier_id)
+    .bind(&cashier_name)
+    .bind(opening_float)
+    .execute(&state.db).await.map_err(|e| e.to_string())?;
+
+    let row = sqlx::query("SELECT * FROM pos_shifts WHERE id = ?")
         .bind(&shift_id)
         .fetch_one(&state.db).await.map_err(|e| e.to_string())?;
     Ok(row_to_json(row))
