@@ -5,7 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertPosLayoutSetSchema } from "@shared/schema";
-import type { PosLayoutSet, PosLocation, PosTerminal } from "@shared/schema";
+import type { Category, PosLayoutSet, PosLocation, PosTerminal } from "@shared/schema";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,7 @@ function LayoutForm({ initial, onClose }: { initial?: PosLayoutSet; onClose: () 
       locationId: initial?.locationId ?? undefined,
       columns: initial?.columns ?? 4,
       rows: initial?.rows ?? 5,
+      colorTheme: initial?.colorTheme ?? "standard",
       active: initial?.active ?? true,
     },
   });
@@ -85,6 +86,18 @@ function LayoutForm({ initial, onClose }: { initial?: PosLayoutSet; onClose: () 
             <FormItem><FormLabel>Rows</FormLabel><FormControl><Input {...field} type="number" min={1} max={20} onChange={e => field.onChange(parseInt(e.target.value) || 5)} /></FormControl><FormMessage /></FormItem>
           )} />
         </div>
+        <FormField control={form.control} name="colorTheme" render={({ field }) => (
+          <FormItem>
+            <FormLabel>POS theme</FormLabel>
+            <Select value={field.value ?? "standard"} onValueChange={field.onChange}>
+              <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+              <SelectContent>
+                <SelectItem value="standard">Dark</SelectItem>
+                <SelectItem value="light">Light</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormItem>
+        )} />
         <FormField control={form.control} name="active" render={({ field }) => (
           <FormItem className="flex items-center gap-3">
             <FormControl><Switch checked={field.value ?? true} onCheckedChange={field.onChange} /></FormControl>
@@ -112,6 +125,7 @@ export default function PosLayouts() {
   const { data: layouts = [], isLoading } = useQuery<PosLayoutSet[]>({ queryKey: ["/api/pos/layouts"] });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"] });
   const { data: terminals = [] } = useQuery<PosTerminal[]>({ queryKey: ["/api/pos/terminals"] });
+  const { data: categories = [] } = useQuery<Category[]>({ queryKey: ["/api/categories"] });
 
   const locationMap = Object.fromEntries(locations.map(l => [l.id, l.name]));
   const terminalsByLayout = terminals.reduce<Record<string, number>>((acc, t) => {
@@ -137,6 +151,63 @@ export default function PosLayouts() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const darkCategoryPresetMutation = useMutation({
+    mutationFn: async () => {
+      const existing = layouts.find(layout => layout.name === "Dark Category POS");
+      if (existing) return { layout: existing, created: false, categoryCount: 0 };
+
+      const createResponse = await apiRequest("POST", "/api/pos/layouts", {
+        name: "Dark Category POS",
+        description: "Dark touchscreen layout with category-first navigation",
+        columns: 4,
+        colsTablet: 3,
+        colsMobile: 2,
+        colsLarge: 6,
+        colsTV: 8,
+        rows: 5,
+        buttonRadius: "rounded",
+        colorTheme: "standard",
+        active: true,
+      });
+      const layout: PosLayoutSet = await createResponse.json();
+      const categoryColors = ["#0284c7", "#7c3aed", "#c026d3", "#e11d48", "#ea580c", "#ca8a04", "#16a34a", "#0891b2"];
+      const activeCategories = categories
+        .filter(category => category.active && !category.parentId)
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .slice(0, layout.columns * layout.rows);
+
+      try {
+        await apiRequest("PUT", `/api/pos/layouts/${layout.id}/buttons`, {
+          buttons: activeCategories.map((category, position) => ({
+            position,
+            label: category.name,
+            color: categoryColors[position % categoryColors.length],
+            buttonType: "category",
+            categoryId: category.id,
+            colspan: 1,
+            rowspan: 1,
+            shape: "rect",
+          })),
+        });
+      } catch (error) {
+        await apiRequest("DELETE", `/api/pos/layouts/${layout.id}`).catch(() => undefined);
+        throw error;
+      }
+
+      return { layout, created: true, categoryCount: activeCategories.length };
+    },
+    onSuccess: ({ layout, created, categoryCount }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pos/layouts"] });
+      toast({
+        title: created ? "Dark Category POS added" : "Dark Category POS already exists",
+        description: created
+          ? `${categoryCount} categor${categoryCount === 1 ? "y" : "ies"} added. Assign the layout to a terminal when ready.`
+          : `"${layout.name}" is already available in Layouts.`,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Unable to add preset", description: e.message, variant: "destructive" }),
+  });
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
@@ -144,9 +215,22 @@ export default function PosLayouts() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><LayoutGrid className="w-6 h-6" />POS Layouts</h1>
           <p className="text-sm text-muted-foreground mt-1">Button grid layouts for GlobiPOS terminals</p>
         </div>
-        <Button onClick={() => { setEditing(undefined); setOpen(true); }} data-testid="button-add-layout">
-          <Plus className="w-4 h-4 mr-2" />New Layout
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => darkCategoryPresetMutation.mutate()}
+            disabled={darkCategoryPresetMutation.isPending}
+            data-testid="button-add-dark-category-layout"
+          >
+            {darkCategoryPresetMutation.isPending
+              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              : <Wand2 className="w-4 h-4 mr-2" />}
+            Dark Category POS
+          </Button>
+          <Button onClick={() => { setEditing(undefined); setOpen(true); }} data-testid="button-add-layout">
+            <Plus className="w-4 h-4 mr-2" />New Layout
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -176,6 +260,7 @@ export default function PosLayouts() {
                 <CardContent className="text-sm space-y-1.5 text-muted-foreground">
                   {layout.description && <p>{layout.description}</p>}
                   <p>{layout.columns} × {layout.rows} grid ({layout.columns * layout.rows} buttons)</p>
+                   <p>{layout.colorTheme === "light" ? "Light" : "Dark"} POS theme</p>
                   {locationName && (
                     <p className="flex items-center gap-1.5">
                       <MapPin className="w-3.5 h-3.5" />{locationName}
