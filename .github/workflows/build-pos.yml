@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - 'scripts/pos-*.mjs'
+      - 'pos-app/**'
+      - '.github/workflows/build-pos.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -18,8 +23,74 @@ env:
   TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  test-version-helper:
+    name: Test POS version safety
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test version and published-asset release safeguards
+        run: npm run test:pos-release-tools
+
+  validate-version:
+    name: Validate release version
+    if: github.event_name != 'pull_request'
+    needs: test-version-helper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
+          fetch-depth: 0
+      - name: Require checkout to match the release tag
+        shell: bash
+        run: |
+          git show-ref --verify --quiet "refs/tags/${TAG_NAME}"
+          test "$(git rev-list -n 1 "${TAG_NAME}")" = "$(git rev-parse HEAD)"
+      - name: Require package, Cargo, Tauri, and tag versions to match
+        run: node scripts/pos-version.mjs --check "${TAG_NAME}"
+
+  native-preflight:
+    name: Validate native POS build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.sha || env.TAG_NAME }}
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: pos-app/package-lock.json
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev
+      - name: Verify portable lockfile and aligned versions
+        run: node scripts/pos-version.mjs --check
+      - name: Install frontend dependencies deterministically
+        working-directory: pos-app
+        run: npm ci
+      - name: Build frontend
+        working-directory: pos-app
+        run: npm run build
+      - name: Compile native application
+        working-directory: pos-app/src-tauri
+        run: cargo check --locked
+
   # ── Desktop: Windows, macOS, Linux ─────────────────────────────────────────
   build-desktop:
+    if: github.event_name != 'pull_request'
+    needs: [validate-version, native-preflight]
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +111,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
@@ -70,7 +143,16 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: pos-app
-        run: npm install
+        run: npm ci
+
+      - name: Require updater signing credentials
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "::error::TAURI_SIGNING_PRIVATE_KEY is missing"; exit 1; }
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" || { echo "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is missing"; exit 1; }
 
       - name: Regenerate icons from source (platform-native ICO/ICNS)
         working-directory: pos-app
@@ -112,10 +194,13 @@ jobs:
   build-android:
     name: Build Android APK
     runs-on: ubuntu-latest
-    needs: []
+    if: github.event_name != 'pull_request'
+    needs: [validate-version, native-preflight]
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
@@ -149,7 +234,16 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: pos-app
-        run: npm install
+        run: npm ci
+
+      - name: Require Android signing credentials
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_B64" || { echo "::error::ANDROID_KEYSTORE_B64 is missing"; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "::error::ANDROID_KEYSTORE_PASSWORD is missing"; exit 1; }
 
       - name: Initialize Android project
         working-directory: pos-app
@@ -170,7 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "$ANDROID_KEYSTORE_B64" | base64 -d > /tmp/globipos-release.p12
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -print | sort -V | tail -n1)
           find pos-app/src-tauri/gen/android/app/build/outputs/apk -name '*-unsigned.apk' | while read -r apk; do
             signed="${apk%-unsigned.apk}-signed.apk"
             "$BT/zipalign" -f -p 4 "$apk" "$signed.aligned"
@@ -188,3 +282,17 @@ jobs:
             pos-app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  verify-release:
+    name: Verify published release assets
+    if: github.event_name != 'pull_request'
+    needs: [build-desktop, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
+      - name: Verify installers, signatures, and updater metadata
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/verify-pos-release.mjs "${{ github.repository }}" "${TAG_NAME}"
