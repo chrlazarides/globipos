@@ -182,3 +182,46 @@ test("catalog sync resumes atomically after Chromium is killed during an in-flig
     await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });
+
+test("fresh catalog replacement cannot mix old and new products after Chromium is killed", { timeout: 120_000 }, async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), "globipos-browser-sync-fresh-atomicity-"));
+
+  try {
+    await withScaleServer(async () => {
+      const seeded = await runBrowser(profile, `${baseUrl}?seedExistingCatalog=true`);
+      assert.equal(seeded.productCount, 250);
+      assert.equal(seeded.categoryCount, 1);
+
+      const interrupted = await runBrowser(
+        profile,
+        `${baseUrl}?killDuringOffset=0`,
+        { stopAtStatus: "writing", killSignal: "SIGKILL" },
+      );
+      assert.equal(interrupted.cursor, null);
+      assert.equal(interrupted.killDuringOffset, 0);
+      assert.equal(interrupted.writeCount, 50);
+
+      const recovered = await runBrowser(
+        profile,
+        `${baseUrl}?verifyFreshReplacement=true`,
+      );
+      assert.ok(
+        recovered.freshRecoveryState === "old" || recovered.freshRecoveryState === "replacement",
+        `Unexpected recovered catalog state: ${recovered.freshRecoveryState}`,
+      );
+      assert.equal(
+        recovered.firstRequestedOffset,
+        recovered.freshRecoveryState === "old" ? 0 : 250,
+      );
+      assert.equal(recovered.productsBeforeRecovery, 250);
+      assert.equal(
+        recovered.categoriesBeforeRecovery,
+        recovered.freshRecoveryState === "old" ? 1 : 20,
+      );
+      assert.equal(recovered.productCount, 130_000);
+      assert.equal(recovered.cursor, null);
+    });
+  } finally {
+    await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});

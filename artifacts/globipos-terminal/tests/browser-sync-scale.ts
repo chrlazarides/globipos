@@ -1,4 +1,11 @@
-import { getProducts, getSyncCursor, saveSyncCursor, setConfig } from "../src/lib/db";
+import {
+  getCategories,
+  getProducts,
+  getSyncCursor,
+  saveCatalogPage,
+  saveSyncCursor,
+  setConfig,
+} from "../src/lib/db";
 import { syncCatalog } from "../src/lib/sync";
 
 const TOTAL_PRODUCTS = 130_000;
@@ -10,6 +17,8 @@ const query = new URLSearchParams(location.search);
 const stopAfter = Number(query.get("stopAfter") ?? TOTAL_PRODUCTS);
 const killDuringOffset = query.has("killDuringOffset") ? Number(query.get("killDuringOffset")) : null;
 const verifyRecovery = query.get("verifyRecovery") === "true";
+const seedExistingCatalog = query.get("seedExistingCatalog") === "true";
+const verifyFreshReplacement = query.get("verifyFreshReplacement") === "true";
 const result = document.querySelector<HTMLPreElement>("#result");
 
 function catalogItem(index: number) {
@@ -44,8 +53,34 @@ async function run() {
     price_level: 1,
   });
 
+  if (seedExistingCatalog) {
+    const oldProducts = Array.from({ length: PAGE_SIZE }, (_, index) => ({
+      ...catalogItem(index),
+      id: `old-product-${index.toString().padStart(6, "0")}`,
+      name: `Old product ${index}`,
+      categoryId: "old-category",
+    }));
+    await saveCatalogPage(
+      [{ id: "old-category", name: "Old category", vatRate: 19, active: true }],
+      oldProducts,
+      true,
+      SERVER_ORIGIN,
+      TERMINAL_CODE,
+      null,
+    );
+    result!.dataset.status = "passed";
+    result!.textContent = JSON.stringify({
+      status: "passed",
+      productCount: (await getProducts()).length,
+      categoryCount: (await getCategories()).length,
+    });
+    return;
+  }
+
   const startingCursor = await getSyncCursor(SERVER_ORIGIN, TERMINAL_CODE);
-  const productsBeforeRecovery = verifyRecovery ? await getProducts() : [];
+  const productsBeforeRecovery = verifyRecovery || verifyFreshReplacement ? await getProducts() : [];
+  const categoriesBeforeRecovery = verifyFreshReplacement ? await getCategories() : [];
+  let freshRecoveryState: "old" | "replacement" | null = null;
   if (verifyRecovery) {
     const expectedCursor = String(killDuringOffset);
     if (startingCursor !== expectedCursor) {
@@ -53,6 +88,25 @@ async function run() {
     }
     if (productsBeforeRecovery.length !== killDuringOffset) {
       throw new Error(`Partially committed page saved products: expected ${killDuringOffset}, found ${productsBeforeRecovery.length}`);
+    }
+  }
+  if (verifyFreshReplacement) {
+    const ids = productsBeforeRecovery.map((product) => product.id);
+    const hasOnlyOldProducts = ids.length === PAGE_SIZE && ids.every((id) => id.startsWith("old-product-"));
+    const hasOnlyReplacementProducts = ids.length === PAGE_SIZE && ids.every((id) => id.startsWith("product-"));
+    const hasOnlyOldCategories = categoriesBeforeRecovery.length === 1
+      && categoriesBeforeRecovery[0]?.id === "old-category";
+    const hasOnlyReplacementCategories = categoriesBeforeRecovery.length === 20
+      && categoriesBeforeRecovery.every((category) => category.id.startsWith("category-"));
+    const recoveredOldCatalog = hasOnlyOldProducts && hasOnlyOldCategories;
+    const recoveredReplacementCatalog = hasOnlyReplacementProducts && hasOnlyReplacementCategories;
+    if (!recoveredOldCatalog && !recoveredReplacementCatalog) {
+      throw new Error(`Fresh replacement recovered a mixed catalog: ${ids.slice(0, 10).join(", ")}`);
+    }
+    freshRecoveryState = recoveredOldCatalog ? "old" : "replacement";
+    const expectedCursor = freshRecoveryState === "old" ? null : String(PAGE_SIZE);
+    if (startingCursor !== expectedCursor) {
+      throw new Error(`Fresh replacement state ${freshRecoveryState} retained cursor ${startingCursor}`);
     }
   }
   const requestedOffsets: number[] = [];
@@ -171,6 +225,8 @@ async function run() {
     firstRequestedOffset: requestedOffsets[0],
     pagesRequested: requestedOffsets.length,
     productsBeforeRecovery: productsBeforeRecovery.length,
+    categoriesBeforeRecovery: categoriesBeforeRecovery.length,
+    freshRecoveryState,
   });
 }
 
