@@ -10,8 +10,36 @@ import { fileURLToPath } from "node:url";
 const execFileAsync = promisify(execFile);
 const helper = fileURLToPath(new URL("./pos-version.mjs", import.meta.url));
 const publishScript = fileURLToPath(new URL("./publish-release.sh", import.meta.url));
+const releaseWorkflow = fileURLToPath(new URL("../.github/workflows/build-pos.yml", import.meta.url));
 const originalVersion = "1.2.3";
 const updatedVersion = "2.4.6";
+
+test("POS release workflow uses Node 24 actions while keeping Node 20 as the explicit build toolchain", async () => {
+  const workflow = await readFile(releaseWorkflow, "utf8");
+
+  assert.doesNotMatch(workflow, /actions\/checkout@v4/);
+  assert.doesNotMatch(workflow, /actions\/setup-node@v4/);
+  assert.doesNotMatch(workflow, /actions\/setup-java@v4/);
+  assert.doesNotMatch(workflow, /android-actions\/setup-android@v3/);
+  assert.doesNotMatch(workflow, /softprops\/action-gh-release@v2/);
+  assert.match(workflow, /actions\/checkout@v5/);
+  assert.match(workflow, /actions\/setup-node@v5[\s\S]*?node-version: 20/);
+  assert.match(workflow, /actions\/setup-java@v5/);
+  assert.match(workflow, /android-actions\/setup-android@v4/);
+  assert.match(workflow, /softprops\/action-gh-release@v3/);
+});
+
+test("POS release workflow keeps desktop, Android, and published-release verification gated", async () => {
+  const workflow = await readFile(releaseWorkflow, "utf8");
+
+  assert.match(workflow, /platform: windows-latest/);
+  assert.match(workflow, /platform: macos-latest/);
+  assert.match(workflow, /platform: ubuntu-22\.04/);
+  assert.match(workflow, /build-desktop:[\s\S]*?needs: \[validate-version, native-preflight, windows-native-preflight\]/);
+  assert.match(workflow, /build-android:[\s\S]*?needs: \[validate-version, native-preflight, windows-native-preflight\]/);
+  assert.match(workflow, /verify-release:[\s\S]*?needs: \[build-desktop, build-android\]/);
+  assert.match(workflow, /verify-release:[\s\S]*?node scripts\/verify-pos-release\.mjs/);
+});
 
 async function createFixture() {
   const root = await mkdtemp(path.join(tmpdir(), "pos-version-test-"));
