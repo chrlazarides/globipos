@@ -40,6 +40,26 @@ fail before version changes if either check fails. Keep native compilation,
 portable-lockfile checks, signing-secret preflights, and published-asset
 verification in the GitHub workflow itself.
 
+For public repositories, never treat a successful anonymous `ls-remote` as proof
+that authenticated pushes will work. If a project-scoped credential is present,
+install the authenticated Git helper before any read or dry-run push check.
+
+**Why:** Public reads can succeed while the selected token is expired, invalid,
+or lacks write access, hiding the failure until release commits need to push.
+
+**How to apply:** Validate the exact credential with a non-destructive dry-run
+push, not a public read request.
+
+## Passwordless updater signing keys
+
+Require the Tauri updater private key, but allow its password to be blank.
+
+**Why:** Tauri supports passwordless signing keys. Treating an empty password as
+a missing secret blocks otherwise valid Windows, Linux, and macOS release jobs.
+
+**How to apply:** Fail CI when the private key is absent; pass the password
+through unchanged and let Tauri handle either protected or passwordless keys.
+
 ## Android APK signing
 Release APKs are signed in CI: `apksigner` + `zipalign` from the newest
 build-tools, using a PKCS12 keystore (alias `globipos`) stored base64 in repo
