@@ -8,7 +8,8 @@ interface LoginProps {
   onLogin: (session: CashierSession) => void;
 }
 
-const PIN_DOTS = 6;
+const MIN_PIN_LENGTH = 4;
+const MAX_PIN_LENGTH = 8;
 
 export function Login({ config, onLogin }: LoginProps) {
   const [pin, setPin]       = useState("");
@@ -16,13 +17,9 @@ export function Login({ config, onLogin }: LoginProps) {
   const [loading, setLoading] = useState(false);
 
   function handleDigit(d: string) {
-    if (pin.length >= PIN_DOTS) return;
-    const newPin = pin + d;
-    setPin(newPin);
+    if (pin.length >= MAX_PIN_LENGTH || loading) return;
+    setPin(pin + d);
     setError(null);
-    if (newPin.length >= 4) {
-      submitPin(newPin);
-    }
   }
 
   function handleDelete() {
@@ -67,7 +64,7 @@ export function Login({ config, onLogin }: LoginProps) {
 
         {/* PIN dots */}
         <div className="flex justify-center gap-3 mb-6">
-          {Array.from({ length: PIN_DOTS }).map((_, i) => (
+          {Array.from({ length: MAX_PIN_LENGTH }).map((_, i) => (
             <div
               key={i}
               className={`w-3.5 h-3.5 rounded-full transition-colors ${
@@ -106,19 +103,24 @@ export function Login({ config, onLogin }: LoginProps) {
               <button
                 key={i}
                 onClick={() => handleDigit(k)}
-                disabled={loading || pin.length >= PIN_DOTS}
+                disabled={loading || pin.length >= MAX_PIN_LENGTH}
                 className="h-14 flex items-center justify-center rounded-xl bg-gray-800 hover:bg-burgundy-800 text-white font-semibold text-xl transition-colors active:scale-95 disabled:opacity-40"
                 data-testid={`button-pin-${k}`}
               >
-                {loading && pin.length >= 4 ? (
-                  <span className="text-sm animate-pulse">…</span>
-                ) : (
-                  k
-                )}
+                {k}
               </button>
             );
           })}
         </div>
+        <button
+          type="button"
+          onClick={() => void submitPin(pin)}
+          disabled={loading || pin.length < MIN_PIN_LENGTH}
+          className="mt-4 h-12 w-full rounded-xl bg-burgundy-700 hover:bg-burgundy-600 text-white font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+          data-testid="button-pin-sign-in"
+        >
+          {loading ? "Signing in…" : "Sign In"}
+        </button>
 
         <p className="text-center text-gray-600 text-xs mt-6">
           Ask your manager to set up cashier PINs in Settings
