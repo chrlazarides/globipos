@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 
 const execFileAsync = promisify(execFile);
 const helper = fileURLToPath(new URL("./pos-version.mjs", import.meta.url));
@@ -14,6 +15,84 @@ const releaseWorkflow = fileURLToPath(new URL("../.github/workflows/build-pos.ym
 const ciWorkflow = fileURLToPath(new URL("../.github/workflows/ci-pos.yml", import.meta.url));
 const originalVersion = "1.2.3";
 const updatedVersion = "2.4.6";
+
+function parseWorkflow(source, description) {
+  try {
+    return parse(source);
+  } catch (error) {
+    assert.fail(`${description} must contain valid YAML: ${error.message}`);
+  }
+}
+
+function workflowJob(workflow, jobName, description) {
+  const job = workflow?.jobs?.[jobName];
+  assert.ok(job, `${description} must keep the ${jobName} job`);
+  return job;
+}
+
+function workflowSteps(workflow, description) {
+  const jobs = workflow?.jobs;
+  assert.ok(jobs && typeof jobs === "object", `${description} must define jobs`);
+
+  return Object.entries(jobs).flatMap(([jobName, job]) => {
+    assert.ok(Array.isArray(job?.steps), `${description} ${jobName} must define steps`);
+    return job.steps;
+  });
+}
+
+function actionReferences(workflow, description) {
+  return workflowSteps(workflow, description)
+    .filter((step) => typeof step?.uses === "string")
+    .map((step) => step.uses);
+}
+
+function assertStepRuns(job, command, message) {
+  const runsCommand = job?.steps?.some(
+    (step) =>
+      typeof step?.run === "string" &&
+      step.run.split("\n").some((line) => {
+        const trimmed = line.trim();
+        return trimmed === command || trimmed.startsWith(`${command} `);
+      }),
+  );
+  assert.ok(runsCommand, message);
+}
+
+function validateReleaseWorkflowGates(source) {
+  const description = "POS release workflow";
+  const workflow = parseWorkflow(source, description);
+  const desktopJob = workflowJob(workflow, "build-desktop", description);
+  const androidJob = workflowJob(workflow, "build-android", description);
+  const verifyJob = workflowJob(workflow, "verify-release", description);
+  const platforms = desktopJob?.strategy?.matrix?.include?.map((entry) => entry?.platform);
+
+  assert.ok(Array.isArray(platforms), `${description} build-desktop must define a platform matrix`);
+  for (const platform of ["windows-latest", "macos-latest", "ubuntu-22.04"]) {
+    assert.ok(platforms.includes(platform), `${description} must build ${platform}`);
+  }
+
+  const requiredPreflightJobs = ["validate-version", "native-preflight", "windows-native-preflight"];
+  assert.deepEqual(
+    desktopJob.needs,
+    requiredPreflightJobs,
+    `${description} build-desktop must depend on every preflight job`,
+  );
+  assert.deepEqual(
+    androidJob.needs,
+    requiredPreflightJobs,
+    `${description} build-android must depend on every preflight job`,
+  );
+  assert.deepEqual(
+    verifyJob.needs,
+    ["build-desktop", "build-android"],
+    `${description} verify-release must depend on every release build`,
+  );
+  assertStepRuns(
+    verifyJob,
+    "node scripts/verify-pos-release.mjs",
+    `${description} verify-release must run the published-asset verifier`,
+  );
+}
 
 test("POS workflows pin reviewed actions while keeping Node 20 as the explicit build toolchain", async () => {
   const approvedActions = new Map([
@@ -28,40 +107,101 @@ test("POS workflows pin reviewed actions while keeping Node 20 as the explicit b
   ]);
 
   for (const workflowPath of [releaseWorkflow, ciWorkflow]) {
-    const workflow = await readFile(workflowPath, "utf8");
-    const actionLines = workflow.matchAll(
-      /^\s*-?\s*uses:\s+([^@\s]+)@([^\s#]+)(?:\s+#\s*(\S+))?\s*$/gm,
-    );
-    let actionCount = 0;
+    const source = await readFile(workflowPath, "utf8");
+    const workflow = parseWorkflow(source, `POS workflow ${workflowPath}`);
+    const references = actionReferences(workflow, `POS workflow ${workflowPath}`);
 
-    for (const [, action, revision, versionComment] of actionLines) {
-      actionCount += 1;
+    for (const reference of references) {
+      const separator = reference.lastIndexOf("@");
+      assert.ok(separator > 0, `Invalid action reference in ${workflowPath}: ${reference}`);
+      const action = reference.slice(0, separator);
+      const revision = reference.slice(separator + 1);
       const approved = approvedActions.get(action);
       assert.ok(approved, `Unreviewed action in ${workflowPath}: ${action}`);
       assert.equal(revision, approved[0], `Unexpected revision for ${action} in ${workflowPath}`);
-      assert.equal(versionComment, approved[1], `Missing or outdated version comment for ${action} in ${workflowPath}`);
+      assert.ok(
+        source
+          .split("\n")
+          .some(
+            (line) =>
+              line.trim() === `- uses: ${action}@${revision} # ${approved[1]}` ||
+              line.trim() === `uses: ${action}@${revision} # ${approved[1]}`,
+          ),
+        `Missing or outdated version comment for ${action} in ${workflowPath}`,
+      );
     }
 
-    assert.ok(actionCount > 0, `No action references found in ${workflowPath}`);
+    assert.ok(references.length > 0, `No action references found in ${workflowPath}`);
   }
 
-  const workflow = await readFile(releaseWorkflow, "utf8");
-  assert.match(
-    workflow,
-    /actions\/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5[\s\S]*?node-version: 20/,
+  const workflow = parseWorkflow(await readFile(releaseWorkflow, "utf8"), "POS release workflow");
+  const nodeSetupSteps = workflowSteps(workflow, "POS release workflow").filter(
+    (step) => step?.uses === "actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444",
   );
+  assert.ok(nodeSetupSteps.length > 0, "POS release workflow must use the approved setup-node action");
+  for (const step of nodeSetupSteps) {
+    assert.equal(step?.with?.["node-version"], 20, "Every POS release setup-node step must select Node 20");
+  }
 });
 
 test("POS release workflow keeps desktop, Android, and published-release verification gated", async () => {
-  const workflow = await readFile(releaseWorkflow, "utf8");
+  validateReleaseWorkflowGates(await readFile(releaseWorkflow, "utf8"));
+});
 
-  assert.match(workflow, /platform: windows-latest/);
-  assert.match(workflow, /platform: macos-latest/);
-  assert.match(workflow, /platform: ubuntu-22\.04/);
-  assert.match(workflow, /build-desktop:[\s\S]*?needs: \[validate-version, native-preflight, windows-native-preflight\]/);
-  assert.match(workflow, /build-android:[\s\S]*?needs: \[validate-version, native-preflight, windows-native-preflight\]/);
-  assert.match(workflow, /verify-release:[\s\S]*?needs: \[build-desktop, build-android\]/);
-  assert.match(workflow, /verify-release:[\s\S]*?node scripts\/verify-pos-release\.mjs/);
+test("a commented-out POS release platform does not satisfy the workflow guard", () => {
+  const missingPlatformWorkflow = `
+jobs:
+  build-desktop:
+    needs: [validate-version, native-preflight, windows-native-preflight]
+    strategy:
+      matrix:
+        include:
+          - platform: windows-latest
+          - platform: macos-latest
+          # - platform: ubuntu-22.04
+    steps: []
+  build-android:
+    needs: [validate-version, native-preflight, windows-native-preflight]
+    steps: []
+  verify-release:
+    needs: [build-desktop, build-android]
+    steps:
+      - run: echo "Release verification disconnected"
+        # run: node scripts/verify-pos-release.mjs
+`;
+
+  assert.throws(
+    () => validateReleaseWorkflowGates(missingPlatformWorkflow),
+    /POS release workflow must build ubuntu-22\.04/,
+  );
+});
+
+test("a commented-out POS release verifier does not satisfy the workflow guard", () => {
+  const missingVerifierWorkflow = `
+jobs:
+  build-desktop:
+    needs: [validate-version, native-preflight, windows-native-preflight]
+    strategy:
+      matrix:
+        include:
+          - platform: windows-latest
+          - platform: macos-latest
+          - platform: ubuntu-22.04
+    steps: []
+  build-android:
+    needs: [validate-version, native-preflight, windows-native-preflight]
+    steps: []
+  verify-release:
+    needs: [build-desktop, build-android]
+    steps:
+      - run: echo "Release verification disconnected"
+        # run: node scripts/verify-pos-release.mjs
+`;
+
+  assert.throws(
+    () => validateReleaseWorkflowGates(missingVerifierWorkflow),
+    /POS release workflow verify-release must run the published-asset verifier/,
+  );
 });
 
 async function createFixture() {
