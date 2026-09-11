@@ -1,0 +1,48 @@
+name: Terminal browser catalog scale
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terminal-browser-catalog-scale
+  cancel-in-progress: false
+
+jobs:
+  browser-catalog-scale:
+    name: Sync 130,000 products across browser restarts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        shell: bash
+        run: |
+          pnpm dlx playwright@1.55.0 install --with-deps chromium
+          chromium_path="$(find "$HOME/.cache/ms-playwright" -type f -path '*/chrome-linux*/chrome' -print -quit)"
+          test -n "$chromium_path" || {
+            echo "::error::Playwright installed Chromium but its executable was not found"
+            exit 1
+          }
+          sudo ln -sf "$chromium_path" /usr/local/bin/chromium
+          chromium --version
+
+      - name: Run production-size browser catalog sync
+        run: pnpm --filter @workspace/globipos-terminal run test:browser-sync-scale

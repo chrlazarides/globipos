@@ -119,7 +119,14 @@ test("130,000-product browser sync survives repeated browser restarts", { timeou
     const results = [];
 
     for (const stopAfter of checkpoints) {
-      results.push(await runBrowser(profile, `${baseUrl}?stopAfter=${stopAfter}`));
+      try {
+        results.push(await runBrowser(profile, `${baseUrl}?stopAfter=${stopAfter}`));
+      } catch (error) {
+        throw new Error(
+          `Catalog scale sync failed at restart checkpoint ${stopAfter.toLocaleString("en-US")} products`,
+          { cause: error },
+        );
+      }
     }
 
     assert.deepEqual(results.map((entry) => entry.productCount), checkpoints);
