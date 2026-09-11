@@ -1,0 +1,25 @@
+{
+  "name": "GlobiPOS Terminal",
+  "short_name": "GlobiPOS POS",
+  "description": "Offline-first POS terminal for cashiers",
+  "id": "/terminal/",
+  "start_url": "/terminal/",
+  "scope": "/terminal/",
+  "display": "standalone",
+  "background_color": "#030712",
+  "theme_color": "#030712",
+  "icons": [
+    {
+      "src": "/terminal/icons/globipos-terminal-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/terminal/icons/globipos-terminal-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

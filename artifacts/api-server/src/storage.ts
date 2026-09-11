@@ -305,6 +305,7 @@ export interface IStorage {
 
   getPosOrders(locationId?: string, terminalId?: string): Promise<PosOrder[]>;
   getPosOrder(id: string): Promise<PosOrder | undefined>;
+  getPosOrderByNumber(orderNumber: string): Promise<(PosOrder & { lines: PosOrderLine[] }) | undefined>;
   createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder>;
   updatePosOrderCardRef(id: string, cardTerminalRef: string): Promise<void>;
   completeCardPosOrder(id: string, cardTerminalRef: string, amountTendered: string): Promise<void>;
@@ -3536,6 +3537,12 @@ export class DatabaseStorage implements IStorage {
     const lines = await db.select().from(posOrderLines).where(eq(posOrderLines.orderId, id));
     return { ...order, lines };
   }
+  async getPosOrderByNumber(orderNumber: string): Promise<(PosOrder & { lines: PosOrderLine[] }) | undefined> {
+    const [order] = await db.select().from(posOrders).where(eq(posOrders.orderNumber, orderNumber)).limit(1);
+    if (!order) return undefined;
+    const lines = await db.select().from(posOrderLines).where(eq(posOrderLines.orderId, order.id));
+    return { ...order, lines };
+  }
   async createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder> {
     if (
       data.paymentMethod?.startsWith("card") &&
@@ -3544,11 +3551,13 @@ export class DatabaseStorage implements IStorage {
     ) {
       throw new Error("Completed card orders require a card terminal reference");
     }
-    const [order] = await db.insert(posOrders).values(data).returning();
-    if (lines.length) {
-      await db.insert(posOrderLines).values(lines.map(l => ({ ...l, orderId: order.id })));
-    }
-    return order;
+    return db.transaction(async (transaction) => {
+      const [order] = await transaction.insert(posOrders).values(data).returning();
+      if (lines.length) {
+        await transaction.insert(posOrderLines).values(lines.map(l => ({ ...l, orderId: order.id })));
+      }
+      return order;
+    });
   }
   async updatePosOrderStatus(id: string, status: string): Promise<void> {
     if (status === "completed") {

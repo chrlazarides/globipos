@@ -905,7 +905,7 @@ export default function PosRegister() {
                         className="text-[10px] px-1 py-0"
                         data-testid={`badge-stock-${item.id}`}
                       >
-                        {qty <= 0 ? "Out" : `${qty} in stock`}
+                         {`${qty} in stock`}
                       </Badge>
                     ) : null;
                   })()}
@@ -1061,7 +1061,7 @@ export default function PosRegister() {
                           className="text-[10px] px-1 py-0"
                           data-testid={`badge-variant-stock-${v.id}`}
                         >
-                          {qty <= 0 ? "Out" : `${qty} in stock`}
+                           {`${qty} in stock`}
                         </Badge>
                       ) : null;
                     })()}

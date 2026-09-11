@@ -1,10 +1,10 @@
 import express, { type Express } from "express";
-import cors from "cors";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import { requireAuth } from "./auth";
 import { logger } from "./lib/logger";
 import healthRouter from "./routes/health";
+import { createApiCorsMiddleware } from "./terminal-cors";
 
 const app: Express = express();
 
@@ -28,7 +28,7 @@ app.use(
   }),
 );
 app.set("trust proxy", 1);
-app.use(cors());
+app.use(createApiCorsMiddleware());
 app.use(cookieParser());
 app.use(
   express.json({

@@ -1,1 +1,2 @@
 - [Browser-safe shared contracts](browser-safe-shared-contracts.md) — Keep legacy frontend schema contracts local so browser code never bundles the database connection.
+- [Product and customer logos](product-customer-logos.md) — Product-level Terminal branding must not reuse the mutable customer logo asset.

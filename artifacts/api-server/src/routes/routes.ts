@@ -9965,7 +9965,7 @@ export async function registerRoutes(
         storage.getPosCashiers(terminal.locationId),
       ]);
       // Send SHA-256 hash of PIN (never plaintext). Terminal stores hash directly.
-      const cashierPayload = cashiers.map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role }));
+      const cashierPayload = cashiers.filter(c => c.active).map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role }));
       // Catalog is bootstrapped separately through the authenticated, bounded sync endpoint.
       // Keep the catalog shape for older clients, but never put the full item table in registration.
       res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: [], categories: cats }, syncConfig: syncCfg, cashiers: cashierPayload });
@@ -9978,7 +9978,7 @@ export async function registerRoutes(
       const terminal = (req as any).terminal;
       const cashiers = await storage.getPosCashiers(terminal.locationId);
       // Send SHA-256 hash (the `pin` column stores hashes, never plaintext)
-      res.json(cashiers.map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role })));
+      res.json(cashiers.filter(c => c.active).map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role })));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -10061,6 +10061,7 @@ export async function registerRoutes(
     try {
       const { name, pin, role, locationId, active } = req.body;
       if (!name || !pin) return res.status(400).json({ message: "name and pin required" });
+      if (!/^\d{4,8}$/.test(String(pin))) return res.status(400).json({ message: "PIN must contain 4 to 8 digits" });
       // Hash PIN with SHA-256 before storing — never store plaintext
       const { createHash } = await import("crypto");
       const pinHash = createHash("sha256").update(String(pin)).digest("hex");
@@ -10071,7 +10072,8 @@ export async function registerRoutes(
   app.put("/api/pos/cashiers/:id", requireAdmin, async (req, res) => {
     try {
       const updates: any = { ...req.body };
-      if (updates.pin) {
+      if (Object.prototype.hasOwnProperty.call(updates, "pin")) {
+        if (!/^\d{4,8}$/.test(String(updates.pin))) return res.status(400).json({ message: "PIN must contain 4 to 8 digits" });
         const { createHash } = await import("crypto");
         updates.pin = createHash("sha256").update(String(updates.pin)).digest("hex");
       }
@@ -10501,24 +10503,44 @@ export async function registerRoutes(
       const results: any[] = [];
       for (const bill of bills) {
         try {
-          const {
-            lines = [],
-            terminalId: _tid,
-            locationId: _lid,
-            paymentRef,
-            ...orderData
-          } = bill;
+          const { validateTerminalBill, terminalBillMatchesExisting } = await import("../terminal-bill");
+          const normalizedBill = validateTerminalBill(bill);
+          const existing = await storage.getPosOrderByNumber(normalizedBill.orderNumber);
+          if (existing) {
+            if (existing.terminalId !== terminal.id) {
+              throw new Error("orderNumber already belongs to another terminal");
+            }
+            if (!terminalBillMatchesExisting(existing, normalizedBill)) {
+              throw new Error("orderNumber was already used with different bill data");
+            }
+            results.push({ orderNumber: bill.orderNumber, status: "ok", id: existing.id, deduplicated: true });
+            continue;
+          }
+          const { lines, ...orderData } = normalizedBill;
           // Enforce server-side context — ignore any payload terminal/location IDs
           const order = await storage.createPosOrder({
             ...orderData,
-            cardTerminalRef: paymentRef ?? orderData.cardTerminalRef,
             terminalId: terminal.id,
             locationId: terminal.locationId,
             syncedAt: new Date(),
           }, lines);
           results.push({ orderNumber: bill.orderNumber, status: "ok", id: order.id });
         } catch (err: any) {
-          results.push({ orderNumber: bill.orderNumber, status: "error", message: err.message });
+          const existing = typeof bill?.orderNumber === "string"
+            ? await storage.getPosOrderByNumber(bill.orderNumber)
+            : undefined;
+          const { validateTerminalBill, terminalBillMatchesExisting } = await import("../terminal-bill");
+          let duplicateMatches = false;
+          try {
+            duplicateMatches = Boolean(existing && terminalBillMatchesExisting(existing, validateTerminalBill(bill)));
+          } catch {
+            duplicateMatches = false;
+          }
+          if (existing?.terminalId === terminal.id && duplicateMatches) {
+            results.push({ orderNumber: bill.orderNumber, status: "ok", id: existing.id, deduplicated: true });
+          } else {
+            results.push({ orderNumber: bill?.orderNumber, status: "error", message: err.message });
+          }
         }
       }
       await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), lastSyncAt: new Date(), outboxQueueSize: 0 });

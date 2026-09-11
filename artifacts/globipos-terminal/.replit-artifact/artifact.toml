@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/terminal/"
+title = "GlobiPOS Terminal"
+description = "A separate installable GlobiPOS point-of-sale application for cashiers on tablets and computers. It registers a terminal, stores a browser-local catalog for resilient operation, and provides cashier PIN access to a touch-friendly register."
+version = "1.0.0"
+id = "artifacts/globipos-terminal"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/terminal/" ]
+localPort = 23173
+
+[services.development]
+run = "pnpm --filter @workspace/globipos-terminal run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/globipos-terminal", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/globipos-terminal/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23173"
+BASE_PATH = "/terminal/"
