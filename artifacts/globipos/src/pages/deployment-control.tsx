@@ -1,0 +1,372 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Activity, AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Copy, Download, GitBranch, HeartPulse, KeyRound, Loader2, MonitorCog, Plus, RefreshCw, Search, Server, ShieldAlert, SlidersHorizontal, Trash2, Users, WifiOff, XCircle } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+
+type Profile = {
+  id: string; slug: string; clientName: string; status: "draft" | "active" | "suspended";
+  backOfficeUrl: string | null; posServerUrl: string | null;
+  customerDomain: string | null; posDomain: string | null; eShopDomain: string | null;
+  domainStatus: "pending" | "connected" | "failed"; domainMessage: string | null; domainCheckedAt: string | null; domainFailureStartedAt: string | null; domainFailureCount: number;
+  domainChecks: Array<{ hostname: string; role: "customer" | "pos"; status: "connected" | "failed"; dnsAddresses: string[]; reason: string }>;
+  eShopDomainStatus: "pending" | "connected" | "failed"; eShopDomainMessage: string | null; eShopDomainCheckedAt: string | null;
+  eShopDomainCheck: { hostname: string; role: "eshop"; status: "connected" | "failed"; dnsAddresses: string[]; reason: string } | null;
+  domainIncidents: Array<{ id: string; startedAt: string; recoveredAt: string | null; reason: string; role: "main" | "eshop" }>;
+  domainNotificationDeliveryStatus: "sent" | "failed" | "skipped" | null;
+  domainNotificationDeliveryKind: "outage" | "recovery" | null;
+  domainNotificationDeliveryMessage: string | null;
+  domainNotificationDeliveryAttemptedAt: string | null;
+  domainNotificationDeliveryHistory: Array<{ status: "sent" | "failed" | "skipped"; kind: "outage" | "recovery"; message: string; attemptedAt: string }>;
+  branding: { companyName?: string; legalName?: string; logoUrl?: string; primaryColor?: string; legalAddress?: string; taxId?: string; storefrontTemplate?: "classic" | "fresh-market" };
+  enabledFeatures: string[]; paymentProvider: string | null; emailProvider: string | null; whatsappProvider: string | null;
+  backOfficeVersion: string | null; posVersion: string | null; targetBackOfficeVersion: string | null; targetPosVersion: string | null;
+  automationProvider: "manual" | "github" | "replit"; externalProjectId: string | null; lastHeartbeatAt: string | null; healthStatus: "unknown" | "healthy" | "warning" | "offline" | "error"; healthMessage: string | null; createdAt: string; updatedAt: string;
+};
+type FormState = Omit<Profile, "id" | "createdAt" | "updatedAt" | "lastHeartbeatAt" | "healthStatus" | "healthMessage" | "domainStatus" | "domainMessage" | "domainCheckedAt" | "domainChecks" | "eShopDomainStatus" | "eShopDomainMessage" | "eShopDomainCheckedAt" | "eShopDomainCheck" | "domainFailureStartedAt" | "domainFailureCount" | "domainIncidents" | "domainNotificationDeliveryStatus" | "domainNotificationDeliveryKind" | "domainNotificationDeliveryMessage" | "domainNotificationDeliveryAttemptedAt" | "domainNotificationDeliveryHistory">;
+type ConflictCode = "DEPLOYMENT_CHANGED" | "DOMAIN_CHANGED_DURING_CHECK";
+type ConflictNotice = { title: string; message: string; preserved: string[]; replaced: string[] };
+type IncidentHistoryResponse = {
+  deployment: { id: string; clientName: string; slug: string };
+  incidents: Profile["domainIncidents"];
+  pagination: { page: number; pageSize: number; total: number; totalPages: number };
+};
+type OperatorAlertFailure = {
+  alertKey: string;
+  event: string;
+  operation: "load" | "save";
+  reason: string;
+  occurrenceCount: number;
+  deliveryAttempts: number;
+  status: "pending" | "delivering" | "failed";
+  firstFailedAt: string;
+  lastFailedAt: string;
+  nextAttemptAt: string | null;
+  retryHistory: Array<{
+    attemptedAt: string;
+    outcome: "delivered" | "failed";
+    operator: { id: string | null; username: string | null };
+  }>;
+};
+type ResolvedOperatorAlert = {
+  operation: "load" | "save";
+  resolvedAt: string;
+  retryHistory: Array<{
+    attemptedAt: string;
+    outcome: "delivered" | "failed";
+  }>;
+};
+class ControlApiError extends Error {
+  constructor(message: string, readonly code?: string) { super(message); }
+}
+const emptyForm: FormState = { slug: "", clientName: "", status: "draft", backOfficeUrl: "", posServerUrl: "", customerDomain: "", posDomain: "", eShopDomain: "", branding: { companyName: "", legalName: "", logoUrl: "", primaryColor: "#1f6f78", legalAddress: "", taxId: "", storefrontTemplate: "fresh-market" }, enabledFeatures: [], paymentProvider: "", emailProvider: "", whatsappProvider: "", backOfficeVersion: "", posVersion: "", targetBackOfficeVersion: "", targetPosVersion: "", automationProvider: "manual", externalProjectId: "" };
+const CUSTOMER_DEPLOYMENT_BASE_DOMAIN = "globipos.shop";
+
+function eShopHostname(slug: string) {
+  const normalized = slug.trim().toLowerCase();
+  return normalized ? `web-${normalized}.${CUSTOMER_DEPLOYMENT_BASE_DOMAIN}` : "";
+}
+const featureOptions = ["inventory", "accounting", "pos", "customer-portal", "whatsapp", "digital-signage", "offline-sync"];
+const healthMeta: Record<string, { label: string; cls: string; icon: typeof CheckCircle2 }> = {
+  healthy: { label: "Healthy", cls: "text-emerald-700 bg-emerald-50 border-emerald-200", icon: CheckCircle2 },
+  warning: { label: "Warning", cls: "text-amber-700 bg-amber-50 border-amber-200", icon: AlertTriangle },
+  offline: { label: "Offline", cls: "text-slate-600 bg-slate-100 border-slate-200", icon: WifiOff },
+  error: { label: "Error", cls: "text-red-700 bg-red-50 border-red-200", icon: XCircle },
+  unknown: { label: "Unknown", cls: "text-slate-500 bg-slate-50 border-slate-200", icon: Activity },
+};
+const domainMeta: Record<string, { label: string; cls: string; icon: typeof CheckCircle2 }> = {
+  connected: { label: "Connected", cls: "text-emerald-700 bg-emerald-50 border-emerald-200", icon: CheckCircle2 },
+  failed: { label: "Failed", cls: "text-red-700 bg-red-50 border-red-200", icon: XCircle },
+  pending: { label: "Pending", cls: "text-amber-700 bg-amber-50 border-amber-200", icon: AlertTriangle },
+};
+
+async function controlRequest<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined, credentials: "include" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ message: res.statusText }));
+    throw new ControlApiError(data.message || `Request failed (${res.status})`, data.code);
+  }
+  return res.json();
+}
+function hostnameFromUrl(value: string | null) { try { return value ? new URL(value).hostname : ""; } catch { return ""; } }
+function formFromProfile(p: Profile): FormState {
+  const customerDomain = p.customerDomain || hostnameFromUrl(p.backOfficeUrl);
+  const posHost = hostnameFromUrl(p.posServerUrl);
+  const posDomain = p.posDomain || (posHost && posHost !== customerDomain ? posHost : "");
+  return { slug: p.slug, clientName: p.clientName, status: p.status, backOfficeUrl: p.backOfficeUrl || "", posServerUrl: p.posServerUrl || "", customerDomain, posDomain, eShopDomain: p.eShopDomain || "", branding: { ...emptyForm.branding, ...p.branding }, enabledFeatures: p.enabledFeatures || [], paymentProvider: p.paymentProvider || "", emailProvider: p.emailProvider || "", whatsappProvider: p.whatsappProvider || "", backOfficeVersion: p.backOfficeVersion || "", posVersion: p.posVersion || "", targetBackOfficeVersion: p.targetBackOfficeVersion || "", targetPosVersion: p.targetPosVersion || "", automationProvider: p.automationProvider, externalProjectId: p.externalProjectId || "" };
+}
+const fieldLabels: Record<keyof FormState, string> = { slug: "slug", clientName: "client name", status: "status", backOfficeUrl: "back-office URL", posServerUrl: "POS URL", customerDomain: "customer hostname", posDomain: "POS hostname", eShopDomain: "e-shop hostname", branding: "branding", enabledFeatures: "enabled features", paymentProvider: "payment provider", emailProvider: "email provider", whatsappProvider: "WhatsApp provider", backOfficeVersion: "back-office version", posVersion: "POS version", targetBackOfficeVersion: "target back-office version", targetPosVersion: "target POS version", automationProvider: "automation provider", externalProjectId: "external project ID" };
+function valuesEqual(a: unknown, b: unknown) { return JSON.stringify(a) === JSON.stringify(b); }
+function reconcileForm(base: FormState, draft: FormState, latest: FormState) {
+  const next = { ...latest, branding: { ...latest.branding } };
+  const preserved: string[] = [], replaced: string[] = [];
+  for (const key of Object.keys(base) as Array<keyof FormState>) {
+    if (key === "branding") continue;
+    const userChanged = !valuesEqual(draft[key], base[key]), serverChanged = !valuesEqual(latest[key], base[key]);
+    if (userChanged && !serverChanged) { (next as any)[key] = draft[key]; preserved.push(fieldLabels[key]); }
+    else if (userChanged && serverChanged && !valuesEqual(draft[key], latest[key])) replaced.push(fieldLabels[key]);
+  }
+  for (const key of Object.keys(base.branding) as Array<keyof FormState["branding"]>) {
+    const userChanged = !valuesEqual(draft.branding[key], base.branding[key]), serverChanged = !valuesEqual(latest.branding[key], base.branding[key]);
+    if (userChanged && !serverChanged) { (next.branding as Record<string, string | undefined>)[key] = draft.branding[key]; preserved.push(`branding: ${key}`); }
+    else if (userChanged && serverChanged && !valuesEqual(draft.branding[key], latest.branding[key])) replaced.push(`branding: ${key}`);
+  }
+  return { form: next, preserved, replaced };
+}
+function StatusPill({ status }: { status: string }) { const m = healthMeta[status] || healthMeta.unknown; const Icon = m.icon; return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${m.cls}`}><Icon className="h-3 w-3" />{m.label}</span>; }
+function DomainPill({ status }: { status: string }) { const m = domainMeta[status] || domainMeta.pending; const Icon = m.icon; return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium ${m.cls}`}><Icon className="h-3 w-3" />{m.label}</span>; }
+
+function NotificationDelivery({ profile, compact = false }: { profile: Profile; compact?: boolean }) {
+  const status = profile.domainNotificationDeliveryStatus;
+  if (!status) return <span className="text-xs text-slate-400">No alert attempts</span>;
+  const failed = status !== "sent";
+  const label = status === "sent" ? "Delivered" : status === "skipped" ? "Not sent" : "Delivery failed";
+  const Icon = failed ? AlertTriangle : CheckCircle2;
+  return <div className={compact ? "mt-1" : "rounded-md border p-3"}>
+    <div className={`flex items-center gap-1.5 text-xs font-medium ${failed ? "text-red-700" : "text-emerald-700"}`}><Icon className="h-3.5 w-3.5" />{label}: {profile.domainNotificationDeliveryKind || "domain alert"}</div>
+    {!compact && <><p className="mt-1 text-xs text-slate-600">{profile.domainNotificationDeliveryMessage}</p><p className="mt-1 text-[11px] text-slate-400">{profile.domainNotificationDeliveryAttemptedAt ? new Date(profile.domainNotificationDeliveryAttemptedAt).toLocaleString() : "Time unknown"} · {profile.domainNotificationDeliveryHistory?.length || 0} attempt{profile.domainNotificationDeliveryHistory?.length === 1 ? "" : "s"} retained</p></>}
+  </div>;
+}
+function Version({ value, target }: { value: string | null; target: string | null }) { const drift = target && target !== value; return <span className={`font-mono text-xs ${drift ? "text-amber-700" : "text-slate-600"}`}>{value || "—"}{drift ? ` → ${target}` : ""}</span>; }
+export function incidentDuration(startedAt: string, recoveredAt: string | null, now = Date.now()) {
+  const milliseconds = Math.max(0, new Date(recoveredAt || now).getTime() - new Date(startedAt).getTime());
+  const minutes = Math.floor(milliseconds / 60_000);
+  if (minutes < 60) return `${Math.max(1, minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+export function retryCooldownLabel(retryEligibleAt: string, now = Date.now()) {
+  const remaining = Math.max(0, new Date(retryEligibleAt).getTime() - now);
+  if (remaining <= 0) return null;
+  const seconds = Math.ceil(remaining / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `Retry available ${new Date(retryEligibleAt).toLocaleString()} (in ${minutes > 0 ? `${minutes}m ` : ""}${remainder}s)`;
+}
+export function IncidentHistory({ incidents }: { incidents: Profile["domainIncidents"] }) {
+  return <div className="rounded-lg border">
+    <div className="border-b bg-slate-50 px-4 py-3">
+      <h3 className="text-sm font-semibold text-slate-900">Recent domain incidents</h3>
+      <p className="mt-0.5 text-xs text-slate-500">Latest five outage and recovery records for this deployment.</p>
+    </div>
+    {incidents?.length ? <div className="divide-y">{incidents.map(incident => <div key={incident.id} className="space-y-1 px-4 py-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-medium text-slate-800">{new Date(incident.startedAt).toLocaleString()}</span>
+        <Badge variant={incident.recoveredAt ? "secondary" : "destructive"}>{incident.recoveredAt ? `Recovered · ${incidentDuration(incident.startedAt, incident.recoveredAt)}` : `Ongoing · ${incidentDuration(incident.startedAt, null)}`}</Badge>
+      </div>
+      <p className="text-slate-600"><Badge variant="outline" className="mr-2">{incident.role === "eshop" ? "E-shop" : "Main"}</Badge>{incident.reason}</p>
+      <p className="text-slate-400">{incident.recoveredAt ? `Recovered ${new Date(incident.recoveredAt).toLocaleString()}` : "Recovery not yet recorded"}</p>
+    </div>)}</div> : <p className="px-4 py-5 text-sm text-slate-500">No domain incidents recorded.</p>}
+  </div>;
+}
+
+export function ResolvedOperatorAlerts({ alerts }: { alerts: ResolvedOperatorAlert[] }) {
+  if (!alerts.length) return null;
+  return <Card>
+    <details>
+      <summary className="cursor-pointer list-none px-5 py-4 text-sm font-semibold text-slate-900">
+        Recently resolved operator alerts <span className="ml-2 font-normal text-slate-500">({alerts.length})</span>
+      </summary>
+      <CardContent className="border-t p-5">
+        <p className="mb-3 text-xs text-slate-500">Latest 20 recovered alerts. Retry history contains delivery outcomes only.</p>
+        <div className="space-y-3">{alerts.map((alert, alertIndex) => <div key={`${alert.operation}-${alert.resolvedAt}-${alertIndex}`} className="rounded-md border bg-slate-50 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <strong className="text-slate-900">Customer AI history {alert.operation}</strong>
+            <span className="text-xs text-slate-500">Resolved {new Date(alert.resolvedAt).toLocaleString()}</span>
+          </div>
+          {alert.retryHistory.length > 0 ? <ul className="mt-2 space-y-1 border-t pt-2">{[...alert.retryHistory].reverse().map((retry, index) => <li key={`${retry.attemptedAt}-${index}`} className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            <span>{new Date(retry.attemptedAt).toLocaleString()}</span>
+            <Badge variant={retry.outcome === "delivered" ? "secondary" : "destructive"}>{retry.outcome === "delivered" ? "Delivered" : "Failed"}</Badge>
+          </li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No manual retries were recorded.</p>}
+        </div>)}</div>
+      </CardContent>
+    </details>
+  </Card>;
+}
+
+function incidentQuery(filters: { from: string; to: string; status: string }, page?: number) {
+  const query = new URLSearchParams();
+  if (page) query.set("page", String(page));
+  if (filters.from) query.set("from", filters.from);
+  if (filters.to) query.set("to", filters.to);
+  if (filters.status !== "all") query.set("status", filters.status);
+  return query.toString();
+}
+
+export default function DeploymentControlPage() {
+  const { toast } = useToast();
+  const [search, setSearch] = useState(""); const [statusFilter, setStatusFilter] = useState("all"); const [healthFilter, setHealthFilter] = useState("all"); const [selected, setSelected] = useState<string[]>([]);
+  const [formOpen, setFormOpen] = useState(false); const [editing, setEditing] = useState<Profile | null>(null); const [form, setForm] = useState<FormState>(emptyForm);
+  const [deleteTarget, setDeleteTarget] = useState<Profile | null>(null); const [suspendTarget, setSuspendTarget] = useState<Profile | null>(null); const [credential, setCredential] = useState<{ client: string; token: string } | null>(null); const [rolloutOpen, setRolloutOpen] = useState(false);
+  const [activationOverride, setActivationOverride] = useState<{ request: { method: string; url: string; body: any }; clientName: string; reason: string } | null>(null);
+  const [conflictNotice, setConflictNotice] = useState<ConflictNotice | null>(null);
+  const [historyProfile, setHistoryProfile] = useState<Profile | null>(null);
+  const [historyFilters, setHistoryFilters] = useState({ from: "", to: "", status: "all" });
+  const [historyPage, setHistoryPage] = useState(1);
+  const [retryClock, setRetryClock] = useState(() => Date.now());
+  const [rollout, setRollout] = useState({ all: false, targetBackOfficeVersion: "", targetPosVersion: "", notes: "" });
+  useEffect(() => { const unique = Array.from(new Set(selected)); if (unique.length !== selected.length) setSelected(unique); }, [selected]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setRetryClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const control = useQuery<any>({ queryKey: ["/api/control/status"], refetchInterval: 60_000 });
+  const deployments = useQuery<Profile[]>({ queryKey: ["/api/control/deployments"], enabled: !!control.data, refetchInterval: 60_000 });
+  const rollouts = useQuery<any[]>({ queryKey: ["/api/control/rollouts"], enabled: !!control.data });
+  const history = useQuery<IncidentHistoryResponse>({
+    queryKey: ["/api/control/deployments", historyProfile?.id, "incidents", historyFilters, historyPage],
+    queryFn: () => controlRequest("GET", `/api/control/deployments/${historyProfile!.id}/incidents?${incidentQuery(historyFilters, historyPage)}`),
+    enabled: !!historyProfile,
+  });
+  const unavailable = control.isError || control.data?.available === false || control.data?.enabled === false;
+  const profiles = deployments.data || [];
+  const filtered = useMemo(() => profiles.filter(p => (!search || `${p.clientName} ${p.slug}`.toLowerCase().includes(search.toLowerCase())) && (statusFilter === "all" || p.status === statusFilter) && (healthFilter === "all" || p.healthStatus === healthFilter)), [profiles, search, statusFilter, healthFilter]);
+  const invalidate = () => { queryClient.invalidateQueries({ queryKey: ["/api/control/deployments"] }); queryClient.invalidateQueries({ queryKey: ["/api/control/status"] }); queryClient.invalidateQueries({ queryKey: ["/api/control/rollouts"] }); };
+  const recoverConflict = async (code: ConflictCode, profileId: string) => {
+    const result = await deployments.refetch();
+    if (result.error) {
+      toast({ title: "Deployment changed", description: "The save conflict was detected, but the latest profile could not be loaded. Try Refresh before saving again.", variant: "destructive" });
+      return;
+    }
+    const latest = result.data?.find(p => p.id === profileId);
+    if (!latest) {
+      setFormOpen(false); setEditing(null);
+      toast({ title: "Deployment changed", description: "The profile is no longer available. The deployment list has been refreshed.", variant: "destructive" });
+      return;
+    }
+    let preserved: string[] = [], replaced: string[] = [];
+    if (editing?.id === profileId) {
+      const reconciled = reconcileForm(formFromProfile(editing), form, formFromProfile(latest));
+      setForm(reconciled.form); preserved = reconciled.preserved; replaced = reconciled.replaced;
+    }
+    setEditing(latest);
+    setFormOpen(true);
+    const domainCheckChanged = code === "DOMAIN_CHANGED_DURING_CHECK";
+    setConflictNotice({
+      title: domainCheckChanged ? "Routing changed during the domain check" : "Deployment changed while saving",
+      message: domainCheckChanged ? "The check result was discarded because routing changed while it was running. The latest routing and readiness state is now loaded." : "Another operator or process changed routing, readiness, or status during this save. The latest deployment state is now loaded.",
+      preserved, replaced,
+    });
+    if (!formOpen) toast({ title: "Latest deployment state loaded", description: "Routing, readiness, or status changed during the operation. Review the profile before trying again." });
+  };
+  const mutation = useMutation({ mutationFn: (x: { method: string; url: string; body?: unknown }) => controlRequest<Profile>(x.method, x.url, x.body), onSuccess: () => { invalidate(); setFormOpen(false); setConflictNotice(null); toast({ title: "Deployment profile saved" }); }, onError: (e: Error, request) => { const code = e instanceof ControlApiError ? e.code : undefined; const id = request.url.match(/\/deployments\/([^/]+)/)?.[1]; if (id && code === "DEPLOYMENT_CHANGED") { void recoverConflict(code, id); return; } toast({ title: "Action failed", description: e.message, variant: "destructive" }); } });
+  const deleting = useMutation({ mutationFn: (id: string) => apiRequest("DELETE", `/api/control/deployments/${id}`), onSuccess: () => { invalidate(); setDeleteTarget(null); toast({ title: "Deployment removed" }); }, onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }) });
+  const credentialMutation = useMutation({ mutationFn: async (id: string) => (await apiRequest("POST", `/api/control/deployments/${id}/rotate-credential`, {})).json(), onSuccess: (data: any, id) => { const p = profiles.find(x => x.id === id); setCredential({ client: p?.clientName || "deployment", token: data.credential }); }, onError: (e: Error) => toast({ title: "Credential rotation failed", description: e.message, variant: "destructive" }) });
+  const rolloutMutation = useMutation({ mutationFn: (body: any) => apiRequest("POST", "/api/control/rollouts", body), onSuccess: () => { invalidate(); setRolloutOpen(false); setSelected([]); toast({ title: "Upgrade rollout queued" }); }, onError: (e: Error) => toast({ title: "Rollout failed", description: e.message, variant: "destructive" }) });
+  const domainMutation = useMutation({ mutationFn: (id: string) => controlRequest<Profile>("POST", `/api/control/deployments/${id}/check-domains`, {}), onSuccess: (profile: Profile) => { invalidate(); setEditing(profile); setConflictNotice(null); toast({ title: profile.domainStatus === "connected" ? "Domains connected" : "Domain check failed", description: profile.domainMessage || undefined, variant: profile.domainStatus === "failed" ? "destructive" : "default" }); }, onError: (e: Error, id) => { const code = e instanceof ControlApiError ? e.code : undefined; if (code === "DOMAIN_CHANGED_DURING_CHECK") { void recoverConflict(code, id); return; } toast({ title: "Domain check failed", description: e.message, variant: "destructive" }); } });
+  const alertRetryMutation = useMutation({
+    mutationFn: (operation: OperatorAlertFailure["operation"]) => controlRequest<{ outcome: "delivered" | "failed" }>("POST", `/api/control/operator-alerts/${operation}/retry`, {}),
+    onSuccess: data => {
+      invalidate();
+      toast({ title: data.outcome === "delivered" ? "Operator alert delivered" : "Operator alert retry failed", variant: data.outcome === "failed" ? "destructive" : "default" });
+    },
+    onError: (e: Error) => {
+      invalidate();
+      toast({ title: "Operator alert retry unavailable", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const openCreate = () => { setEditing(null); setForm(emptyForm); setConflictNotice(null); setFormOpen(true); };
+  const openEdit = (p: Profile) => { setEditing(p); setForm(formFromProfile(p)); setConflictNotice(null); setFormOpen(true); };
+  const setField = (key: keyof FormState, value: any) => setForm(f => ({ ...f, [key]: value }));
+  const setSlug = (value: string) => setForm(f => {
+    const slug = value.trim().toLowerCase();
+    const hostname = slug ? `${slug}.${CUSTOMER_DEPLOYMENT_BASE_DOMAIN}` : "";
+    return {
+      ...f,
+      slug,
+      customerDomain: hostname,
+      posDomain: "",
+      backOfficeUrl: hostname ? `https://${hostname}` : "",
+      posServerUrl: hostname ? `https://${hostname}` : "",
+      eShopDomain: f.eShopDomain ? eShopHostname(slug) : "",
+    };
+  });
+  const setDomain = (key: "customerDomain" | "posDomain", value: string) => setForm(f => {
+    const next = { ...f, [key]: value.trim().toLowerCase() };
+    if (key === "customerDomain") {
+      next.backOfficeUrl = value.trim() ? `https://${value.trim().toLowerCase()}` : "";
+      if (!f.posDomain) next.posServerUrl = next.backOfficeUrl;
+    } else {
+      next.posServerUrl = value.trim() ? `https://${value.trim().toLowerCase()}` : (next.customerDomain ? `https://${next.customerDomain}` : "");
+    }
+    return next;
+  });
+  const validUrl = (value: string) => { try { return Boolean(new URL(value)); } catch { return false; } };
+  const formReady = Boolean(form.clientName.trim() && form.slug.trim() && form.customerDomain?.trim() && form.backOfficeUrl && form.posServerUrl && validUrl(form.backOfficeUrl) && validUrl(form.posServerUrl));
+  const domainsFresh = (profile: Profile) => {
+    const mainFresh = profile.domainStatus === "connected" && !!profile.domainCheckedAt && Date.now() - new Date(profile.domainCheckedAt).getTime() <= 15 * 60 * 1000;
+    const eShopFresh = !profile.eShopDomain || (profile.eShopDomainStatus === "connected" && !!profile.eShopDomainCheckedAt && Date.now() - new Date(profile.eShopDomainCheckedAt).getTime() <= 15 * 60 * 1000);
+    return mainFresh && eShopFresh;
+  };
+  const save = () => { if (!formReady) { toast({ title: "Complete required fields", description: "Client name, slug, and customer domain are required.", variant: "destructive" }); return; } const request = { method: editing ? "PATCH" : "POST", url: editing ? `/api/control/deployments/${editing.id}` : "/api/control/deployments", body: { ...form, customerDomain: form.customerDomain || null, posDomain: form.posDomain || null, eShopDomain: form.eShopDomain || null, backOfficeUrl: form.backOfficeUrl, posServerUrl: form.posServerUrl, paymentProvider: form.paymentProvider || "none", emailProvider: form.emailProvider || "none", whatsappProvider: form.whatsappProvider || "none", backOfficeVersion: form.backOfficeVersion || "unknown", posVersion: form.posVersion || "unknown", targetBackOfficeVersion: form.targetBackOfficeVersion || null, targetPosVersion: form.targetPosVersion || null, externalProjectId: form.externalProjectId || null } }; const routingChanged = !!editing && ((form.customerDomain || null) !== editing.customerDomain || (form.posDomain || null) !== editing.posDomain || (form.eShopDomain || null) !== editing.eShopDomain); if (form.status === "active" && (!editing || editing.status !== "active" || routingChanged) && (!editing || !domainsFresh(editing) || routingChanged)) { setActivationOverride({ request, clientName: form.clientName, reason: routingChanged ? "Hostname settings changed and the new routing has not been checked." : editing?.domainMessage || "Required domains do not have a recent successful check." }); return; } mutation.mutate(request); };
+  const copyCredential = async () => { if (credential) { await navigator.clipboard.writeText(credential.token); toast({ title: "Credential copied", description: "This token will not be shown again." }); } };
+  const exportProfile = async (p: Profile) => { try { const res = await apiRequest("GET", `/api/control/deployments/${p.id}/export`); const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${p.slug}-deployment.json`; a.click(); URL.revokeObjectURL(url); } catch (e) { toast({ title: "Export failed", description: (e as Error).message, variant: "destructive" }); } };
+  const openHistory = (p: Profile) => { setHistoryProfile(p); setHistoryFilters({ from: "", to: "", status: "all" }); setHistoryPage(1); };
+  const exportIncidents = async () => {
+    if (!historyProfile) return;
+    try {
+      const res = await apiRequest("GET", `/api/control/deployments/${historyProfile.id}/incidents/export?${incidentQuery(historyFilters)}`);
+      const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement("a");
+      a.href = url; a.download = `${historyProfile.slug}-domain-incidents.csv`; a.click(); URL.revokeObjectURL(url);
+    } catch (e) { toast({ title: "Incident export failed", description: (e as Error).message, variant: "destructive" }); }
+  };
+  const activeDomainFailures = profiles.filter(p => p.status === "active" && p.domainStatus === "failed");
+  const activeEShopFailures = profiles.filter(p => p.status === "active" && p.eShopDomain && p.eShopDomainStatus === "failed");
+  const activeDeliveryWarnings = profiles.filter(p => p.domainNotificationDeliveryStatus === "failed" || p.domainNotificationDeliveryStatus === "skipped");
+  const operatorAlertFailures = (control.data?.alertDeliveryFailures || []) as OperatorAlertFailure[];
+  const resolvedOperatorAlerts = (control.data?.resolvedOperatorAlerts || []) as ResolvedOperatorAlert[];
+  const total = profiles.length, healthy = profiles.filter(p => p.healthStatus === "healthy").length, drift = profiles.filter(p => p.targetBackOfficeVersion && p.targetBackOfficeVersion !== p.backOfficeVersion || p.targetPosVersion && p.targetPosVersion !== p.posVersion).length;
+  const rolloutData = (rollouts.data || []).map((r: any) => ({ ...r, all: r.scope === "all" }));
+
+  if (control.isLoading) return <div className="p-6 space-y-5"><div className="h-8 w-72 animate-pulse rounded bg-muted" /><div className="h-24 animate-pulse rounded-xl bg-muted" /><div className="h-96 animate-pulse rounded-xl bg-muted" /></div>;
+  if (unavailable) return <div className="mx-auto flex min-h-[70vh] max-w-2xl items-center px-6"><Card className="w-full border-amber-200 bg-amber-50/50"><CardContent className="p-8 text-center"><ShieldAlert className="mx-auto mb-4 h-10 w-10 text-amber-700" /><h1 className="text-xl font-semibold text-slate-900">Deployment control is not available</h1><p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-slate-600">The control plane is development-only and must be explicitly enabled for this environment. This account may also need superuser access. No deployment data has been substituted.</p><Button variant="outline" className="mt-6" onClick={() => control.refetch()}><RefreshCw className="mr-2 h-4 w-4" />Check again</Button></CardContent></Card></div>;
+
+  return <div className="min-h-full bg-slate-50/60 p-4 sm:p-6 lg:p-8">
+    {conflictNotice && formOpen && <div role="alert" className="fixed inset-x-4 top-4 z-[70] mx-auto max-w-3xl rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 shadow-xl"><div className="flex gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="font-semibold">{conflictNotice.title}</p><p className="mt-1 leading-5">{conflictNotice.message}</p>{conflictNotice.preserved.length > 0 && <p className="mt-2"><strong>Unsaved edits preserved:</strong> {conflictNotice.preserved.join(", ")}.</p>}{conflictNotice.replaced.length > 0 && <p className="mt-2"><strong>Replaced with newer server values:</strong> {conflictNotice.replaced.join(", ")}.</p>}{conflictNotice.preserved.length === 0 && conflictNotice.replaced.length === 0 && <p className="mt-2">No unsaved form edits needed reconciliation.</p>}</div></div></div>}
+    {editing && formOpen && <div className="fixed inset-x-4 bottom-6 z-[60] mx-auto max-w-3xl rounded-lg border bg-background p-3 shadow-xl"><div className="mb-3 grid gap-2 sm:grid-cols-2"><div className="flex min-w-0 items-center gap-2"><DomainPill status={editing.domainStatus} />{editing.domainMessage && <span title={editing.domainMessage} className="max-w-48 truncate text-xs text-slate-500">{editing.domainMessage}</span>}</div><NotificationDelivery profile={editing} /></div><div className="flex flex-wrap items-center gap-2"><span className="mr-auto text-sm font-semibold">Profile actions</span><Button variant="outline" disabled={domainMutation.isPending} onClick={() => domainMutation.mutate(editing.id)}>{domainMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Check domains</Button><Button variant="outline" onClick={() => credentialMutation.mutate(editing.id)}>Rotate credential</Button><Button variant="outline" onClick={() => exportProfile(editing)}>Download manifest</Button><Button variant="outline" onClick={() => { if (editing.status === "suspended" && !domainsFresh(editing)) { setActivationOverride({ request: { method: "PATCH", url: `/api/control/deployments/${editing.id}`, body: { status: "active" } }, clientName: editing.clientName, reason: editing.domainMessage || "Required domains do not have a recent successful check." }); } else { setFormOpen(false); if (editing.status === "suspended") mutation.mutate({ method: "PATCH", url: `/api/control/deployments/${editing.id}`, body: { status: "active" } }); else setSuspendTarget(editing); } }}>{editing.status === "suspended" ? "Reactivate deployment" : "Suspend deployment"}</Button>{editing.status === "draft" && <Button variant="destructive" onClick={() => { setFormOpen(false); setDeleteTarget(editing); }}>Delete draft</Button>}</div></div>}
+    <div className="mx-auto max-w-[1500px] space-y-6">
+      {profiles.some(profile => profile.domainIncidents?.length) && <Card>
+        <CardHeader className="border-b bg-white px-5 py-4"><CardTitle className="text-base">Recent domain incidents by deployment</CardTitle></CardHeader>
+        <CardContent className="grid gap-4 p-5 lg:grid-cols-2">
+          {profiles.filter(profile => profile.domainIncidents?.length).map(profile => <div key={profile.id} className="space-y-2">
+            <button className="text-left text-sm font-semibold text-teal-800 hover:underline" onClick={() => openEdit(profile)}>{profile.clientName}</button>
+            <IncidentHistory incidents={profile.domainIncidents} />
+            <Button variant="outline" size="sm" onClick={() => openHistory(profile)}>View full history</Button>
+          </div>)}
+        </CardContent>
+      </Card>}
+      <header className="flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-teal-700"><MonitorCog className="h-4 w-4" /> GlobiPOS support cockpit</div><h1 className="text-3xl font-semibold tracking-tight text-slate-900">Deployment Control Center</h1><p className="mt-1 text-sm text-slate-500">Manage isolated customer installations from one shared codebase.</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => { control.refetch(); deployments.refetch(); }}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button><Button onClick={openCreate}><Plus className="mr-2 h-4 w-4" />New deployment</Button></div></header>
+      {operatorAlertFailures.length > 0 && <Card className="border-red-300 bg-red-50"><CardContent className="p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" /><div className="min-w-0 flex-1"><p className="font-semibold text-red-950">Operator alerts could not be delivered</p><div className="mt-2 space-y-4">{operatorAlertFailures.map(failure => {
+        const cooldownLabel = failure.nextAttemptAt ? retryCooldownLabel(failure.nextAttemptAt, retryClock) : null;
+        return <div key={failure.alertKey} className="rounded-md border border-red-200 bg-white/60 p-3 text-sm text-red-900"><div className="flex flex-wrap items-center justify-between gap-3"><div><strong>Customer AI history {failure.operation}</strong> — {failure.reason}<span className="block text-xs text-red-700">{failure.occurrenceCount} occurrence{failure.occurrenceCount === 1 ? "" : "s"}; last delivery used {failure.deliveryAttempts} attempt{failure.deliveryAttempts === 1 ? "" : "s"} at {new Date(failure.lastFailedAt).toLocaleString()}</span>{cooldownLabel && <span className="mt-1 block text-xs font-medium text-amber-800">{cooldownLabel}</span>}</div><Button size="sm" variant="outline" className="border-red-300 bg-white text-red-800 hover:bg-red-100" disabled={alertRetryMutation.isPending || Boolean(cooldownLabel)} onClick={() => alertRetryMutation.mutate(failure.operation)}>{alertRetryMutation.isPending && alertRetryMutation.variables === failure.operation ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Retry delivery</Button></div>{failure.retryHistory?.length > 0 && <div className="mt-3 border-t border-red-200 pt-2"><p className="text-xs font-semibold text-red-950">Recent manual retries</p><ul className="mt-1 space-y-1">{[...failure.retryHistory].reverse().map((retry, index) => <li key={`${retry.attemptedAt}-${index}`} className="flex flex-wrap items-center gap-x-2 text-xs text-red-800"><span>{new Date(retry.attemptedAt).toLocaleString()}</span><Badge variant={retry.outcome === "delivered" ? "secondary" : "destructive"}>{retry.outcome === "delivered" ? "Delivered" : "Failed"}</Badge><span>by {retry.operator?.username || "Unknown operator"}</span></li>)}</ul></div>}</div>;
+      })}</div></div></div></CardContent></Card>}
+      <ResolvedOperatorAlerts alerts={resolvedOperatorAlerts} />
+      {profiles.some(profile => profile.eShopDomain) && <Card><CardHeader className="border-b bg-white px-5 py-4"><CardTitle className="text-base">Customer e-shop hostnames</CardTitle></CardHeader><CardContent className="space-y-4 p-5"><p className="text-sm text-slate-600">Each e-shop subdomain must be added separately in Replit Publishing because wildcard custom domains are not supported. Add the exact hostname, create the DNS record Replit shows, and set <code>CUSTOMER_ESHOP_HOSTNAME</code> to the same value on that customer’s isolated deployment.</p><div className="grid gap-3 lg:grid-cols-2">{profiles.filter(profile => profile.eShopDomain).map(profile => <div key={profile.id} className="rounded-md border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-sm text-slate-900">{profile.clientName}</strong><DomainPill status={profile.eShopDomainStatus} /></div><div className="mt-2 font-mono text-sm text-teal-800">{profile.eShopDomain}</div><p className="mt-1 text-xs text-slate-500">{profile.eShopDomainMessage || "Run Check domains after connecting this hostname."}</p></div>)}</div></CardContent></Card>}
+      {activeDomainFailures.length > 0 && <Card className="border-red-300 bg-red-50"><CardContent className="p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" /><div><p className="font-semibold text-red-900">{activeDomainFailures.length} active customer domain{activeDomainFailures.length === 1 ? " is" : "s are"} not responding</p><div className="mt-2 space-y-1">{activeDomainFailures.map(p => <button key={p.id} className="block text-left text-sm text-red-800 underline-offset-2 hover:underline" onClick={() => openEdit(p)}><strong>{p.clientName}</strong> — {p.domainMessage || "Domain check failed"} <span className="text-red-600">({p.domainFailureCount} consecutive; since {p.domainFailureStartedAt ? new Date(p.domainFailureStartedAt).toLocaleString() : "unknown"})</span></button>)}</div></div></div></CardContent></Card>}
+      {activeEShopFailures.length > 0 && <Card className="border-red-300 bg-red-50"><CardContent className="p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" /><div><p className="font-semibold text-red-900">{activeEShopFailures.length} active customer e-shop{activeEShopFailures.length === 1 ? " is" : "s are"} not responding</p><div className="mt-2 space-y-1">{activeEShopFailures.map(p => <button key={p.id} className="block text-left text-sm text-red-800 hover:underline" onClick={() => openEdit(p)}><strong>{p.clientName}</strong> — {p.eShopDomainMessage || "E-shop domain check failed"}</button>)}</div></div></div></CardContent></Card>}
+      {activeDeliveryWarnings.length > 0 && <Card className="border-amber-300 bg-amber-50"><CardContent className="p-4"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" /><div><p className="font-semibold text-amber-950">{activeDeliveryWarnings.length} deployment alert{activeDeliveryWarnings.length === 1 ? " needs" : "s need"} delivery attention</p><div className="mt-2 space-y-1">{activeDeliveryWarnings.map(p => <button key={p.id} className="block text-left text-sm text-amber-900 underline-offset-2 hover:underline" onClick={() => openEdit(p)}><strong>{p.clientName}</strong> — {p.domainNotificationDeliveryMessage || "Notification could not be delivered"}</button>)}</div></div></div></CardContent></Card>}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Card><CardContent className="p-4"><div className="flex justify-between"><Users className="h-4 w-4 text-teal-700" /><span className="text-2xl font-semibold">{total}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Registered clients</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><HeartPulse className="h-4 w-4 text-emerald-700" /><span className="text-2xl font-semibold text-emerald-700">{healthy}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Healthy heartbeat</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><GitBranch className="h-4 w-4 text-amber-700" /><span className="text-2xl font-semibold text-amber-700">{drift}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Version drift</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><Activity className="h-4 w-4 text-slate-500" /><span className="text-2xl font-semibold">{rollouts.data?.length || 0}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Rollouts recorded</p></CardContent></Card></div>
+      <Card><CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center"><div className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input aria-label="Search deployments" className="pl-9" placeholder="Search client name or slug…" value={search} onChange={e => setSearch(e.target.value)} /></div><div className="flex flex-wrap gap-2"><select aria-label="Filter by status" className="h-9 rounded-md border bg-background px-3 text-sm" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="all">All statuses</option><option value="active">Active</option><option value="draft">Draft</option><option value="suspended">Suspended</option></select><select aria-label="Filter by health" className="h-9 rounded-md border bg-background px-3 text-sm" value={healthFilter} onChange={e => setHealthFilter(e.target.value)}><option value="all">All health</option>{Object.keys(healthMeta).map(x => <option key={x} value={x}>{healthMeta[x].label}</option>)}</select><Button variant="outline" disabled={!selected.length} onClick={() => { setRollout({ all: false, targetBackOfficeVersion: "", targetPosVersion: "", notes: "" }); setRolloutOpen(true); }}><GitBranch className="mr-2 h-4 w-4" />Upgrade selected ({selected.length})</Button><Button variant="secondary" onClick={() => { setRollout({ all: true, targetBackOfficeVersion: "", targetPosVersion: "", notes: "" }); setRolloutOpen(true); }}><SlidersHorizontal className="mr-2 h-4 w-4" />Upgrade all</Button></div></CardContent></Card>
+      {filtered.length > 0 && <Card><CardHeader className="border-b bg-white px-5 py-4"><CardTitle className="text-base">Latest alert delivery by deployment</CardTitle></CardHeader><CardContent className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3">{filtered.map(profile => <button key={profile.id} className="rounded-md border p-3 text-left hover:bg-slate-50" onClick={() => openEdit(profile)}><p className="mb-1 text-sm font-medium text-slate-900">{profile.clientName}</p><NotificationDelivery profile={profile} compact />{profile.domainNotificationDeliveryAttemptedAt && <p className="mt-1 text-[11px] text-slate-400">{new Date(profile.domainNotificationDeliveryAttemptedAt).toLocaleString()}</p>}</button>)}</CardContent></Card>}
+       <Card className="overflow-hidden"><CardHeader className="border-b bg-white px-5 py-4"><CardTitle className="text-base">Fleet overview <span className="ml-2 text-sm font-normal text-slate-400">{filtered.length} shown</span></CardTitle></CardHeader><CardContent className="p-0">{deployments.isLoading ? <div className="space-y-3 p-6">{[1, 2, 3].map(x => <div key={x} className="h-14 animate-pulse rounded bg-muted" />)}</div> : filtered.length === 0 ? <div className="p-14 text-center"><Server className="mx-auto mb-3 h-8 w-8 text-slate-300" /><p className="font-medium text-slate-700">No deployments match these filters</p><p className="mt-1 text-sm text-slate-500">Create a profile or adjust your search.</p></div> : <div className="overflow-x-auto"><table className="w-full min-w-[930px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="w-10 px-5 py-3"><Checkbox aria-label="Select all visible" checked={filtered.length > 0 && filtered.every(p => selected.includes(p.id))} onCheckedChange={v => setSelected(v ? filtered.map(p => p.id) : [])} /></th><th className="px-3 py-3">Client</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Health</th><th className="px-3 py-3">Versions</th><th className="px-3 py-3">Automation</th><th className="px-5 py-3 text-right">Actions</th></tr></thead><tbody className="divide-y">{filtered.map(p => <tr key={p.id} className="bg-white transition-colors hover:bg-teal-50/30"><td className="px-5 py-4"><Checkbox aria-label={`Select ${p.clientName}`} checked={selected.includes(p.id)} onCheckedChange={v => setSelected(s => v ? [...s, p.id] : s.filter(id => id !== p.id))} /></td><td className="px-3 py-4"><div className="font-medium text-slate-900">{p.clientName}</div><div className="font-mono text-xs text-slate-400">{p.slug}</div><div className="max-w-[220px] truncate font-mono text-xs text-teal-700">{p.customerDomain || hostnameFromUrl(p.backOfficeUrl)}</div>{p.posDomain && <div className="max-w-[220px] truncate font-mono text-[10px] text-slate-400">POS: {p.posDomain}</div>}</td><td className="px-3 py-4"><Badge variant={p.status === "active" ? "default" : p.status === "suspended" ? "destructive" : "secondary"}>{p.status}</Badge></td><td className="px-3 py-4"><StatusPill status={p.healthStatus} />{p.healthMessage && <div className="mt-1 max-w-[180px] truncate text-xs text-slate-400">{p.healthMessage}</div>}</td><td className="space-y-1 px-3 py-4"><div className="flex gap-2"><span className="w-8 text-[10px] uppercase text-slate-400">BO</span><Version value={p.backOfficeVersion} target={p.targetBackOfficeVersion} /></div><div className="flex gap-2"><span className="w-8 text-[10px] uppercase text-slate-400">POS</span><Version value={p.posVersion} target={p.targetPosVersion} /></div></td><td className="px-3 py-4"><span className="capitalize text-slate-600">{p.automationProvider}</span>{p.externalProjectId && <div className="max-w-[130px] truncate font-mono text-xs text-slate-400">{p.externalProjectId}</div>}</td><td className="space-x-1 px-5 py-4 text-right"><Button variant="ghost" size="sm" onClick={() => openHistory(p)}>Incidents</Button><Button variant="ghost" size="sm" onClick={() => openEdit(p)}>Manage <ChevronRight className="ml-1 h-4 w-4" /></Button></td></tr>)}</tbody></table></div>}</CardContent></Card>
+      {rolloutData.length > 0 && <Card><CardHeader className="px-5 py-4"><CardTitle className="text-base">Recent rollout activity</CardTitle></CardHeader><CardContent className="px-5 pb-5"><div className="space-y-2">{rolloutData.slice(0, 5).map((r: any, i: number) => <div key={r.id || i} className="flex flex-wrap items-center justify-between gap-2 border-b py-2 last:border-0"><span className="text-sm">{r.all ? "All clients" : `${r.deploymentIds?.length || 0} selected clients`}</span><span className="font-mono text-xs text-slate-500">{r.targetBackOfficeVersion || "—"} / {r.targetPosVersion || "—"}</span><span className="text-xs text-slate-400">{r.createdAt ? new Date(r.createdAt).toLocaleString() : "Queued"}</span></div>)}</div></CardContent></Card>}
+    </div>
+    <Dialog open={!!historyProfile} onOpenChange={open => !open && setHistoryProfile(null)}><DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto"><DialogHeader><DialogTitle>Domain incident history — {historyProfile?.clientName}</DialogTitle><DialogDescription>Search the complete outage history. Date filters use the incident start date.</DialogDescription></DialogHeader><div className="grid gap-3 sm:grid-cols-4"><label className="space-y-1 text-sm font-medium">From<Input type="date" value={historyFilters.from} onChange={e => { setHistoryFilters(f => ({ ...f, from: e.target.value })); setHistoryPage(1); }} /></label><label className="space-y-1 text-sm font-medium">To<Input type="date" value={historyFilters.to} onChange={e => { setHistoryFilters(f => ({ ...f, to: e.target.value })); setHistoryPage(1); }} /></label><label className="space-y-1 text-sm font-medium">Status<select className="h-10 w-full rounded-md border bg-background px-3 font-normal" value={historyFilters.status} onChange={e => { setHistoryFilters(f => ({ ...f, status: e.target.value })); setHistoryPage(1); }}><option value="all">All incidents</option><option value="ongoing">Ongoing</option><option value="recovered">Recovered</option></select></label><div className="flex items-end"><Button className="w-full" variant="outline" onClick={exportIncidents}><Download className="mr-2 h-4 w-4" />Export CSV</Button></div></div>{history.isLoading ? <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-slate-400" /></div> : history.isError ? <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800">{(history.error as Error).message}</div> : history.data?.incidents.length ? <div className="divide-y rounded-lg border">{history.data.incidents.map(incident => <div key={incident.id} className="space-y-1 p-4 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{new Date(incident.startedAt).toLocaleString()}</span><Badge variant={incident.recoveredAt ? "secondary" : "destructive"}>{incident.recoveredAt ? `Recovered · ${incidentDuration(incident.startedAt, incident.recoveredAt)}` : `Ongoing · ${incidentDuration(incident.startedAt, null)}`}</Badge></div><p className="text-slate-600">{incident.reason}</p><p className="text-xs text-slate-400">{incident.recoveredAt ? `Recovered ${new Date(incident.recoveredAt).toLocaleString()}` : "Recovery not yet recorded"}</p></div>)}</div> : <div className="rounded-lg border p-8 text-center text-sm text-slate-500">No incidents match these filters.</div>}<DialogFooter className="items-center sm:justify-between"><span className="text-sm text-slate-500">{history.data ? `${history.data.pagination.total} incident${history.data.pagination.total === 1 ? "" : "s"} · Page ${history.data.pagination.page} of ${history.data.pagination.totalPages}` : ""}</span><div className="flex gap-2"><Button variant="outline" size="sm" disabled={!history.data || historyPage <= 1} onClick={() => setHistoryPage(p => p - 1)}><ChevronLeft className="mr-1 h-4 w-4" />Previous</Button><Button variant="outline" size="sm" disabled={!history.data || historyPage >= history.data.pagination.totalPages} onClick={() => setHistoryPage(p => p + 1)}>Next<ChevronRight className="ml-1 h-4 w-4" /></Button></div></DialogFooter></DialogContent></Dialog>
+     <Dialog open={formOpen} onOpenChange={setFormOpen}><DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>{editing ? "Edit deployment profile" : "Create deployment profile"}</DialogTitle><DialogDescription>Keep identity and connection details current before coordinating a rollout.</DialogDescription></DialogHeader><div className="grid gap-4 py-2 sm:grid-cols-2"><label className="space-y-1 text-sm font-medium">Client name<Input value={form.clientName} onChange={e => setField("clientName", e.target.value)} /></label><label className="space-y-1 text-sm font-medium">Slug<Input value={form.slug} onChange={e => setSlug(e.target.value)} /></label><label className="space-y-1 text-sm font-medium">Status<select className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" value={form.status} onChange={e => setField("status", e.target.value)}><option value="draft">Draft</option><option value="active">Active</option><option value="suspended">Suspended</option></select></label><label className="space-y-1 text-sm font-medium">Automation<select className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" value={form.automationProvider} onChange={e => setField("automationProvider", e.target.value)}><option value="manual">Manual</option><option value="github">GitHub</option><option value="replit">Replit</option></select></label><div className="sm:col-span-2 rounded-lg border border-teal-100 bg-teal-50/50 p-4"><p className="text-sm font-semibold text-slate-900">Customer routing</p><p className="mt-1 text-xs leading-5 text-slate-600">The slug automatically creates one shared back-office and POS hostname on globipos.shop. Connect this exact hostname in Replit Publishing and DNS.</p><div className="mt-3"><label className="space-y-1 text-sm font-medium">Generated customer hostname<Input value={form.customerDomain || ""} readOnly className="bg-white font-mono" placeholder="customer.globipos.shop" /></label></div><div className="mt-3 grid gap-2 text-xs text-slate-500"><div>Back office: <span className="font-mono">{form.backOfficeUrl || "—"}</span></div><div>POS server: <span className="font-mono">{form.posServerUrl || "—"}</span></div><div>E-shop: <span className="font-mono">{form.eShopDomain || "Enable customer portal to provision"}</span></div></div></div><label className="space-y-1 text-sm font-medium">External project ID<Input value={form.externalProjectId || ""} onChange={e => setField("externalProjectId", e.target.value)} /></label><label className="space-y-1 text-sm font-medium">Logo URL<Input value={form.branding.logoUrl || ""} onChange={e => setField("branding", { ...form.branding, logoUrl: e.target.value })} /></label><label className="space-y-1 text-sm font-medium">Company name<Input value={form.branding.companyName || ""} onChange={e => setField("branding", { ...form.branding, companyName: e.target.value })} /></label><label className="space-y-1 text-sm font-medium">Legal name<Input value={form.branding.legalName || ""} onChange={e => setField("branding", { ...form.branding, legalName: e.target.value })} /></label><label className="space-y-1 text-sm font-medium">Primary color<Input type="text" value={form.branding.primaryColor || ""} onChange={e => setField("branding", { ...form.branding, primaryColor: e.target.value })} /></label><label className="space-y-1 text-sm font-medium">Tax ID<Input value={form.branding.taxId || ""} onChange={e => setField("branding", { ...form.branding, taxId: e.target.value })} /></label><label className="space-y-1 text-sm font-medium sm:col-span-2">Legal address<Textarea rows={2} value={form.branding.legalAddress || ""} onChange={e => setField("branding", { ...form.branding, legalAddress: e.target.value })} /></label><label className="space-y-1 text-sm font-medium">Payment provider<Input value={form.paymentProvider || ""} onChange={e => setField("paymentProvider", e.target.value)} /></label><label className="space-y-1 text-sm font-medium">Email provider<Input value={form.emailProvider || ""} onChange={e => setField("emailProvider", e.target.value)} /></label><label className="space-y-1 text-sm font-medium">WhatsApp provider<Input value={form.whatsappProvider || ""} onChange={e => setField("whatsappProvider", e.target.value)} /></label><label className="space-y-1 text-sm font-medium">Back office version<Input value={form.backOfficeVersion || ""} onChange={e => setField("backOfficeVersion", e.target.value)} /></label><label className="space-y-1 text-sm font-medium">POS version<Input value={form.posVersion || ""} onChange={e => setField("posVersion", e.target.value)} /></label><label className="space-y-1 text-sm font-medium">Target back office<Input value={form.targetBackOfficeVersion || ""} onChange={e => setField("targetBackOfficeVersion", e.target.value)} /></label><label className="space-y-1 text-sm font-medium">Target POS<Input value={form.targetPosVersion || ""} onChange={e => setField("targetPosVersion", e.target.value)} /></label><div className="sm:col-span-2"><p className="mb-2 text-sm font-medium">Enabled features</p><div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{featureOptions.map(f => <label key={f} className="flex items-center gap-2 text-sm capitalize"><Checkbox checked={form.enabledFeatures.includes(f)} onCheckedChange={v => setField("enabledFeatures", v ? [...form.enabledFeatures, f] : form.enabledFeatures.filter(x => x !== f))} />{f.replace("-", " ")}</label>)}</div></div></div><DialogFooter><Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button><Button disabled={!form.clientName || !form.slug || mutation.isPending} onClick={save}>{mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{editing ? "Save changes" : "Create profile"}</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={!!credential} onOpenChange={open => !open && setCredential(null)}><DialogContent><DialogHeader><DialogTitle className="flex items-center gap-2"><KeyRound className="h-5 w-5 text-teal-700" />New credential generated</DialogTitle><DialogDescription>This token is shown once. Copy it now; it will not be retained or displayed again.</DialogDescription></DialogHeader><div className="flex items-center gap-2 rounded-md border bg-slate-50 p-3"><code className="min-w-0 flex-1 break-all text-xs">{credential?.token}</code><Button size="sm" variant="outline" onClick={copyCredential}><Copy className="mr-2 h-4 w-4" />Copy</Button></div><DialogFooter><Button onClick={() => setCredential(null)}>Done</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={rolloutOpen} onOpenChange={setRolloutOpen}><DialogContent><DialogHeader><DialogTitle>{rollout.all ? "Upgrade all deployments" : "Upgrade selected deployments"}</DialogTitle><DialogDescription>{rollout.all ? "This queues an upgrade for every eligible client. Confirm the target versions carefully." : `This queues an upgrade for ${selected.length} selected client${selected.length === 1 ? "" : "s"}.`}</DialogDescription></DialogHeader><div className="space-y-4 py-2"><label className="space-y-1 text-sm font-medium">Target back office version<Input value={rollout.targetBackOfficeVersion} onChange={e => setRollout(r => ({ ...r, targetBackOfficeVersion: e.target.value }))} placeholder="e.g. 2.8.0" /></label><label className="space-y-1 text-sm font-medium">Target POS version<Input value={rollout.targetPosVersion} onChange={e => setRollout(r => ({ ...r, targetPosVersion: e.target.value }))} placeholder="e.g. 2.8.0" /></label><label className="space-y-1 text-sm font-medium">Operator notes<Textarea value={rollout.notes} onChange={e => setRollout(r => ({ ...r, notes: e.target.value }))} /></label></div><DialogFooter><Button variant="outline" onClick={() => setRolloutOpen(false)}>Cancel</Button><Button disabled={rolloutMutation.isPending || (!rollout.targetBackOfficeVersion && !rollout.targetPosVersion)} onClick={() => rolloutMutation.mutate({ ...rollout, deploymentIds: rollout.all ? undefined : selected })}>{rolloutMutation.isPending ? "Queueing…" : "Queue rollout"}</Button></DialogFooter></DialogContent></Dialog>
+    <AlertDialog open={!!activationOverride} onOpenChange={open => !open && setActivationOverride(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Activate without connected domains?</AlertDialogTitle><AlertDialogDescription><strong>{activationOverride?.clientName}</strong> has not passed all required DNS and HTTPS checks. {activationOverride?.reason} Only continue if you have deliberately verified the deployment another way.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Go back</AlertDialogCancel><AlertDialogAction className="bg-amber-600 hover:bg-amber-700" onClick={() => { if (activationOverride) mutation.mutate({ ...activationOverride.request, body: { ...activationOverride.request.body, overrideDomainWarning: true } }); setActivationOverride(null); setFormOpen(false); }}>Override and activate</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+    <AlertDialog open={!!deleteTarget} onOpenChange={o => !o && setDeleteTarget(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete deployment profile?</AlertDialogTitle><AlertDialogDescription>This permanently removes the control-plane profile for <strong>{deleteTarget?.clientName}</strong>. The customer installation itself is not deleted.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction className="bg-destructive" onClick={() => deleteTarget && deleting.mutate(deleteTarget.id)}>Delete profile</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+    <AlertDialog open={!!suspendTarget} onOpenChange={o => !o && setSuspendTarget(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Suspend this deployment?</AlertDialogTitle><AlertDialogDescription>Suspending <strong>{suspendTarget?.clientName}</strong> marks it unavailable for operational work. You can reactivate it by editing the profile.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => { if (suspendTarget) mutation.mutate({ method: "PATCH", url: `/api/control/deployments/${suspendTarget.id}`, body: { status: "suspended" } }); setSuspendTarget(null); }}>Suspend</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+  </div>;
+}

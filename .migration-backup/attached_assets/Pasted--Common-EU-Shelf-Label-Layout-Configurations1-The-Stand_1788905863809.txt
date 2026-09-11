@@ -1,0 +1,18 @@
+ Common EU Shelf Label Layout Configurations1. The Standard Dual-Price Layout (Standard Grocery Items)This is the most common layout used for pre-packaged items like cereal, pasta, or coffee. The overall selling price dominates the visual field, while the unit price sits in a smaller, distinct font nearby. [1] (https://www.sciencedirect.com/science/article/pii/S0022435999000226), [2] (https://en.wikipedia.org/wiki/Unit_price_information_in_supermarkets)ComponentVisual PlacementExample DataProduct Name & BrandMain Header (Top Left/Center)Bio-Organic Spaghetti 500gSelling PriceLarge Bold Font (Center or Right)€ 2.49Unit Price (UoM)Small Font (Bottom Left/Below Selling Price)€ 4.98 / kgBarcode / Internal CodeBottom Edge or Margin`2. The Promotional / Discount LayoutWhen an item is on sale, EU consumer law requires transparency. The shelf label must cleanly contrast the promotional UoM with the historical or regular price.text+-----------------------------------------------------------+
+
+|  SUPER-CHOCO CEREAL 375g                                  |
+|                                                           |
+|  WAS: €4.00 (€10.66/kg)       [ SALE PRICE ]              |
+|                               ** € 2.99 **                |
+|                                                           |
+|  UNIT PRICE:   € 7.97 / kg                                |
+|  Barcode: [||||||||||||||]     Promo Ends: 15/10          |
++-----------------------------------------------------------+
+Use code with caution.3. Loose / Variable Weight Layouts (Produce & Delicatessen)For items not pre-packed (like loose bananas, apples, or cheese at the counter), the primary focal price is the unit price, since a definitive single-item package price cannot be determined until checkout. [1] (https://gs1.eu/wp-content/uploads/2022/07/Supply-Chain-Management-for-Fresh-Fruit-and-Vegetables-%E2%80%93-Integrated-Guideline-Part-4a-Labelling-of-Consumer-Units.pdf)text+-----------------------------------------------------------+
+
+|  ORGANIC LIME (SPAIN)                                     |
+|                                                           |
+|                       ** € 3.89 / kg **                   |
+|                                                           |
+|  Batch: #90812                 PLU: 4048                  |
++-----------------------------------------------------------+

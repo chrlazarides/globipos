@@ -1,47 +1,45 @@
-# GlobiPOS - Wholesale Wine & Spirits Management System + Multi-Location POS
+# [Project name]
 
-## Overview
-GlobiPOS is a comprehensive stock, invoicing, and point-of-sale system for wholesale and retail operations in the wine and spirits industry. It streamlines operations from item catalog management and customer accounts to diverse document types (invoices, credit notes, proforma, quotations), advanced pricing contracts, and seasonal offers. Key capabilities include robust reporting, mobile barcode scanning for efficient order creation, integrated accounting with double-entry bookkeeping, financial reports, and VAT returns, plus a full multi-location POS platform. The system also supports offline functionality and is deployable as a Progressive Web App (PWA).
+_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
 
-## User Preferences
-I prefer iterative development with clear communication on major changes. Please ask before implementing significant architectural shifts or feature additions. I like seeing high-level summaries of progress and potential next steps. I prefer detailed explanations for complex technical decisions.
+## Run & Operate
 
+- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm run typecheck` — full typecheck across all packages
+- `pnpm run build` — typecheck + build all packages
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
+- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- Required env: `DATABASE_URL` — Postgres connection string
 
-## Deployment Architecture (decided July 2026)
-- **Per-client deployments from one shared codebase**: this Repl is the shared development environment (common dev database); each client gets their own published deployment with its own production database and its own credentials.
-- **WhatsApp credentials** (`WHATSAPP_APP_SECRET`, verify token, etc.) live as **production environment secrets per deployment** — never in shared/dev secrets. The webhook signature check fails closed in production if `WHATSAPP_APP_SECRET` is unset; in development it is skipped so the simulator works unsigned.
-- **Version pinning**: clients may stay on a specific tagged release indefinitely; updates are opt-in per client, never automatic. Schema migrations must be per-release and replayable in order so a pinned client can upgrade later. The app should expose its running version for support.
-- **Central fleet control plane (decided)**: a fleet module inside this same codebase, deployed as our own central deployment (enabled via a FLEET_MODE-style flag) with its own database. Holds a deployments registry (client, URL, pinned version, last heartbeat, health, integration config status). Client deployments phone home with periodic heartbeats authenticated by per-client API keys; the control plane never holds inbound credentials to client systems — support actions are delivered as commands in heartbeat responses. Scope v1: monitoring + support actions (settings status visibility, update reminders). This is the implementation vehicle for super-admin support access.
-- Planned: super-admin support access across client deployment settings (via the fleet control plane); per-client release pipeline with tagging + pinning (follow-up tasks).
+## Stack
 
-## System Architecture
-GlobiPOS is built with a modern web stack:
-- **Frontend**: React, TypeScript, Vite, utilizing Shadcn/ui for components, TanStack Query for data fetching, and Wouter for routing.
-- **Backend**: An Express.js REST API.
-- **Database**: PostgreSQL, managed with Drizzle ORM.
-- **Styling**: Tailwind CSS, with a wine-themed color scheme (burgundy as primary).
-- **UI/UX**: Features a consistent design language with reusable components (sidebar, data-tables, stat-cards). Documents (invoices, statements) are generated dynamically in PDF/HTML format, pulling company details and currency from database settings.
-- **Key Features**:
-    - **Item & Customer Management**: Detailed item catalog (with categories, pack sizes, 5 price levels) and customer accounts (with various payment terms).
-    - **Document Generation**: Supports Invoice, Credit Note, Proforma, and Quotation document types. Quotations and Proformas can be converted to invoices.
-    - **Advanced Pricing**: Flexible pricing contracts with discount rules (minQuantity, category, brand specific, percentage/fixed discounts) and purchase goal/voucher reward systems.
-    - **Stock Management**: Stock quantity is tracked per individual bottle/piece, with automatic adjustments for sales and purchases, and display showing both bottle count and pack equivalents.
-    - **Inventory In (Color/Size)** (`/inventory-in`): Draft/staging workflow for receiving stock across a Dept × Style × Color × Size matrix. Staff build a draft receipt line by line, each line specifying department, style, color, size, and quantity. Barcodes are synthesised automatically (Code-39 descriptive + EAN-8 sequential) on staging. Posting a draft atomically increments `stockQuantity` on the matching item variants and writes a purchase record. Un-posted drafts can be deleted; posted receipts are immutable. Received stock can be routed to a specific **receiving location** (writing per-location stock via `item_location_stock`), and after posting a **spot transfer** dialog can immediately move some/all of the received stock to another location. Stock/warehouse locations can be created inline (from the receiving-location row) without POS admin access via `POST /api/stock-locations` (`requireStaff + requireModule("items")`); the admin-only `isDefaultReceiving` reassignment is ignored for non-admin callers.
-    - **Location Stock** (`/location-stock`): View and adjust per-location stock for each item/variant (color/size). Stock locations can be created directly from this page (shared `CreateLocationDialog`) so items-module users are not blocked by POS-admin-only location management.
-    - **Multi-barcode per Item**: Each item can carry any number of alternate EAN-13 (or other format) barcodes via the `item_barcodes` table — used for supermarket products that ship under different barcodes per country of manufacture. Managed through a "Barcodes" tab in the item edit dialog. EAN-13 check-digit is validated client- and server-side. Any registered barcode resolves to the correct item on scan (barcode lookup checks `item_barcodes` first, then falls back to the item's primary barcode field). Each entry stores barcode, optional country, optional note, and an `isPrimary` flag.
-    - **Accounting Module**: Implements double-entry bookkeeping with a chart of accounts, journal entries, expense tracking, and automated journal entry generation for transactions (invoices, payments, purchases). Provides financial reports: Trial Balance, Profit & Loss, Balance Sheet, General Ledger, and Cyprus VAT 4 Return.
-    - **Accounting Audit Grid** (`/accounting/audit`): Four-tab page: (1) Transaction Audit — XLS-style dense grid of all journal entry lines with balance check, CSV export, and filters; (2) Data Dictionary — account mapping rules, normal balances, and 10 integrity rules; (3) Simulation — 5-step visual pipeline showing how each transaction type flows through journal entries, account impacts, integrity checks, and report impact; (4) **Snapshots** — version-control/checkpoint system for accounting state with named snapshots, timeline view, differential comparison (account-level balance diff between any two snapshots), and balance rollback to any prior checkpoint.
-    - **Offline Capability**: Supports offline invoicing by caching essential data (items, customers) in IndexedDB and queuing unsynced invoices. Automatically syncs when online.
-    - **PDA: OCR Invoice Import + Goods Received Voucher (GRV)**: Staff photograph a supplier invoice with the PDA camera; OpenAI vision extracts header (supplier name, invoice number/date) and line items, with fuzzy matching against existing suppliers/items. A GRV is created (`goods_received_vouchers` / `goods_received_voucher_items` tables) tracking expected vs. received quantity per line. Staff scan received goods by barcode to reconcile quantities against the OCR'd expectations, and unmatched/mismatched lines are flagged. Finalizing a GRV creates a real `purchase_invoice` (reusing existing stock increment side effects) and marks the GRV completed with `hasDiscrepancies` if quantities didn't reconcile. Back-office visibility via the "Goods Received" tab on `/pda-operations`, including manual supplier assignment and item matching for any OCR lines that couldn't be auto-matched.
-    - **Expiration Management & Near-Expiry Offers** (`/expiration`): Best-before/expiration tracking per stock batch via the `expiration_batches` table (itemId, itemName/sku/barcode snapshot, expirationDate, quantity, optional locationId/batchCode/notes, costPrice, status, linked promotionId). The page shows summary cards (expired / critical ≤7d / expiring ≤30d / cost value at risk) and a colour-coded batch table filterable by urgency bucket. Buckets are computed server-side in the `/api/expiration/report` and `/api/expiration/batches` routes (expired <0 days, critical ≤7, warning ≤30, ok otherwise). A dashboard alert banner surfaces the combined expired + expiring-soon count and links to the page (notifications). One-click **near-expiry markdown offer** creates (or updates) a `pos_promotions` row (qty_threshold type, percentage discount, valid until the batch's expiry date, priority 100) for the batch's item and marks the batch `discounted` with the promotion linked. Routes are `requireStaff + requireModule("items")`.
-    - **POS Terminal Audit Sync**: Terminals push their local audit_log entries (logins, voids, price overrides, drawer opens…) to the server during outbox flush (`POST /api/pos/sync/audit-logs`, X-Terminal-Code auth, deduped per terminal by localId). Admins view them in a filterable "Terminal Audit Log" section on `/pos/terminals`, and a "POS Cashiers" tab on `/reports` shows per-cashier sales, orders, voids, and audit action counts over a date range (SQL-side aggregation, no row caps).
-    - **PWA Support**: Installable as a Progressive Web App on mobile devices, offering an app-like experience with offline asset caching via a service worker.
-    - **Security & User Management**: Three-tier role-based access control (`superuser` > `admin` > `staff`) with JWT-based authentication, httpOnly cookies, and an activity/audit log for all mutating API calls. Settings page access is password protected (superusers bypass this gate entirely). TOTP-based two-factor authentication (2FA) is mandatory for all users — users without 2FA configured are forced through setup on first login before they can access the system. Admins can reset another user's 2FA from the Users page (which forces re-setup on next login). **Granular module permissions**: Staff users can be restricted to a configurable subset of 12 modules (dashboard, items, customers, invoices, payments, suppliers, pricing, accounting, reports, email_logs, import, statements); empty permissions array = full access; admin/superuser always have full access. The Users management UI is embedded in the Settings page (Settings | Users tabs). A dedicated `superadmin` account exists with the superuser role.
-    - **Reporting**: Comprehensive sales reports (including profit margin analysis), customer statements with aging analysis, and email functionality for documents and statements.
-    - **Data Management**: Includes smart Excel import functionality for various entities and a differential backup/restore system. Backup exports are v2 JSON with `backupType` (full/differential), `sinceDate`, and `tableCounts` metadata. **Full backup** exports all records; **Differential backup** exports only transaction records (invoices, payments, journal entries, expenses, purchase invoices) created since the last backup date, while always including full config tables (customers, items, suppliers, etc.). The scheduled daily backup automatically uses differential mode when within 8 days of last backup. **Restore from backup** supports both full restore (wipe-and-replace) and differential merge (insert-ignore for new records, upsert for config tables) via `/api/backup/restore`. A backup inspector endpoint (`/api/backup/inspect`) lets the UI preview backup metadata before committing to restore.
+- pnpm workspaces, Node.js 24, TypeScript 5.9
+- API: Express 5
+- DB: PostgreSQL + Drizzle ORM
+- Validation: Zod (`zod/v4`), `drizzle-zod`
+- API codegen: Orval (from OpenAPI spec)
+- Build: esbuild (CJS bundle)
 
-## External Dependencies
-- **PostgreSQL**: Primary database for all application data.
-- **SendGrid**: Integrated for sending email notifications, specifically for invoice documents and customer statements.
-- **Resend**: Used for sending automatic daily backup emails.
-- **IndexedDB**: Utilized for client-side data caching to support offline functionality.
+## Where things live
+
+_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+
+## Architecture decisions
+
+_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+
+## Product
+
+_Describe the high-level user-facing capabilities of this app once they exist._
+
+## User preferences
+
+_Populate as you build — explicit user instructions worth remembering across sessions._
+
+## Gotchas
+
+_Populate as you build — sharp edges, "always run X before Y" rules._
+
+## Pointers
+
+- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details

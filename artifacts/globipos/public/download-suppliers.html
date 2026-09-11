@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Download Suppliers Backup</title>
+  <style>
+    body { font-family: Arial, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #f9fafb; }
+    .box { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 40px 48px; text-align: center; max-width: 400px; }
+    h2 { color: #111; margin: 0 0 8px; }
+    p { color: #6b7280; font-size: 14px; margin: 0 0 24px; }
+    button { background: #7c3aed; color: #fff; border: none; border-radius: 6px; padding: 12px 28px; font-size: 15px; cursor: pointer; }
+    button:hover { background: #6d28d9; }
+    .note { color: #9ca3af; font-size: 12px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>Suppliers Backup</h2>
+    <p>Differential backup — 12 suppliers.<br>Import via Settings → Backup → Restore.</p>
+    <button onclick="download()">Save suppliers-for-production.json</button>
+    <div class="note" id="status"></div>
+  </div>
+  <script>
+    async function download() {
+      document.getElementById('status').textContent = 'Fetching…';
+      try {
+        const res = await fetch('/api/backup/suppliers-for-production');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'suppliers-for-production.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        document.getElementById('status').textContent = '✓ Download started';
+      } catch(e) {
+        document.getElementById('status').textContent = 'Error: ' + e.message;
+      }
+    }
+    window.onload = download;
+  </script>
+</body>
+</html>

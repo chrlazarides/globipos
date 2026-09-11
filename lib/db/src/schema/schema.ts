@@ -1,0 +1,1642 @@
+import { sql } from "drizzle-orm";
+import { pgTable, text, varchar, uuid, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+import { relations } from "drizzle-orm";
+
+export const users = pgTable("users", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  username: text("username").notNull().unique(),
+  email: text("email"),
+  password: text("password").notNull(),
+  role: text("role").notNull().default("staff"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  lastLoginAt: timestamp("last_login_at"),
+  totpSecret: text("totp_secret"),
+  totpEnabled: boolean("totp_enabled").notNull().default(false),
+  permissions: text("permissions").default("[]"),
+  whatsappQuietHoursEnabled: boolean("whatsapp_quiet_hours_enabled").notNull().default(false),
+  whatsappQuietHoursStart: integer("whatsapp_quiet_hours_start").notNull().default(22),
+  whatsappQuietHoursEnd: integer("whatsapp_quiet_hours_end").notNull().default(8),
+  whatsappQuietHoursTimezone: text("whatsapp_quiet_hours_timezone").notNull().default("Europe/Nicosia"),
+  whatsappQuietHoursMigrated: boolean("whatsapp_quiet_hours_migrated").notNull().default(false),
+});
+
+export const activityLogs = pgTable("activity_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id"),
+  username: text("username"),
+  action: text("action").notNull(),
+  entity: text("entity"),
+  entityId: text("entity_id"),
+  description: text("description"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const deploymentProfiles = pgTable("deployment_profiles", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  slug: text("slug").notNull().unique(),
+  clientName: text("client_name").notNull(),
+  status: text("status").notNull().default("draft"),
+  backOfficeUrl: text("back_office_url").notNull(),
+  posServerUrl: text("pos_server_url").notNull(),
+  customerDomain: text("customer_domain"),
+  posDomain: text("pos_domain"),
+  eShopDomain: text("e_shop_domain"),
+  domainStatus: text("domain_status").notNull().default("pending"),
+  domainMessage: text("domain_message"),
+  domainChecks: jsonb("domain_checks").notNull().default([]),
+  domainCheckedAt: timestamp("domain_checked_at"),
+  eShopDomainStatus: text("e_shop_domain_status").notNull().default("pending"),
+  eShopDomainMessage: text("e_shop_domain_message"),
+  eShopDomainCheck: jsonb("e_shop_domain_check"),
+  eShopDomainCheckedAt: timestamp("e_shop_domain_checked_at"),
+  domainFailureStartedAt: timestamp("domain_failure_started_at"),
+  domainFailureCount: integer("domain_failure_count").notNull().default(0),
+  domainCheckClaimedAt: timestamp("domain_check_claimed_at"),
+  domainCheckClaimToken: text("domain_check_claim_token"),
+  domainNotificationPending: text("domain_notification_pending"),
+  domainNotificationMessage: text("domain_notification_message"),
+  domainNotificationCreatedAt: timestamp("domain_notification_created_at"),
+  domainNotificationQueue: jsonb("domain_notification_queue").notNull().default([]),
+  domainNotificationDeliveryStatus: text("domain_notification_delivery_status"),
+  domainNotificationDeliveryKind: text("domain_notification_delivery_kind"),
+  domainNotificationDeliveryMessage: text("domain_notification_delivery_message"),
+  domainNotificationDeliveryAttemptedAt: timestamp("domain_notification_delivery_attempted_at"),
+  domainNotificationDeliveryHistory: jsonb("domain_notification_delivery_history").notNull().default([]),
+  branding: jsonb("branding").notNull().default({}),
+  enabledFeatures: jsonb("enabled_features").notNull().default([]),
+  paymentProvider: text("payment_provider").notNull().default("none"),
+  emailProvider: text("email_provider").notNull().default("none"),
+  whatsappProvider: text("whatsapp_provider").notNull().default("none"),
+  backOfficeVersion: text("back_office_version").notNull().default("unknown"),
+  posVersion: text("pos_version").notNull().default("unknown"),
+  targetBackOfficeVersion: text("target_back_office_version"),
+  targetPosVersion: text("target_pos_version"),
+  automationProvider: text("automation_provider").notNull().default("manual"),
+  externalProjectId: text("external_project_id"),
+  credentialHash: text("credential_hash"),
+  lastHeartbeatAt: timestamp("last_heartbeat_at"),
+  healthStatus: text("health_status").notNull().default("unknown"),
+  healthMessage: text("health_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export const deploymentDomainIncidents = pgTable("deployment_domain_incidents", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  deploymentId: uuid("deployment_id").notNull().references(() => deploymentProfiles.id, { onDelete: "cascade" }),
+  startedAt: timestamp("started_at").notNull(),
+  recoveredAt: timestamp("recovered_at"),
+  reason: text("reason").notNull(),
+  role: text("role").notNull().default("main"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("deployment_domain_incidents_one_open_per_role")
+    .on(table.deploymentId, table.role)
+    .where(sql`${table.recoveredAt} IS NULL`),
+]);
+
+export type OperatorAlertRetryHistoryEntry = {
+  attemptedAt: string;
+  outcome: "delivered" | "failed";
+  operator: { id: string | null; username: string | null };
+};
+
+export const operatorAlertFailures = pgTable("operator_alert_failures", {
+  alertKey: text("alert_key").primaryKey(),
+  event: text("event").notNull(),
+  operation: text("operation").notNull(),
+  reason: text("reason").notNull(),
+  occurrenceCount: integer("occurrence_count").notNull().default(1),
+  deliveryAttempts: integer("delivery_attempts").notNull(),
+  status: text("status").notNull().default("pending"),
+  claimedAt: timestamp("claimed_at"),
+  claimToken: text("claim_token"),
+  nextAttemptAt: timestamp("next_attempt_at"),
+  firstFailedAt: timestamp("first_failed_at").defaultNow().notNull(),
+  lastFailedAt: timestamp("last_failed_at").defaultNow().notNull(),
+  resolvedAt: timestamp("resolved_at"),
+  retryHistory: jsonb("retry_history").$type<OperatorAlertRetryHistoryEntry[]>().notNull().default([]),
+});
+
+export const deploymentRollouts = pgTable("deployment_rollouts", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  scope: text("scope").notNull(),
+  deploymentIds: jsonb("deployment_ids").notNull().default([]),
+  targetBackOfficeVersion: text("target_back_office_version"),
+  targetPosVersion: text("target_pos_version"),
+  status: text("status").notNull().default("queued"),
+  initiatedBy: varchar("initiated_by").notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export const erpIntegrationConfigs = pgTable("erp_integration_configs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  // Each application database is one customer deployment. This singleton
+  // scope prevents the running app from addressing another deployment.
+  scope: text("scope").notNull().default("local").unique(),
+  provider: text("provider").notNull(), // softone | sap-b1
+  enabled: boolean("enabled").notNull().default(false),
+  policies: jsonb("policies").notNull().default({}),
+  lastTestedAt: timestamp("last_tested_at"),
+  lastTestStatus: text("last_test_status"),
+  lastSyncAt: timestamp("last_sync_at"),
+  lastSyncStatus: text("last_sync_status"),
+  syncLockedAt: timestamp("sync_locked_at"),
+  syncLockToken: text("sync_lock_token"),
+  generation: integer("generation").notNull().default(1),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+export const systemSettings = pgTable("system_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  key: text("key").notNull().unique(),
+  value: text("value").notNull(),
+  label: text("label").notNull(),
+  group: text("group").notNull().default("general"),
+});
+
+export const customerAiHealth = pgTable("customer_ai_health", {
+  scope: text("scope").primaryKey().default("global"),
+  fallbackCount: integer("fallback_count").notNull().default(0),
+  recommendationFallbackCount: integer("recommendation_fallback_count").notNull().default(0),
+  feedbackFallbackCount: integer("feedback_fallback_count").notNull().default(0),
+  consecutiveFallbackCount: integer("consecutive_fallback_count").notNull().default(0),
+  failureRevision: integer("failure_revision").notNull().default(0),
+  lastFailureCategory: text("last_failure_category"),
+  lastFailureAt: timestamp("last_failure_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Last-known-good POS release metadata, keyed by the configured GitHub repository.
+// Asset URLs are copied only from a successful GitHub releases API response.
+export const posReleaseCaches = pgTable("pos_release_caches", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  repoUrl: text("repo_url").notNull().unique(),
+  releases: jsonb("releases").notNull().default([]),
+  verifiedAt: timestamp("verified_at").defaultNow().notNull(),
+});
+
+export const categories = pgTable("categories", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  parentId: varchar("parent_id"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }),
+  active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+export const productFamilies = pgTable("product_families", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").unique(),
+  name: text("name").notNull(),
+  active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+export const items = pgTable("items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  sku: text("sku").notNull().unique(),
+  barcode: text("barcode"),
+  description: text("description"),
+  categoryId: varchar("category_id"),
+  familyId: varchar("family_id").references(() => productFamilies.id, { onDelete: "set null" }),
+  itemType: text("item_type").notNull().default("general"),
+  unitType: text("unit_type").notNull().default("pc"),
+  packSize: integer("pack_size").notNull().default(1),
+  shelfLabelUomEnabled: boolean("shelf_label_uom_enabled").notNull().default(false),
+  shelfLabelQuantity: numeric("shelf_label_quantity", { precision: 12, scale: 3 }),
+  shelfLabelUnit: text("shelf_label_unit"),
+  shelfLabelDiscountEnabled: boolean("shelf_label_discount_enabled").notNull().default(false),
+  shelfLabelPreviousPrice: numeric("shelf_label_previous_price", { precision: 10, scale: 2 }),
+  shelfLabelPreviousPriceVerifiedAt: timestamp("shelf_label_previous_price_verified_at"),
+  shelfLabelPreviousPriceProvenance: text("shelf_label_previous_price_provenance"),
+  price1: numeric("price_1", { precision: 10, scale: 2 }).notNull().default("0"),
+  price2: numeric("price_2", { precision: 10, scale: 2 }).notNull().default("0"),
+  price3: numeric("price_3", { precision: 10, scale: 2 }).notNull().default("0"),
+  price4: numeric("price_4", { precision: 10, scale: 2 }).notNull().default("0"),
+  price5: numeric("price_5", { precision: 10, scale: 2 }).notNull().default("0"),
+  costPrice: numeric("cost_price", { precision: 10, scale: 2 }).notNull().default("0"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }),
+  stockQuantity: integer("stock_quantity").notNull().default(0),
+  reorderLevel: integer("reorder_level").notNull().default(10),
+  volume: text("volume"),
+  alcoholPercentage: numeric("alcohol_percentage", { precision: 4, scale: 1 }),
+  brand: text("brand"),
+  origin: text("origin"),
+  vintage: text("vintage"),
+  imageUrl: text("image_url"),
+  imageThumbnailUrl: text("image_thumbnail_url"),
+  imageCardUrl: text("image_card_url"),
+  imageFullUrl: text("image_full_url"),
+  imageVersion: text("image_version"),
+  active: boolean("active").default(true).notNull(),
+  hasVariants: boolean("has_variants").default(false).notNull(),
+  season: text("season"),
+  garmentGender: text("garment_gender"),
+  garmentMaterial: text("garment_material"),
+  garmentStyle: text("garment_style"),
+  garmentCare: text("garment_care"),
+  sequenceNo: serial("sequence_no").notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+export const itemShelfPriceHistory = pgTable("item_shelf_price_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  price: numeric("price", { precision: 10, scale: 2 }).notNull(),
+  effectiveAt: timestamp("effective_at").notNull().defaultNow(),
+  source: text("source").notNull().default("item_update"),
+  recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+}, (table) => [
+  index("item_shelf_price_history_item_effective_idx").on(table.itemId, table.effectiveAt),
+]);
+
+// Product variants (color/size/textile/quality/etc.) for items with hasVariants=true.
+// Each variant has its own SKU/barcode/stock, and may override price/cost from the parent item.
+export const itemVariants = pgTable("item_variants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  sku: text("sku").notNull().unique(),
+  barcode: text("barcode"),
+  option1Name: text("option1_name"), // e.g. "Color"
+  option1Value: text("option1_value"), // e.g. "Red"
+  option2Name: text("option2_name"), // e.g. "Size"
+  option2Value: text("option2_value"), // e.g. "Large"
+  option3Name: text("option3_name"), // e.g. "Textile"
+  option3Value: text("option3_value"), // e.g. "Cotton"
+  price1: numeric("price_1", { precision: 10, scale: 2 }), // null = inherit item.price1
+  price2: numeric("price_2", { precision: 10, scale: 2 }),
+  price3: numeric("price_3", { precision: 10, scale: 2 }),
+  price4: numeric("price_4", { precision: 10, scale: 2 }),
+  price5: numeric("price_5", { precision: 10, scale: 2 }),
+  costPrice: numeric("cost_price", { precision: 10, scale: 2 }),
+  stockQuantity: integer("stock_quantity").notNull().default(0),
+  reorderLevel: integer("reorder_level"),
+  imageUrl: text("image_url"),
+  active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+// Master list of colors (textile/shoes/apparel) used to populate variant option values.
+export const colors = pgTable("colors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  hexCode: text("hex_code"),
+  active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+// Master list of sizes (textile/shoes/apparel) used to populate variant option values.
+export const sizes = pgTable("sizes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  active: boolean("active").default(true).notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+// Multiple EAN barcodes per item — one supermarket product can carry different
+// EAN-13 codes depending on country of manufacture (e.g. UK, Germany, Greece).
+// Scanning ANY registered barcode resolves to the same item in the POS/invoice.
+export const itemBarcodes = pgTable("item_barcodes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  barcode: text("barcode").notNull().unique(), // EAN-13 (13 digits) or other format
+  country: text("country"),                    // e.g. "UK", "Germany", "Greece"
+  note: text("note"),                          // optional free-text label
+  isPrimary: boolean("is_primary").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// "Inventory In with Col/Size" — staged stock-intake lines synthesized from a
+// Department(Category)+Style+Color+Size matrix, mirroring the legacy CPLPOS
+// "Inventory In with Col/Size" workflow. Lines are appended as drafts (with a
+// barcode/SKU already synthesized) and only affect actual item/variant stock
+// once "Posted".
+export const inventoryInLines = pgTable("inventory_in_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  categoryId: varchar("category_id").notNull(),
+  style: text("style").notNull(),
+  description: text("description").notNull(),
+  costPrice: numeric("cost_price", { precision: 10, scale: 2 }).notNull().default("0"),
+  price1: numeric("price_1", { precision: 10, scale: 2 }).notNull().default("0"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("19"),
+  season: text("season"),
+  codeMethod: text("code_method").notNull().default("descriptive"), // "descriptive" (Code-39) | "sequential" (EAN-8) | "qr"
+  locationId: varchar("location_id"),
+  colorId: varchar("color_id").notNull(),
+  colorName: text("color_name").notNull(),
+  sizeId: varchar("size_id").notNull(),
+  sizeName: text("size_name").notNull(),
+  quantity: integer("quantity").notNull(),
+  barcode: text("barcode").notNull(),
+  sku: text("sku").notNull(),
+  posted: boolean("posted").notNull().default(false),
+  postedAt: timestamp("posted_at"),
+  itemId: varchar("item_id"),
+  variantId: varchar("variant_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Reusable Color+Size(+Quality) sets for garments/shoes so businesses don't have to
+// reselect the same option ranges for every new model/item.
+export const variantTemplates = pgTable("variant_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  colorIds: text("color_ids").array().notNull().default(sql`'{}'::text[]`),
+  sizeIds: text("size_ids").array().notNull().default(sql`'{}'::text[]`),
+  qualities: text("qualities").array(), // e.g. ["Standard","Premium"], null = no quality/grade axis
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const customers = pgTable("customers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  contactFirstName: text("contact_first_name"),
+  contactLastName: text("contact_last_name"),
+  email: text("email"),
+  phone: text("phone"),
+  address: text("address"),
+  city: text("city"),
+  taxId: text("tax_id"),
+  paymentTerms: text("payment_terms").notNull().default("cash"),
+  creditLimit: numeric("credit_limit", { precision: 12, scale: 2 }).notNull().default("0"),
+  currentBalance: numeric("current_balance", { precision: 12, scale: 2 }).notNull().default("0"),
+  openingBalance: numeric("opening_balance", { precision: 12, scale: 2 }).notNull().default("0"),
+  priceLevel: integer("price_level").notNull().default(1),
+  notes: text("notes"),
+  location: text("location"),
+  portalAccessCode: text("portal_access_code"),
+  active: boolean("active").default(true).notNull(),
+  cashbackBalance: numeric("cashback_balance", { precision: 10, scale: 2 }).default("0"),
+});
+
+// Customer-facing PWA profile, feedback, and inbox data. Preferences are kept
+// separate from the commercial customer record so they are strictly opt-in.
+export const customerPreferences = pgTable("customer_preferences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }).unique(),
+  dietaryPreferences: text("dietary_preferences").array().notNull().default(sql`'{}'::text[]`),
+  dislikedIngredients: text("disliked_ingredients").array().notNull().default(sql`'{}'::text[]`),
+  preferredCategories: text("preferred_categories").array().notNull().default(sql`'{}'::text[]`),
+  recommendationGoals: text("recommendation_goals").array().notNull().default(sql`'{}'::text[]`),
+  budgetPreference: text("budget_preference"),
+  notificationRecommendations: boolean("notification_recommendations").notNull().default(true),
+  notificationOrderUpdates: boolean("notification_order_updates").notNull().default(true),
+  notificationOffers: boolean("notification_offers").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export const customerFeedback = pgTable("customer_feedback", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  orderId: varchar("order_id").references(() => portalOrders.id, { onDelete: "set null" }),
+  context: text("context").notNull(),
+  rating: integer("rating").notNull(),
+  comment: text("comment"),
+  sentiment: text("sentiment").notNull(),
+  sentimentScore: numeric("sentiment_score", { precision: 3, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const customerNotifications = pgTable("customer_notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  type: text("type").notNull(),
+  actionUrl: text("action_url"),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const portalOrders = pgTable("portal_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  checkoutKey: varchar("checkout_key"),
+  status: text("status").notNull().default("pending"),
+  source: text("source").notNull().default("portal"), // portal | whatsapp
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
+  vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+  cashbackApplied: numeric("cashback_applied", { precision: 10, scale: 2 }).default("0"),
+  notes: text("notes"),
+  invoiceId: varchar("invoice_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("portal_orders_customer_checkout_key_unique")
+    .on(table.customerId, table.checkoutKey)
+    .where(sql`${table.checkoutKey} is not null`),
+]);
+
+export const portalOrderItems = pgTable("portal_order_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderId: varchar("order_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
+  unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+});
+
+export const priceContracts = pgTable("price_contracts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  name: text("name").notNull(),
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date").notNull(),
+  discountType: text("discount_type").notNull().default("percentage"),
+  discountValue: numeric("discount_value", { precision: 10, scale: 2 }).notNull().default("0"),
+  categoryId: varchar("category_id"),
+  brand: text("brand"),
+  categoryIds: text("category_ids").array().default([]),
+  brands: text("brands").array().default([]),
+  minQuantity: integer("min_quantity").default(0),
+  purchaseGoal: numeric("purchase_goal", { precision: 12, scale: 2 }).default("0"),
+  voucherType: text("voucher_type").default("percentage"),
+  voucherValue: numeric("voucher_value", { precision: 10, scale: 2 }).default("0"),
+  active: boolean("active").default(true).notNull(),
+  source: text("source").default("manual"),
+});
+
+export const priceContractRules = pgTable("price_contract_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").notNull(),
+  categoryIds: text("rule_category_ids").array().default([]),
+  brands: text("rule_brands").array().default([]),
+  minQuantity: integer("rule_min_quantity").default(0),
+  discountType: text("rule_discount_type").notNull().default("percentage"),
+  discountValue: numeric("rule_discount_value", { precision: 10, scale: 2 }).notNull().default("0"),
+});
+
+export const priceContractItems = pgTable("price_contract_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  specialPrice: numeric("special_price", { precision: 10, scale: 2 }).notNull(),
+});
+
+export const seasonalOffers = pgTable("seasonal_offers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date").notNull(),
+  discountPercentage: numeric("discount_percentage", { precision: 5, scale: 2 }).notNull(),
+  minItems: integer("min_items").default(1),
+  mixMatch: boolean("mix_match").default(false).notNull(),
+  active: boolean("active").default(true).notNull(),
+});
+
+export const seasonalOfferItems = pgTable("seasonal_offer_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  offerId: varchar("offer_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  requiredQuantity: integer("required_quantity").default(1),
+});
+
+export const invoices = pgTable("invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceNumber: text("invoice_number").notNull().unique(),
+  erpExternalRef: text("erp_external_ref").unique(),
+  type: text("type").notNull().default("invoice"),
+  customerId: varchar("customer_id").notNull(),
+  date: date("date").notNull(),
+  dueDate: date("due_date"),
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
+  taxRate: numeric("tax_rate", { precision: 5, scale: 2 }).notNull().default("0"),
+  taxAmount: numeric("tax_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  discountAmount: numeric("discount_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+  status: text("status").notNull().default("draft"),
+  notes: text("notes"),
+  deliveryLocation: text("delivery_location"),
+  linkedInvoiceId: varchar("linked_invoice_id"),
+  portalOrderId: varchar("portal_order_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const invoiceItems = pgTable("invoice_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id").notNull(),
+  itemId: varchar("item_id"),
+  variantId: varchar("variant_id"),
+  description: text("description").notNull(),
+  quantity: numeric("quantity", { precision: 12, scale: 4 }).notNull(),
+  saleUnit: text("sale_unit").notNull().default("pc"),
+  unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
+  discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).notNull().default("0"),
+  discount: numeric("discount", { precision: 10, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+});
+
+export const payments = pgTable("payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id"),
+  invoiceId: varchar("invoice_id"),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  paymentDate: date("payment_date").notNull(),
+  paymentMethod: text("payment_method").notNull().default("cash"),
+  reference: text("reference"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const suppliers = pgTable("suppliers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  contactPerson: text("contact_person"),
+  email: text("email"),
+  phone: text("phone"),
+  address: text("address"),
+  city: text("city"),
+  country: text("country").default("Cyprus"),
+  taxId: text("tax_id"),
+  iban: text("iban"),
+  swift: text("swift"),
+  bankName: text("bank_name"),
+  paymentTerms: text("payment_terms").notNull().default("cash"),
+  currentBalance: numeric("current_balance", { precision: 12, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+  active: boolean("active").default(true).notNull(),
+});
+
+export const purchaseInvoices = pgTable("purchase_invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceNumber: text("invoice_number").notNull(),
+  supplierInvoiceRef: text("supplier_invoice_ref"),
+  supplierId: varchar("supplier_id").notNull(),
+  date: date("date").notNull(),
+  dueDate: date("due_date"),
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
+  vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+  status: text("status").notNull().default("draft"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const purchaseInvoiceItems = pgTable("purchase_invoice_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  purchaseInvoiceId: varchar("purchase_invoice_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  variantId: varchar("variant_id"),
+  description: text("description").notNull(),
+  quantity: integer("quantity").notNull(),
+  purchaseUnit: text("purchase_unit").notNull().default("pc"),
+  unitCost: numeric("unit_cost", { precision: 10, scale: 2 }).notNull(),
+  discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).notNull().default("0"),
+  discount: numeric("discount", { precision: 10, scale: 2 }).notNull().default("0"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("19"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+});
+
+export const supplierPayments = pgTable("supplier_payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  supplierId: varchar("supplier_id").notNull(),
+  purchaseInvoiceId: varchar("purchase_invoice_id"),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  paymentDate: date("payment_date").notNull(),
+  paymentMethod: text("payment_method").notNull().default("bank_transfer"),
+  reference: text("reference"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const emailLogs = pgTable("email_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id"),
+  customerId: varchar("customer_id"),
+  customerName: text("customer_name"),
+  toEmail: text("to_email").notNull(),
+  fromEmail: text("from_email"),
+  replyTo: text("reply_to"),
+  subject: text("subject").notNull(),
+  status: text("status").notNull().default("sent"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Accounting Module
+export const accounts = pgTable("accounts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  type: text("type").notNull(), // asset, liability, equity, revenue, expense
+  subtype: text("subtype"), // e.g. current_asset, fixed_asset, current_liability, etc.
+  parentId: varchar("parent_id"),
+  description: text("description"),
+  balance: numeric("balance", { precision: 12, scale: 2 }).notNull().default("0"),
+  isSystem: boolean("is_system").notNull().default(false),
+  active: boolean("active").notNull().default(true),
+});
+
+export const journalEntries = pgTable("journal_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  entryNumber: text("entry_number").notNull().unique(),
+  date: date("date").notNull(),
+  description: text("description").notNull(),
+  reference: text("reference"),
+  sourceType: text("source_type"), // manual, invoice, payment, purchase, supplier_payment, expense, credit_note
+  sourceId: varchar("source_id"),
+  status: text("status").notNull().default("posted"), // posted, draft
+  totalAmount: numeric("total_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const journalEntryLines = pgTable("journal_entry_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  journalEntryId: varchar("journal_entry_id").notNull(),
+  accountId: varchar("account_id").notNull(),
+  debit: numeric("debit", { precision: 12, scale: 2 }).notNull().default("0"),
+  credit: numeric("credit", { precision: 12, scale: 2 }).notNull().default("0"),
+  description: text("description"),
+});
+
+export const expenses = pgTable("expenses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  date: date("date").notNull(),
+  expenseAccountId: varchar("expense_account_id").notNull(),
+  paymentAccountId: varchar("payment_account_id").notNull(),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  description: text("description").notNull(),
+  reference: text("reference"),
+  paymentMethod: text("payment_method").notNull().default("cash"),
+  supplierId: varchar("supplier_id"),
+  journalEntryId: varchar("journal_entry_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const accountingSnapshots = pgTable("accounting_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdByUsername: text("created_by_username"),
+  accountBalances: text("account_balances").notNull(), // JSON: [{id,code,name,type,balance}]
+  journalEntryCount: integer("journal_entry_count").notNull().default(0),
+  lastEntryNumber: text("last_entry_number"),
+  totalDebitVolume: numeric("total_debit_volume", { precision: 12, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+});
+
+// Insert schemas
+export const insertAccountingSnapshotSchema = createInsertSchema(accountingSnapshots).omit({ id: true, createdAt: true });
+export type InsertAccountingSnapshot = z.infer<typeof insertAccountingSnapshotSchema>;
+export type AccountingSnapshot = typeof accountingSnapshots.$inferSelect;
+
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, lastLoginAt: true });
+export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({ id: true });
+export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });
+export const insertProductFamilySchema = createInsertSchema(productFamilies).omit({ id: true });
+export const insertColorSchema = createInsertSchema(colors).omit({ id: true, updatedAt: true });
+export const insertSizeSchema = createInsertSchema(sizes).omit({ id: true, updatedAt: true });
+export const insertItemSchema = createInsertSchema(items).omit({ id: true, sequenceNo: true });
+export const insertItemVariantSchema = createInsertSchema(itemVariants).omit({ id: true, updatedAt: true });
+export type InsertItemVariant = z.infer<typeof insertItemVariantSchema>;
+export type ItemVariant = typeof itemVariants.$inferSelect;
+export const insertVariantTemplateSchema = createInsertSchema(variantTemplates).omit({ id: true, createdAt: true });
+export type InsertVariantTemplate = z.infer<typeof insertVariantTemplateSchema>;
+export type VariantTemplate = typeof variantTemplates.$inferSelect;
+
+export const insertItemBarcodeSchema = createInsertSchema(itemBarcodes).omit({ id: true, createdAt: true });
+export type InsertItemBarcode = z.infer<typeof insertItemBarcodeSchema>;
+export type ItemBarcode = typeof itemBarcodes.$inferSelect;
+
+export const insertInventoryInLineSchema = createInsertSchema(inventoryInLines).omit({
+  id: true, barcode: true, sku: true, posted: true, postedAt: true, itemId: true, variantId: true, createdAt: true,
+});
+export type InsertInventoryInLine = z.infer<typeof insertInventoryInLineSchema>;
+export type InventoryInLine = typeof inventoryInLines.$inferSelect;
+export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true }).extend({
+  code: z.string().optional().default(""),
+});
+export const insertCustomerPreferencesSchema = createInsertSchema(customerPreferences).omit({ id: true, customerId: true, createdAt: true, updatedAt: true });
+export const insertCustomerFeedbackSchema = createInsertSchema(customerFeedback).omit({ id: true, customerId: true, sentiment: true, sentimentScore: true, createdAt: true });
+export const insertCustomerNotificationSchema = createInsertSchema(customerNotifications).omit({ id: true, customerId: true, readAt: true, createdAt: true });
+export const insertPriceContractSchema = createInsertSchema(priceContracts).omit({ id: true });
+export const insertPriceContractRuleSchema = createInsertSchema(priceContractRules).omit({ id: true });
+export const insertPriceContractItemSchema = createInsertSchema(priceContractItems).omit({ id: true });
+export const insertSeasonalOfferSchema = createInsertSchema(seasonalOffers).omit({ id: true });
+export const insertSeasonalOfferItemSchema = createInsertSchema(seasonalOfferItems).omit({ id: true });
+export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });
+export const insertInvoiceItemSchema = createInsertSchema(invoiceItems).omit({ id: true }).extend({
+  quantity: z.union([z.string(), z.number()]).transform(String),
+});
+export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true });
+export const insertPortalOrderSchema = createInsertSchema(portalOrders).omit({ id: true, createdAt: true });
+export const insertPortalOrderItemSchema = createInsertSchema(portalOrderItems).omit({ id: true });
+export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true });
+export const insertPurchaseInvoiceSchema = createInsertSchema(purchaseInvoices).omit({ id: true, createdAt: true });
+export const insertPurchaseInvoiceItemSchema = createInsertSchema(purchaseInvoiceItems).omit({ id: true });
+export const insertSupplierPaymentSchema = createInsertSchema(supplierPayments).omit({ id: true, createdAt: true });
+export const insertEmailLogSchema = createInsertSchema(emailLogs).omit({ id: true, createdAt: true });
+export const insertAccountSchema = createInsertSchema(accounts).omit({ id: true });
+export const insertJournalEntrySchema = createInsertSchema(journalEntries).omit({ id: true, createdAt: true });
+export const insertJournalEntryLineSchema = createInsertSchema(journalEntryLines).omit({ id: true });
+export const insertExpenseSchema = createInsertSchema(expenses).omit({ id: true, createdAt: true });
+
+// Types
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type User = typeof users.$inferSelect;
+export type InsertSystemSetting = z.infer<typeof insertSystemSettingSchema>;
+export type SystemSetting = typeof systemSettings.$inferSelect;
+export type InsertCategory = z.infer<typeof insertCategorySchema>;
+export type Category = typeof categories.$inferSelect;
+export type InsertProductFamily = z.infer<typeof insertProductFamilySchema>;
+export type ProductFamily = typeof productFamilies.$inferSelect;
+export type InsertColor = z.infer<typeof insertColorSchema>;
+export type Color = typeof colors.$inferSelect;
+export type InsertSize = z.infer<typeof insertSizeSchema>;
+export type Size = typeof sizes.$inferSelect;
+export type InsertItem = z.infer<typeof insertItemSchema>;
+export type Item = typeof items.$inferSelect;
+export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
+export type Customer = typeof customers.$inferSelect;
+export type InsertCustomerPreferences = z.infer<typeof insertCustomerPreferencesSchema>;
+export type CustomerPreferences = typeof customerPreferences.$inferSelect;
+export type InsertCustomerFeedback = z.infer<typeof insertCustomerFeedbackSchema>;
+export type CustomerFeedback = typeof customerFeedback.$inferSelect;
+export type InsertCustomerNotification = z.infer<typeof insertCustomerNotificationSchema>;
+export type CustomerNotification = typeof customerNotifications.$inferSelect;
+export type InsertPriceContract = z.infer<typeof insertPriceContractSchema>;
+export type PriceContract = typeof priceContracts.$inferSelect;
+export type InsertPriceContractRule = z.infer<typeof insertPriceContractRuleSchema>;
+export type PriceContractRule = typeof priceContractRules.$inferSelect;
+export type InsertPriceContractItem = z.infer<typeof insertPriceContractItemSchema>;
+export type PriceContractItem = typeof priceContractItems.$inferSelect;
+export type InsertSeasonalOffer = z.infer<typeof insertSeasonalOfferSchema>;
+export type SeasonalOffer = typeof seasonalOffers.$inferSelect;
+export type InsertSeasonalOfferItem = z.infer<typeof insertSeasonalOfferItemSchema>;
+export type SeasonalOfferItem = typeof seasonalOfferItems.$inferSelect;
+export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
+export type Invoice = typeof invoices.$inferSelect;
+export type InsertInvoiceItem = z.infer<typeof insertInvoiceItemSchema>;
+export type InvoiceItem = typeof invoiceItems.$inferSelect;
+export type InsertPayment = z.infer<typeof insertPaymentSchema>;
+export type Payment = typeof payments.$inferSelect;
+export type InsertPortalOrder = z.infer<typeof insertPortalOrderSchema>;
+export type PortalOrder = typeof portalOrders.$inferSelect;
+export type InsertPortalOrderItem = z.infer<typeof insertPortalOrderItemSchema>;
+export type PortalOrderItem = typeof portalOrderItems.$inferSelect;
+export type InsertSupplier = z.infer<typeof insertSupplierSchema>;
+export type Supplier = typeof suppliers.$inferSelect;
+export type InsertPurchaseInvoice = z.infer<typeof insertPurchaseInvoiceSchema>;
+export type PurchaseInvoice = typeof purchaseInvoices.$inferSelect;
+export type InsertPurchaseInvoiceItem = z.infer<typeof insertPurchaseInvoiceItemSchema>;
+export type PurchaseInvoiceItem = typeof purchaseInvoiceItems.$inferSelect;
+export type InsertSupplierPayment = z.infer<typeof insertSupplierPaymentSchema>;
+export type SupplierPayment = typeof supplierPayments.$inferSelect;
+export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
+export type EmailLog = typeof emailLogs.$inferSelect;
+export type InsertAccount = z.infer<typeof insertAccountSchema>;
+export type Account = typeof accounts.$inferSelect;
+export type InsertJournalEntry = z.infer<typeof insertJournalEntrySchema>;
+export type JournalEntry = typeof journalEntries.$inferSelect;
+export type InsertJournalEntryLine = z.infer<typeof insertJournalEntryLineSchema>;
+export type JournalEntryLine = typeof journalEntryLines.$inferSelect;
+export type InsertExpense = z.infer<typeof insertExpenseSchema>;
+export type Expense = typeof expenses.$inferSelect;
+
+export const insertActivityLogSchema = createInsertSchema(activityLogs).omit({ id: true, createdAt: true });
+export type InsertActivityLog = z.infer<typeof insertActivityLogSchema>;
+export type ActivityLog = typeof activityLogs.$inferSelect;
+
+export const customerDeliveryLocations = pgTable("customer_delivery_locations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  name: text("name").notNull(),
+  address: text("address"),
+  lat: numeric("lat", { precision: 10, scale: 7 }),
+  lng: numeric("lng", { precision: 10, scale: 7 }),
+  isDefault: boolean("is_default").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCustomerDeliveryLocationSchema = createInsertSchema(customerDeliveryLocations).omit({ id: true, createdAt: true });
+export type InsertCustomerDeliveryLocation = z.infer<typeof insertCustomerDeliveryLocationSchema>;
+export type CustomerDeliveryLocation = typeof customerDeliveryLocations.$inferSelect;
+
+// ─── Version Control Snapshots ────────────────────────────────────────────────
+export const versionSnapshots = pgTable("version_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description").default(""),
+  type: text("type").notNull().default("manual"), // "manual" | "publish"
+  createdBy: text("created_by").notNull().default("system"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  dataSnapshot: text("data_snapshot"),
+  appVersion: text("app_version").default("1.0"),
+  tableCounts: text("table_counts").default("{}"),
+});
+
+export const insertVersionSnapshotSchema = createInsertSchema(versionSnapshots).omit({ id: true, createdAt: true });
+export type InsertVersionSnapshot = z.infer<typeof insertVersionSnapshotSchema>;
+export type VersionSnapshot = typeof versionSnapshots.$inferSelect;
+
+// ─── GlobiPOS Tables ──────────────────────────────────────────────────────────
+export const posLocations = pgTable("pos_locations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  address: text("address"),
+  phone: text("phone"),
+  timezone: text("timezone").notNull().default("Europe/Nicosia"),
+  currencyCode: text("currency_code").notNull().default("EUR"),
+  active: boolean("active").notNull().default(true),
+  isDefaultReceiving: boolean("is_default_receiving").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posTerminals = pgTable("pos_terminals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  locationId: varchar("location_id").notNull(),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  description: text("description"),
+  hardwareType: text("hardware_type").notNull().default("desktop"), // desktop | tablet | mobile
+  layoutSetId: varchar("layout_set_id"),
+  lastSeenAt: timestamp("last_seen_at"),
+  lastSyncAt: timestamp("last_sync_at"),
+  outboxQueueSize: integer("outbox_queue_size").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  // Peripheral configuration — written by back office, downloaded by terminal on sync
+  peripheralConfig: jsonb("peripheral_config"),
+  // Peripheral status — written by terminal on heartbeat, read by back office
+  peripheralStatus: jsonb("peripheral_status"),
+});
+
+export const posLayoutSets = pgTable("pos_layout_sets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  locationId: varchar("location_id"),
+  columns: integer("columns").notNull().default(4),       // desktop columns
+  colsTablet: integer("cols_tablet").default(3),          // tablet columns (640–1023px)
+  colsMobile: integer("cols_mobile").default(2),          // phone columns (<640px)
+  colsLarge: integer("cols_large").default(6),             // large monitor columns (1920–2559px)
+  colsTV: integer("cols_tv").default(8),                   // 4K / TV columns (2560px+)
+  rows: integer("rows").notNull().default(5),
+  buttonRadius: text("button_radius").default("rounded"), // rounded | round | square
+  colorTheme: text("color_theme").default("standard"),     // standard (dark) | light
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posLayoutButtons = pgTable("pos_layout_buttons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  layoutSetId: varchar("layout_set_id").notNull(),
+  position: integer("position").notNull(),
+  label: text("label").notNull(),
+  color: text("color").default("#6b7280"),
+  icon: text("icon"),
+  buttonType: text("button_type").notNull().default("item"), // item | category | action | sublayout | empty
+  itemId: varchar("item_id"),
+  categoryId: varchar("category_id"),
+  actionCode: text("action_code"),
+  sublayoutId: varchar("sublayout_id"),    // links to another posLayoutSet (condiments / modifiers)
+  colspan: integer("colspan").default(1), // 1=normal, 2=wide
+  rowspan: integer("rowspan").default(1), // 1=normal, 2=tall
+  shape: text("shape").default("rect"),   // rect | round | wide (alias colspan=2) | tall (alias rowspan=2)
+});
+
+export const posOrders = pgTable("pos_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderNumber: text("order_number").notNull().unique(),
+  terminalId: varchar("terminal_id").notNull(),
+  locationId: varchar("location_id").notNull(),
+  shiftId: varchar("shift_id"),
+  customerId: varchar("customer_id"),
+  cashierId: text("cashier_id"),
+  cashierName: text("cashier_name"),
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
+  discountAmount: numeric("discount_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  vatAmount: numeric("vat_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+  paymentMethod: text("payment_method").notNull().default("cash"),
+  amountTendered: numeric("amount_tendered", { precision: 12, scale: 2 }).default("0"),
+  changeDue: numeric("change_due", { precision: 12, scale: 2 }).default("0"),
+  status: text("status").notNull().default("completed"), // completed | voided | held
+  cardTerminalRef: text("card_terminal_ref"),
+  // Persisted idempotency guard for card-terminal charges. Unlike the in-memory
+  // chargeInflightKeys Set, this survives a server restart — so a cashier who
+  // retries with the same key after a crash/deploy still gets blocked instead
+  // of slipping through the in-flight guard.
+  idempotencyKey: text("idempotency_key"),
+  chargeAttemptedAt: timestamp("charge_attempted_at"),
+  notes: text("notes"),
+  receiptPrinted: boolean("receipt_printed").notNull().default(false),
+  syncedAt: timestamp("synced_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posOrderLines = pgTable("pos_order_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderId: varchar("order_id").notNull(),
+  itemId: varchar("item_id"),
+  variantId: varchar("variant_id"),
+  description: text("description").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  quantity: numeric("quantity", { precision: 10, scale: 3 }).notNull(),
+  unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
+  discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).notNull().default("0"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+});
+
+export const posShifts = pgTable("pos_shifts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  terminalId: varchar("terminal_id").notNull(),
+  locationId: varchar("location_id").notNull(),
+  cashierId: text("cashier_id"),
+  cashierName: text("cashier_name"),
+  openedAt: timestamp("opened_at").notNull(),
+  closedAt: timestamp("closed_at"),
+  openingFloat: numeric("opening_float", { precision: 12, scale: 2 }).notNull().default("0"),
+  closingCash: numeric("closing_cash", { precision: 12, scale: 2 }),
+  totalSales: numeric("total_sales", { precision: 12, scale: 2 }).notNull().default("0"),
+  totalCash: numeric("total_cash", { precision: 12, scale: 2 }).notNull().default("0"),
+  totalCard: numeric("total_card", { precision: 12, scale: 2 }).notNull().default("0"),
+  totalVoids: numeric("total_voids", { precision: 12, scale: 2 }).notNull().default("0"),
+  transactionCount: integer("transaction_count").notNull().default(0),
+  status: text("status").notNull().default("open"), // open | closed
+  notes: text("notes"),
+  syncedAt: timestamp("synced_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posSyncConfig = pgTable("pos_sync_config", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ruleKey: text("rule_key").notNull().unique(), // e.g. loyalty_earn_offline, loyalty_redeem_offline
+  label: text("label").notNull(),
+  offlineBehavior: text("offline_behavior").notNull().default("allow"), // allow | block | warn_allow
+  description: text("description"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const posInbox = pgTable("pos_inbox", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  terminalId: varchar("terminal_id"), // null = all terminals
+  locationId: varchar("location_id"), // null = all locations
+  itemType: text("item_type").notNull(), // price_change | special_offer | layout_update | manager_message
+  payload: text("payload").notNull(), // JSON
+  startsAt: timestamp("starts_at"),
+  expiresAt: timestamp("expires_at"),
+  acknowledged: boolean("acknowledged").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posAuditLogs = pgTable("pos_audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  terminalId: varchar("terminal_id").notNull(),
+  localId: integer("local_id").notNull(), // device-side audit_log rowid, for dedupe
+  cashierId: text("cashier_id"),
+  cashierName: text("cashier_name"),
+  action: text("action").notNull(),
+  entity: text("entity"),
+  entityId: text("entity_id"),
+  detail: text("detail"),
+  deviceCreatedAt: text("device_created_at"), // timestamp string from the terminal
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("pos_audit_terminal_local_idx").on(t.terminalId, t.localId)]);
+
+// POS Insert schemas
+export const insertPosLocationSchema = createInsertSchema(posLocations).omit({ id: true, createdAt: true });
+export type InsertPosLocation = z.infer<typeof insertPosLocationSchema>;
+export type PosLocation = typeof posLocations.$inferSelect;
+
+export const insertPosTerminalSchema = createInsertSchema(posTerminals).omit({ id: true, createdAt: true, lastSeenAt: true, lastSyncAt: true });
+export type InsertPosTerminal = z.infer<typeof insertPosTerminalSchema>;
+export type PosTerminal = typeof posTerminals.$inferSelect;
+
+export const insertPosLayoutSetSchema = createInsertSchema(posLayoutSets).omit({ id: true, createdAt: true });
+export type InsertPosLayoutSet = z.infer<typeof insertPosLayoutSetSchema>;
+export type PosLayoutSet = typeof posLayoutSets.$inferSelect;
+
+export const insertPosLayoutButtonSchema = createInsertSchema(posLayoutButtons).omit({ id: true });
+export type InsertPosLayoutButton = z.infer<typeof insertPosLayoutButtonSchema>;
+export type PosLayoutButton = typeof posLayoutButtons.$inferSelect;
+
+export const insertPosOrderSchema = createInsertSchema(posOrders).omit({ id: true, createdAt: true, syncedAt: true });
+export type InsertPosOrder = z.infer<typeof insertPosOrderSchema>;
+export type PosOrder = typeof posOrders.$inferSelect;
+
+export const insertPosOrderLineSchema = createInsertSchema(posOrderLines).omit({ id: true });
+export type InsertPosOrderLine = z.infer<typeof insertPosOrderLineSchema>;
+export type PosOrderLine = typeof posOrderLines.$inferSelect;
+
+export const insertPosShiftSchema = createInsertSchema(posShifts).omit({ id: true, createdAt: true, syncedAt: true });
+export type InsertPosShift = z.infer<typeof insertPosShiftSchema>;
+export type PosShift = typeof posShifts.$inferSelect;
+
+export const insertPosAuditLogSchema = createInsertSchema(posAuditLogs).omit({ id: true, createdAt: true });
+export type InsertPosAuditLog = z.infer<typeof insertPosAuditLogSchema>;
+export type PosAuditLog = typeof posAuditLogs.$inferSelect;
+
+export const insertPosSyncConfigSchema = createInsertSchema(posSyncConfig).omit({ id: true, updatedAt: true });
+export type InsertPosSyncConfig = z.infer<typeof insertPosSyncConfigSchema>;
+export type PosSyncConfig = typeof posSyncConfig.$inferSelect;
+
+export const insertPosInboxSchema = createInsertSchema(posInbox).omit({ id: true, createdAt: true });
+export type InsertPosInbox = z.infer<typeof insertPosInboxSchema>;
+export type PosInbox = typeof posInbox.$inferSelect;
+
+// ── POS Cashiers (server-managed; synced to terminal on registration) ─────────
+
+export const posCashiers = pgTable("pos_cashiers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  locationId: varchar("location_id"), // null = all locations
+  name: text("name").notNull(),
+  pin: text("pin").notNull(),          // plaintext; terminal hashes locally
+  role: text("role").notNull().default("cashier"), // cashier | supervisor | manager
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertPosCashierSchema = createInsertSchema(posCashiers).omit({ id: true, createdAt: true });
+export type InsertPosCashier = z.infer<typeof insertPosCashierSchema>;
+export type PosCashier = typeof posCashiers.$inferSelect;
+
+// ── POS Phase 3: Promotions, Container Deposits, Returns ──────────────────────
+
+export const posPromotions = pgTable("pos_promotions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  locationId: varchar("location_id").references(() => posLocations.id, { onDelete: "set null" }),
+  name: text("name").notNull(),
+  type: text("type").notNull().default("buy_n_get_m"), // buy_n_get_m | qty_threshold | meal_deal | coupon | mix_match
+  productIds: text("product_ids").array().notNull().default(sql`'{}'`),
+  categoryIds: text("category_ids").array().notNull().default(sql`'{}'`),
+  thresholdQty: integer("threshold_qty").notNull().default(1),
+  getQty: integer("get_qty").notNull().default(0),           // for buy_n_get_m
+  thresholdPrice: numeric("threshold_price", { precision: 10, scale: 2 }).notNull().default("0"), // price/unit when qty threshold met
+  bundlePrice: numeric("bundle_price", { precision: 10, scale: 2 }).notNull().default("0"),       // meal deal / mix-match total
+  discountPct: numeric("discount_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+  discountFixed: numeric("discount_fixed", { precision: 10, scale: 2 }).notNull().default("0"),
+  couponCode: text("coupon_code"),
+  priority: integer("priority").notNull().default(0),
+  stackable: boolean("stackable").notNull().default(false),
+  validFrom: timestamp("valid_from"),
+  validUntil: timestamp("valid_until"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const posContainerDeposits = pgTable("pos_container_deposits", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  depositAmount: numeric("deposit_amount", { precision: 10, scale: 2 }).notNull(),
+  productIds: text("product_ids").array().notNull().default(sql`'{}'`),  // specific items
+  categoryIds: text("category_ids").array().notNull().default(sql`'{}'`), // all items in category
+  depositSku: text("deposit_sku").notNull().default("DEPOSIT"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posReturnOrders = pgTable("pos_return_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  originalOrderId: varchar("original_order_id").references(() => posOrders.id, { onDelete: "set null" }),
+  originalOrderNumber: text("original_order_number"),
+  terminalId: varchar("terminal_id").references(() => posTerminals.id, { onDelete: "set null" }),
+  locationId: varchar("location_id").references(() => posLocations.id, { onDelete: "set null" }),
+  cashierId: varchar("cashier_id"),
+  cashierName: text("cashier_name").notNull(),
+  refundMethod: text("refund_method").notNull().default("cash"), // cash | card | store_credit | exchange
+  refundTotal: numeric("refund_total", { precision: 12, scale: 2 }).notNull(),
+  notes: text("notes"),
+  status: text("status").notNull().default("completed"), // completed | pending | voided
+  syncedAt: timestamp("synced_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const posReturnOrderLines = pgTable("pos_return_order_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  returnOrderId: varchar("return_order_id").notNull().references(() => posReturnOrders.id, { onDelete: "cascade" }),
+  originalOrderId: varchar("original_order_id"),
+  originalLineId: varchar("original_line_id"),
+  productId: varchar("product_id"),
+  description: text("description").notNull(),
+  qty: numeric("qty", { precision: 10, scale: 3 }).notNull(),
+  unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+  lineTotal: numeric("line_total", { precision: 12, scale: 2 }).notNull(),
+  restocked: boolean("restocked").notNull().default(true),
+});
+
+// ── Customer PWA: Push Subscriptions, Loyalty, OTP tokens ────────────────────
+
+export const customerPushSubscriptions = pgTable("customer_push_subscriptions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const customerLoyaltyPoints = pgTable("customer_loyalty_points", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  points: integer("points").notNull(),
+  type: text("type").notNull().default("earn"), // earn | redeem | adjust | expire
+  reason: text("reason"),
+  sourceType: text("source_type"), // invoice | portal_order | manual
+  sourceId: varchar("source_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("customer_loyalty_points_source_unique")
+    .on(table.sourceType, table.sourceId)
+    .where(sql`${table.sourceType} is not null and ${table.sourceId} is not null`),
+]);
+
+export const customerOtpTokens = pgTable("customer_otp_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  email: text("email").notNull(),
+  code: text("code").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  used: boolean("used").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCustomerPushSubscriptionSchema = createInsertSchema(customerPushSubscriptions).omit({ id: true, createdAt: true });
+export type InsertCustomerPushSubscription = z.infer<typeof insertCustomerPushSubscriptionSchema>;
+export type CustomerPushSubscription = typeof customerPushSubscriptions.$inferSelect;
+
+export const insertCustomerLoyaltyPointSchema = createInsertSchema(customerLoyaltyPoints).omit({ id: true, createdAt: true });
+export type InsertCustomerLoyaltyPoint = z.infer<typeof insertCustomerLoyaltyPointSchema>;
+export type CustomerLoyaltyPoint = typeof customerLoyaltyPoints.$inferSelect;
+
+// Insert schemas for Phase 3
+export const insertPosPromotionSchema = createInsertSchema(posPromotions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPosPromotion = z.infer<typeof insertPosPromotionSchema>;
+export type PosPromotion = typeof posPromotions.$inferSelect;
+
+export const insertPosContainerDepositSchema = createInsertSchema(posContainerDeposits).omit({ id: true, createdAt: true });
+export type InsertPosContainerDeposit = z.infer<typeof insertPosContainerDepositSchema>;
+export type PosContainerDeposit = typeof posContainerDeposits.$inferSelect;
+
+export const insertPosReturnOrderSchema = createInsertSchema(posReturnOrders).omit({ id: true, createdAt: true, syncedAt: true });
+export type InsertPosReturnOrder = z.infer<typeof insertPosReturnOrderSchema>;
+export type PosReturnOrder = typeof posReturnOrders.$inferSelect;
+
+export const insertPosReturnOrderLineSchema = createInsertSchema(posReturnOrderLines).omit({ id: true });
+export type InsertPosReturnOrderLine = z.infer<typeof insertPosReturnOrderLineSchema>;
+export type PosReturnOrderLine = typeof posReturnOrderLines.$inferSelect;
+
+// ── Phase 5: WhatsApp Chatbot & Voice Ordering ─────────────────────────────
+
+export const chatConversations = pgTable("chat_conversations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull(),
+  channel: text("channel").notNull().default("portal"), // portal | whatsapp
+  waPhoneNumber: text("wa_phone_number"),
+  status: text("status").notNull().default("active"), // active | handoff | closed
+  handoffStaffId: varchar("handoff_staff_id"),
+  handoffAt: timestamp("handoff_at"),
+  lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const chatMessages = pgTable("chat_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  conversationId: varchar("conversation_id").notNull(),
+  role: text("role").notNull().default("user"), // user | bot | staff
+  content: text("content").notNull(),
+  channel: text("channel").notNull().default("portal"), // portal | whatsapp
+  intent: text("intent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const faqEntries = pgTable("faq_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  question: text("question").notNull(),
+  answer: text("answer").notNull(),
+  keywords: text("keywords").array().default([]),
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertChatConversationSchema = createInsertSchema(chatConversations).omit({ id: true, createdAt: true, lastMessageAt: true });
+export type InsertChatConversation = z.infer<typeof insertChatConversationSchema>;
+export type ChatConversation = typeof chatConversations.$inferSelect;
+
+export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
+export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
+export type ChatMessage = typeof chatMessages.$inferSelect;
+
+export const insertFaqEntrySchema = createInsertSchema(faqEntries).omit({ id: true, createdAt: true });
+export type InsertFaqEntry = z.infer<typeof insertFaqEntrySchema>;
+export type FaqEntry = typeof faqEntries.$inferSelect;
+
+// ── Staff Push Subscriptions (back-office browser push for new WhatsApp orders) ─
+export const staffPushSubscriptions = pgTable("staff_push_subscriptions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertStaffPushSubscriptionSchema = createInsertSchema(staffPushSubscriptions).omit({ id: true, createdAt: true });
+export type InsertStaffPushSubscription = z.infer<typeof insertStaffPushSubscriptionSchema>;
+
+export type StaffPushSubscription = typeof staffPushSubscriptions.$inferSelect;
+
+// ── WhatsApp cart/browse/pending-item persistence (survives server restarts & long absences) ─
+// Single source of truth for a WhatsApp conversation's session state. The in-memory
+// Maps in chatbot-service.ts are the hot path for every message; every mutation is
+// also mirrored here so a server restart doesn't silently wipe active carts, browse
+// lists, or pending confirmations. On boot, loadWaStateFromDb() repopulates the Maps
+// (and re-arms pending-item timers) from surviving rows.
+export const waCartState = pgTable("wa_cart_state", {
+  conversationId: varchar("conversation_id").primaryKey(),
+  cart: jsonb("cart").notNull().default([]), // WaCartItem[]
+  browseResults: jsonb("browse_results"), // any[] | null
+  browseExpiresAt: timestamp("browse_expires_at"),
+  pendingItem: jsonb("pending_item"), // WaPendingItem | null
+  pendingExpiresAt: timestamp("pending_expires_at"),
+  pendingExpiredFlag: boolean("pending_expired_flag").notNull().default(false),
+  pendingExpiredReplySentAt: timestamp("pending_expired_reply_sent_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertWaCartStateSchema = createInsertSchema(waCartState).omit({ updatedAt: true });
+export type InsertWaCartState = z.infer<typeof insertWaCartStateSchema>;
+export type WaCartState = typeof waCartState.$inferSelect;
+
+// ── Digital signage: media library, playlists (with scheduling), and screens ──
+// Screens are addressed by a public `pairingCode` for browser-based menu boards
+// and shelf monitors (any TV/streaming box browser can point at
+// /signage/play/:pairingCode). POS customer-facing displays are a special
+// screenType auto-provisioned/linked to a terminal on registration.
+export const signageMedia = pgTable("signage_media", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  mediaType: text("media_type").notNull().default("image"), // 'image' | 'video'
+  url: text("url").notNull(),
+  durationSeconds: integer("duration_seconds").notNull().default(8),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const signagePlaylists = pgTable("signage_playlists", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const signagePlaylistItems = pgTable("signage_playlist_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  playlistId: varchar("playlist_id").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  contentType: text("content_type").notNull().default("media"), // 'media' | 'item' | 'offer'
+  mediaId: varchar("media_id"),
+  itemId: varchar("item_id"),
+  offerId: varchar("offer_id"),
+  durationSeconds: integer("duration_seconds").notNull().default(8),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  daysOfWeek: text("days_of_week"), // csv "0,1,2,3,4,5,6" (0=Sun); null = every day
+  startTime: text("start_time"), // "09:00"; null = all day
+  endTime: text("end_time"), // "21:00"; null = all day
+  enabled: boolean("enabled").notNull().default(true),
+});
+
+export const signageScreens = pgTable("signage_screens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  screenType: text("screen_type").notNull().default("menu_board"), // 'pos_customer_display' | 'menu_board' | 'shelf_monitor'
+  pairingCode: text("pairing_code").notNull().unique(),
+  posTerminalId: varchar("pos_terminal_id"),
+  playlistId: varchar("playlist_id"),
+  status: text("status").notNull().default("unpaired"), // 'unpaired' | 'online' | 'offline'
+  lastSeenAt: timestamp("last_seen_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertSignageMediaSchema = createInsertSchema(signageMedia).omit({ id: true, createdAt: true });
+export const insertSignagePlaylistSchema = createInsertSchema(signagePlaylists).omit({ id: true, createdAt: true });
+export const insertSignagePlaylistItemSchema = createInsertSchema(signagePlaylistItems).omit({ id: true });
+export const insertSignageScreenSchema = createInsertSchema(signageScreens).omit({ id: true, createdAt: true, pairingCode: true, status: true, lastSeenAt: true });
+
+export type InsertSignageMedia = z.infer<typeof insertSignageMediaSchema>;
+export type SignageMedia = typeof signageMedia.$inferSelect;
+export type InsertSignagePlaylist = z.infer<typeof insertSignagePlaylistSchema>;
+export type SignagePlaylist = typeof signagePlaylists.$inferSelect;
+export type InsertSignagePlaylistItem = z.infer<typeof insertSignagePlaylistItemSchema>;
+export type SignagePlaylistItem = typeof signagePlaylistItems.$inferSelect;
+export type InsertSignageScreen = z.infer<typeof insertSignageScreenSchema>;
+export type SignageScreen = typeof signageScreens.$inferSelect;
+
+// ── Handheld PDA Operations (Stock Take, Transfers) ───────────────────────────
+// Replaces the legacy Falcon DOS data collector. Stock take sessions are counted
+// on the handheld and applied to items.stockQuantity on submission. Transfers are
+// a movement log between named locations. Since this app tracks a single global
+// items.stockQuantity (no per-location split), completing a transfer only mutates
+// stockQuantity when one side of the transfer is the designated "Main Warehouse"
+// (moving stock in or out of the tracked pool); store-to-store moves are logged
+// but do not change stockQuantity, since neither side is the tracked pool.
+
+export const stockTakeSessions = pgTable("stock_take_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reference: text("reference").notNull(),
+  locationLabel: text("location_label"),
+  status: text("status").notNull().default("open"), // open | submitted | cancelled
+  notes: text("notes"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdByUsername: text("created_by_username"),
+  submittedAt: timestamp("submitted_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const stockTakeLines = pgTable("stock_take_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  systemQuantity: integer("system_quantity").notNull().default(0),
+  countedQuantity: integer("counted_quantity").notNull().default(0),
+  notes: text("notes"),
+  scannedAt: timestamp("scanned_at").defaultNow().notNull(),
+});
+
+// Per-location stock pools. Splits an item/variant's stock across POS locations
+// (stores/warehouses). items.stockQuantity / itemVariants.stockQuantity remain the
+// global total; this table tracks how much of that total sits at each location.
+// variantId is null for items without variants.
+export const itemLocationStock = pgTable("item_location_stock", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  variantId: varchar("variant_id").references(() => itemVariants.id, { onDelete: "cascade" }),
+  locationId: varchar("location_id").notNull().references(() => posLocations.id, { onDelete: "cascade" }),
+  quantity: integer("quantity").notNull().default(0),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+export const insertItemLocationStockSchema = createInsertSchema(itemLocationStock).omit({ id: true, updatedAt: true });
+export type InsertItemLocationStock = z.infer<typeof insertItemLocationStockSchema>;
+export type ItemLocationStock = typeof itemLocationStock.$inferSelect;
+
+export const stockTransfers = pgTable("stock_transfers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  transferNumber: text("transfer_number").notNull().unique(),
+  fromLocation: text("from_location").notNull(),
+  toLocation: text("to_location").notNull(),
+  status: text("status").notNull().default("draft"), // draft | completed | cancelled
+  notes: text("notes"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdByUsername: text("created_by_username"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const stockTransferItems = pgTable("stock_transfer_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  transferId: varchar("transfer_id").notNull(),
+  itemId: varchar("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  quantity: integer("quantity").notNull().default(1),
+});
+
+export const insertStockTakeSessionSchema = createInsertSchema(stockTakeSessions).omit({ id: true, createdAt: true, submittedAt: true });
+export type InsertStockTakeSession = z.infer<typeof insertStockTakeSessionSchema>;
+export type StockTakeSession = typeof stockTakeSessions.$inferSelect;
+
+export const insertStockTakeLineSchema = createInsertSchema(stockTakeLines).omit({ id: true, scannedAt: true });
+export type InsertStockTakeLine = z.infer<typeof insertStockTakeLineSchema>;
+export type StockTakeLine = typeof stockTakeLines.$inferSelect;
+
+export const insertStockTransferSchema = createInsertSchema(stockTransfers).omit({ id: true, createdAt: true, completedAt: true });
+export type InsertStockTransfer = z.infer<typeof insertStockTransferSchema>;
+export type StockTransfer = typeof stockTransfers.$inferSelect;
+
+export const insertStockTransferItemSchema = createInsertSchema(stockTransferItems).omit({ id: true, transferId: true });
+export type InsertStockTransferItem = z.infer<typeof insertStockTransferItemSchema>;
+export type StockTransferItem = typeof stockTransferItems.$inferSelect;
+
+// ── Agoranomia: shelf unit-price label compliance ─────────────────────────────
+// Tracks the price that was last printed on an item's shelf label. Scanning an
+// item on the handheld compares the current system price to this record so
+// staff can build a "needs reprint" batch when prices have changed since the
+// label was last printed (Cyprus consumer-protection unit pricing compliance).
+export const labelProfiles = pgTable("label_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  kind: text("kind").notNull(), // barcode | shelf
+  config: jsonb("config").$type<Record<string, unknown>>().notNull(),
+  isDefault: boolean("is_default").notNull().default(false),
+  isSystem: boolean("is_system").notNull().default(false),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export const insertLabelProfileSchema = createInsertSchema(labelProfiles).omit({
+  id: true, createdAt: true, updatedAt: true,
+});
+export type InsertLabelProfile = z.infer<typeof insertLabelProfileSchema>;
+export type LabelProfile = typeof labelProfiles.$inferSelect;
+
+export const agoranomiaLabelPrints = pgTable("agoranomia_label_prints", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  sku: text("sku"),
+  printedPrice: numeric("printed_price", { precision: 10, scale: 2 }).notNull(),
+  printedUnitPrice: numeric("printed_unit_price", { precision: 10, scale: 2 }),
+  printedPreviousPrice: numeric("printed_previous_price", { precision: 10, scale: 2 }),
+  printedPreviousUnitPrice: numeric("printed_previous_unit_price", { precision: 10, scale: 2 }),
+  discountPercentage: numeric("discount_percentage", { precision: 5, scale: 2 }),
+  discountVerifiedAt: timestamp("discount_verified_at"),
+  discountProvenance: text("discount_provenance"),
+  unitLabel: text("unit_label"), // e.g. "per L", "per kg", "per pc"
+  printedAt: timestamp("printed_at").defaultNow().notNull(),
+  printedByUsername: text("printed_by_username"),
+  labelProfileId: varchar("label_profile_id"),
+  profileSnapshot: jsonb("profile_snapshot").$type<Record<string, unknown>>(),
+});
+
+export const insertAgoranomiaLabelPrintSchema = createInsertSchema(agoranomiaLabelPrints).omit({ id: true, printedAt: true });
+export type InsertAgoranomiaLabelPrint = z.infer<typeof insertAgoranomiaLabelPrintSchema>;
+export type AgoranomiaLabelPrint = typeof agoranomiaLabelPrints.$inferSelect;
+
+// ── PDA: Goods Received Voucher (GRV) ─────────────────────────────────────────
+// A GRV starts as an OCR draft from a photographed supplier invoice (header +
+// line items extracted by a vision model), then staff physically scan received
+// goods to reconcile receivedQuantity against expectedQuantity per line before
+// finalizing. Finalizing creates a real purchase_invoices/purchase_invoice_items
+// pair via the existing createPurchaseInvoice storage method, so stock, supplier
+// balance and journal-entry side effects are identical to a manually entered
+// purchase invoice — this table only tracks the OCR + verification workflow.
+export const goodsReceivedVouchers = pgTable("goods_received_vouchers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  grvNumber: text("grv_number").notNull().unique(),
+  supplierId: varchar("supplier_id"),
+  supplierNameRaw: text("supplier_name_raw"),
+  invoiceNumberRaw: text("invoice_number_raw"),
+  invoiceDateRaw: text("invoice_date_raw"),
+  ocrRawText: text("ocr_raw_text"),
+  status: text("status").notNull().default("draft"), // draft | verifying | completed | cancelled
+  purchaseInvoiceId: varchar("purchase_invoice_id"),
+  hasDiscrepancies: boolean("has_discrepancies").notNull().default(false),
+  notes: text("notes"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdByUsername: text("created_by_username"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const goodsReceivedVoucherItems = pgTable("goods_received_voucher_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  grvId: varchar("grv_id").notNull(),
+  itemId: varchar("item_id"),
+  descriptionRaw: text("description_raw").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  expectedQuantity: integer("expected_quantity").notNull().default(0),
+  receivedQuantity: integer("received_quantity").notNull().default(0),
+  unitCost: numeric("unit_cost", { precision: 10, scale: 2 }).notNull().default("0"),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull().default("19"),
+  matched: boolean("matched").notNull().default(false),
+});
+
+export const goodsReceivedVoucherScanEvents = pgTable("goods_received_voucher_scan_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  grvId: varchar("grv_id").notNull(),
+  eventKey: text("event_key").notNull(),
+  lineId: varchar("line_id").notNull(),
+  matchedBy: text("matched_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  grvEventUnique: uniqueIndex("goods_received_voucher_scan_events_grv_event_unique").on(table.grvId, table.eventKey),
+}));
+export const insertGoodsReceivedVoucherSchema = createInsertSchema(goodsReceivedVouchers).omit({ id: true, createdAt: true, completedAt: true });
+export type InsertGoodsReceivedVoucher = z.infer<typeof insertGoodsReceivedVoucherSchema>;
+export type GoodsReceivedVoucher = typeof goodsReceivedVouchers.$inferSelect;
+
+export const insertGoodsReceivedVoucherItemSchema = createInsertSchema(goodsReceivedVoucherItems).omit({ id: true, grvId: true });
+export type InsertGoodsReceivedVoucherItem = z.infer<typeof insertGoodsReceivedVoucherItemSchema>;
+export type GoodsReceivedVoucherItem = typeof goodsReceivedVoucherItems.$inferSelect;
+
+// ── Expiration / Best-Before batch tracking ──────────────────────────────────
+// Each row is a tracked batch of a perishable item with an expiration (best
+// before) date and the quantity received in that batch. Powers the Expiration
+// Management report, near-expiry notifications, and one-click markdown offers.
+// A batch may optionally be pinned to a POS location and linked to a
+// pos_promotions row once a near-expiry markdown offer is created for it.
+export const expirationBatches = pgTable("expiration_batches", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  itemName: text("item_name").notNull(),
+  sku: text("sku"),
+  barcode: text("barcode"),
+  locationId: varchar("location_id").references(() => posLocations.id, { onDelete: "set null" }),
+  batchCode: text("batch_code"),
+  expirationDate: date("expiration_date").notNull(),
+  quantity: integer("quantity").notNull().default(0),
+  costPrice: numeric("cost_price", { precision: 10, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+  status: text("status").notNull().default("active"), // active | sold_out | expired | discounted | discarded
+  promotionId: varchar("promotion_id"),
+  createdByUsername: text("created_by_username"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
+});
+
+export const insertExpirationBatchSchema = createInsertSchema(expirationBatches).omit({ id: true, createdAt: true, updatedAt: true, promotionId: true });
+export type InsertExpirationBatch = z.infer<typeof insertExpirationBatchSchema>;
+export type ExpirationBatch = typeof expirationBatches.$inferSelect;
+
+export const erpSyncCursors = pgTable("erp_sync_cursors", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+  recordType: text("record_type").notNull(),
+  cursor: text("cursor"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => ({
+  erpCursorUnique: uniqueIndex("erp_sync_cursors_unique").on(table.configId, table.generation, table.recordType),
+}));
+
+export const erpSyncAudits = pgTable("erp_sync_audits", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+  idempotencyKey: text("idempotency_key").notNull(),
+  recordType: text("record_type").notNull(),
+  recordId: text("record_id").notNull(),
+  direction: text("direction").notNull(), // outbound | inbound
+  status: text("status").notNull(), // succeeded | failed | skipped
+  externalId: text("external_id"),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  attempt: integer("attempt").notNull().default(1),
+});
+
+export const erpRecordMappings = pgTable("erp_record_mappings", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+  recordType: text("record_type").notNull(),
+  localId: text("local_id").notNull(),
+  externalId: text("external_id").notNull(),
+  sourceVersion: text("source_version"),
+  lastSyncedAt: timestamp("last_synced_at").defaultNow().notNull(),
+}, (table) => ({
+  erpMappingLocal: uniqueIndex("erp_record_mappings_local").on(table.configId, table.generation, table.recordType, table.localId),
+  erpMappingExternal: uniqueIndex("erp_record_mappings_external").on(table.configId, table.generation, table.recordType, table.externalId),
+}));
+
+export const erpSyncRuns = pgTable("erp_sync_runs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull().default(1),
+  initiatedBy: varchar("initiated_by"),
+  recordTypes: jsonb("record_types").notNull().default([]),
+  status: text("status").notNull().default("running"),
+  succeeded: integer("succeeded").notNull().default(0),
+  failed: integer("failed").notNull().default(0),
+  skipped: integer("skipped").notNull().default(0),
+  failureSummary: text("failure_summary"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+});
+
+export const erpStockReconciliations = pgTable("erp_stock_reconciliations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: uuid("config_id").notNull().references(() => erpIntegrationConfigs.id, { onDelete: "cascade" }),
+  generation: integer("generation").notNull(),
+  localId: text("local_id").notNull(),
+  cycle: integer("cycle").notNull(),
+  targetQuantity: integer("target_quantity").notNull(),
+  observedQuantity: integer("observed_quantity").notNull(),
+  observedRevision: text("observed_revision").notNull(),
+  correlationKey: text("correlation_key").notNull().unique(),
+  status: text("status").notNull().default("pending"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+}, table => ({
+  erpStockCycle: uniqueIndex("erp_stock_reconciliations_cycle").on(table.configId, table.generation, table.localId, table.cycle),
+}));

@@ -1,0 +1,1083 @@
+import { useState } from "react";
+import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
+import { PageHeader } from "@/components/page-header";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Printer, Scale, TrendingUp, BarChart3, Receipt, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
+
+interface TrialBalanceAccount {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+  debit: string;
+  credit: string;
+}
+
+interface TrialBalanceData {
+  accounts: TrialBalanceAccount[];
+  totalDebit: string;
+  totalCredit: string;
+}
+
+interface ReportAccount {
+  id: string;
+  code: string;
+  name: string;
+  balance: string;
+}
+
+interface ProfitLossData {
+  revenue: ReportAccount[];
+  expenses: ReportAccount[];
+  totalRevenue: string;
+  totalExpenses: string;
+  netIncome: string;
+}
+
+interface BalanceSheetData {
+  assets: ReportAccount[];
+  liabilities: ReportAccount[];
+  equity: ReportAccount[];
+  netIncome: string;
+  totalAssets: string;
+  totalLiabilities: string;
+  totalEquity: string;
+}
+
+interface VatInvoiceItem {
+  id?: string;
+  invoiceNumber?: string;
+  customerName?: string;
+  supplierName?: string;
+  supplierRef?: string;
+  description?: string;
+  date: string;
+  netAmount: string;
+  vatAmount: string;
+  grossAmount: string;
+}
+
+interface VatCategory {
+  count: number;
+  netAmount: string;
+  vatAmount: string;
+  grossAmount?: string;
+  items: VatInvoiceItem[];
+}
+
+interface VatReturnData {
+  period: { from: string; to: string };
+  sales: VatCategory;
+  creditNotes: VatCategory;
+  purchases: VatCategory;
+  expenses: VatCategory;
+  outputVat: string;
+  outputNet: string;
+  inputVat: string;
+  inputNet: string;
+  netVatPayable: string;
+}
+
+function formatEUR(value: string | number): string {
+  const num = typeof value === "string" ? parseFloat(value) : value;
+  return "€" + (num || 0).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function getFirstDayOfMonth(): string {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split("T")[0];
+}
+
+function getToday(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+function getCurrentQuarter(): string {
+  const d = new Date();
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return `${d.getFullYear()}-Q${q}`;
+}
+
+function padDate(y: number, m: number, d: number): string {
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+function getQuarterDates(qStr: string): { from: string; to: string } {
+  const [yearStr, qPart] = qStr.split("-Q");
+  const year = parseInt(yearStr);
+  const q = parseInt(qPart);
+  const startMonth = (q - 1) * 3 + 1;
+  const endMonth = q * 3;
+  const lastDay = new Date(year, endMonth, 0).getDate();
+  return { from: padDate(year, startMonth, 1), to: padDate(year, endMonth, lastDay) };
+}
+
+function getAvailableQuarters(): string[] {
+  const quarters: string[] = [];
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  for (let y = currentYear - 1; y <= currentYear + 1; y++) {
+    for (let q = 1; q <= 4; q++) {
+      quarters.push(`${y}-Q${q}`);
+    }
+  }
+  return quarters;
+}
+
+function formatQuarterLabel(qStr: string): string {
+  const [yearStr, qPart] = qStr.split("-Q");
+  const q = parseInt(qPart);
+  const months = ["Jan-Mar", "Apr-Jun", "Jul-Sep", "Oct-Dec"];
+  return `Q${q} ${yearStr} (${months[q - 1]})`;
+}
+
+export default function AccountingReports() {
+  const [plFrom, setPlFrom] = useState(getFirstDayOfMonth);
+  const [plTo, setPlTo] = useState(getToday);
+  const [bsAsOf, setBsAsOf] = useState(getToday);
+  const [vatFrom, setVatFrom] = useState(() => getQuarterDates(getCurrentQuarter()).from);
+  const [vatTo, setVatTo] = useState(() => getQuarterDates(getCurrentQuarter()).to);
+  const [, setLocation] = useLocation();
+  const [showSalesDetail, setShowSalesDetail] = useState(false);
+  const [showPurchaseDetail, setShowPurchaseDetail] = useState(false);
+  const [drillDown, setDrillDown] = useState<{ id: string; name: string; code: string; from: string; to: string } | null>(null);
+
+  const { data: trialBalance, isLoading: tbLoading } = useQuery<TrialBalanceData>({
+    queryKey: ["/api/reports/trial-balance"],
+  });
+
+  const { data: profitLoss, isLoading: plLoading } = useQuery<ProfitLossData>({
+    queryKey: ["/api/reports/profit-loss", plFrom, plTo],
+  });
+
+  const { data: balanceSheet, isLoading: bsLoading } = useQuery<BalanceSheetData>({
+    queryKey: ["/api/reports/balance-sheet", bsAsOf],
+  });
+
+  const { data: vatReturn, isLoading: vatLoading } = useQuery<VatReturnData>({
+    queryKey: ["/api/reports/vat-return", vatFrom, vatTo],
+    enabled: !!vatFrom && !!vatTo,
+  });
+
+  const { data: glData, isLoading: glLoading } = useQuery<{ entries: any[]; openingBalance: string }>({
+    queryKey: ["/api/reports/general-ledger", drillDown?.id, drillDown?.from, drillDown?.to],
+    enabled: !!drillDown,
+  });
+
+  const openDrill = (id: string, code: string, name: string, from: string, to: string) =>
+    setDrillDown({ id, code, name, from, to });
+
+  return (
+    <div className="p-6 space-y-6">
+      <PageHeader
+        title="Accounting Reports"
+        description="Trial Balance, Profit & Loss, Balance Sheet, and VAT Return reports"
+      />
+
+      <Tabs defaultValue="trial-balance">
+        <TabsList className="flex flex-wrap h-auto gap-1">
+          <TabsTrigger value="trial-balance" data-testid="tab-trial-balance">
+            <Scale className="w-4 h-4 mr-1" /> Trial Balance
+          </TabsTrigger>
+          <TabsTrigger value="profit-loss" data-testid="tab-profit-loss">
+            <TrendingUp className="w-4 h-4 mr-1" /> Profit & Loss
+          </TabsTrigger>
+          <TabsTrigger value="balance-sheet" data-testid="tab-balance-sheet">
+            <BarChart3 className="w-4 h-4 mr-1" /> Balance Sheet
+          </TabsTrigger>
+          <TabsTrigger value="vat-return" data-testid="tab-vat-return">
+            <Receipt className="w-4 h-4 mr-1" /> VAT Return
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="trial-balance" className="mt-4 space-y-4">
+          <div className="flex items-center justify-end">
+            <Button variant="outline" onClick={() => window.print()} data-testid="button-print-trial-balance">
+              <Printer className="w-4 h-4 mr-2" /> Print
+            </Button>
+          </div>
+
+          {tbLoading ? (
+            <Skeleton className="h-64" />
+          ) : trialBalance ? (
+            <Card>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead data-testid="th-tb-code">Code</TableHead>
+                      <TableHead data-testid="th-tb-name">Account Name</TableHead>
+                      <TableHead data-testid="th-tb-type">Type</TableHead>
+                      <TableHead className="text-right" data-testid="th-tb-debit">Debit</TableHead>
+                      <TableHead className="text-right" data-testid="th-tb-credit">Credit</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {trialBalance.accounts.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-8 text-muted-foreground" data-testid="text-tb-empty">
+                          No accounts found
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      trialBalance.accounts.map((acc, idx) => (
+                        <TableRow
+                          key={`${acc.code}-${idx}`}
+                          data-testid={`row-tb-${acc.code}`}
+                          className="cursor-pointer hover:bg-muted/60 group"
+                          onClick={() => openDrill(acc.id, acc.code, acc.name, "1900-01-01", "9999-12-31")}
+                        >
+                          <TableCell className="font-mono text-sm">{acc.code}</TableCell>
+                          <TableCell className="text-sm">
+                            <span className="group-hover:underline">{acc.name}</span>
+                            <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="secondary" className="capitalize">{acc.type}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right text-sm" data-testid={`text-tb-debit-${acc.code}`}>
+                            {formatEUR(acc.debit)}
+                          </TableCell>
+                          <TableCell className="text-right text-sm" data-testid={`text-tb-credit-${acc.code}`}>
+                            {formatEUR(acc.credit)}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                  <TableFooter>
+                    <TableRow className="font-bold">
+                      <TableCell colSpan={3}>Totals</TableCell>
+                      <TableCell className="text-right" data-testid="text-tb-total-debit">
+                        {formatEUR(trialBalance.totalDebit)}
+                      </TableCell>
+                      <TableCell className="text-right" data-testid="text-tb-total-credit">
+                        {formatEUR(trialBalance.totalCredit)}
+                      </TableCell>
+                    </TableRow>
+                  </TableFooter>
+                </Table>
+              </CardContent>
+            </Card>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="profit-loss" className="mt-4 space-y-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-end gap-4 flex-wrap">
+                <div>
+                  <Label className="text-xs">From</Label>
+                  <Input
+                    type="date"
+                    value={plFrom}
+                    onChange={(e) => setPlFrom(e.target.value)}
+                    data-testid="input-pl-date-from"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">To</Label>
+                  <Input
+                    type="date"
+                    value={plTo}
+                    onChange={(e) => setPlTo(e.target.value)}
+                    data-testid="input-pl-date-to"
+                  />
+                </div>
+                <Button variant="outline" onClick={() => window.print()} data-testid="button-print-profit-loss">
+                  <Printer className="w-4 h-4 mr-2" /> Print
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {plLoading ? (
+            <Skeleton className="h-64" />
+          ) : profitLoss ? (
+            <>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Revenue</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Account</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {profitLoss.revenue.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
+                            No revenue accounts
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        profitLoss.revenue.map((acc) => (
+                          <TableRow
+                            key={acc.id}
+                            data-testid={`row-pl-revenue-${acc.code}`}
+                            className="cursor-pointer hover:bg-muted/60 group"
+                            onClick={() => openDrill(acc.id, acc.code, acc.name, plFrom, plTo)}
+                          >
+                            <TableCell className="font-mono text-sm">{acc.code}</TableCell>
+                            <TableCell className="text-sm">
+                              <span className="group-hover:underline">{acc.name}</span>
+                              <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                            </TableCell>
+                            <TableCell className="text-right text-sm" data-testid={`text-pl-revenue-amount-${acc.code}`}>
+                              {formatEUR(acc.balance)}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="font-bold">
+                        <TableCell colSpan={2}>Total Revenue</TableCell>
+                        <TableCell className="text-right" data-testid="text-pl-total-revenue">
+                          {formatEUR(profitLoss.totalRevenue)}
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Expenses</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Account</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {profitLoss.expenses.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
+                            No expense accounts
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        profitLoss.expenses.map((acc) => (
+                          <TableRow
+                            key={acc.id}
+                            data-testid={`row-pl-expense-${acc.code}`}
+                            className="cursor-pointer hover:bg-muted/60 group"
+                            onClick={() => openDrill(acc.id, acc.code, acc.name, plFrom, plTo)}
+                          >
+                            <TableCell className="font-mono text-sm">{acc.code}</TableCell>
+                            <TableCell className="text-sm">
+                              <span className="group-hover:underline">{acc.name}</span>
+                              <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                            </TableCell>
+                            <TableCell className="text-right text-sm" data-testid={`text-pl-expense-amount-${acc.code}`}>
+                              {formatEUR(acc.balance)}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="font-bold">
+                        <TableCell colSpan={2}>Total Expenses</TableCell>
+                        <TableCell className="text-right" data-testid="text-pl-total-expenses">
+                          {formatEUR(profitLoss.totalExpenses)}
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              <Card className="border-2">
+                <CardContent className="p-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <span className="text-sm text-muted-foreground">Total Revenue</span>
+                      <span className="text-sm font-medium" data-testid="text-pl-summary-revenue">
+                        {formatEUR(profitLoss.totalRevenue)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <span className="text-sm text-muted-foreground">Total Expenses</span>
+                      <span className="text-sm font-medium" data-testid="text-pl-summary-expenses">
+                        {formatEUR(profitLoss.totalExpenses)}
+                      </span>
+                    </div>
+                    <div className="border-t pt-2 flex items-center justify-between gap-4 flex-wrap">
+                      <span className="text-base font-semibold">Net Income</span>
+                      <span
+                        className={`text-lg font-bold ${parseFloat(profitLoss.netIncome) >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}
+                        data-testid="text-pl-net-income"
+                      >
+                        {formatEUR(profitLoss.netIncome)}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="balance-sheet" className="mt-4 space-y-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-end gap-4 flex-wrap">
+                <div>
+                  <Label className="text-xs">As of Date</Label>
+                  <Input
+                    type="date"
+                    value={bsAsOf}
+                    onChange={(e) => setBsAsOf(e.target.value)}
+                    data-testid="input-bs-date"
+                  />
+                </div>
+                <Button variant="outline" onClick={() => window.print()} data-testid="button-print-balance-sheet">
+                  <Printer className="w-4 h-4 mr-2" /> Print
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {bsLoading ? (
+            <Skeleton className="h-64" />
+          ) : balanceSheet ? (
+            <>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Assets</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Account</TableHead>
+                        <TableHead className="text-right">Balance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {balanceSheet.assets.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
+                            No asset accounts
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        balanceSheet.assets.map((acc) => (
+                          <TableRow
+                            key={acc.id}
+                            data-testid={`row-bs-asset-${acc.code}`}
+                            className="cursor-pointer hover:bg-muted/60 group"
+                            onClick={() => openDrill(acc.id, acc.code, acc.name, "1900-01-01", bsAsOf)}
+                          >
+                            <TableCell className="font-mono text-sm">{acc.code}</TableCell>
+                            <TableCell className="text-sm">
+                              <span className="group-hover:underline">{acc.name}</span>
+                              <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                            </TableCell>
+                            <TableCell className="text-right text-sm" data-testid={`text-bs-asset-balance-${acc.code}`}>
+                              {formatEUR(acc.balance)}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="font-bold">
+                        <TableCell colSpan={2}>Total Assets</TableCell>
+                        <TableCell className="text-right" data-testid="text-bs-total-assets">
+                          {formatEUR(balanceSheet.totalAssets)}
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Liabilities</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Account</TableHead>
+                        <TableHead className="text-right">Balance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {balanceSheet.liabilities.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
+                            No liability accounts
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        balanceSheet.liabilities.map((acc) => (
+                          <TableRow
+                            key={acc.id}
+                            data-testid={`row-bs-liability-${acc.code}`}
+                            className="cursor-pointer hover:bg-muted/60 group"
+                            onClick={() => openDrill(acc.id, acc.code, acc.name, "1900-01-01", bsAsOf)}
+                          >
+                            <TableCell className="font-mono text-sm">{acc.code}</TableCell>
+                            <TableCell className="text-sm">
+                              <span className="group-hover:underline">{acc.name}</span>
+                              <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                            </TableCell>
+                            <TableCell className="text-right text-sm" data-testid={`text-bs-liability-balance-${acc.code}`}>
+                              {formatEUR(acc.balance)}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="font-bold">
+                        <TableCell colSpan={2}>Total Liabilities</TableCell>
+                        <TableCell className="text-right" data-testid="text-bs-total-liabilities">
+                          {formatEUR(balanceSheet.totalLiabilities)}
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Equity</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Code</TableHead>
+                        <TableHead>Account</TableHead>
+                        <TableHead className="text-right">Balance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {balanceSheet.equity.length === 0 && parseFloat(balanceSheet.netIncome) === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
+                            No equity accounts
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        <>
+                          {balanceSheet.equity.map((acc) => (
+                            <TableRow
+                              key={acc.id}
+                              data-testid={`row-bs-equity-${acc.code}`}
+                              className="cursor-pointer hover:bg-muted/60 group"
+                              onClick={() => openDrill(acc.id, acc.code, acc.name, "1900-01-01", bsAsOf)}
+                            >
+                              <TableCell className="font-mono text-sm">{acc.code}</TableCell>
+                              <TableCell className="text-sm">
+                                <span className="group-hover:underline">{acc.name}</span>
+                                <ExternalLink className="inline w-3 h-3 ml-1 opacity-0 group-hover:opacity-50" />
+                              </TableCell>
+                              <TableCell className="text-right text-sm" data-testid={`text-bs-equity-balance-${acc.code}`}>
+                                {formatEUR(acc.balance)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow data-testid="row-bs-net-income">
+                            <TableCell className="font-mono text-sm text-muted-foreground">—</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">Current Year Net Income</TableCell>
+                            <TableCell
+                              className={`text-right text-sm font-medium ${parseFloat(balanceSheet.netIncome) >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}
+                              data-testid="text-bs-net-income"
+                            >
+                              {formatEUR(balanceSheet.netIncome)}
+                            </TableCell>
+                          </TableRow>
+                        </>
+                      )}
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="font-bold">
+                        <TableCell colSpan={2}>Total Equity</TableCell>
+                        <TableCell className="text-right" data-testid="text-bs-total-equity">
+                          {formatEUR(balanceSheet.totalEquity)}
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              <Card className="border-2">
+                <CardContent className="p-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <span className="text-sm text-muted-foreground">Total Assets</span>
+                      <span className="text-sm font-medium" data-testid="text-bs-summary-assets">
+                        {formatEUR(balanceSheet.totalAssets)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <span className="text-sm text-muted-foreground">Total Liabilities + Equity</span>
+                      <span className="text-sm font-medium" data-testid="text-bs-summary-liabilities-equity">
+                        {formatEUR(
+                          parseFloat(balanceSheet.totalLiabilities) + parseFloat(balanceSheet.totalEquity)
+                        )}
+                      </span>
+                    </div>
+                    <div className="border-t pt-2 flex items-center justify-between gap-4 flex-wrap">
+                      <span className="text-base font-semibold">Balance Check</span>
+                      {Math.abs(
+                        parseFloat(balanceSheet.totalAssets) -
+                          (parseFloat(balanceSheet.totalLiabilities) + parseFloat(balanceSheet.totalEquity))
+                      ) < 0.01 ? (
+                        <Badge variant="default" data-testid="badge-bs-balanced">Balanced</Badge>
+                      ) : (
+                        <Badge variant="destructive" data-testid="badge-bs-unbalanced">Unbalanced</Badge>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="vat-return" className="mt-4 space-y-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="space-y-3">
+                <div className="flex items-end gap-3 flex-wrap">
+                  <div>
+                    <Label className="text-xs">From</Label>
+                    <Input type="date" value={vatFrom} onChange={e => setVatFrom(e.target.value)} className="w-[160px]" data-testid="input-vat-from" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">To</Label>
+                    <Input type="date" value={vatTo} onChange={e => setVatTo(e.target.value)} className="w-[160px]" data-testid="input-vat-to" />
+                  </div>
+                  <Button variant="outline" onClick={() => window.print()} data-testid="button-print-vat-return">
+                    <Printer className="w-4 h-4 mr-2" /> Print
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground">Quick select:</span>
+                  {getAvailableQuarters().filter(q => {
+                    const y = parseInt(q.split("-Q")[0]);
+                    return y >= new Date().getFullYear() - 1;
+                  }).map(q => {
+                    const d = getQuarterDates(q);
+                    const isActive = vatFrom === d.from && vatTo === d.to;
+                    return (
+                      <Button
+                        key={q}
+                        variant={isActive ? "default" : "outline"}
+                        size="sm"
+                        className="h-6 text-xs px-2"
+                        onClick={() => { setVatFrom(d.from); setVatTo(d.to); }}
+                        data-testid={`button-vat-quarter-${q}`}
+                      >
+                        {formatQuarterLabel(q)}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {vatLoading ? (
+            <Skeleton className="h-64" />
+          ) : vatReturn ? (
+            <>
+              <Card>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg">Output VAT (Sales)</CardTitle>
+                    <Button variant="ghost" size="sm" onClick={() => setShowSalesDetail(v => !v)} data-testid="button-toggle-sales-detail">
+                      {showSalesDetail ? <ChevronDown className="w-4 h-4 mr-1" /> : <ChevronRight className="w-4 h-4 mr-1" />}
+                      {showSalesDetail ? "Hide" : "Show"} Invoice Analysis
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead data-testid="th-vat-output-desc">Description</TableHead>
+                        <TableHead className="text-center" data-testid="th-vat-output-count">Count</TableHead>
+                        <TableHead className="text-right" data-testid="th-vat-output-net">Net Amount</TableHead>
+                        <TableHead className="text-right" data-testid="th-vat-output-vat">VAT Amount</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow data-testid="row-vat-sales">
+                        <TableCell className="text-sm">Sales Invoices</TableCell>
+                        <TableCell className="text-center text-sm" data-testid="text-vat-sales-count">{vatReturn.sales.count}</TableCell>
+                        <TableCell className="text-right text-sm" data-testid="text-vat-sales-net">{formatEUR(vatReturn.sales.netAmount)}</TableCell>
+                        <TableCell className="text-right text-sm font-medium" data-testid="text-vat-sales-vat">{formatEUR(vatReturn.sales.vatAmount)}</TableCell>
+                      </TableRow>
+                      {vatReturn.creditNotes.count > 0 && (
+                        <TableRow data-testid="row-vat-credit-notes">
+                          <TableCell className="text-sm text-red-600 dark:text-red-400">Less: Credit Notes</TableCell>
+                          <TableCell className="text-center text-sm text-red-600 dark:text-red-400" data-testid="text-vat-cn-count">{vatReturn.creditNotes.count}</TableCell>
+                          <TableCell className="text-right text-sm text-red-600 dark:text-red-400" data-testid="text-vat-cn-net">({formatEUR(vatReturn.creditNotes.netAmount)})</TableCell>
+                          <TableCell className="text-right text-sm font-medium text-red-600 dark:text-red-400" data-testid="text-vat-cn-vat">({formatEUR(vatReturn.creditNotes.vatAmount)})</TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="font-bold">
+                        <TableCell colSpan={2}>Total Output VAT</TableCell>
+                        <TableCell className="text-right" data-testid="text-vat-output-net-total">{formatEUR(vatReturn.outputNet)}</TableCell>
+                        <TableCell className="text-right" data-testid="text-vat-output-total">{formatEUR(vatReturn.outputVat)}</TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+
+                  {showSalesDetail && (
+                    <div className="border-t">
+                      <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide bg-muted/30">Sales Invoice Analysis</div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="text-xs">
+                            <TableHead className="text-xs">Invoice #</TableHead>
+                            <TableHead className="text-xs">Customer</TableHead>
+                            <TableHead className="text-xs">Date</TableHead>
+                            <TableHead className="text-right text-xs">Net</TableHead>
+                            <TableHead className="text-right text-xs">VAT</TableHead>
+                            <TableHead className="text-right text-xs">Gross</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {vatReturn.sales.items.map((item, idx) => (
+                            <TableRow
+                              key={idx}
+                              className="text-xs cursor-pointer hover:bg-muted/50 transition-colors"
+                              data-testid={`row-vat-sale-${idx}`}
+                              onClick={() => setLocation(`/invoices/${item.id}`)}
+                              title="Open invoice"
+                            >
+                              <TableCell className="text-xs font-mono text-primary underline-offset-2 hover:underline">
+                                <span className="flex items-center gap-1">{item.invoiceNumber}<ExternalLink className="w-3 h-3 opacity-50" /></span>
+                              </TableCell>
+                              <TableCell className="text-xs">{item.customerName}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{item.date}</TableCell>
+                              <TableCell className="text-right text-xs">{formatEUR(item.netAmount)}</TableCell>
+                              <TableCell className="text-right text-xs">{formatEUR(item.vatAmount)}</TableCell>
+                              <TableCell className="text-right text-xs font-medium">{formatEUR(item.grossAmount)}</TableCell>
+                            </TableRow>
+                          ))}
+                          {vatReturn.creditNotes.items.map((item, idx) => (
+                            <TableRow
+                              key={`cn-${idx}`}
+                              className="text-xs text-red-600 dark:text-red-400 cursor-pointer hover:bg-red-50/50 dark:hover:bg-red-950/20 transition-colors"
+                              data-testid={`row-vat-cn-${idx}`}
+                              onClick={() => setLocation(`/invoices/${item.id}`)}
+                              title="Open credit note"
+                            >
+                              <TableCell className="text-xs font-mono underline-offset-2 hover:underline">
+                                <span className="flex items-center gap-1">{item.invoiceNumber}<ExternalLink className="w-3 h-3 opacity-50" /></span>
+                              </TableCell>
+                              <TableCell className="text-xs">{item.customerName}</TableCell>
+                              <TableCell className="text-xs text-red-400">{item.date}</TableCell>
+                              <TableCell className="text-right text-xs">({formatEUR(item.netAmount)})</TableCell>
+                              <TableCell className="text-right text-xs">({formatEUR(item.vatAmount)})</TableCell>
+                              <TableCell className="text-right text-xs font-medium">({formatEUR(item.grossAmount)})</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg">Input VAT (Purchases)</CardTitle>
+                    <Button variant="ghost" size="sm" onClick={() => setShowPurchaseDetail(v => !v)} data-testid="button-toggle-purchase-detail">
+                      {showPurchaseDetail ? <ChevronDown className="w-4 h-4 mr-1" /> : <ChevronRight className="w-4 h-4 mr-1" />}
+                      {showPurchaseDetail ? "Hide" : "Show"} Invoice Analysis
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Description</TableHead>
+                        <TableHead className="text-center">Count</TableHead>
+                        <TableHead className="text-right">Net Amount</TableHead>
+                        <TableHead className="text-right">VAT Amount</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow data-testid="row-vat-purchases">
+                        <TableCell className="text-sm">Purchase Invoices</TableCell>
+                        <TableCell className="text-center text-sm" data-testid="text-vat-purch-count">{vatReturn.purchases.count}</TableCell>
+                        <TableCell className="text-right text-sm" data-testid="text-vat-purch-net">{formatEUR(vatReturn.purchases.netAmount)}</TableCell>
+                        <TableCell className="text-right text-sm font-medium" data-testid="text-vat-purch-vat">{formatEUR(vatReturn.purchases.vatAmount)}</TableCell>
+                      </TableRow>
+                      <TableRow data-testid="row-vat-expenses">
+                        <TableCell className="text-sm">Business Expenses</TableCell>
+                        <TableCell className="text-center text-sm" data-testid="text-vat-exp-count">{vatReturn.expenses.count}</TableCell>
+                        <TableCell className="text-right text-sm" data-testid="text-vat-exp-net">{formatEUR(vatReturn.expenses.netAmount)}</TableCell>
+                        <TableCell className="text-right text-sm font-medium" data-testid="text-vat-exp-vat">{formatEUR(vatReturn.expenses.vatAmount)}</TableCell>
+                      </TableRow>
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow className="font-bold">
+                        <TableCell colSpan={2}>Total Input VAT</TableCell>
+                        <TableCell className="text-right" data-testid="text-vat-input-net-total">{formatEUR(vatReturn.inputNet)}</TableCell>
+                        <TableCell className="text-right" data-testid="text-vat-input-total">{formatEUR(vatReturn.inputVat)}</TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+
+                  {showPurchaseDetail && (
+                    <div className="border-t">
+                      {vatReturn.purchases.items.length > 0 && (
+                        <>
+                          <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide bg-muted/30">Purchase Invoice Analysis</div>
+                          <Table>
+                            <TableHeader>
+                              <TableRow className="text-xs">
+                                <TableHead className="text-xs">Invoice #</TableHead>
+                                <TableHead className="text-xs">Supplier Ref</TableHead>
+                                <TableHead className="text-xs">Supplier</TableHead>
+                                <TableHead className="text-xs">Date</TableHead>
+                                <TableHead className="text-right text-xs">Net</TableHead>
+                                <TableHead className="text-right text-xs">VAT</TableHead>
+                                <TableHead className="text-right text-xs">Gross</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {vatReturn.purchases.items.map((item, idx) => (
+                                <TableRow
+                                  key={idx}
+                                  className="text-xs cursor-pointer hover:bg-muted/50 transition-colors"
+                                  data-testid={`row-vat-purchase-${idx}`}
+                                  onClick={() => setLocation("/purchase-invoices")}
+                                  title="Open purchase invoices"
+                                >
+                                  <TableCell className="text-xs font-mono text-primary underline-offset-2 hover:underline">
+                                    <span className="flex items-center gap-1">{item.invoiceNumber}<ExternalLink className="w-3 h-3 opacity-50" /></span>
+                                  </TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{item.supplierRef}</TableCell>
+                                  <TableCell className="text-xs">{item.supplierName}</TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{item.date}</TableCell>
+                                  <TableCell className="text-right text-xs">{formatEUR(item.netAmount)}</TableCell>
+                                  <TableCell className="text-right text-xs">{formatEUR(item.vatAmount)}</TableCell>
+                                  <TableCell className="text-right text-xs font-medium">{formatEUR(item.grossAmount)}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </>
+                      )}
+                      {vatReturn.expenses.items.length > 0 && (
+                        <>
+                          <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide bg-muted/30 border-t">Business Expense Analysis</div>
+                          <Table>
+                            <TableHeader>
+                              <TableRow className="text-xs">
+                                <TableHead className="text-xs">Description</TableHead>
+                                <TableHead className="text-xs">Date</TableHead>
+                                <TableHead className="text-right text-xs">Net</TableHead>
+                                <TableHead className="text-right text-xs">VAT</TableHead>
+                                <TableHead className="text-right text-xs">Gross</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {vatReturn.expenses.items.map((item, idx) => (
+                                <TableRow
+                                  key={idx}
+                                  className="text-xs cursor-pointer hover:bg-muted/50 transition-colors"
+                                  data-testid={`row-vat-expense-${idx}`}
+                                  onClick={() => setLocation("/accounting/expenses")}
+                                  title="Open expenses"
+                                >
+                                  <TableCell className="text-xs">
+                                    <span className="flex items-center gap-1">{item.description}<ExternalLink className="w-3 h-3 opacity-40" /></span>
+                                  </TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{item.date}</TableCell>
+                                  <TableCell className="text-right text-xs">{formatEUR(item.netAmount)}</TableCell>
+                                  <TableCell className="text-right text-xs">{formatEUR(item.vatAmount)}</TableCell>
+                                  <TableCell className="text-right text-xs font-medium">{formatEUR(item.grossAmount)}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border-2">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg">VAT Return Summary — {vatFrom} to {vatTo}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-sm text-muted-foreground">Output VAT (collected from sales)</span>
+                      <span className="text-sm font-medium" data-testid="text-vat-summary-output">{formatEUR(vatReturn.outputVat)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-sm text-muted-foreground">Input VAT (paid on purchases & expenses)</span>
+                      <span className="text-sm font-medium" data-testid="text-vat-summary-input">{formatEUR(vatReturn.inputVat)}</span>
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-base font-semibold">
+                        {parseFloat(vatReturn.netVatPayable) >= 0 ? "Net VAT Payable to Tax Department" : "Net VAT Refundable from Tax Department"}
+                      </span>
+                      <span
+                        className={`text-lg font-bold ${parseFloat(vatReturn.netVatPayable) >= 0 ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}
+                        data-testid="text-vat-net-payable"
+                      >
+                        {formatEUR(Math.abs(parseFloat(vatReturn.netVatPayable)))}
+                      </span>
+                    </div>
+                    <div className="pt-2 text-xs text-muted-foreground">
+                      <p>Cyprus VAT Return (Form VAT 4) — Quarterly filing at 19% standard rate</p>
+                      <p>Filing deadline: 10th day of the month following the quarter end</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          ) : null}
+        </TabsContent>
+      </Tabs>
+
+      {/* General Ledger Drill-Down Sheet */}
+      <Sheet open={!!drillDown} onOpenChange={(open) => !open && setDrillDown(null)}>
+        <SheetContent className="w-full sm:max-w-2xl flex flex-col p-0" data-testid="sheet-gl-drilldown">
+          <SheetHeader className="px-6 py-4 border-b shrink-0">
+            <SheetTitle className="flex items-center gap-2">
+              <span className="font-mono text-sm text-muted-foreground">{drillDown?.code}</span>
+              <span>{drillDown?.name}</span>
+            </SheetTitle>
+            <p className="text-xs text-muted-foreground">
+              General Ledger · {drillDown?.from === "1900-01-01" ? "All time" : `${drillDown?.from} to ${drillDown?.to}`}
+            </p>
+          </SheetHeader>
+
+          <ScrollArea className="flex-1">
+            {glLoading ? (
+              <div className="p-6 space-y-2">
+                <Skeleton className="h-8" />
+                <Skeleton className="h-8" />
+                <Skeleton className="h-8" />
+              </div>
+            ) : glData ? (
+              <div>
+                {/* Opening Balance */}
+                <div className="px-6 py-3 bg-muted/40 border-b flex justify-between items-center">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Opening Balance</span>
+                  <span className="text-sm font-semibold" data-testid="text-gl-opening">{formatEUR(glData.openingBalance)}</span>
+                </div>
+
+                {glData.entries.length === 0 ? (
+                  <div className="px-6 py-12 text-center text-muted-foreground text-sm">
+                    No transactions in this period
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="text-xs">Date</TableHead>
+                        <TableHead className="text-xs">Entry #</TableHead>
+                        <TableHead className="text-xs">Description</TableHead>
+                        <TableHead className="text-right text-xs">Debit</TableHead>
+                        <TableHead className="text-right text-xs">Credit</TableHead>
+                        <TableHead className="text-right text-xs">Balance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(() => {
+                        let running = parseFloat(glData.openingBalance);
+                        return glData.entries.map((entry: any, idx: number) => {
+                          const d = parseFloat(entry.debit || "0");
+                          const c = parseFloat(entry.credit || "0");
+                          running += d - c;
+                          return (
+                            <TableRow key={idx} className="text-xs" data-testid={`row-gl-entry-${idx}`}>
+                              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{entry.date}</TableCell>
+                              <TableCell className="text-xs font-mono whitespace-nowrap">{entry.entryNumber}</TableCell>
+                              <TableCell className="text-xs max-w-[200px] truncate" title={entry.description}>
+                                {entry.lineDescription || entry.description}
+                              </TableCell>
+                              <TableCell className="text-right text-xs">
+                                {d > 0 ? formatEUR(d) : "—"}
+                              </TableCell>
+                              <TableCell className="text-right text-xs">
+                                {c > 0 ? formatEUR(c) : "—"}
+                              </TableCell>
+                              <TableCell className={`text-right text-xs font-medium ${running < 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+                                {formatEUR(running)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        });
+                      })()}
+                    </TableBody>
+                  </Table>
+                )}
+
+                {/* Closing Balance */}
+                {glData.entries.length > 0 && (() => {
+                  const closing = glData.entries.reduce((bal: number, e: any) => {
+                    return bal + parseFloat(e.debit || "0") - parseFloat(e.credit || "0");
+                  }, parseFloat(glData.openingBalance));
+                  return (
+                    <div className="px-6 py-3 bg-muted/40 border-t flex justify-between items-center">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Closing Balance</span>
+                      <span className={`text-sm font-bold ${closing < 0 ? "text-red-600 dark:text-red-400" : ""}`} data-testid="text-gl-closing">
+                        {formatEUR(closing)}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+            ) : null}
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}

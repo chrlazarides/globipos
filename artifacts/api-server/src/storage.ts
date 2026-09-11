@@ -1,0 +1,4079 @@
+// @ts-nocheck
+import { db } from "./db";
+import { eq, and, gte, lte, lt, gt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
+import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeQrCode, synthesizeSequentialCode } from "./barcode-utils";
+import {
+  users, categories, colors, sizes, items, itemShelfPriceHistory, itemVariants, itemBarcodes, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
+  seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
+  portalOrders, portalOrderItems, systemSettings, customerLoyaltyPoints,
+  suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
+  emailLogs, accounts, journalEntries, journalEntryLines, expenses,
+  posLocations, posTerminals, posLayoutSets, posLayoutButtons,
+  posOrders, posOrderLines, posShifts, posSyncConfig, posInbox, posAuditLogs,
+  type InsertUser, type User, type InsertCategory, type Category, type InsertColor, type Color, type InsertSize, type Size,
+  type InsertItem, type Item, type InsertItemVariant, type ItemVariant, type InsertVariantTemplate, type VariantTemplate,
+  type InsertItemBarcode, type ItemBarcode,
+  type InsertInventoryInLine, type InventoryInLine, type InsertCustomer, type Customer,
+  type InsertPriceContract, type PriceContract,
+  type InsertPriceContractRule, type PriceContractRule,
+  type InsertPriceContractItem, type PriceContractItem,
+  type InsertSeasonalOffer, type SeasonalOffer,
+  type InsertSeasonalOfferItem, type SeasonalOfferItem,
+  type InsertInvoice, type Invoice, type InsertInvoiceItem, type InvoiceItem,
+  type InsertPayment, type Payment,
+  type InsertPortalOrder, type PortalOrder,
+  type InsertPortalOrderItem, type PortalOrderItem,
+  type SystemSetting,
+  type InsertSupplier, type Supplier,
+  type InsertPurchaseInvoice, type PurchaseInvoice,
+  type InsertPurchaseInvoiceItem, type PurchaseInvoiceItem,
+  type InsertSupplierPayment, type SupplierPayment,
+  type InsertEmailLog, type EmailLog,
+  type InsertAccount, type Account,
+  type InsertJournalEntry, type JournalEntry,
+  type InsertJournalEntryLine, type JournalEntryLine,
+  type InsertExpense, type Expense,
+  customerDeliveryLocations,
+  type InsertCustomerDeliveryLocation, type CustomerDeliveryLocation,
+  versionSnapshots,
+  type VersionSnapshot,
+  type InsertPosLocation, type PosLocation,
+  type InsertPosTerminal, type PosTerminal,
+  type InsertPosLayoutSet, type PosLayoutSet,
+  type InsertPosLayoutButton, type PosLayoutButton,
+  type InsertPosOrder, type PosOrder,
+  type InsertPosOrderLine, type PosOrderLine,
+  type InsertPosShift, type PosShift, type InsertPosAuditLog, type PosAuditLog,
+  type InsertPosSyncConfig, type PosSyncConfig,
+  type InsertPosInbox, type PosInbox,
+  signageMedia, signagePlaylists, signagePlaylistItems, signageScreens,
+  type InsertSignageMedia, type SignageMedia,
+  type InsertSignagePlaylist, type SignagePlaylist,
+  type InsertSignagePlaylistItem, type SignagePlaylistItem,
+  type InsertSignageScreen, type SignageScreen,
+  itemLocationStock,
+  type InsertItemLocationStock, type ItemLocationStock,
+} from "@workspace/db";
+
+export interface IStorage {
+  getUser(id: string): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+
+  getCategories(): Promise<Category[]>;
+  getCategory(id: string): Promise<Category | undefined>;
+  createCategory(data: InsertCategory): Promise<Category>;
+  updateCategory(id: string, data: Partial<InsertCategory>): Promise<Category | undefined>;
+
+  getColors(): Promise<Color[]>;
+  createColor(data: InsertColor): Promise<Color>;
+  updateColor(id: string, data: Partial<InsertColor>): Promise<Color | undefined>;
+  deleteColor(id: string): Promise<void>;
+
+  getSizes(): Promise<Size[]>;
+  createSize(data: InsertSize): Promise<Size>;
+  updateSize(id: string, data: Partial<InsertSize>): Promise<Size | undefined>;
+  deleteSize(id: string): Promise<void>;
+
+  getLocationStock(locationId?: string, itemId?: string): Promise<ItemLocationStock[]>;
+  getStockForItemAcrossLocations(itemId: string): Promise<(ItemLocationStock & { locationName: string })[]>;
+  setLocationStock(itemId: string, variantId: string | null, locationId: string, quantity: number): Promise<ItemLocationStock>;
+  adjustLocationStock(itemId: string, variantId: string | null, locationId: string, delta: number): Promise<ItemLocationStock>;
+
+  getItemBarcodes(itemId: string): Promise<ItemBarcode[]>;
+  getAllItemBarcodes(): Promise<ItemBarcode[]>;
+  getBarcodeOwnerKeys(barcode: string): Promise<string[]>;
+  addItemBarcode(data: InsertItemBarcode): Promise<ItemBarcode>;
+  deleteItemBarcode(id: string): Promise<void>;
+  getItemByAnyBarcode(barcode: string): Promise<Item | undefined>;
+
+  getItems(): Promise<Item[]>;
+  getCatalogPage(options: { limit: number; cursor?: { name: string; id: string }; since?: Date }): Promise<Item[]>;
+  getItem(id: string): Promise<Item | undefined>;
+  getItemByBarcode(barcode: string): Promise<Item | undefined>;
+  createItem(data: InsertItem): Promise<Item>;
+  updateItem(id: string, data: Partial<InsertItem>): Promise<Item | undefined>;
+
+  getItemVariants(itemId: string): Promise<ItemVariant[]>;
+  getAllItemVariants(): Promise<ItemVariant[]>;
+  getAllItemVariantsIncludingInactive(): Promise<ItemVariant[]>;
+  getItemVariant(id: string): Promise<ItemVariant | undefined>;
+  getItemVariantByBarcode(barcode: string): Promise<ItemVariant | undefined>;
+  getItemVariantBySku(sku: string): Promise<ItemVariant | undefined>;
+  bulkUpsertVariantMatrix(itemId: string, season: string | null, cells: { colorId: string; colorName: string; colorIndex: number; sizeId: string; sizeName: string; sizeIndex: number; quality?: string | null; qualityIndex?: number; quantity: number }[]): Promise<ItemVariant[]>;
+  createItemVariant(data: InsertItemVariant): Promise<ItemVariant>;
+  updateItemVariant(id: string, data: Partial<InsertItemVariant>): Promise<ItemVariant | undefined>;
+  deleteItemVariant(id: string): Promise<void>;
+
+  getVariantTemplates(): Promise<VariantTemplate[]>;
+  createVariantTemplate(data: InsertVariantTemplate): Promise<VariantTemplate>;
+  deleteVariantTemplate(id: string): Promise<void>;
+
+  getInventoryInLines(posted?: boolean): Promise<InventoryInLine[]>;
+  appendInventoryInLines(header: Omit<InsertInventoryInLine, "colorId" | "colorName" | "sizeId" | "sizeName" | "quantity">, cells: { colorId: string; colorName: string; sizeId: string; sizeName: string; quantity: number }[]): Promise<InventoryInLine[]>;
+  deleteInventoryInLine(id: string): Promise<void>;
+  postInventoryInLines(ids: string[]): Promise<{ posted: number; itemsCreated: number; variantsCreated: number; lines: Array<{ id: string; barcode: string; description: string; colorName: string; sizeName: string; quantity: number; itemId: string; variantId: string; locationId: string | null }> }>;
+  getDefaultReceivingLocation(): Promise<import("@shared/schema").PosLocation | undefined>;
+  setDefaultReceivingLocation(id: string): Promise<void>;
+
+  getCustomers(): Promise<Customer[]>;
+  deleteCustomer(id: string): Promise<void>;
+  getCustomer(id: string): Promise<Customer | undefined>;
+  getNextCustomerCode(): Promise<string>;
+  findDuplicateCustomer(name: string, email?: string | null, taxId?: string | null, excludeId?: string): Promise<Customer[]>;
+  createCustomer(data: InsertCustomer): Promise<Customer>;
+  updateCustomer(id: string, data: Partial<InsertCustomer>): Promise<Customer | undefined>;
+  getCustomerDeliveryLocations(customerId: string): Promise<CustomerDeliveryLocation[]>;
+  createCustomerDeliveryLocation(data: InsertCustomerDeliveryLocation): Promise<CustomerDeliveryLocation>;
+  updateCustomerDeliveryLocation(id: string, data: Partial<InsertCustomerDeliveryLocation>): Promise<CustomerDeliveryLocation | undefined>;
+  deleteCustomerDeliveryLocation(id: string): Promise<void>;
+
+  getPriceContracts(): Promise<(PriceContract & { customerName?: string; priceLevel?: number })[]>;
+  getPriceContract(id: string): Promise<PriceContract | undefined>;
+  createPriceContract(data: InsertPriceContract): Promise<PriceContract>;
+  updatePriceContract(id: string, data: Partial<InsertPriceContract>): Promise<PriceContract | undefined>;
+  getContractRules(contractId: string): Promise<PriceContractRule[]>;
+  setContractRules(contractId: string, rules: InsertPriceContractRule[]): Promise<PriceContractRule[]>;
+
+  getSeasonalOffers(): Promise<SeasonalOffer[]>;
+  getSeasonalOffer(id: string): Promise<SeasonalOffer | undefined>;
+  createSeasonalOffer(data: InsertSeasonalOffer): Promise<SeasonalOffer>;
+
+  getInvoices(type?: string): Promise<(Invoice & { customerName: string })[]>;
+  getInvoice(id: string): Promise<(Invoice & { items: InvoiceItem[]; customerName: string }) | undefined>;
+  createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[], overrideNumber?: string): Promise<Invoice>;
+  updateInvoice(id: string, data: Partial<InsertInvoice>, lineItems?: InsertInvoiceItem[]): Promise<Invoice | undefined>;
+  deleteInvoice(id: string): Promise<void>;
+  getNextInvoiceNumber(type: string): Promise<string>;
+
+  getPayments(invoiceId: string): Promise<Payment[]>;
+  getAllPayments(): Promise<(Payment & { invoiceNumber?: string; customerName?: string; invoiceTotal?: string })[]>;
+  createPayment(data: InsertPayment): Promise<Payment>;
+  updatePayment(id: string, data: Partial<InsertPayment>): Promise<Payment>;
+  deletePayment(id: string): Promise<void>;
+  autoMarkOverdue(): Promise<void>;
+
+  getDashboardStats(): Promise<any>;
+  getDashboardCharts(): Promise<any>;
+  getSalesReport(from: string, to: string, customerId?: string): Promise<any>;
+  getItemSalesReport(from: string, to: string, customerId?: string, categoryId?: string): Promise<any>;
+  getCustomerStatements(): Promise<any[]>;
+  getCustomerLastPrices(customerId: string, excludeInvoiceId?: string): Promise<Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]>>;
+  getCustomerSavingsReport(customerId: string, from: string, to: string): Promise<any>;
+  getItemPriceHistory(itemId: string, limit?: number, from?: string, to?: string): Promise<{ invoiceId: string; invoiceNumber: string; date: string; customerId: string; customerName: string; quantity: string; unitPrice: string; discountPercent: string; discountAmount: string }[]>;
+  quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number): Promise<{ contractId: string }>;
+  getContractItems(contractId: string): Promise<PriceContractItem[]>;
+  deleteContractItem(itemId: string): Promise<void>;
+  updateContractItem(itemId: string, specialPrice: number): Promise<PriceContractItem>;
+  deleteContract(id: string): Promise<void>;
+
+  getSettings(): Promise<SystemSetting[]>;
+  getSetting(key: string): Promise<SystemSetting | undefined>;
+  upsertSetting(key: string, value: string, label: string, group: string): Promise<SystemSetting>;
+
+  getCustomerByCode(code: string): Promise<Customer | undefined>;
+  getCustomerInvoices(customerId: string): Promise<(Invoice & { items: InvoiceItem[] })[]>;
+  getPortalOrders(customerId: string): Promise<(PortalOrder & { items: PortalOrderItem[] })[]>;
+  getCustomerIdsWithWhatsappOrders(): Promise<string[]>;
+  getAllPortalOrders(filters?: { source?: string; status?: string }): Promise<(PortalOrder & { items: PortalOrderItem[]; customerName: string; customerCode: string })[]>;
+  updatePortalOrderStatus(id: string, status: string): Promise<PortalOrder | undefined>;
+  setPortalOrderInvoiceId(id: string, invoiceId: string): Promise<PortalOrder | undefined>;
+  createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]): Promise<PortalOrder>;
+  getCustomerPortalOrderByCheckoutKey(customerId: string, checkoutKey: string): Promise<PortalOrder | undefined>;
+  createCustomerPortalOrderAtomic(
+    data: Omit<InsertPortalOrder, "total" | "cashbackApplied">,
+    lineItems: InsertPortalOrderItem[],
+    options: {
+      useCashback: boolean;
+      loyaltyEnabled: boolean;
+      cashbackEnabled: boolean;
+      pointsPerEuro: number;
+      silverThreshold: number;
+      goldThreshold: number;
+      bronzeCashbackPercent: number;
+      silverCashbackPercent: number;
+      goldCashbackPercent: number;
+      maxCashbackOrderPercent: number;
+    },
+  ): Promise<{ order: PortalOrder; replayed: boolean }>;
+  getAvailableItems(): Promise<Item[]>;
+
+  getSuppliers(): Promise<Supplier[]>;
+  getSupplier(id: string): Promise<Supplier | undefined>;
+  createSupplier(data: InsertSupplier): Promise<Supplier>;
+  updateSupplier(id: string, data: Partial<InsertSupplier>): Promise<Supplier | undefined>;
+  deleteSupplier(id: string): Promise<void>;
+
+  getPurchaseInvoices(): Promise<(PurchaseInvoice & { supplierName: string })[]>;
+  getPurchaseInvoice(id: string): Promise<(PurchaseInvoice & { items: PurchaseInvoiceItem[]; supplierName: string }) | undefined>;
+  createPurchaseInvoice(data: InsertPurchaseInvoice, lineItems: InsertPurchaseInvoiceItem[]): Promise<PurchaseInvoice>;
+  updatePurchaseInvoice(id: string, data: Partial<InsertPurchaseInvoice>): Promise<PurchaseInvoice | undefined>;
+  deletePurchaseInvoiceItems(purchaseInvoiceId: string): Promise<void>;
+  createPurchaseInvoiceItems(lineItems: InsertPurchaseInvoiceItem[]): Promise<void>;
+  deletePurchaseInvoice(id: string): Promise<void>;
+  getNextPurchaseInvoiceNumber(): Promise<string>;
+  getLastPurchaseCosts(): Promise<Record<string, { unitCost: string; date: string }>>;
+
+  getSupplierPayments(supplierId?: string): Promise<(SupplierPayment & { supplierName?: string })[]>;
+  createSupplierPayment(data: InsertSupplierPayment): Promise<SupplierPayment>;
+  updateSupplierPayment(id: string, data: Partial<InsertSupplierPayment>): Promise<SupplierPayment>;
+
+  getEmailLogs(): Promise<EmailLog[]>;
+  getEmailLogsByCustomer(customerId: string): Promise<EmailLog[]>;
+  createEmailLog(data: InsertEmailLog): Promise<EmailLog>;
+
+  // Accounting
+  getAccounts(): Promise<Account[]>;
+  getAccount(id: string): Promise<Account | undefined>;
+  getAccountByCode(code: string): Promise<Account | undefined>;
+  createAccount(data: InsertAccount): Promise<Account>;
+  updateAccount(id: string, data: Partial<InsertAccount>): Promise<Account | undefined>;
+
+  getJournalEntries(): Promise<JournalEntry[]>;
+  getJournalEntry(id: string): Promise<(JournalEntry & { lines: (JournalEntryLine & { accountName?: string; accountCode?: string })[] }) | undefined>;
+  createJournalEntry(data: InsertJournalEntry, lines: InsertJournalEntryLine[]): Promise<JournalEntry>;
+  updateJournalEntry(id: string, data: Partial<InsertJournalEntry>, lines: InsertJournalEntryLine[]): Promise<JournalEntry | undefined>;
+  deleteJournalEntry(id: string): Promise<void>;
+  getNextJournalEntryNumber(): Promise<string>;
+
+  getExpenses(): Promise<(Expense & { expenseAccountName?: string; paymentAccountName?: string; supplierName?: string })[]>;
+  createExpense(data: InsertExpense): Promise<Expense>;
+  updateExpense(id: string, data: Partial<InsertExpense>): Promise<Expense | undefined>;
+
+  getGeneralLedger(accountId: string, from: string, to: string): Promise<{ entries: any[]; openingBalance: string }>;
+  getTrialBalance(): Promise<{ accounts: any[]; totalDebits: string; totalCredits: string }>;
+  getProfitAndLoss(from: string, to: string): Promise<{ revenue: any[]; expenses: any[]; totalRevenue: string; totalExpenses: string; netIncome: string }>;
+  getBalanceSheet(asOf: string): Promise<{ assets: any[]; liabilities: any[]; equity: any[]; totalAssets: string; totalLiabilities: string; totalEquity: string }>;
+
+  getPurchaseInvoiceSummary(): Promise<{ totalOutstanding: string; totalCount: number; dueThisMonth: string; overdue: string; overdueCount: number }>;
+  getStockSuggestions(): Promise<{ id: string; name: string; sku: string; stockQuantity: number; reorderLevel: number; categoryName?: string; avgMonthly: number; suggestedOrder: number; urgency: "critical" | "warning" | "info" }[]>;
+
+  // Version Control
+  listVersionSnapshots(): Promise<Omit<VersionSnapshot, "dataSnapshot">[]>;
+  createVersionSnapshot(name: string, description: string, type: string, createdBy: string, dataSnapshot: string, appVersion: string, tableCounts: string): Promise<VersionSnapshot>;
+  getVersionSnapshot(id: string): Promise<VersionSnapshot | undefined>;
+  deleteVersionSnapshot(id: string): Promise<void>;
+
+  // GlobiPOS
+  getPosLocations(): Promise<PosLocation[]>;
+  getPosLocation(id: string): Promise<PosLocation | undefined>;
+  createPosLocation(data: InsertPosLocation): Promise<PosLocation>;
+  updatePosLocation(id: string, data: Partial<InsertPosLocation>): Promise<PosLocation | undefined>;
+  deletePosLocation(id: string): Promise<void>;
+
+  getPosTerminals(locationId?: string): Promise<PosTerminal[]>;
+  getPosTerminal(id: string): Promise<PosTerminal | undefined>;
+  getPosTerminalByCode(code: string): Promise<PosTerminal | undefined>;
+  createPosTerminal(data: InsertPosTerminal): Promise<PosTerminal>;
+  updatePosTerminal(id: string, data: Partial<InsertPosTerminal & { lastSeenAt?: Date; lastSyncAt?: Date; outboxQueueSize?: number }>): Promise<PosTerminal | undefined>;
+  deletePosTerminal(id: string): Promise<void>;
+
+  getSignageMedia(): Promise<SignageMedia[]>;
+  createSignageMedia(data: InsertSignageMedia): Promise<SignageMedia>;
+  deleteSignageMedia(id: string): Promise<void>;
+
+  getSignagePlaylists(): Promise<SignagePlaylist[]>;
+  getSignagePlaylist(id: string): Promise<SignagePlaylist | undefined>;
+  createSignagePlaylist(data: InsertSignagePlaylist): Promise<SignagePlaylist>;
+  updateSignagePlaylist(id: string, data: Partial<InsertSignagePlaylist>): Promise<SignagePlaylist | undefined>;
+  deleteSignagePlaylist(id: string): Promise<void>;
+
+  getSignagePlaylistItems(playlistId: string): Promise<SignagePlaylistItem[]>;
+  createSignagePlaylistItem(data: InsertSignagePlaylistItem): Promise<SignagePlaylistItem>;
+  updateSignagePlaylistItem(id: string, data: Partial<InsertSignagePlaylistItem>): Promise<SignagePlaylistItem | undefined>;
+  deleteSignagePlaylistItem(id: string): Promise<void>;
+  reorderSignagePlaylistItems(playlistId: string, orderedIds: string[]): Promise<void>;
+
+  getSignageScreens(): Promise<SignageScreen[]>;
+  getSignageScreen(id: string): Promise<SignageScreen | undefined>;
+  getSignageScreenByCode(code: string): Promise<SignageScreen | undefined>;
+  getSignageScreenByTerminalId(terminalId: string): Promise<SignageScreen | undefined>;
+  createSignageScreen(data: InsertSignageScreen & { pairingCode: string }): Promise<SignageScreen>;
+  updateSignageScreen(id: string, data: Partial<InsertSignageScreen> & { status?: string; lastSeenAt?: Date }): Promise<SignageScreen | undefined>;
+  deleteSignageScreen(id: string): Promise<void>;
+  markSignageScreenSeen(pairingCode: string): Promise<void>;
+
+  getPosLayoutSets(locationId?: string): Promise<PosLayoutSet[]>;
+  getPosLayoutSet(id: string): Promise<PosLayoutSet | undefined>;
+  createPosLayoutSet(data: InsertPosLayoutSet): Promise<PosLayoutSet>;
+  updatePosLayoutSet(id: string, data: Partial<InsertPosLayoutSet>): Promise<PosLayoutSet | undefined>;
+  deletePosLayoutSet(id: string): Promise<void>;
+  clonePosLayoutSet(id: string, newName?: string): Promise<PosLayoutSet>;
+  getPosLayoutButtons(layoutSetId: string): Promise<PosLayoutButton[]>;
+  upsertPosLayoutButton(data: InsertPosLayoutButton): Promise<PosLayoutButton>;
+  deletePosLayoutButton(id: string): Promise<void>;
+
+  getPosOrders(locationId?: string, terminalId?: string): Promise<PosOrder[]>;
+  getPosOrder(id: string): Promise<PosOrder | undefined>;
+  createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder>;
+  updatePosOrderCardRef(id: string, cardTerminalRef: string): Promise<void>;
+  completeCardPosOrder(id: string, cardTerminalRef: string, amountTendered: string): Promise<void>;
+  voidPosOrder(id: string): Promise<void>;
+  beginCardCharge(id: string, idempotencyKey: string, staleAfterMs: number): Promise<boolean>;
+  clearCardChargeAttempt(id: string): Promise<void>;
+  getHeldOrdersWithRecentChargeAttempt(sinceMs: number): Promise<PosOrder[]>;
+
+  createPosShift(data: InsertPosShift & { syncedAt?: Date }): Promise<PosShift>;
+
+  insertPosAuditLogs(rows: InsertPosAuditLog[]): Promise<number>;
+  getPosAuditLogs(filters?: { terminalId?: string; cashierId?: string; action?: string; limit?: number }): Promise<PosAuditLog[]>;
+  getPosCashierActivity(start: Date, end: Date): Promise<{ orders: { cashierId: string | null; cashierName: string | null; orders: number; sales: number; voids: number }[]; audits: { cashierId: string | null; cashierName: string | null; action: string; count: number }[] }>;
+
+  getPosSyncConfig(): Promise<PosSyncConfig[]>;
+  upsertPosSyncConfig(ruleKey: string, label: string, offlineBehavior: string, description?: string): Promise<PosSyncConfig>;
+
+  getPosInbox(terminalId?: string, since?: Date): Promise<PosInbox[]>;
+  createPosInboxItem(data: InsertPosInbox): Promise<PosInbox>;
+  deletePosInboxItem(id: string): Promise<void>;
+
+  // POS Cashiers
+  getPosCashiers(locationId?: string): Promise<import("@shared/schema").PosCashier[]>;
+  getPosCashier(id: string): Promise<import("@shared/schema").PosCashier | undefined>;
+  createPosCashier(data: import("@shared/schema").InsertPosCashier): Promise<import("@shared/schema").PosCashier>;
+  updatePosCashier(id: string, data: Partial<import("@shared/schema").InsertPosCashier>): Promise<import("@shared/schema").PosCashier | undefined>;
+  deletePosCashier(id: string): Promise<void>;
+
+  // PDA: Stock Take
+  getStockTakeSessions(): Promise<import("@shared/schema").StockTakeSession[]>;
+  getStockTakeSession(id: string): Promise<(import("@shared/schema").StockTakeSession & { lines: import("@shared/schema").StockTakeLine[] }) | undefined>;
+  createStockTakeSession(data: import("@shared/schema").InsertStockTakeSession): Promise<import("@shared/schema").StockTakeSession>;
+  upsertStockTakeLine(data: import("@shared/schema").InsertStockTakeLine): Promise<import("@shared/schema").StockTakeLine>;
+  submitStockTakeSession(id: string): Promise<import("@shared/schema").StockTakeSession | undefined>;
+
+  // PDA: Stock Transfers
+  getStockTransfers(): Promise<(import("@shared/schema").StockTransfer & { items: import("@shared/schema").StockTransferItem[] })[]>;
+  getStockTransfer(id: string): Promise<(import("@shared/schema").StockTransfer & { items: import("@shared/schema").StockTransferItem[] }) | undefined>;
+  getNextTransferNumber(): Promise<string>;
+  createStockTransfer(data: import("@shared/schema").InsertStockTransfer, items: import("@shared/schema").InsertStockTransferItem[]): Promise<import("@shared/schema").StockTransfer>;
+  completeStockTransfer(id: string): Promise<import("@shared/schema").StockTransfer | undefined>;
+
+  // PDA: Agoranomia label compliance
+  getAgoranomiaLabelPrint(itemId: string): Promise<import("@shared/schema").AgoranomiaLabelPrint | undefined>;
+  getAllAgoranomiaLabelPrints(): Promise<import("@shared/schema").AgoranomiaLabelPrint[]>;
+  recordAgoranomiaLabelPrints(records: import("@shared/schema").InsertAgoranomiaLabelPrint[]): Promise<import("@shared/schema").AgoranomiaLabelPrint[]>;
+
+  // PDA: Goods Received Vouchers (OCR invoice import + receiving verification)
+  getGoodsReceivedVouchers(): Promise<(import("@shared/schema").GoodsReceivedVoucher & { items: import("@shared/schema").GoodsReceivedVoucherItem[] })[]>;
+  getGoodsReceivedVoucher(id: string): Promise<(import("@shared/schema").GoodsReceivedVoucher & { items: import("@shared/schema").GoodsReceivedVoucherItem[] }) | undefined>;
+  getNextGrvNumber(): Promise<string>;
+  createGoodsReceivedVoucher(data: import("@shared/schema").InsertGoodsReceivedVoucher, items: import("@shared/schema").InsertGoodsReceivedVoucherItem[]): Promise<import("@shared/schema").GoodsReceivedVoucher>;
+  updateGoodsReceivedVoucher(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucher>): Promise<import("@shared/schema").GoodsReceivedVoucher | undefined>;
+  updateGoodsReceivedVoucherItem(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucherItem>): Promise<import("@shared/schema").GoodsReceivedVoucherItem | undefined>;
+  scanGoodsReceivedVoucherLine(grvId: string, code: string, eventKey: string, incrementBy?: number): Promise<{ line: import("@shared/schema").GoodsReceivedVoucherItem; matchedBy: "barcode" | "sku" | "none" } | undefined>;
+  prepareGrvFinalization(id: string): Promise<any>;
+  completeGrvFinalization(id: string, purchaseInvoiceId: string, hasDiscrepancies: boolean): Promise<import("@shared/schema").GoodsReceivedVoucher | undefined>;
+}
+
+export class DatabaseStorage implements IStorage {
+  async getUser(id: string) {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+  async getUserByUsername(username: string) {
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user;
+  }
+  async createUser(data: InsertUser) {
+    const [user] = await db.insert(users).values(data).returning();
+    return user;
+  }
+
+  async getCategories() {
+    return db.select().from(categories).where(eq(categories.active, true));
+  }
+  async getCategory(id: string) {
+    const [cat] = await db.select().from(categories).where(eq(categories.id, id));
+    return cat;
+  }
+  async createCategory(data: InsertCategory) {
+    const [cat] = await db.insert(categories).values(data).returning();
+    return cat;
+  }
+  async updateCategory(id: string, data: Partial<InsertCategory>) {
+    const [cat] = await db.update(categories).set(data).where(eq(categories.id, id)).returning();
+    return cat;
+  }
+
+  async getColors() {
+    return db.select().from(colors).orderBy(colors.name);
+  }
+  async createColor(data: InsertColor) {
+    const [row] = await db.insert(colors).values(data).returning();
+    return row;
+  }
+  async updateColor(id: string, data: Partial<InsertColor>) {
+    const [row] = await db.update(colors).set(data).where(eq(colors.id, id)).returning();
+    return row;
+  }
+  async deleteColor(id: string) {
+    await db.delete(colors).where(eq(colors.id, id));
+  }
+
+  async getSizes() {
+    return db.select().from(sizes).orderBy(sizes.sortOrder, sizes.name);
+  }
+  async createSize(data: InsertSize) {
+    const [row] = await db.insert(sizes).values(data).returning();
+    return row;
+  }
+  async updateSize(id: string, data: Partial<InsertSize>) {
+    const [row] = await db.update(sizes).set(data).where(eq(sizes.id, id)).returning();
+    return row;
+  }
+  async deleteSize(id: string) {
+    await db.delete(sizes).where(eq(sizes.id, id));
+  }
+
+  async getLocationStock(locationId?: string, itemId?: string) {
+    const conditions = [];
+    if (locationId) conditions.push(eq(itemLocationStock.locationId, locationId));
+    if (itemId) conditions.push(eq(itemLocationStock.itemId, itemId));
+    if (conditions.length) {
+      return db.select().from(itemLocationStock).where(and(...conditions));
+    }
+    return db.select().from(itemLocationStock);
+  }
+  async getStockForItemAcrossLocations(itemId: string) {
+    const rows = await db.select({
+      id: itemLocationStock.id,
+      itemId: itemLocationStock.itemId,
+      variantId: itemLocationStock.variantId,
+      locationId: itemLocationStock.locationId,
+      quantity: itemLocationStock.quantity,
+      updatedAt: itemLocationStock.updatedAt,
+      locationName: posLocations.name,
+    })
+      .from(itemLocationStock)
+      .innerJoin(posLocations, eq(itemLocationStock.locationId, posLocations.id))
+      .where(eq(itemLocationStock.itemId, itemId));
+    return rows;
+  }
+  async setLocationStock(itemId: string, variantId: string | null, locationId: string, quantity: number) {
+    const conditions = [eq(itemLocationStock.itemId, itemId), eq(itemLocationStock.locationId, locationId)];
+    conditions.push(variantId ? eq(itemLocationStock.variantId, variantId) : isNull(itemLocationStock.variantId));
+    const [existing] = await db.select().from(itemLocationStock).where(and(...conditions));
+    if (existing) {
+      const [row] = await db.update(itemLocationStock).set({ quantity }).where(eq(itemLocationStock.id, existing.id)).returning();
+      return row;
+    }
+    const [row] = await db.insert(itemLocationStock).values({ itemId, variantId: variantId || null, locationId, quantity }).returning();
+    return row;
+  }
+  async adjustLocationStock(itemId: string, variantId: string | null, locationId: string, delta: number) {
+    const conditions = [eq(itemLocationStock.itemId, itemId), eq(itemLocationStock.locationId, locationId)];
+    conditions.push(variantId ? eq(itemLocationStock.variantId, variantId) : isNull(itemLocationStock.variantId));
+    const [existing] = await db.select().from(itemLocationStock).where(and(...conditions));
+    if (existing) {
+      const newQty = existing.quantity + delta;
+      const [row] = await db.update(itemLocationStock).set({ quantity: newQty }).where(eq(itemLocationStock.id, existing.id)).returning();
+      return row;
+    }
+    const [row] = await db.insert(itemLocationStock).values({ itemId, variantId: variantId || null, locationId, quantity: delta }).returning();
+    return row;
+  }
+
+  async getItems() {
+    return db.select().from(items).orderBy(items.name);
+  }
+  async getCatalogPage({ limit, cursor, since }: { limit: number; cursor?: { name: string; id: string }; since?: Date }) {
+    const conditions = [];
+    if (since) conditions.push(gt(items.updatedAt, since));
+    if (cursor) {
+      conditions.push(or(gt(items.name, cursor.name), and(eq(items.name, cursor.name), gt(items.id, cursor.id))));
+    }
+    return db.select().from(items)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(items.name, items.id)
+      .limit(Math.max(1, Math.min(limit, 500)));
+  }
+  async getItem(id: string) {
+    const [item] = await db.select().from(items).where(eq(items.id, id));
+    return item;
+  }
+  async getItemBarcodes(itemId: string) {
+    return db.select().from(itemBarcodes)
+      .where(eq(itemBarcodes.itemId, itemId))
+      .orderBy(itemBarcodes.isPrimary, itemBarcodes.createdAt);
+  }
+  async getAllItemBarcodes() {
+    return db.select().from(itemBarcodes);
+  }
+  async getBarcodeOwnerKeys(barcode: string) {
+    const [matchingItems, matchingVariants, matchingAliases] = await Promise.all([
+      db.select({ id: items.id }).from(items).where(eq(items.barcode, barcode)),
+      db.select({ id: itemVariants.id }).from(itemVariants).where(eq(itemVariants.barcode, barcode)),
+      db.select({ itemId: itemBarcodes.itemId }).from(itemBarcodes).where(eq(itemBarcodes.barcode, barcode)),
+    ]);
+    return [
+      ...matchingItems.map((item) => `item:${item.id}`),
+      ...matchingVariants.map((variant) => `variant:${variant.id}`),
+      ...matchingAliases.map((alias) => `item:${alias.itemId}`),
+    ];
+  }
+  async addItemBarcode(data: InsertItemBarcode) {
+    const [row] = await db.insert(itemBarcodes).values(data).returning();
+    return row;
+  }
+  async deleteItemBarcode(id: string) {
+    await db.delete(itemBarcodes).where(eq(itemBarcodes.id, id));
+  }
+  async getItemByAnyBarcode(barcode: string) {
+    // Check the item_barcodes alias table first
+    const [bc] = await db.select().from(itemBarcodes).where(eq(itemBarcodes.barcode, barcode));
+    if (bc) return this.getItem(bc.itemId);
+    // Fall back to the primary barcode on the item itself
+    return this.getItemByBarcode(barcode);
+  }
+
+  async getItemByBarcode(barcode: string) {
+    const [item] = await db.select().from(items).where(eq(items.barcode, barcode));
+    return item;
+  }
+  async createItem(data: InsertItem) {
+    if (data.shelfLabelDiscountEnabled) {
+      throw new Error("A promotional shelf label can only be enabled while reducing an existing item's price");
+    }
+    return db.transaction(async (tx) => {
+      const [item] = await tx.insert(items).values(data).returning();
+      await tx.insert(itemShelfPriceHistory).values({ itemId: item.id, price: item.price1, source: "item_create" });
+      return item;
+    });
+  }
+  async updateItem(id: string, data: Partial<InsertItem>) {
+    return db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(items).where(eq(items.id, id));
+      if (!existing) return undefined;
+      const oldPrice = Number(existing.price1);
+      const newPrice = data.price1 === undefined ? oldPrice : Number(data.price1);
+      if (!existing.shelfLabelDiscountEnabled && data.shelfLabelDiscountEnabled === true) {
+        if (!(newPrice < oldPrice)) {
+          throw new Error("Enable a promotional shelf label in the same update that reduces Price Level 1");
+        }
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const recent = await tx.select({ price: itemShelfPriceHistory.price, source: itemShelfPriceHistory.source })
+          .from(itemShelfPriceHistory)
+          .where(and(eq(itemShelfPriceHistory.itemId, id), gte(itemShelfPriceHistory.effectiveAt, since)));
+        const statutoryPrior = Math.min(oldPrice, ...recent.map((row) => Number(row.price)));
+        const legacyHistoryIncomplete = recent.some((row) => row.source === "migration_baseline");
+        if (!legacyHistoryIncomplete && Number(data.shelfLabelPreviousPrice) !== statutoryPrior) {
+          throw new Error(`The statutory prior price is €${statutoryPrior.toFixed(2)}, calculated from the recorded 30-day shelf-price history`);
+        }
+        data.shelfLabelPreviousPriceProvenance = legacyHistoryIncomplete
+          ? "staff_attested_legacy_period"
+          : "recorded_30_day_low";
+      } else if (existing.shelfLabelDiscountEnabled && data.shelfLabelDiscountEnabled !== false) {
+        if (data.shelfLabelPreviousPrice !== undefined && Number(data.shelfLabelPreviousPrice) !== Number(existing.shelfLabelPreviousPrice)) {
+          throw new Error("Disable the current promotional campaign before establishing a different statutory prior price");
+        }
+        data.shelfLabelPreviousPrice = existing.shelfLabelPreviousPrice;
+        data.shelfLabelPreviousPriceProvenance = existing.shelfLabelPreviousPriceProvenance;
+      }
+      const [item] = await tx.update(items).set(data).where(eq(items.id, id)).returning();
+      if (newPrice !== oldPrice) {
+        await tx.insert(itemShelfPriceHistory).values({ itemId: id, price: newPrice.toFixed(2), source: "item_update" });
+      }
+      return item;
+    });
+  }
+
+  async getItemVariants(itemId: string) {
+    return db.select().from(itemVariants).where(eq(itemVariants.itemId, itemId)).orderBy(itemVariants.sku);
+  }
+  async getAllItemVariants() {
+    return db.select().from(itemVariants).where(eq(itemVariants.active, true));
+  }
+  async getAllItemVariantsIncludingInactive() {
+    return db.select().from(itemVariants);
+  }
+  async getItemVariant(id: string) {
+    const [v] = await db.select().from(itemVariants).where(eq(itemVariants.id, id));
+    return v;
+  }
+  async getItemVariantByBarcode(barcode: string) {
+    const [v] = await db.select().from(itemVariants).where(eq(itemVariants.barcode, barcode));
+    return v;
+  }
+  async getItemVariantBySku(sku: string) {
+    const [v] = await db.select().from(itemVariants).where(eq(itemVariants.sku, sku));
+    return v;
+  }
+  async createItemVariant(data: InsertItemVariant) {
+    const [v] = await db.insert(itemVariants).values(data).returning();
+    await db.update(items).set({ hasVariants: true }).where(eq(items.id, data.itemId));
+    return v;
+  }
+  async updateItemVariant(id: string, data: Partial<InsertItemVariant>) {
+    const [v] = await db.update(itemVariants).set(data).where(eq(itemVariants.id, id)).returning();
+    return v;
+  }
+  async deleteItemVariant(id: string) {
+    await db.delete(itemVariants).where(eq(itemVariants.id, id));
+  }
+
+  async bulkUpsertVariantMatrix(
+    itemId: string,
+    season: string | null,
+    cells: { colorId: string; colorName: string; colorIndex: number; sizeId: string; sizeName: string; sizeIndex: number; quality?: string | null; qualityIndex?: number; quantity: number }[]
+  ) {
+    const item = await this.getItem(itemId);
+    if (!item) throw new Error("Item not found");
+
+    const existingVariants = await db.select().from(itemVariants).where(eq(itemVariants.itemId, itemId));
+    const results: ItemVariant[] = [];
+
+    for (const cell of cells) {
+      const existing = existingVariants.find(v =>
+        v.option1Value === cell.colorName &&
+        v.option2Value === cell.sizeName &&
+        (v.option3Value || null) === (cell.quality || null)
+      );
+      if (existing) {
+        const [updated] = await db.update(itemVariants)
+          .set({ stockQuantity: cell.quantity })
+          .where(eq(itemVariants.id, existing.id))
+          .returning();
+        results.push(updated);
+        continue;
+      }
+
+      let salt = 0;
+      let barcode = generateVariantBarcode({ itemSequenceNo: item.sequenceNo, colorIndex: cell.colorIndex, sizeIndex: cell.sizeIndex, qualityIndex: cell.qualityIndex, season });
+      while (await db.select().from(itemVariants).where(eq(itemVariants.barcode, barcode)).then(r => r.length > 0)) {
+        salt++;
+        barcode = generateVariantBarcode({ itemSequenceNo: item.sequenceNo, colorIndex: cell.colorIndex, sizeIndex: cell.sizeIndex, qualityIndex: cell.qualityIndex, season, salt });
+      }
+
+      const skuParts = [item.sku, cell.colorName, cell.sizeName];
+      if (cell.quality) skuParts.push(cell.quality);
+      const sku = skuParts.join("-").replace(/\s+/g, "").toUpperCase();
+
+      const [created] = await db.insert(itemVariants).values({
+        itemId,
+        sku,
+        barcode,
+        option1Name: "Color",
+        option1Value: cell.colorName,
+        option2Name: "Size",
+        option2Value: cell.sizeName,
+        option3Name: cell.quality ? "Quality" : null,
+        option3Value: cell.quality || null,
+        stockQuantity: cell.quantity,
+        active: true,
+      }).returning();
+      results.push(created);
+    }
+
+    await db.update(items).set({ hasVariants: true, season: season || item.season }).where(eq(items.id, itemId));
+    return results;
+  }
+
+  async getVariantTemplates() {
+    return db.select().from(variantTemplates).orderBy(variantTemplates.name);
+  }
+  async createVariantTemplate(data: InsertVariantTemplate) {
+    const [row] = await db.insert(variantTemplates).values(data).returning();
+    return row;
+  }
+  async deleteVariantTemplate(id: string) {
+    await db.delete(variantTemplates).where(eq(variantTemplates.id, id));
+  }
+
+  async getInventoryInLines(posted?: boolean) {
+    if (posted === undefined) {
+      return db.select().from(inventoryInLines).orderBy(desc(inventoryInLines.createdAt));
+    }
+    return db.select().from(inventoryInLines).where(eq(inventoryInLines.posted, posted)).orderBy(desc(inventoryInLines.createdAt));
+  }
+
+  async appendInventoryInLines(
+    header: Omit<InsertInventoryInLine, "colorId" | "colorName" | "sizeId" | "sizeName" | "quantity">,
+    cells: { colorId: string; colorName: string; sizeId: string; sizeName: string; quantity: number }[]
+  ) {
+    const category = await this.getCategory(header.categoryId);
+    if (!category) throw new Error("Category (department) not found");
+    if (cells.length === 0) throw new Error("No quantities entered in the matrix");
+
+    let nextSeq: number | null = null;
+    if (header.codeMethod === "sequential") {
+      const [row] = await db.select({ maxSku: sql<string>`max(${inventoryInLines.sku})` }).from(inventoryInLines).where(eq(inventoryInLines.codeMethod, "sequential"));
+      nextSeq = row?.maxSku ? parseInt(row.maxSku, 10) + 1 : 1;
+    }
+
+    const results: InventoryInLine[] = [];
+    for (const cell of cells) {
+      if (cell.quantity <= 0) continue;
+      let barcode: string;
+      let sku: string;
+      if (header.codeMethod === "sequential") {
+        sku = String(nextSeq!).padStart(7, "0");
+        barcode = synthesizeSequentialCode(nextSeq!);
+        nextSeq!++;
+      } else if (header.codeMethod === "qr") {
+        barcode = synthesizeQrCode({
+          categoryName: category.name,
+          style: header.style,
+          colorName: cell.colorName,
+          sizeName: cell.sizeName,
+        });
+        sku = barcode.slice(3);
+      } else {
+        barcode = synthesizeDescriptiveCode({ categoryName: category.name, style: header.style, colorName: cell.colorName, sizeName: cell.sizeName });
+        sku = barcode;
+      }
+      // Ensure uniqueness against prior drafts/items
+      let salt = 0;
+      let finalBarcode = barcode;
+      let finalSku = sku;
+      while (
+        (await db.select().from(inventoryInLines).where(eq(inventoryInLines.barcode, finalBarcode)).then(r => r.length > 0)) ||
+        (await db.select().from(itemVariants).where(eq(itemVariants.barcode, finalBarcode)).then(r => r.length > 0))
+      ) {
+        salt++;
+        if (header.codeMethod === "sequential") {
+          finalBarcode = synthesizeSequentialCode(nextSeq! + salt);
+          finalSku = finalBarcode;
+        } else if (header.codeMethod === "qr") {
+          finalBarcode = synthesizeQrCode({
+            categoryName: category.name,
+            style: header.style,
+            colorName: cell.colorName,
+            sizeName: cell.sizeName,
+            salt,
+          });
+          finalSku = finalBarcode.slice(3);
+        } else {
+          finalBarcode = `${barcode}`.slice(0, 15) + salt;
+          finalSku = finalBarcode;
+        }
+      }
+
+      const [created] = await db.insert(inventoryInLines).values({
+        categoryId: header.categoryId,
+        style: header.style,
+        description: header.description,
+        costPrice: header.costPrice,
+        price1: header.price1,
+        vatRate: header.vatRate,
+        season: header.season || null,
+        codeMethod: header.codeMethod,
+        colorId: cell.colorId,
+        colorName: cell.colorName,
+        sizeId: cell.sizeId,
+        sizeName: cell.sizeName,
+        quantity: cell.quantity,
+        barcode: finalBarcode,
+        sku: finalSku,
+      }).returning();
+      results.push(created);
+    }
+    if (results.length === 0) throw new Error("Enter at least one quantity in the matrix");
+    return results;
+  }
+
+  async deleteInventoryInLine(id: string) {
+    const [line] = await db.select().from(inventoryInLines).where(eq(inventoryInLines.id, id));
+    if (line?.posted) throw new Error("Cannot delete a posted line");
+    await db.delete(inventoryInLines).where(eq(inventoryInLines.id, id));
+  }
+
+  async postInventoryInLines(ids: string[]) {
+    const lines = await db.select().from(inventoryInLines).where(and(inArray(inventoryInLines.id, ids), eq(inventoryInLines.posted, false)));
+    if (lines.length === 0) return { posted: 0, itemsCreated: 0, variantsCreated: 0, lines: [] };
+
+    let itemsCreated = 0;
+    let variantsCreated = 0;
+    const itemCache = new Map<string, Item>();
+    const resultLines: Array<{ id: string; barcode: string; description: string; colorName: string; sizeName: string; quantity: number; itemId: string; variantId: string; locationId: string | null }> = [];
+
+    for (const line of lines) {
+      const itemKey = `${line.categoryId}::${line.style.toUpperCase()}`;
+      let item = itemCache.get(itemKey);
+      if (!item) {
+        const [existing] = await db.select().from(items).where(and(eq(items.categoryId, line.categoryId), ilike(items.name, line.style)));
+        if (existing) {
+          item = existing;
+        } else {
+          const [createdItem] = await db.insert(items).values({
+            name: line.style,
+            sku: `${line.style}-${Date.now().toString(36)}`.toUpperCase(),
+            barcode: null,
+            description: line.description,
+            categoryId: line.categoryId,
+            costPrice: line.costPrice,
+            price1: line.price1,
+            vatRate: line.vatRate,
+            season: line.season,
+            hasVariants: true,
+            stockQuantity: 0,
+          }).returning();
+          item = createdItem;
+          itemsCreated++;
+        }
+        itemCache.set(itemKey, item);
+      }
+
+      const [existingVariant] = await db.select().from(itemVariants).where(and(
+        eq(itemVariants.itemId, item.id),
+        eq(itemVariants.option1Value, line.colorName),
+        eq(itemVariants.option2Value, line.sizeName),
+      ));
+
+      let variantId: string;
+      if (existingVariant) {
+        await db.update(itemVariants).set({ stockQuantity: existingVariant.stockQuantity + line.quantity }).where(eq(itemVariants.id, existingVariant.id));
+        variantId = existingVariant.id;
+      } else {
+        const [createdVariant] = await db.insert(itemVariants).values({
+          itemId: item.id,
+          sku: line.sku,
+          barcode: line.barcode,
+          option1Name: "Color",
+          option1Value: line.colorName,
+          option2Name: "Size",
+          option2Value: line.sizeName,
+          costPrice: line.costPrice,
+          price1: line.price1,
+          stockQuantity: line.quantity,
+          active: true,
+        }).returning();
+        variantId = createdVariant.id;
+        variantsCreated++;
+      }
+
+      await db.update(inventoryInLines).set({ posted: true, postedAt: new Date(), itemId: item.id, variantId }).where(eq(inventoryInLines.id, line.id));
+      if (!item.hasVariants) {
+        await db.update(items).set({ hasVariants: true }).where(eq(items.id, item.id));
+      }
+
+      // Increment per-location stock if a receiving location was set on this line
+      if (line.locationId) {
+        await this.adjustLocationStock(item.id, variantId, line.locationId, line.quantity);
+      }
+
+      resultLines.push({
+        id: line.id,
+        barcode: line.barcode,
+        description: `${line.description} — ${line.colorName} / ${line.sizeName}`,
+        colorName: line.colorName,
+        sizeName: line.sizeName,
+        quantity: line.quantity,
+        itemId: item.id,
+        variantId,
+        locationId: line.locationId ?? null,
+      });
+    }
+
+    return { posted: lines.length, itemsCreated, variantsCreated, lines: resultLines };
+  }
+
+  async getDefaultReceivingLocation() {
+    const [loc] = await db.select().from(posLocations).where(eq(posLocations.isDefaultReceiving, true)).limit(1);
+    return loc ?? undefined;
+  }
+
+  async setDefaultReceivingLocation(id: string) {
+    await db.update(posLocations).set({ isDefaultReceiving: false });
+    await db.update(posLocations).set({ isDefaultReceiving: true }).where(eq(posLocations.id, id));
+  }
+
+  async getCustomers() {
+    const custs = await db.select().from(customers).orderBy(customers.name);
+
+    // Compute live balance per customer from invoices (all statuses incl. draft) and payments
+    const allInvs = await db.select({
+      customerId: invoices.customerId,
+      total: invoices.total,
+      type: invoices.type,
+      id: invoices.id,
+      status: invoices.status,
+    }).from(invoices);
+
+    const allPayments = await db.select({
+      customerId: payments.customerId,
+      invoiceId: payments.invoiceId,
+      amount: payments.amount,
+    }).from(payments);
+
+    const paymentsByInvoice = new Map<string, number>();
+    for (const p of allPayments) {
+      if (!p.invoiceId) continue;
+      paymentsByInvoice.set(p.invoiceId, (paymentsByInvoice.get(p.invoiceId) || 0) + parseFloat(p.amount));
+    }
+
+    return custs.map(c => {
+      const openingBalance = parseFloat(String(c.openingBalance ?? "0")) || 0;
+      const custInvs = allInvs.filter(i => i.customerId === c.id && i.type === "invoice");
+      const custCns = allInvs.filter(i => i.customerId === c.id && i.type === "credit_note");
+      const totalInvoiced = custInvs.reduce((s, i) => s + parseFloat(i.total), 0);
+      const totalCredits = custCns.reduce((s, i) => s + parseFloat(i.total), 0);
+      const totalPaid = custInvs.reduce((s, i) => {
+        const pmts = paymentsByInvoice.get(i.id) || 0;
+        if (pmts > 0) return s + Math.min(pmts, parseFloat(i.total));
+        if (i.status === "paid") return s + parseFloat(i.total);
+        return s;
+      }, 0);
+      const liveBalance = Math.max(0, openingBalance + totalInvoiced - totalCredits - totalPaid);
+      return { ...c, currentBalance: liveBalance.toFixed(2) };
+    });
+  }
+  async getCustomer(id: string) {
+    const [cust] = await db.select().from(customers).where(eq(customers.id, id));
+    return cust;
+  }
+  async getNextCustomerCode() {
+    const normalizedSuffix = sql<string>`COALESCE(
+      NULLIF(LTRIM(SUBSTRING(${customers.code} FROM 5), '0'), ''),
+      '0'
+    )`;
+    const [result] = await db
+      .select({ code: customers.code })
+      .from(customers)
+      .where(sql`${customers.code} ~ '^CUST[0-9]+$'`)
+      .orderBy(
+        desc(sql`LENGTH(${normalizedSuffix})`),
+        desc(normalizedSuffix),
+      )
+      .limit(1);
+    const nextNumber = BigInt(result?.code.slice(4) || "0") + BigInt(1);
+    return `CUST${nextNumber.toString().padStart(4, "0")}`;
+  }
+
+  async findDuplicateCustomer(name: string, email?: string | null, taxId?: string | null, excludeId?: string) {
+    const conditions = [];
+    conditions.push(ilike(customers.name, name.trim()));
+    if (email && email.trim()) {
+      conditions.push(ilike(customers.email, email.trim()));
+    }
+    if (taxId && taxId.trim()) {
+      conditions.push(ilike(customers.taxId, taxId.trim()));
+    }
+    let query = db.select().from(customers).where(or(...conditions));
+    const results = await query;
+    return results.filter(c => !excludeId || c.id !== excludeId);
+  }
+
+  async createCustomer(data: InsertCustomer) {
+    const [cust] = await db.insert(customers).values(data).returning();
+    return cust;
+  }
+  async updateCustomer(id: string, data: Partial<InsertCustomer>) {
+    const [cust] = await db.update(customers).set(data).where(eq(customers.id, id)).returning();
+    return cust;
+  }
+  async deleteCustomer(id: string) {
+    await db.delete(customerDeliveryLocations).where(eq(customerDeliveryLocations.customerId, id));
+    await db.delete(customers).where(eq(customers.id, id));
+  }
+
+  async getCustomerDeliveryLocations(customerId: string) {
+    return db.select().from(customerDeliveryLocations)
+      .where(eq(customerDeliveryLocations.customerId, customerId))
+      .orderBy(desc(customerDeliveryLocations.isDefault), customerDeliveryLocations.name);
+  }
+
+  async createCustomerDeliveryLocation(data: InsertCustomerDeliveryLocation) {
+    if (data.isDefault) {
+      await db.update(customerDeliveryLocations)
+        .set({ isDefault: false })
+        .where(eq(customerDeliveryLocations.customerId, data.customerId));
+    }
+    const [loc] = await db.insert(customerDeliveryLocations).values(data).returning();
+    return loc;
+  }
+
+  async updateCustomerDeliveryLocation(id: string, data: Partial<InsertCustomerDeliveryLocation>) {
+    if (data.isDefault && data.customerId) {
+      await db.update(customerDeliveryLocations)
+        .set({ isDefault: false })
+        .where(eq(customerDeliveryLocations.customerId, data.customerId));
+    }
+    const [loc] = await db.update(customerDeliveryLocations).set(data).where(eq(customerDeliveryLocations.id, id)).returning();
+    return loc;
+  }
+
+  async deleteCustomerDeliveryLocation(id: string) {
+    await db.delete(customerDeliveryLocations).where(eq(customerDeliveryLocations.id, id));
+  }
+
+  async getPriceContracts() {
+    const result = await db
+      .select({
+        id: priceContracts.id,
+        customerId: priceContracts.customerId,
+        name: priceContracts.name,
+        startDate: priceContracts.startDate,
+        endDate: priceContracts.endDate,
+        discountType: priceContracts.discountType,
+        discountValue: priceContracts.discountValue,
+        categoryId: priceContracts.categoryId,
+        brand: priceContracts.brand,
+        categoryIds: priceContracts.categoryIds,
+        brands: priceContracts.brands,
+        minQuantity: priceContracts.minQuantity,
+        purchaseGoal: priceContracts.purchaseGoal,
+        voucherType: priceContracts.voucherType,
+        voucherValue: priceContracts.voucherValue,
+        active: priceContracts.active,
+        source: priceContracts.source,
+        customerName: customers.name,
+        priceLevel: customers.priceLevel,
+      })
+      .from(priceContracts)
+      .leftJoin(customers, eq(priceContracts.customerId, customers.id))
+      .orderBy(desc(priceContracts.startDate));
+    return result.map(r => ({ ...r, customerName: r.customerName || undefined, priceLevel: r.priceLevel || 1 }));
+  }
+  async getPriceContract(id: string) {
+    const [contract] = await db.select().from(priceContracts).where(eq(priceContracts.id, id));
+    return contract;
+  }
+  async createPriceContract(data: InsertPriceContract) {
+    const [contract] = await db.insert(priceContracts).values(data).returning();
+    return contract;
+  }
+  async updatePriceContract(id: string, data: Partial<InsertPriceContract>) {
+    const [contract] = await db.update(priceContracts).set(data).where(eq(priceContracts.id, id)).returning();
+    return contract;
+  }
+  async getContractRules(contractId: string) {
+    return db.select().from(priceContractRules).where(eq(priceContractRules.contractId, contractId));
+  }
+  async setContractRules(contractId: string, rules: InsertPriceContractRule[]) {
+    await db.delete(priceContractRules).where(eq(priceContractRules.contractId, contractId));
+    if (rules.length === 0) return [];
+    const inserted = await db.insert(priceContractRules).values(rules.map(r => ({ ...r, contractId }))).returning();
+    return inserted;
+  }
+
+  async getSeasonalOffers() {
+    return db.select().from(seasonalOffers).orderBy(desc(seasonalOffers.startDate));
+  }
+  async getSeasonalOffer(id: string) {
+    const [offer] = await db.select().from(seasonalOffers).where(eq(seasonalOffers.id, id));
+    return offer;
+  }
+  async createSeasonalOffer(data: InsertSeasonalOffer) {
+    const [offer] = await db.insert(seasonalOffers).values(data).returning();
+    return offer;
+  }
+
+  async getInvoices(type?: string) {
+    let query = db
+      .select({
+        id: invoices.id,
+        invoiceNumber: invoices.invoiceNumber,
+        erpExternalRef: invoices.erpExternalRef,
+        type: invoices.type,
+        customerId: invoices.customerId,
+        date: invoices.date,
+        dueDate: invoices.dueDate,
+        subtotal: invoices.subtotal,
+        taxRate: invoices.taxRate,
+        taxAmount: invoices.taxAmount,
+        discountAmount: invoices.discountAmount,
+        total: invoices.total,
+        status: invoices.status,
+        notes: invoices.notes,
+        deliveryLocation: invoices.deliveryLocation,
+        linkedInvoiceId: invoices.linkedInvoiceId,
+        portalOrderId: invoices.portalOrderId,
+        createdAt: invoices.createdAt,
+        customerName: customers.name,
+      })
+      .from(invoices)
+      .leftJoin(customers, eq(invoices.customerId, customers.id))
+      .orderBy(desc(invoices.createdAt));
+
+    if (type) {
+      query = query.where(eq(invoices.type, type)) as any;
+    }
+
+    const result = await query;
+    return result.map(r => ({ ...r, customerName: r.customerName || "Unknown" }));
+  }
+
+  async getInvoice(id: string) {
+    const [inv] = await db
+      .select({
+        id: invoices.id,
+        invoiceNumber: invoices.invoiceNumber,
+        erpExternalRef: invoices.erpExternalRef,
+        type: invoices.type,
+        customerId: invoices.customerId,
+        date: invoices.date,
+        dueDate: invoices.dueDate,
+        subtotal: invoices.subtotal,
+        taxRate: invoices.taxRate,
+        taxAmount: invoices.taxAmount,
+        discountAmount: invoices.discountAmount,
+        total: invoices.total,
+        status: invoices.status,
+        notes: invoices.notes,
+        deliveryLocation: invoices.deliveryLocation,
+        linkedInvoiceId: invoices.linkedInvoiceId,
+        portalOrderId: invoices.portalOrderId,
+        createdAt: invoices.createdAt,
+        customerName: customers.name,
+      })
+      .from(invoices)
+      .leftJoin(customers, eq(invoices.customerId, customers.id))
+      .where(eq(invoices.id, id));
+
+    if (!inv) return undefined;
+
+    const lineItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, id));
+    return { ...inv, customerName: inv.customerName || "Unknown", items: lineItems };
+  }
+
+  async getNextInvoiceNumber(type: string) {
+    const prefix = type === "credit_note" ? "CN" : type === "proforma" ? "PF" : type === "quotation" ? "QT" : "INV";
+    const [result] = await db
+      .select({ maxNum: sql<string>`MAX(CAST(NULLIF(SUBSTRING(invoice_number FROM '[0-9]+$'), '') AS INTEGER))` })
+      .from(invoices)
+      .where(eq(invoices.type, type));
+    const num = (parseInt(result?.maxNum || "0") || 0) + 1;
+    return `${prefix}-${String(num).padStart(5, "0")}`;
+  }
+
+  async createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[], overrideNumber?: string) {
+    const invoiceNumber = overrideNumber || await this.getNextInvoiceNumber(data.type as string);
+    const [inv] = await db.insert(invoices).values({ ...data, invoiceNumber }).returning();
+    if (lineItems.length > 0) {
+      await db.insert(invoiceItems).values(lineItems.map((li) => ({ ...li, invoiceId: inv.id })));
+    }
+    return inv;
+  }
+
+  async updateInvoice(id: string, data: Partial<InsertInvoice>, lineItems?: InsertInvoiceItem[]) {
+    const { ...updateData } = data;
+    const [inv] = await db.update(invoices).set(updateData).where(eq(invoices.id, id)).returning();
+    if (lineItems) {
+      await db.delete(invoiceItems).where(eq(invoiceItems.invoiceId, id));
+      if (lineItems.length > 0) {
+        await db.insert(invoiceItems).values(lineItems.map((li) => ({ ...li, invoiceId: id })));
+      }
+    }
+    return inv;
+  }
+
+  async deleteInvoice(id: string) {
+    await db.delete(invoiceItems).where(eq(invoiceItems.invoiceId, id));
+    await db.delete(invoices).where(eq(invoices.id, id));
+  }
+
+  async getPayments(invoiceId: string) {
+    return db.select().from(payments).where(eq(payments.invoiceId, invoiceId)).orderBy(desc(payments.paymentDate));
+  }
+
+  async getAllPayments() {
+    const rows = await db
+      .select({
+        id: payments.id,
+        customerId: payments.customerId,
+        invoiceId: payments.invoiceId,
+        amount: payments.amount,
+        paymentDate: payments.paymentDate,
+        paymentMethod: payments.paymentMethod,
+        reference: payments.reference,
+        notes: payments.notes,
+        createdAt: payments.createdAt,
+        invoiceNumber: invoices.invoiceNumber,
+        invoiceTotal: invoices.total,
+        customerName: customers.name,
+      })
+      .from(payments)
+      .leftJoin(invoices, eq(payments.invoiceId, invoices.id))
+      .leftJoin(customers, sql`${customers.id} = COALESCE(${payments.customerId}, ${invoices.customerId})`)
+      .where(sql`${payments.notes} IS NULL OR ${payments.notes} NOT LIKE 'Applied from balance payment%'`)
+      .orderBy(desc(payments.createdAt));
+    return rows.map(r => ({
+      ...r,
+      invoiceNumber: r.invoiceNumber || undefined,
+      invoiceTotal: r.invoiceTotal || undefined,
+      customerName: r.customerName || undefined,
+    }));
+  }
+
+  private async recalcInvoiceStatus(invoiceId: string) {
+    const inv = await db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
+    if (!inv[0]) return;
+    // Only auto-manage status for actual invoices; never touch cancelled
+    if (inv[0].type !== "invoice") return;
+    if (inv[0].status === "cancelled") return;
+
+    const allPmts = await this.getPayments(invoiceId);
+    const totalPaid = allPmts.reduce((s, p) => s + parseFloat(String(p.amount)), 0);
+    const invoiceTotal = parseFloat(String(inv[0].total));
+    const currentStatus = inv[0].status;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dueDate = inv[0].dueDate ? new Date(inv[0].dueDate) : null;
+    const isPastDue = dueDate ? dueDate < today : false;
+
+    let newStatus: string = currentStatus;
+
+    if (totalPaid >= invoiceTotal && invoiceTotal > 0) {
+      newStatus = "paid";
+    } else if (totalPaid > 0) {
+      // Partially paid — always mark as partial (promotes out of draft too)
+      newStatus = "partial";
+    } else {
+      // No payments
+      if (currentStatus === "paid" || currentStatus === "partial") {
+        // All payments removed — fall back based on due date
+        newStatus = isPastDue ? "overdue" : "sent";
+      } else if (currentStatus === "sent" && isPastDue) {
+        newStatus = "overdue";
+      }
+      // draft stays draft; overdue stays overdue (no payments, still past due)
+    }
+
+    if (newStatus !== currentStatus) {
+      await db.update(invoices).set({ status: newStatus }).where(eq(invoices.id, invoiceId));
+    }
+  }
+
+  // Sweep all non-draft, non-paid, non-cancelled invoices past their due date → mark overdue
+  async autoMarkOverdue() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split("T")[0];
+    await db.update(invoices).set({ status: "overdue" }).where(
+      and(
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} IN ('sent', 'partial')`,
+        sql`${invoices.dueDate} IS NOT NULL`,
+        sql`${invoices.dueDate} < ${todayStr}`,
+      )
+    );
+  }
+
+  async createPayment(data: InsertPayment) {
+    const [payment] = await db.insert(payments).values(data).returning();
+
+    if (data.invoiceId) {
+      // Payment against a specific invoice → update its status
+      await this.recalcInvoiceStatus(data.invoiceId);
+    } else if (data.customerId) {
+      // Balance payment → apply remaining amount to oldest outstanding invoices
+      let remaining = parseFloat(String(data.amount));
+      const outstanding = await db
+        .select()
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.customerId, data.customerId),
+            sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
+            eq(invoices.type, "invoice"),
+          )
+        )
+        .orderBy(invoices.date);
+
+      for (const inv of outstanding) {
+        if (remaining <= 0) break;
+        const existingPmts = await this.getPayments(inv.id);
+        const alreadyPaid = existingPmts.reduce((s, p) => s + parseFloat(String(p.amount)), 0);
+        const invTotal = parseFloat(String(inv.total));
+        const owed = invTotal - alreadyPaid;
+        if (owed <= 0) continue;
+        const applying = Math.min(remaining, owed);
+        // Record a sub-payment linked to this invoice
+        await db.insert(payments).values({
+          customerId: data.customerId,
+          invoiceId: inv.id,
+          amount: applying.toFixed(2),
+          paymentDate: data.paymentDate,
+          paymentMethod: data.paymentMethod,
+          reference: data.reference,
+          notes: `Applied from balance payment ${payment.id}`,
+        });
+        await this.recalcInvoiceStatus(inv.id);
+        remaining -= applying;
+      }
+    }
+
+    return payment;
+  }
+
+  async updatePayment(id: string, data: Partial<InsertPayment>) {
+    const [updated] = await db.update(payments).set(data).where(eq(payments.id, id)).returning();
+    if (!updated) throw new Error("Payment not found");
+    if (updated.invoiceId) {
+      await this.recalcInvoiceStatus(updated.invoiceId);
+    }
+    return updated;
+  }
+
+  async deletePayment(id: string) {
+    const [pmt] = await db.select().from(payments).where(eq(payments.id, id)).limit(1);
+    if (!pmt) throw new Error("Payment not found");
+    // Also delete any child split-payments created by a balance payment
+    await db.delete(payments).where(sql`${payments.notes} LIKE ${'Applied from balance payment ' + id + '%'}`);
+    await db.delete(payments).where(eq(payments.id, id));
+    if (pmt.invoiceId) {
+      await this.recalcInvoiceStatus(pmt.invoiceId);
+    } else if (pmt.customerId) {
+      // Balance payment: recalc status for all invoices of this customer that may have been affected
+      const custInvs = await db.select({ id: invoices.id }).from(invoices)
+        .where(and(eq(invoices.customerId, pmt.customerId), eq(invoices.type, "invoice")));
+      for (const inv of custInvs) {
+        await this.recalcInvoiceStatus(inv.id);
+      }
+    }
+  }
+
+  async getDashboardStats() {
+    const [itemCount] = await db.select({ count: sql<number>`count(*)` }).from(items).where(eq(items.active, true));
+    const [custCount] = await db.select({ count: sql<number>`count(*)` }).from(customers).where(eq(customers.active, true));
+    const [invCount] = await db.select({ count: sql<number>`count(*)` }).from(invoices).where(eq(invoices.type, "invoice"));
+    // Dynamic overdue count: unpaid/partial invoices past their due date
+    const todayStr = new Date().toISOString().split("T")[0];
+    const [overdueCount] = await db.select({ count: sql<number>`count(*)` }).from(invoices).where(
+      and(
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} IN ('sent', 'partial', 'overdue')`,
+        sql`${invoices.dueDate} IS NOT NULL`,
+        sql`${invoices.dueDate} < ${todayStr}`,
+      )
+    );
+    // Revenue: total collected (sum of payments received, excluding sub-payments)
+    const [revenueRow] = await db.select({ total: sql<string>`coalesce(sum(amount::numeric), 0)` }).from(payments)
+      .leftJoin(invoices, eq(payments.invoiceId, invoices.id))
+      .where(sql`(${invoices.type} = 'invoice' OR ${payments.invoiceId} IS NULL) AND (${payments.notes} IS NULL OR ${payments.notes} NOT LIKE 'Applied from balance payment%')`);
+
+    const lowStockItems = await db.select().from(items)
+      .where(and(eq(items.active, true), sql`${items.stockQuantity} <= ${items.reorderLevel}`))
+      .orderBy(items.stockQuantity)
+      .limit(10);
+
+    const recentInvs = await db
+      .select({
+        id: invoices.id,
+        invoiceNumber: invoices.invoiceNumber,
+        type: invoices.type,
+        customerId: invoices.customerId,
+        date: invoices.date,
+        dueDate: invoices.dueDate,
+        subtotal: invoices.subtotal,
+        taxRate: invoices.taxRate,
+        taxAmount: invoices.taxAmount,
+        discountAmount: invoices.discountAmount,
+        total: invoices.total,
+        status: invoices.status,
+        notes: invoices.notes,
+        linkedInvoiceId: invoices.linkedInvoiceId,
+        createdAt: invoices.createdAt,
+        customerName: customers.name,
+      })
+      .from(invoices)
+      .leftJoin(customers, eq(invoices.customerId, customers.id))
+      .where(eq(invoices.type, "invoice"))
+      .orderBy(desc(invoices.createdAt))
+      .limit(5);
+
+    const now2 = new Date();
+    const monthStart = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
+    const lastDay2 = new Date(now2.getFullYear(), now2.getMonth() + 1, 0).getDate();
+    const monthEnd = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-${String(lastDay2).padStart(2, "0")}`;
+    const [unpaidThisMonthRow] = await db.select({ total: sql<string>`coalesce(sum(cast(${invoices.total} as numeric)), 0)` }).from(invoices).where(
+      and(
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
+        sql`${invoices.dueDate} IS NOT NULL`,
+        gte(invoices.dueDate, monthStart),
+        lte(invoices.dueDate, monthEnd),
+      )
+    );
+    const [overdueOver1MonthRow] = await db.select({ total: sql<string>`coalesce(sum(cast(${invoices.total} as numeric)), 0)` }).from(invoices).where(
+      and(
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} NOT IN ('paid', 'cancelled')`,
+        sql`${invoices.dueDate} IS NOT NULL`,
+        sql`${invoices.dueDate} < ${monthStart}`,
+      )
+    );
+
+    return {
+      totalItems: itemCount?.count || 0,
+      totalCustomers: custCount?.count || 0,
+      totalInvoices: invCount?.count || 0,
+      overdueInvoices: overdueCount?.count || 0,
+      totalRevenue: revenueRow?.total || "0",
+      unpaidThisMonth: parseFloat(unpaidThisMonthRow?.total || "0").toFixed(2),
+      overdueOver1Month: parseFloat(overdueOver1MonthRow?.total || "0").toFixed(2),
+      lowStockItems,
+      recentInvoices: recentInvs.map(r => ({ ...r, customerName: r.customerName || "Unknown" })),
+    };
+  }
+
+  async getDashboardCharts() {
+    // Last 6 full months + current month = 7 data points
+    const now = new Date();
+    const months: { label: string; from: string; to: string }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+      const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      const to = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      const label = d.toLocaleString("en-GB", { month: "short", year: "2-digit" });
+      months.push({ label, from, to });
+    }
+
+    // Fetch all sales invoices (non-cancelled) with their items + item cost prices in date range
+    const sixMonthsAgo = months[0].from;
+    const lastMonthEnd = months[months.length - 1].to;
+    const allInvs = await db
+      .select({
+        id: invoices.id,
+        date: invoices.date,
+        subtotal: invoices.subtotal,
+        discountAmount: invoices.discountAmount,
+        status: invoices.status,
+        total: invoices.total,
+      })
+      .from(invoices)
+      .where(and(
+        eq(invoices.type, "invoice"),
+        gte(invoices.date, sixMonthsAgo),
+        sql`${invoices.status} != 'cancelled'`,
+      ));
+
+    // Fetch purchase invoices in the same date range (confirmed only)
+    const allPurchInvs = await db
+      .select({ date: purchaseInvoices.date, total: purchaseInvoices.total })
+      .from(purchaseInvoices)
+      .where(and(
+        gte(purchaseInvoices.date, sixMonthsAgo),
+        lte(purchaseInvoices.date, lastMonthEnd),
+        eq(purchaseInvoices.status, "confirmed"),
+      ));
+
+    const allInvIds = allInvs.map(i => i.id);
+
+    // Get all invoice items with cost price (pack-size adjusted) matching getSalesReport logic
+    let itemCostMap: Record<string, number> = {};
+    let itemPackMap: Record<string, number> = {};
+    let invItemCosts: Record<string, number> = {};
+    if (allInvIds.length > 0) {
+      const invItemRows = await db
+        .select({
+          invoiceId: invoiceItems.invoiceId,
+          quantity: invoiceItems.quantity,
+          itemId: invoiceItems.itemId,
+          saleUnit: invoiceItems.saleUnit,
+        })
+        .from(invoiceItems)
+        .where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(allInvIds.map(id => `'${id}'`).join(","))}]::text[])`);
+
+      const allItemIds = [...new Set(invItemRows.map(r => r.itemId).filter(Boolean))] as string[];
+      if (allItemIds.length > 0) {
+        const itemRows = await db
+          .select({ id: items.id, costPrice: items.costPrice, packSize: items.packSize })
+          .from(items)
+          .where(sql`${items.id} = ANY(ARRAY[${sql.raw(allItemIds.map(id => `'${id}'`).join(","))}]::text[])`);
+        itemCostMap = Object.fromEntries(itemRows.map(r => [r.id, parseFloat(r.costPrice || "0")]));
+        itemPackMap = Object.fromEntries(itemRows.map(r => [r.id, r.packSize || 1]));
+      }
+
+      for (const row of invItemRows) {
+        const qty = parseFloat(String(row.quantity || 0));
+        const cost = row.itemId ? (itemCostMap[row.itemId] || 0) : 0;
+        const packSize = row.itemId ? (itemPackMap[row.itemId] || 1) : 1;
+        const costPerBottle = packSize > 0 ? cost / packSize : cost;
+        // Match getSalesReport: if sold in packs, multiply qty by packSize for cost
+        const effectiveQty = row.saleUnit === "pack" ? qty * packSize : qty;
+        const lineCost = effectiveQty * costPerBottle;
+        invItemCosts[row.invoiceId] = (invItemCosts[row.invoiceId] || 0) + lineCost;
+      }
+    }
+
+    // Build monthly buckets — revenue = subtotal - discount (ex-VAT), matching sales report
+    const monthlySales = months.map(m => {
+      const monthInvs = allInvs.filter(i => i.date >= m.from && i.date <= m.to);
+      const revenue = monthInvs.reduce((s, i) => s + parseFloat(i.subtotal) - parseFloat(i.discountAmount || "0"), 0);
+      const cost = monthInvs.reduce((s, i) => s + (invItemCosts[i.id] || 0), 0);
+      const profit = revenue - cost;
+      // Cash flow: cash in = paid/partial invoices (inc VAT); cash out = confirmed purchase invoices
+      const cashIn = monthInvs
+        .filter(i => i.status === "paid" || i.status === "partial")
+        .reduce((s, i) => s + parseFloat(i.total || "0"), 0);
+      const cashOut = allPurchInvs
+        .filter(i => i.date >= m.from && i.date <= m.to)
+        .reduce((s, i) => s + parseFloat(i.total || "0"), 0);
+      const netCash = cashIn - cashOut;
+      return {
+        month: m.label, endDate: m.to,
+        revenue: Math.round(revenue * 100) / 100,
+        profit: Math.round(profit * 100) / 100,
+        invoices: monthInvs.length,
+        cashIn: Math.round(cashIn * 100) / 100,
+        cashOut: Math.round(cashOut * 100) / 100,
+        netCash: Math.round(netCash * 100) / 100,
+      };
+    });
+
+    // Top 5 customers by net revenue ex-VAT (all time, non-cancelled)
+    const custRevRows = await db
+      .select({
+        customerId: invoices.customerId,
+        customerName: customers.name,
+        subtotal: invoices.subtotal,
+        discountAmount: invoices.discountAmount,
+      })
+      .from(invoices)
+      .leftJoin(customers, eq(invoices.customerId, customers.id))
+      .where(and(eq(invoices.type, "invoice"), sql`${invoices.status} != 'cancelled'`));
+
+    const custTotals: Record<string, { name: string; revenue: number }> = {};
+    for (const r of custRevRows) {
+      if (!r.customerId) continue;
+      if (!custTotals[r.customerId]) custTotals[r.customerId] = { name: r.customerName || "Unknown", revenue: 0 };
+      custTotals[r.customerId].revenue += parseFloat(r.subtotal) - parseFloat(r.discountAmount || "0");
+    }
+    const topCustomers = Object.values(custTotals)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5)
+      .map(c => ({ name: c.name.length > 18 ? c.name.slice(0, 18) + "…" : c.name, revenue: Math.round(c.revenue * 100) / 100 }));
+
+    // Pareto: all customers sorted descending by revenue with cumulative %
+    const paretoAll = Object.values(custTotals)
+      .filter(c => c.revenue > 0)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 15);
+    const paretoTotal = paretoAll.reduce((s, c) => s + c.revenue, 0);
+    let cumRev = 0;
+    const paretoCustomers = paretoAll.map(c => {
+      cumRev += c.revenue;
+      return {
+        name: c.name.length > 13 ? c.name.slice(0, 13) + "…" : c.name,
+        revenue: Math.round(c.revenue * 100) / 100,
+        cumPct: paretoTotal > 0 ? Math.round(cumRev / paretoTotal * 1000) / 10 : 0,
+      };
+    });
+
+    // Invoice status breakdown
+    const statusRows = await db
+      .select({ status: invoices.status, total: invoices.total })
+      .from(invoices)
+      .where(eq(invoices.type, "invoice"));
+    const statusMap: Record<string, { count: number; amount: number }> = {};
+    for (const r of statusRows) {
+      if (!statusMap[r.status]) statusMap[r.status] = { count: 0, amount: 0 };
+      statusMap[r.status].count++;
+      statusMap[r.status].amount += parseFloat(r.total);
+    }
+    const invoiceStatus = Object.entries(statusMap).map(([status, v]) => ({
+      status,
+      count: v.count,
+      amount: Math.round(v.amount * 100) / 100,
+    }));
+
+    return { monthlySales, topCustomers, invoiceStatus, paretoCustomers };
+  }
+
+  async getSalesReport(from: string, to: string, customerId?: string) {
+    let conditions = [
+      eq(invoices.type, "invoice"),
+      gte(invoices.date, from),
+      lte(invoices.date, to),
+      sql`${invoices.status} != 'cancelled'`,
+    ];
+    if (customerId && customerId !== "all") {
+      conditions.push(eq(invoices.customerId, customerId));
+    }
+
+    const invs = await db
+      .select({
+        id: invoices.id,
+        invoiceNumber: invoices.invoiceNumber,
+        type: invoices.type,
+        customerId: invoices.customerId,
+        date: invoices.date,
+        dueDate: invoices.dueDate,
+        subtotal: invoices.subtotal,
+        taxRate: invoices.taxRate,
+        taxAmount: invoices.taxAmount,
+        discountAmount: invoices.discountAmount,
+        total: invoices.total,
+        status: invoices.status,
+        notes: invoices.notes,
+        linkedInvoiceId: invoices.linkedInvoiceId,
+        createdAt: invoices.createdAt,
+        customerName: customers.name,
+      })
+      .from(invoices)
+      .leftJoin(customers, eq(invoices.customerId, customers.id))
+      .where(and(...conditions))
+      .orderBy(desc(invoices.date));
+
+    const invoicesWithCost = await Promise.all(invs.map(async (inv) => {
+      const lineItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
+      let totalCost = 0;
+      for (const li of lineItems) {
+        if (li.itemId) {
+          const item = await db.select({ costPrice: items.costPrice, packSize: items.packSize }).from(items).where(eq(items.id, li.itemId)).limit(1);
+          if (item.length > 0) {
+            const costPerUnit = parseFloat(item[0].costPrice) / (item[0].packSize || 1);
+            const liQty = parseFloat(String(li.quantity || "0"));
+            const saleInPacks = li.saleUnit === "pack" ? liQty * (item[0].packSize || 1) : liQty;
+            totalCost += costPerUnit * saleInPacks;
+          }
+        }
+      }
+      const revenue = parseFloat(inv.subtotal) - parseFloat(inv.discountAmount || "0");
+      const profit = revenue - totalCost;
+      const marginPct = revenue > 0 ? (profit / revenue) * 100 : 0;
+      return {
+        ...inv,
+        customerName: inv.customerName || "Unknown",
+        costTotal: totalCost.toFixed(2),
+        profit: profit.toFixed(2),
+        marginPct: marginPct.toFixed(1),
+      };
+    }));
+
+    const totalSales = invoicesWithCost.reduce((s, i) => s + parseFloat(i.total), 0);
+    const totalTax = invoicesWithCost.reduce((s, i) => s + parseFloat(i.taxAmount), 0);
+    const totalCost = invoicesWithCost.reduce((s, i) => s + parseFloat(i.costTotal), 0);
+    const totalProfit = invoicesWithCost.reduce((s, i) => s + parseFloat(i.profit), 0);
+    const totalRevenue = invoicesWithCost.reduce((s, i) => s + parseFloat(i.subtotal) - parseFloat(i.discountAmount || "0"), 0);
+    const overallMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+
+    const customerMap: Record<string, { name: string; revenue: number; cost: number; profit: number; invoiceCount: number }> = {};
+    for (const inv of invoicesWithCost) {
+      if (!customerMap[inv.customerId]) {
+        customerMap[inv.customerId] = { name: inv.customerName, revenue: 0, cost: 0, profit: 0, invoiceCount: 0 };
+      }
+      const c = customerMap[inv.customerId];
+      c.revenue += parseFloat(inv.subtotal) - parseFloat(inv.discountAmount || "0");
+      c.cost += parseFloat(inv.costTotal);
+      c.profit += parseFloat(inv.profit);
+      c.invoiceCount += 1;
+    }
+    const customerProfits = Object.entries(customerMap).map(([id, c]) => ({
+      customerId: id,
+      customerName: c.name,
+      revenue: c.revenue.toFixed(2),
+      cost: c.cost.toFixed(2),
+      profit: c.profit.toFixed(2),
+      marginPct: c.revenue > 0 ? ((c.profit / c.revenue) * 100).toFixed(1) : "0.0",
+      invoiceCount: c.invoiceCount,
+    })).sort((a, b) => parseFloat(b.profit) - parseFloat(a.profit));
+
+    return {
+      invoices: invoicesWithCost,
+      totalRevenue: totalRevenue.toFixed(2),
+      totalSales: totalSales.toFixed(2),
+      totalTax: totalTax.toFixed(2),
+      totalCost: totalCost.toFixed(2),
+      totalProfit: totalProfit.toFixed(2),
+      overallMargin: overallMargin.toFixed(1),
+      invoiceCount: invoicesWithCost.length,
+      customerProfits,
+    };
+  }
+
+  async getItemSalesReport(from: string, to: string, customerId?: string, categoryId?: string) {
+    let invConditions: any[] = [
+      eq(invoices.type, "invoice"),
+      gte(invoices.date, from),
+      lte(invoices.date, to),
+      sql`${invoices.status} != 'cancelled'`,
+    ];
+    if (customerId && customerId !== "all") invConditions.push(eq(invoices.customerId, customerId));
+
+    const matchingInvoices = await db.select({ id: invoices.id, date: invoices.date })
+      .from(invoices).where(and(...invConditions));
+
+    if (matchingInvoices.length === 0) {
+      return { items: [], totalRevenue: "0.00", totalCost: "0.00", totalProfit: "0.00", overallMargin: "0.0", totalQty: 0, uniqueItemCount: 0 };
+    }
+
+    const invoiceIds = matchingInvoices.map(i => i.id);
+    const invoiceDateMap = Object.fromEntries(matchingInvoices.map(i => [i.id, i.date]));
+
+    const lineRows = await db.select({
+      invoiceId: invoiceItems.invoiceId,
+      itemId: invoiceItems.itemId,
+      quantity: invoiceItems.quantity,
+      saleUnit: invoiceItems.saleUnit,
+      total: invoiceItems.total,
+    }).from(invoiceItems)
+      .where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(invoiceIds.map(id => `'${id}'`).join(","))}]::text[])`);
+
+    const uniqueItemIds = [...new Set(lineRows.map(r => r.itemId).filter(Boolean))] as string[];
+    type ItemDetail = { name: string; sku: string; costPrice: number; packSize: number; categoryId: string | null; categoryName: string };
+    let itemDetailMap: Record<string, ItemDetail> = {};
+
+    if (uniqueItemIds.length > 0) {
+      const itemRows = await db.select({
+        id: items.id, name: items.name, sku: items.sku,
+        costPrice: items.costPrice, packSize: items.packSize,
+        categoryId: items.categoryId, categoryName: categories.name,
+      }).from(items)
+        .leftJoin(categories, eq(items.categoryId, categories.id))
+        .where(sql`${items.id} = ANY(ARRAY[${sql.raw(uniqueItemIds.map(id => `'${id}'`).join(","))}]::text[])`);
+      itemDetailMap = Object.fromEntries(itemRows.map(r => [r.id, {
+        name: r.name, sku: r.sku,
+        costPrice: parseFloat(r.costPrice || "0"),
+        packSize: r.packSize || 1,
+        categoryId: r.categoryId,
+        categoryName: r.categoryName || "Uncategorized",
+      }]));
+    }
+
+    type ItemEntry = {
+      itemId: string; itemName: string; sku: string;
+      categoryId: string | null; categoryName: string;
+      qtySold: number; revenue: number; cost: number;
+      invoiceSet: Set<string>;
+      monthly: Record<string, { qty: number; revenue: number; cost: number }>;
+    };
+    const itemMap: Record<string, ItemEntry> = {};
+
+    for (const li of lineRows) {
+      if (!li.itemId) continue;
+      const d = itemDetailMap[li.itemId];
+      if (!d) continue;
+      if (categoryId && categoryId !== "all" && d.categoryId !== categoryId) continue;
+
+      if (!itemMap[li.itemId]) {
+        itemMap[li.itemId] = {
+          itemId: li.itemId, itemName: d.name, sku: d.sku,
+          categoryId: d.categoryId, categoryName: d.categoryName,
+          qtySold: 0, revenue: 0, cost: 0, invoiceSet: new Set(), monthly: {},
+        };
+      }
+      const e = itemMap[li.itemId];
+      const liQtyN = parseFloat(String(li.quantity || "0"));
+      const qty = li.saleUnit === "pack" ? liQtyN * d.packSize : liQtyN;
+      const rev = parseFloat(li.total);
+      const cos = (d.costPrice / (d.packSize || 1)) * qty;
+      e.qtySold += qty;
+      e.revenue += rev;
+      e.cost += cos;
+      e.invoiceSet.add(li.invoiceId);
+      const monthKey = (invoiceDateMap[li.invoiceId] || "").substring(0, 7);
+      if (!e.monthly[monthKey]) e.monthly[monthKey] = { qty: 0, revenue: 0, cost: 0 };
+      e.monthly[monthKey].qty += qty;
+      e.monthly[monthKey].revenue += rev;
+      e.monthly[monthKey].cost += cos;
+    }
+
+    const result = Object.values(itemMap).map(e => {
+      const profit = e.revenue - e.cost;
+      const marginPct = e.revenue > 0 ? (profit / e.revenue) * 100 : 0;
+      return {
+        itemId: e.itemId, itemName: e.itemName, sku: e.sku,
+        categoryId: e.categoryId, categoryName: e.categoryName,
+        qtySold: e.qtySold,
+        revenue: parseFloat(e.revenue.toFixed(2)),
+        cost: parseFloat(e.cost.toFixed(2)),
+        profit: parseFloat(profit.toFixed(2)),
+        marginPct: parseFloat(marginPct.toFixed(1)),
+        invoiceCount: e.invoiceSet.size,
+        avgUnitPrice: e.qtySold > 0 ? parseFloat((e.revenue / e.qtySold).toFixed(2)) : 0,
+        monthly: Object.entries(e.monthly).map(([month, m]) => ({
+          month, qty: m.qty,
+          revenue: parseFloat(m.revenue.toFixed(2)),
+          profit: parseFloat((m.revenue - m.cost).toFixed(2)),
+        })).sort((a, b) => a.month.localeCompare(b.month)),
+      };
+    }).sort((a, b) => b.revenue - a.revenue);
+
+    const totRev = result.reduce((s, r) => s + r.revenue, 0);
+    const totCost = result.reduce((s, r) => s + r.cost, 0);
+    const totProfit = result.reduce((s, r) => s + r.profit, 0);
+    const totQty = result.reduce((s, r) => s + r.qtySold, 0);
+    return {
+      items: result,
+      totalRevenue: totRev.toFixed(2),
+      totalCost: totCost.toFixed(2),
+      totalProfit: totProfit.toFixed(2),
+      overallMargin: totRev > 0 ? ((totProfit / totRev) * 100).toFixed(1) : "0.0",
+      totalQty: totQty,
+      uniqueItemCount: result.length,
+    };
+  }
+
+  async getCustomerStatements() {
+    const custs = await db.select().from(customers).where(eq(customers.active, true));
+
+    // Load ALL payments at once and build a lookup map: invoiceId -> total paid
+    const allPayments = await db.select().from(payments);
+    const paymentsByInvoice = new Map<string, number>();
+    for (const pmt of allPayments) {
+      if (!pmt.invoiceId) continue;
+      const prev = paymentsByInvoice.get(pmt.invoiceId) || 0;
+      paymentsByInvoice.set(pmt.invoiceId, prev + parseFloat(String(pmt.amount)));
+    }
+
+    // Helper: get actual paid amount for an invoice
+    const getPaid = (inv: { id: string; total: string; status: string }) => {
+      const pmtTotal = paymentsByInvoice.get(inv.id) || 0;
+      if (pmtTotal > 0) return Math.min(pmtTotal, parseFloat(inv.total));
+      if (inv.status === "paid") return parseFloat(inv.total);
+      return 0;
+    };
+
+    // Helper: days credit given for a payment terms string
+    const termDays = (terms: string | null): number => {
+      if (terms === "credit_30") return 30;
+      if (terms === "credit_60") return 60;
+      if (terms === "credit_90") return 90;
+      return 0;
+    };
+
+    // Helper: parse a YYYY-MM-DD string as a LOCAL midnight Date (avoids UTC-offset day shift)
+    const parseLocalDate = (s: string): Date => {
+      const [y, m, d] = s.split("-").map(Number);
+      return new Date(y, m - 1, d, 0, 0, 0, 0);
+    };
+
+    // Helper: compute effective due date for an invoice given customer terms
+    const effectiveDueDate = (inv: { date: string; dueDate: string | null }, creditDays: number): Date => {
+      if (inv.dueDate) {
+        return parseLocalDate(inv.dueDate);
+      }
+      const d = parseLocalDate(inv.date);
+      d.setDate(d.getDate() + creditDays);
+      return d;
+    };
+
+    const statements = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Last day of the current month
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    endOfMonth.setHours(23, 59, 59, 999);
+
+    for (const cust of custs) {
+      const allInvs = await db.select().from(invoices).where(eq(invoices.customerId, cust.id));
+      const invs = allInvs.filter(i => i.type === "invoice" && i.status !== "cancelled");
+      const cns = allInvs.filter(i => i.type === "credit_note" && i.status !== "cancelled");
+
+      const totalInvoiced = invs.reduce((s, i) => s + parseFloat(i.total), 0);
+      const totalCredits = cns.reduce((s, i) => s + parseFloat(i.total), 0);
+      const totalPaid = invs.reduce((s, i) => s + getPaid(i), 0);
+
+      const creditDays = termDays(cust.paymentTerms);
+
+      // Terms-aware aging buckets:
+      // withinTermsFuture: not yet due AND due date is after end of this month
+      // dueThisMonth:      not yet due AND due date falls within this calendar month
+      // overdue1_30:       1–30 days past due date
+      // overdue31_60:      31–60 days past due date
+      // overdue60plus:     60+ days past due date
+      const aging = { withinTermsFuture: 0, dueThisMonth: 0, overdue1_30: 0, overdue31_60: 0, overdue60plus: 0 };
+
+      for (const inv of invs) {
+        const paid = getPaid(inv);
+        const balance = parseFloat(inv.total) - paid;
+        if (balance <= 0) continue;
+        const dueDate = effectiveDueDate(inv, creditDays);
+        if (dueDate >= today) {
+          // Not yet overdue
+          if (dueDate <= endOfMonth) {
+            aging.dueThisMonth += balance;
+          } else {
+            aging.withinTermsFuture += balance;
+          }
+        } else {
+          // Overdue
+          const daysLate = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+          if (daysLate <= 30) aging.overdue1_30 += balance;
+          else if (daysLate <= 60) aging.overdue31_60 += balance;
+          else aging.overdue60plus += balance;
+        }
+      }
+
+      // Apply credit notes to oldest overdue buckets first
+      let creditsRemaining = totalCredits;
+      for (const bucket of ["overdue60plus", "overdue31_60", "overdue1_30", "dueThisMonth", "withinTermsFuture"] as const) {
+        if (creditsRemaining <= 0) break;
+        const reduction = Math.min(creditsRemaining, aging[bucket]);
+        aging[bucket] = Math.max(0, aging[bucket] - reduction);
+        creditsRemaining -= reduction;
+      }
+
+      // Total overdue = everything past due date
+      const totalOverdue = aging.overdue1_30 + aging.overdue31_60 + aging.overdue60plus;
+
+      // Break outstanding balances into last-month (prevMonth) and month-before-last invoice totals
+      const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const prevMonthYM = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, "0")}`;
+      const prevPrevMonthDate = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+      const prevPrevMonthYM = `${prevPrevMonthDate.getFullYear()}-${String(prevPrevMonthDate.getMonth() + 1).padStart(2, "0")}`;
+      let dueByEomCurrentMonth = 0;
+      let dueByEomPrevMonth = 0;
+      for (const inv of invs) {
+        const paid = getPaid(inv);
+        const balance = parseFloat(inv.total) - paid;
+        if (balance <= 0) continue;
+        const invYM = inv.date.substring(0, 7);
+        if (invYM === prevMonthYM) dueByEomCurrentMonth += balance;
+        else if (invYM === prevPrevMonthYM) dueByEomPrevMonth += balance;
+      }
+      // "Due by" = outstanding from last month + month before last
+      const dueByEndOfMonth = dueByEomCurrentMonth + dueByEomPrevMonth;
+
+      // Balance as of the last day of the previous month:
+      // Sum all invoices (and credit notes) whose invoice date falls on or before prevMonthEnd,
+      // minus all payments received on or before prevMonthEnd.
+      const prevMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0); // last day of prev month
+      prevMonthEnd.setHours(23, 59, 59, 999);
+      const prevMonthEndStr = `${prevMonthEnd.getFullYear()}-${String(prevMonthEnd.getMonth() + 1).padStart(2, "0")}-${String(prevMonthEnd.getDate()).padStart(2, "0")}`;
+      const prevMonthEndLabel = prevMonthEnd.toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
+
+      let balanceAsOfPrevMonthEnd = 0;
+      for (const inv of allInvs) {
+        if (inv.status === "cancelled") continue;
+        if (String(inv.date) > prevMonthEndStr) continue;
+        const total = parseFloat(inv.total);
+        if (inv.type === "invoice") balanceAsOfPrevMonthEnd += total;
+        else if (inv.type === "credit_note") balanceAsOfPrevMonthEnd -= total;
+      }
+      // Subtract payments received on or before prevMonthEnd
+      const custInvIdsSet = new Set(allInvs.map(i => i.id));
+      for (const pmt of allPayments) {
+        if ((pmt.notes || "").startsWith("Applied from balance payment")) continue;
+        const belongsToCust = (pmt.invoiceId && custInvIdsSet.has(pmt.invoiceId)) ||
+          (!pmt.invoiceId && pmt.customerId === cust.id);
+        if (!belongsToCust) continue;
+        const pmtDate = String(pmt.paymentDate || "");
+        if (pmtDate > prevMonthEndStr) continue;
+        balanceAsOfPrevMonthEnd -= parseFloat(String(pmt.amount));
+      }
+      balanceAsOfPrevMonthEnd = Math.max(0, balanceAsOfPrevMonthEnd);
+
+      const invById = new Map(allInvs.map(i => [i.id, i]));
+
+      const invoiceList = allInvs.map(inv => {
+        const total = parseFloat(inv.total);
+        const paid = getPaid(inv);
+        const outstanding = Math.max(0, total - paid);
+        let daysOverdue: number | null = null;
+        let effectiveDue: string | null = null;
+        if (inv.type === "invoice" && outstanding > 0) {
+          const dueDate = effectiveDueDate(inv, creditDays);
+          effectiveDue = `${dueDate.getFullYear()}-${String(dueDate.getMonth() + 1).padStart(2, "0")}-${String(dueDate.getDate()).padStart(2, "0")}`;
+          daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+        }
+        return {
+          invoiceNumber: inv.invoiceNumber,
+          date: inv.date,
+          type: inv.type,
+          status: inv.status,
+          dueDate: inv.dueDate,
+          effectiveDueDate: effectiveDue,
+          total: total.toFixed(2),
+          paid: paid.toFixed(2),
+          balance: outstanding.toFixed(2),
+          daysOverdue,
+        };
+      });
+
+      const custInvIds = new Set(allInvs.map(i => i.id));
+      const paymentList = allPayments
+        .filter(p => {
+          if ((p.notes || "").startsWith("Applied from balance payment")) return false;
+          if (p.invoiceId && custInvIds.has(p.invoiceId)) return true;
+          if (!p.invoiceId && p.customerId === cust.id) return true;
+          return false;
+        })
+        .sort((a, b) => String(a.paymentDate).localeCompare(String(b.paymentDate)))
+        .map(p => {
+          const inv = p.invoiceId ? invById.get(p.invoiceId) : null;
+          return {
+            date: p.paymentDate,
+            amount: parseFloat(String(p.amount)).toFixed(2),
+            paymentMethod: p.paymentMethod,
+            reference: p.reference || null,
+            notes: p.notes || null,
+            invoiceNumber: inv ? inv.invoiceNumber : null,
+          };
+        });
+
+      const openingBalance = parseFloat(String(cust.openingBalance ?? "0")) || 0;
+      const totalBalance = openingBalance + aging.withinTermsFuture + aging.dueThisMonth + aging.overdue1_30 + aging.overdue31_60 + aging.overdue60plus;
+
+      statements.push({
+        customerId: cust.id,
+        customerName: cust.name,
+        paymentTerms: cust.paymentTerms || "cash",
+        openingBalance: openingBalance.toFixed(2),
+        totalInvoiced: totalInvoiced.toFixed(2),
+        totalCredits: totalCredits.toFixed(2),
+        totalPaid: totalPaid.toFixed(2),
+        balance: totalBalance.toFixed(2),
+        balanceAsOfPrevMonthEnd: balanceAsOfPrevMonthEnd.toFixed(2),
+        prevMonthEndLabel,
+        dueByEndOfMonth: dueByEndOfMonth.toFixed(2),
+        dueByEomCurrentMonth: dueByEomCurrentMonth.toFixed(2),
+        dueByEomPrevMonth: dueByEomPrevMonth.toFixed(2),
+        totalOverdue: totalOverdue.toFixed(2),
+        invoiceCount: allInvs.length,
+        invoices: invoiceList,
+        payments: paymentList,
+        aging: {
+          withinTermsFuture: aging.withinTermsFuture.toFixed(2),
+          dueThisMonth: aging.dueThisMonth.toFixed(2),
+          overdue1_30: aging.overdue1_30.toFixed(2),
+          overdue31_60: aging.overdue31_60.toFixed(2),
+          overdue60plus: aging.overdue60plus.toFixed(2),
+        },
+      });
+    }
+    return statements;
+  }
+
+  async getContractItems(contractId: string) {
+    return db.select().from(priceContractItems).where(eq(priceContractItems.contractId, contractId));
+  }
+
+  async deleteContractItem(itemId: string) {
+    await db.delete(priceContractItems).where(eq(priceContractItems.id, itemId));
+  }
+
+  async updateContractItem(itemId: string, specialPrice: number) {
+    const [updated] = await db.update(priceContractItems)
+      .set({ specialPrice: String(specialPrice) })
+      .where(eq(priceContractItems.id, itemId))
+      .returning();
+    return updated;
+  }
+
+  async deleteContract(id: string) {
+    await db.delete(priceContractItems).where(eq(priceContractItems.contractId, id));
+    await db.delete(priceContractRules).where(eq(priceContractRules.contractId, id));
+    await db.delete(priceContracts).where(eq(priceContracts.id, id));
+  }
+
+  async getCustomerLastPrices(customerId: string, excludeInvoiceId?: string) {
+    const allInvoices = await db.select({
+      id: invoices.id, date: invoices.date, invoiceNumber: invoices.invoiceNumber,
+    }).from(invoices)
+      .where(and(
+        eq(invoices.customerId, customerId),
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} != 'cancelled'`,
+        excludeInvoiceId ? sql`${invoices.id} != ${excludeInvoiceId}` : undefined,
+      ))
+      .orderBy(desc(invoices.date));
+
+    if (allInvoices.length === 0) return {};
+
+    const invoiceIds = allInvoices.map(i => i.id);
+    const invoiceMap = Object.fromEntries(allInvoices.map(i => [i.id, { date: i.date, invoiceNumber: i.invoiceNumber }]));
+
+    const lineRows = await db.select({
+      invoiceId: invoiceItems.invoiceId,
+      itemId: invoiceItems.itemId,
+      unitPrice: invoiceItems.unitPrice,
+      discountPercent: invoiceItems.discountPercent,
+      discount: invoiceItems.discount,
+    }).from(invoiceItems)
+      .where(and(
+        inArray(invoiceItems.invoiceId, invoiceIds),
+        sql`${invoiceItems.itemId} IS NOT NULL`,
+      ));
+
+    const sortedRows = lineRows.sort((a, b) => {
+      const dateA = invoiceMap[a.invoiceId]?.date || "";
+      const dateB = invoiceMap[b.invoiceId]?.date || "";
+      return dateB.localeCompare(dateA);
+    });
+
+    const resultMap: Record<string, { lastUnitPrice: string; lastDiscountPercent: string; lastDiscountAmount: string; invoiceDate: string; invoiceNumber: string }[]> = {};
+    const seenInvoicePerItem: Record<string, Set<string>> = {};
+    for (const row of sortedRows) {
+      if (!row.itemId) continue;
+      if (!resultMap[row.itemId]) {
+        resultMap[row.itemId] = [];
+        seenInvoicePerItem[row.itemId] = new Set();
+      }
+      if (resultMap[row.itemId].length >= 3) continue;
+      if (seenInvoicePerItem[row.itemId].has(row.invoiceId)) continue;
+      seenInvoicePerItem[row.itemId].add(row.invoiceId);
+      resultMap[row.itemId].push({
+        lastUnitPrice: row.unitPrice,
+        lastDiscountPercent: row.discountPercent,
+        lastDiscountAmount: row.discount,
+        invoiceDate: invoiceMap[row.invoiceId]?.date || "",
+        invoiceNumber: invoiceMap[row.invoiceId]?.invoiceNumber || "",
+      });
+    }
+    return resultMap;
+  }
+
+  async getItemPriceHistory(itemId: string, limit = 50, from?: string, to?: string) {
+    const conditions = [
+      eq(invoiceItems.itemId, itemId),
+      eq(invoices.type, "invoice"),
+      sql`${invoices.status} != 'cancelled'`,
+    ] as any[];
+    if (from) conditions.push(gte(invoices.date, from));
+    if (to) conditions.push(lte(invoices.date, to));
+    const rows = await db
+      .select({
+        invoiceId: invoiceItems.invoiceId,
+        invoiceNumber: invoices.invoiceNumber,
+        date: invoices.date,
+        customerId: invoices.customerId,
+        customerName: customers.name,
+        quantity: invoiceItems.quantity,
+        unitPrice: invoiceItems.unitPrice,
+        discountPercent: invoiceItems.discountPercent,
+        discountAmount: invoiceItems.discount,
+      })
+      .from(invoiceItems)
+      .innerJoin(invoices, eq(invoiceItems.invoiceId, invoices.id))
+      .leftJoin(customers, eq(invoices.customerId, customers.id))
+      .where(and(...conditions))
+      .orderBy(desc(invoices.date))
+      .limit(limit);
+    return rows.map(r => ({
+      invoiceId: r.invoiceId,
+      invoiceNumber: r.invoiceNumber,
+      date: r.date,
+      customerId: r.customerId || "",
+      customerName: r.customerName || "Unknown",
+      quantity: r.quantity,
+      unitPrice: r.unitPrice,
+      discountPercent: r.discountPercent,
+      discountAmount: r.discountAmount,
+    }));
+  }
+
+  async getCustomerSavingsReport(customerId: string, from: string, to: string) {
+    const matchingInvoices = await db.select({
+      id: invoices.id, invoiceNumber: invoices.invoiceNumber, date: invoices.date, total: invoices.total,
+    }).from(invoices)
+      .where(and(
+        eq(invoices.customerId, customerId),
+        eq(invoices.type, "invoice"),
+        sql`${invoices.status} != 'cancelled'`,
+        gte(invoices.date, from),
+        lte(invoices.date, to),
+      ))
+      .orderBy(desc(invoices.date));
+
+    if (matchingInvoices.length === 0) {
+      const [cust0] = await db.select({ name: customers.name }).from(customers).where(eq(customers.id, customerId));
+      return { customerId, customerName: cust0?.name || customerId, monthly: [], invoices: [], totalSavings: 0, avgDiscountPercent: 0, invoiceCount: 0, bestDeal: 0, savedVsCatalogue: 0 };
+    }
+
+    const invoiceIds = matchingInvoices.map(i => i.id);
+
+    const lineRows = await db.select({
+      invoiceId: invoiceItems.invoiceId,
+      itemId: invoiceItems.itemId,
+      description: invoiceItems.description,
+      quantity: invoiceItems.quantity,
+      saleUnit: invoiceItems.saleUnit,
+      unitPrice: invoiceItems.unitPrice,
+      discountPercent: invoiceItems.discountPercent,
+      discount: invoiceItems.discount,
+      total: invoiceItems.total,
+    }).from(invoiceItems)
+      .where(inArray(invoiceItems.invoiceId, invoiceIds));
+
+    const uniqueItemIds = [...new Set(lineRows.map(r => r.itemId).filter((id): id is string => id !== null))];
+    const catalogueMap: Record<string, number> = {};
+    if (uniqueItemIds.length > 0) {
+      const itemRows = await db.select({ id: items.id, price1: items.price1 })
+        .from(items)
+        .where(inArray(items.id, uniqueItemIds));
+      for (const r of itemRows) catalogueMap[r.id] = parseFloat(r.price1 || "0");
+    }
+
+    type InvoiceResult = {
+      invoiceId: string; invoiceNumber: string; date: string;
+      totalSavings: number; catalogueTotal: number; actualTotal: number; discountPct: number;
+      lines: { itemName: string; qty: number; cataloguePrice: number; unitPrice: number; savingsPerUnit: number; lineSavings: number; saleUnit: string }[];
+    };
+    const invoiceResults: InvoiceResult[] = [];
+    const monthlyMap: Record<string, { savings: number; invoiceCount: number }> = {};
+
+    for (const inv of matchingInvoices) {
+      const invLines = lineRows.filter(r => r.invoiceId === inv.id);
+      let catalogueTotal = 0;
+      let actualTotal = 0;
+      const discountedLines = [];
+
+      for (const li of invLines) {
+        const qty = parseFloat(String(li.quantity || "0"));
+        const unitPrice = parseFloat(li.unitPrice);
+        const discountAmt = parseFloat(li.discount || "0");
+        const lineTotal = parseFloat(li.total);
+        const cataloguePrice = li.itemId ? (catalogueMap[li.itemId] || unitPrice) : unitPrice;
+        const catalogueLineTotal = cataloguePrice * qty;
+        const savings = Math.max(0, catalogueLineTotal - lineTotal);
+        catalogueTotal += catalogueLineTotal;
+        actualTotal += lineTotal;
+        if (savings > 0 || discountAmt > 0) {
+          discountedLines.push({
+            itemName: li.description,
+            qty,
+            cataloguePrice,
+            unitPrice,
+            savingsPerUnit: qty > 0 ? savings / qty : 0,
+            lineSavings: savings,
+            saleUnit: li.saleUnit,
+          });
+        }
+      }
+
+      const totalSavings = Math.max(0, catalogueTotal - actualTotal);
+      const discountPct = catalogueTotal > 0 ? (totalSavings / catalogueTotal) * 100 : 0;
+
+      if (discountedLines.length > 0) {
+        invoiceResults.push({
+          invoiceId: inv.id,
+          invoiceNumber: inv.invoiceNumber,
+          date: inv.date,
+          totalSavings,
+          catalogueTotal,
+          actualTotal,
+          discountPct,
+          lines: discountedLines,
+        });
+        const monthKey = inv.date.substring(0, 7);
+        if (!monthlyMap[monthKey]) monthlyMap[monthKey] = { savings: 0, invoiceCount: 0 };
+        monthlyMap[monthKey].savings += totalSavings;
+        monthlyMap[monthKey].invoiceCount++;
+      }
+    }
+
+    const monthly = Object.entries(monthlyMap)
+      .map(([month, data]) => ({ month, savings: parseFloat(data.savings.toFixed(2)), invoiceCount: data.invoiceCount }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
+    const totalSavings = invoiceResults.reduce((s, r) => s + r.totalSavings, 0);
+    const totalCatalogue = invoiceResults.reduce((s, r) => s + r.catalogueTotal, 0);
+    const totalDiscountPct = totalCatalogue > 0 ? (totalSavings / totalCatalogue) * 100 : 0;
+    const bestDealEntry = invoiceResults.length > 0
+      ? invoiceResults.reduce((best, r) => r.totalSavings > best.savings ? { invoiceNumber: r.invoiceNumber, savings: r.totalSavings } : best, { invoiceNumber: "", savings: 0 })
+      : null;
+
+    const [cust] = await db.select({ name: customers.name }).from(customers).where(eq(customers.id, customerId));
+    const savedVsCatalogue = parseFloat(totalSavings.toFixed(2));
+
+    return {
+      customerId,
+      customerName: cust?.name || customerId,
+      monthly,
+      invoices: invoiceResults.map(r => ({
+        invoiceId: r.invoiceId,
+        invoiceNumber: r.invoiceNumber,
+        invoiceDate: r.date,
+        totalSavings: r.totalSavings,
+        invoiceTotal: r.actualTotal,
+        lines: r.lines.map(l => ({
+          itemName: l.itemName,
+          qty: l.qty,
+          unitPrice: l.unitPrice,
+          discountPercent: l.unitPrice > 0 ? (l.savingsPerUnit / l.unitPrice) * 100 : 0,
+          discountAmount: l.lineSavings,
+          savings: l.lineSavings,
+        })),
+      })),
+      totalSavings: parseFloat(totalSavings.toFixed(2)),
+      avgDiscountPercent: parseFloat(totalDiscountPct.toFixed(1)),
+      invoiceCount: invoiceResults.length,
+      bestDeal: bestDealEntry && bestDealEntry.savings > 0 ? bestDealEntry.savings : 0,
+      savedVsCatalogue,
+    };
+  }
+
+  async quickSaveContractPrice(customerId: string, itemId: string, fixedPrice: number) {
+    const today = new Date().toISOString().split("T")[0];
+    const existingContracts = await db.select().from(priceContracts).where(and(
+      eq(priceContracts.customerId, customerId),
+      eq(priceContracts.source, 'invoice-discount'),
+      eq(priceContracts.active, true),
+    ));
+
+    let contractId: string;
+    if (existingContracts.length > 0) {
+      contractId = existingContracts[0].id;
+    } else {
+      const [cust] = await db.select({ name: customers.name }).from(customers).where(eq(customers.id, customerId));
+      const customerName = cust?.name || customerId;
+      const endDate = new Date();
+      endDate.setFullYear(endDate.getFullYear() + 2);
+      const insertPayload: InsertPriceContract = {
+        customerId,
+        name: `Auto – ${customerName}`,
+        startDate: today,
+        endDate: endDate.toISOString().split("T")[0],
+        discountType: "percentage",
+        discountValue: "0",
+        active: true,
+        source: "invoice-discount",
+      };
+      const [newContract] = await db.insert(priceContracts).values(insertPayload).returning();
+      contractId = newContract.id;
+    }
+
+    const existingItem = await db.select().from(priceContractItems).where(and(
+      eq(priceContractItems.contractId, contractId),
+      eq(priceContractItems.itemId, itemId),
+    ));
+
+    if (existingItem.length > 0) {
+      await db.update(priceContractItems)
+        .set({ specialPrice: fixedPrice.toFixed(2) })
+        .where(eq(priceContractItems.id, existingItem[0].id));
+    } else {
+      await db.insert(priceContractItems).values({ contractId, itemId, specialPrice: fixedPrice.toFixed(2) });
+    }
+
+    return { contractId };
+  }
+
+  async getSettings() {
+    return db.select().from(systemSettings).orderBy(systemSettings.group, systemSettings.key);
+  }
+
+  async getSetting(key: string) {
+    const [setting] = await db.select().from(systemSettings).where(eq(systemSettings.key, key));
+    return setting;
+  }
+
+  async upsertSetting(key: string, value: string, label: string, group: string) {
+    const existing = await this.getSetting(key);
+    if (existing) {
+      const [updated] = await db.update(systemSettings).set({ value, label, group }).where(eq(systemSettings.key, key)).returning();
+      return updated;
+    }
+    const [created] = await db.insert(systemSettings).values({ key, value, label, group }).returning();
+    return created;
+  }
+
+  async getCustomerByCode(code: string) {
+    const [cust] = await db.select().from(customers).where(eq(customers.code, code));
+    return cust;
+  }
+
+  async getCustomerInvoices(customerId: string) {
+    const invs = await db.select().from(invoices)
+      .where(eq(invoices.customerId, customerId))
+      .orderBy(desc(invoices.createdAt));
+    const result = [];
+    for (const inv of invs) {
+      const lineItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
+      result.push({ ...inv, items: lineItems });
+    }
+    return result;
+  }
+
+  async getPortalOrders(customerId: string) {
+    const orders = await db.select().from(portalOrders)
+      .where(eq(portalOrders.customerId, customerId))
+      .orderBy(desc(portalOrders.createdAt));
+    const result = [];
+    for (const order of orders) {
+      const items = await db.select().from(portalOrderItems).where(eq(portalOrderItems.orderId, order.id));
+      result.push({ ...order, items });
+    }
+    return result;
+  }
+
+  async getCustomerIdsWithWhatsappOrders() {
+    const rows = await db.selectDistinct({ customerId: portalOrders.customerId })
+      .from(portalOrders)
+      .where(eq(portalOrders.source, "whatsapp"));
+    return rows.map((r) => r.customerId);
+  }
+
+  async getAllPortalOrders(filters?: { source?: string; status?: string }) {
+    const conditions = [];
+    if (filters?.source) conditions.push(eq(portalOrders.source, filters.source));
+    if (filters?.status) conditions.push(eq(portalOrders.status, filters.status));
+
+    const rows = await db
+      .select({ order: portalOrders, customerName: customers.name, customerCode: customers.code, customerPhone: customers.phone })
+      .from(portalOrders)
+      .leftJoin(customers, eq(customers.id, portalOrders.customerId))
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(portalOrders.createdAt));
+
+    const result = [];
+    for (const row of rows) {
+      const items = await db.select().from(portalOrderItems).where(eq(portalOrderItems.orderId, row.order.id));
+      result.push({ ...row.order, items, customerName: row.customerName || "Unknown", customerCode: row.customerCode || "", customerPhone: row.customerPhone || null });
+    }
+    return result;
+  }
+
+  async updatePortalOrderStatus(id: string, status: string) {
+    const [updated] = await db.update(portalOrders).set({ status }).where(eq(portalOrders.id, id)).returning();
+    return updated;
+  }
+
+  async setPortalOrderInvoiceId(id: string, invoiceId: string) {
+    const [updated] = await db.update(portalOrders).set({ invoiceId }).where(eq(portalOrders.id, id)).returning();
+    return updated;
+  }
+
+  async createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]) {
+    const [order] = await db.insert(portalOrders).values(data).returning();
+    if (lineItems.length > 0) {
+      await db.insert(portalOrderItems).values(lineItems.map(li => ({ ...li, orderId: order.id })));
+    }
+    return order;
+  }
+
+  async getCustomerPortalOrderByCheckoutKey(customerId: string, checkoutKey: string) {
+    const [order] = await db.select().from(portalOrders).where(and(
+      eq(portalOrders.customerId, customerId),
+      eq(portalOrders.checkoutKey, checkoutKey),
+    ));
+    return order;
+  }
+
+  async createCustomerPortalOrderAtomic(
+    data: Omit<InsertPortalOrder, "total" | "cashbackApplied">,
+    lineItems: InsertPortalOrderItem[],
+    options: {
+      useCashback: boolean;
+      loyaltyEnabled: boolean;
+      cashbackEnabled: boolean;
+      pointsPerEuro: number;
+      silverThreshold: number;
+      goldThreshold: number;
+      bronzeCashbackPercent: number;
+      silverCashbackPercent: number;
+      goldCashbackPercent: number;
+      maxCashbackOrderPercent: number;
+    },
+  ) {
+    return db.transaction(async (tx) => {
+      const lockedCustomerResult = await tx.execute(
+        sql`select id, cashback_balance from ${customers} where ${customers.id} = ${data.customerId} for update`,
+      );
+      const lockedCustomer = lockedCustomerResult.rows[0] as { id: string; cashback_balance: string | null } | undefined;
+      if (!lockedCustomer) throw new Error("CUSTOMER_NOT_FOUND");
+
+      if (data.checkoutKey) {
+        const [existingOrder] = await tx.select().from(portalOrders).where(and(
+          eq(portalOrders.customerId, data.customerId),
+          eq(portalOrders.checkoutKey, data.checkoutKey),
+        ));
+        if (existingOrder) return { order: existingOrder, replayed: true };
+      }
+
+      const subtotal = Number(data.subtotal);
+      const grossTotal = subtotal + Number(data.vatAmount);
+      const availableCashback = Number(lockedCustomer.cashback_balance || 0);
+      const cashbackLimit = grossTotal * (options.maxCashbackOrderPercent / 100);
+      const cashbackApplied = options.useCashback && options.cashbackEnabled
+        ? Math.min(availableCashback, grossTotal, cashbackLimit)
+        : 0;
+      const total = Math.max(0, grossTotal - cashbackApplied);
+
+      const [order] = await tx.insert(portalOrders).values({
+        ...data,
+        total: total.toFixed(2),
+        cashbackApplied: cashbackApplied.toFixed(2),
+      }).returning();
+      if (lineItems.length) {
+        await tx.insert(portalOrderItems).values(lineItems.map((item) => ({ ...item, orderId: order.id })));
+      }
+
+      const [loyaltyTotals] = await tx.select({
+        balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}), 0)`,
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, data.customerId));
+      const priorPointsBalance = Number(loyaltyTotals?.balance || 0);
+      const requestedPoints = options.loyaltyEnabled ? Math.floor(subtotal * options.pointsPerEuro) : 0;
+      let awardedPoints = 0;
+      if (requestedPoints > 0) {
+        const [award] = await tx.insert(customerLoyaltyPoints).values({
+          customerId: data.customerId,
+          points: requestedPoints,
+          type: "earn",
+          reason: `Order #${order.id.slice(0, 8)}`,
+          sourceType: "portal_order",
+          sourceId: order.id,
+        }).onConflictDoNothing().returning({ points: customerLoyaltyPoints.points });
+        awardedPoints = award?.points || 0;
+      }
+
+      const pointsBalance = priorPointsBalance + awardedPoints;
+      const cashbackRate = pointsBalance >= options.goldThreshold
+        ? options.goldCashbackPercent
+        : pointsBalance >= options.silverThreshold
+          ? options.silverCashbackPercent
+          : options.bronzeCashbackPercent;
+      const earnedCashback = options.cashbackEnabled
+        ? Number((subtotal * cashbackRate / 100).toFixed(2))
+        : 0;
+      const newCashbackBalance = availableCashback - cashbackApplied + earnedCashback;
+      if (newCashbackBalance < 0) throw new Error("INSUFFICIENT_CASHBACK");
+
+      await tx.update(customers)
+        .set({ cashbackBalance: newCashbackBalance.toFixed(2) })
+        .where(eq(customers.id, data.customerId));
+
+      return { order, replayed: false };
+    });
+  }
+
+  async getAvailableItems() {
+    return db.select().from(items)
+      .where(and(eq(items.active, true), sql`${items.stockQuantity} > 0`))
+      .orderBy(items.name);
+  }
+
+  async getSuppliers() {
+    return db.select().from(suppliers).orderBy(suppliers.name);
+  }
+  async getSupplier(id: string) {
+    const [sup] = await db.select().from(suppliers).where(eq(suppliers.id, id));
+    return sup;
+  }
+  async createSupplier(data: InsertSupplier) {
+    const [sup] = await db.insert(suppliers).values(data).returning();
+    return sup;
+  }
+  async updateSupplier(id: string, data: Partial<InsertSupplier>) {
+    const [sup] = await db.update(suppliers).set(data).where(eq(suppliers.id, id)).returning();
+    return sup;
+  }
+  async deleteSupplier(id: string) {
+    await db.delete(supplierPayments).where(eq(supplierPayments.supplierId, id));
+    await db.delete(suppliers).where(eq(suppliers.id, id));
+  }
+
+  async getPurchaseInvoices() {
+    const result = await db
+      .select({
+        id: purchaseInvoices.id,
+        invoiceNumber: purchaseInvoices.invoiceNumber,
+        supplierInvoiceRef: purchaseInvoices.supplierInvoiceRef,
+        supplierId: purchaseInvoices.supplierId,
+        date: purchaseInvoices.date,
+        dueDate: purchaseInvoices.dueDate,
+        subtotal: purchaseInvoices.subtotal,
+        vatAmount: purchaseInvoices.vatAmount,
+        total: purchaseInvoices.total,
+        status: purchaseInvoices.status,
+        notes: purchaseInvoices.notes,
+        createdAt: purchaseInvoices.createdAt,
+        supplierName: suppliers.name,
+      })
+      .from(purchaseInvoices)
+      .leftJoin(suppliers, eq(purchaseInvoices.supplierId, suppliers.id))
+      .orderBy(desc(purchaseInvoices.createdAt));
+    return result.map(r => ({ ...r, supplierName: r.supplierName || "Unknown" }));
+  }
+
+  async getPurchaseInvoice(id: string) {
+    const [inv] = await db
+      .select({
+        id: purchaseInvoices.id,
+        invoiceNumber: purchaseInvoices.invoiceNumber,
+        supplierInvoiceRef: purchaseInvoices.supplierInvoiceRef,
+        supplierId: purchaseInvoices.supplierId,
+        date: purchaseInvoices.date,
+        dueDate: purchaseInvoices.dueDate,
+        subtotal: purchaseInvoices.subtotal,
+        vatAmount: purchaseInvoices.vatAmount,
+        total: purchaseInvoices.total,
+        status: purchaseInvoices.status,
+        notes: purchaseInvoices.notes,
+        createdAt: purchaseInvoices.createdAt,
+        supplierName: suppliers.name,
+      })
+      .from(purchaseInvoices)
+      .leftJoin(suppliers, eq(purchaseInvoices.supplierId, suppliers.id))
+      .where(eq(purchaseInvoices.id, id));
+    if (!inv) return undefined;
+    const lineItems = await db.select().from(purchaseInvoiceItems).where(eq(purchaseInvoiceItems.purchaseInvoiceId, id));
+    return { ...inv, supplierName: inv.supplierName || "Unknown", items: lineItems };
+  }
+
+  async getNextPurchaseInvoiceNumber() {
+    const [result] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(purchaseInvoices);
+    const num = (result?.count || 0) + 1;
+    return `PI-${String(num).padStart(5, "0")}`;
+  }
+
+  async createPurchaseInvoice(data: InsertPurchaseInvoice, lineItems: InsertPurchaseInvoiceItem[]) {
+    const invoiceNumber = await this.getNextPurchaseInvoiceNumber();
+    const [inv] = await db.insert(purchaseInvoices).values({ ...data, invoiceNumber }).returning();
+    if (lineItems.length > 0) {
+      await db.insert(purchaseInvoiceItems).values(lineItems.map(li => ({ ...li, purchaseInvoiceId: inv.id })));
+    }
+    return inv;
+  }
+
+  async getLastPurchaseCosts(): Promise<Record<string, { unitCost: string; date: string }>> {
+    const rows = await db.execute(sql`
+      SELECT DISTINCT ON (pii.item_id)
+        pii.item_id,
+        pii.unit_cost,
+        pi.date
+      FROM purchase_invoice_items pii
+      JOIN purchase_invoices pi ON pi.id = pii.purchase_invoice_id
+      ORDER BY pii.item_id, pi.date DESC, pi.created_at DESC
+    `);
+    const result: Record<string, { unitCost: string; date: string }> = {};
+    for (const row of rows.rows) {
+      const r = row as any;
+      result[r.item_id] = { unitCost: r.unit_cost, date: r.date };
+    }
+    return result;
+  }
+
+  async updatePurchaseInvoice(id: string, data: Partial<InsertPurchaseInvoice>) {
+    const [inv] = await db.update(purchaseInvoices).set(data).where(eq(purchaseInvoices.id, id)).returning();
+    return inv;
+  }
+
+  async deletePurchaseInvoiceItems(purchaseInvoiceId: string) {
+    await db.delete(purchaseInvoiceItems).where(eq(purchaseInvoiceItems.purchaseInvoiceId, purchaseInvoiceId));
+  }
+
+  async deletePurchaseInvoice(id: string) {
+    await db.delete(purchaseInvoiceItems).where(eq(purchaseInvoiceItems.purchaseInvoiceId, id));
+    await db.delete(supplierPayments).where(eq(supplierPayments.purchaseInvoiceId, id));
+    await db.delete(purchaseInvoices).where(eq(purchaseInvoices.id, id));
+  }
+
+  async createPurchaseInvoiceItems(lineItems: InsertPurchaseInvoiceItem[]) {
+    if (lineItems.length > 0) {
+      await db.insert(purchaseInvoiceItems).values(lineItems);
+    }
+  }
+
+  async getSupplierPayments(supplierId?: string) {
+    let query = db
+      .select({
+        id: supplierPayments.id,
+        supplierId: supplierPayments.supplierId,
+        purchaseInvoiceId: supplierPayments.purchaseInvoiceId,
+        amount: supplierPayments.amount,
+        paymentDate: supplierPayments.paymentDate,
+        paymentMethod: supplierPayments.paymentMethod,
+        reference: supplierPayments.reference,
+        notes: supplierPayments.notes,
+        createdAt: supplierPayments.createdAt,
+        supplierName: suppliers.name,
+        purchaseInvoiceNumber: purchaseInvoices.invoiceNumber,
+        purchaseInvoiceTotal: purchaseInvoices.total,
+        purchaseInvoiceRef: purchaseInvoices.supplierInvoiceRef,
+      })
+      .from(supplierPayments)
+      .leftJoin(suppliers, eq(supplierPayments.supplierId, suppliers.id))
+      .leftJoin(purchaseInvoices, eq(supplierPayments.purchaseInvoiceId, purchaseInvoices.id))
+      .orderBy(desc(supplierPayments.createdAt));
+
+    if (supplierId) {
+      query = query.where(eq(supplierPayments.supplierId, supplierId)) as any;
+    }
+
+    const result = await query;
+    return result.map(r => ({
+      ...r,
+      supplierName: r.supplierName || undefined,
+      purchaseInvoiceNumber: r.purchaseInvoiceNumber || undefined,
+      purchaseInvoiceTotal: r.purchaseInvoiceTotal || undefined,
+      purchaseInvoiceRef: r.purchaseInvoiceRef || undefined,
+    }));
+  }
+
+  async createSupplierPayment(data: InsertSupplierPayment) {
+    const [payment] = await db.insert(supplierPayments).values(data).returning();
+    if (data.supplierId) {
+      const supplier = await this.getSupplier(data.supplierId);
+      if (supplier) {
+        const newBalance = parseFloat(supplier.currentBalance) - parseFloat(String(data.amount));
+        await this.updateSupplier(data.supplierId, { currentBalance: newBalance.toFixed(2) });
+      }
+    }
+    // If linked to a purchase invoice, check if fully paid and mark it "paid"
+    if (data.purchaseInvoiceId) {
+      const paymentsForPI = await db
+        .select()
+        .from(supplierPayments)
+        .where(eq(supplierPayments.purchaseInvoiceId, data.purchaseInvoiceId));
+      const totalPaid = paymentsForPI.reduce((s, p) => s + parseFloat(String(p.amount)), 0);
+      const [pi] = await db.select().from(purchaseInvoices).where(eq(purchaseInvoices.id, data.purchaseInvoiceId));
+      if (pi && totalPaid >= parseFloat(String(pi.total))) {
+        await db.update(purchaseInvoices).set({ status: "paid" }).where(eq(purchaseInvoices.id, data.purchaseInvoiceId));
+      }
+    }
+    return payment;
+  }
+
+  async updateSupplierPayment(id: string, data: Partial<InsertSupplierPayment>) {
+    const [existing] = await db.select().from(supplierPayments).where(eq(supplierPayments.id, id));
+    if (!existing) throw new Error("Payment not found");
+    const [updated] = await db.update(supplierPayments).set(data).where(eq(supplierPayments.id, id)).returning();
+    if (data.amount !== undefined && existing.supplierId) {
+      const oldAmount = parseFloat(String(existing.amount));
+      const newAmount = parseFloat(String(data.amount));
+      const diff = newAmount - oldAmount;
+      if (diff !== 0) {
+        const supplier = await this.getSupplier(existing.supplierId);
+        if (supplier) {
+          const newBalance = parseFloat(supplier.currentBalance) + diff;
+          await this.updateSupplier(existing.supplierId, { currentBalance: Math.max(0, newBalance).toFixed(2) });
+        }
+      }
+    }
+    return updated;
+  }
+
+  async getEmailLogs() {
+    return db.select().from(emailLogs).orderBy(desc(emailLogs.createdAt));
+  }
+
+  async getEmailLogsByCustomer(customerId: string) {
+    return db.select().from(emailLogs).where(eq(emailLogs.customerId, customerId)).orderBy(desc(emailLogs.createdAt));
+  }
+
+  async createEmailLog(data: InsertEmailLog) {
+    const [log] = await db.insert(emailLogs).values(data).returning();
+    return log;
+  }
+
+  // Accounting
+  async getAccounts() {
+    return db.select().from(accounts).orderBy(accounts.code);
+  }
+
+  async getAccount(id: string) {
+    const [account] = await db.select().from(accounts).where(eq(accounts.id, id));
+    return account;
+  }
+
+  async getAccountByCode(code: string) {
+    const [account] = await db.select().from(accounts).where(eq(accounts.code, code));
+    return account;
+  }
+
+  async createAccount(data: InsertAccount) {
+    const [account] = await db.insert(accounts).values(data).returning();
+    return account;
+  }
+
+  async updateAccount(id: string, data: Partial<InsertAccount>) {
+    const [account] = await db.update(accounts).set(data).where(eq(accounts.id, id)).returning();
+    return account;
+  }
+
+  async getJournalEntries() {
+    return db.select().from(journalEntries).orderBy(desc(journalEntries.date), desc(journalEntries.createdAt));
+  }
+
+  async getJournalEntry(id: string) {
+    const [entry] = await db.select().from(journalEntries).where(eq(journalEntries.id, id));
+    if (!entry) return undefined;
+
+    const lines = await db
+      .select({
+        id: journalEntryLines.id,
+        journalEntryId: journalEntryLines.journalEntryId,
+        accountId: journalEntryLines.accountId,
+        debit: journalEntryLines.debit,
+        credit: journalEntryLines.credit,
+        description: journalEntryLines.description,
+        accountName: accounts.name,
+        accountCode: accounts.code,
+      })
+      .from(journalEntryLines)
+      .leftJoin(accounts, eq(journalEntryLines.accountId, accounts.id))
+      .where(eq(journalEntryLines.journalEntryId, id));
+
+    return {
+      ...entry,
+      lines: lines.map(l => ({
+        ...l,
+        accountName: l.accountName ?? undefined,
+        accountCode: l.accountCode ?? undefined,
+      })),
+    };
+  }
+
+  async createJournalEntry(data: InsertJournalEntry, lines: InsertJournalEntryLine[]) {
+    const [entry] = await db.insert(journalEntries).values(data).returning();
+
+    if (lines.length > 0) {
+      const linesWithEntry = lines.map(l => ({ ...l, journalEntryId: entry.id }));
+      await db.insert(journalEntryLines).values(linesWithEntry);
+    }
+
+    for (const line of lines) {
+      const debitAmt = parseFloat(String(line.debit || "0"));
+      const creditAmt = parseFloat(String(line.credit || "0"));
+      if (debitAmt === 0 && creditAmt === 0) continue;
+
+      const [acct] = await db.select().from(accounts).where(eq(accounts.id, line.accountId));
+      if (!acct) continue;
+
+      const currentBal = parseFloat(acct.balance);
+      let newBal = currentBal;
+      if (acct.type === "asset" || acct.type === "expense") {
+        newBal += debitAmt - creditAmt;
+      } else {
+        newBal += creditAmt - debitAmt;
+      }
+      await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, line.accountId));
+    }
+
+    return entry;
+  }
+
+  async updateJournalEntry(id: string, data: Partial<InsertJournalEntry>, lines: InsertJournalEntryLine[]) {
+    // Reverse existing line impacts on account balances
+    const existingLines = await db.select().from(journalEntryLines).where(eq(journalEntryLines.journalEntryId, id));
+    for (const line of existingLines) {
+      const debitAmt = parseFloat(String(line.debit || "0"));
+      const creditAmt = parseFloat(String(line.credit || "0"));
+      if (debitAmt === 0 && creditAmt === 0) continue;
+      const [acct] = await db.select().from(accounts).where(eq(accounts.id, line.accountId));
+      if (!acct) continue;
+      const currentBal = parseFloat(acct.balance);
+      let newBal = currentBal;
+      if (acct.type === "asset" || acct.type === "expense") {
+        newBal -= debitAmt - creditAmt;
+      } else {
+        newBal -= creditAmt - debitAmt;
+      }
+      await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, line.accountId));
+    }
+
+    // Delete old lines
+    await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, id));
+
+    // Update header
+    const [entry] = await db.update(journalEntries).set(data).where(eq(journalEntries.id, id)).returning();
+    if (!entry) return undefined;
+
+    // Insert new lines and update balances
+    if (lines.length > 0) {
+      const linesWithEntry = lines.map(l => ({ ...l, journalEntryId: id }));
+      await db.insert(journalEntryLines).values(linesWithEntry);
+    }
+    for (const line of lines) {
+      const debitAmt = parseFloat(String(line.debit || "0"));
+      const creditAmt = parseFloat(String(line.credit || "0"));
+      if (debitAmt === 0 && creditAmt === 0) continue;
+      const [acct] = await db.select().from(accounts).where(eq(accounts.id, line.accountId));
+      if (!acct) continue;
+      const currentBal = parseFloat(acct.balance);
+      let newBal = currentBal;
+      if (acct.type === "asset" || acct.type === "expense") {
+        newBal += debitAmt - creditAmt;
+      } else {
+        newBal += creditAmt - debitAmt;
+      }
+      await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, line.accountId));
+    }
+    return entry;
+  }
+
+  async deleteJournalEntry(id: string) {
+    // Reverse account balance impacts first
+    const existingLines = await db.select().from(journalEntryLines).where(eq(journalEntryLines.journalEntryId, id));
+    for (const line of existingLines) {
+      const debitAmt = parseFloat(String(line.debit || "0"));
+      const creditAmt = parseFloat(String(line.credit || "0"));
+      if (debitAmt === 0 && creditAmt === 0) continue;
+      const [acct] = await db.select().from(accounts).where(eq(accounts.id, line.accountId));
+      if (!acct) continue;
+      const currentBal = parseFloat(acct.balance);
+      let newBal = currentBal;
+      if (acct.type === "asset" || acct.type === "expense") {
+        newBal -= debitAmt - creditAmt;
+      } else {
+        newBal -= creditAmt - debitAmt;
+      }
+      await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, line.accountId));
+    }
+    await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, id));
+    await db.delete(journalEntries).where(eq(journalEntries.id, id));
+  }
+
+  async getNextJournalEntryNumber() {
+    const [result] = await db.select({
+      maxNum: sql<number>`COALESCE(MAX(CAST(SUBSTRING(entry_number FROM 4) AS INTEGER)), 0)`
+    }).from(journalEntries);
+    const num = (result?.maxNum || 0) + 1;
+    return `JE-${String(num).padStart(5, "0")}`;
+  }
+
+  async getExpenses() {
+    const result = await db
+      .select({
+        id: expenses.id,
+        date: expenses.date,
+        expenseAccountId: expenses.expenseAccountId,
+        paymentAccountId: expenses.paymentAccountId,
+        amount: expenses.amount,
+        vatAmount: expenses.vatAmount,
+        description: expenses.description,
+        reference: expenses.reference,
+        paymentMethod: expenses.paymentMethod,
+        supplierId: expenses.supplierId,
+        journalEntryId: expenses.journalEntryId,
+        createdAt: expenses.createdAt,
+      })
+      .from(expenses)
+      .orderBy(desc(expenses.date), desc(expenses.createdAt));
+
+    const allAccts = await this.getAccounts();
+    const allSuppliers = await this.getSuppliers();
+    const acctMap = Object.fromEntries(allAccts.map(a => [a.id, a.name]));
+    const supplierMap = Object.fromEntries(allSuppliers.map(s => [s.id, s.name]));
+
+    return result.map(r => ({
+      ...r,
+      expenseAccountName: acctMap[r.expenseAccountId],
+      paymentAccountName: acctMap[r.paymentAccountId],
+      supplierName: r.supplierId ? supplierMap[r.supplierId] : undefined,
+    }));
+  }
+
+  async createExpense(data: InsertExpense) {
+    const [expense] = await db.insert(expenses).values(data).returning();
+    return expense;
+  }
+
+  async updateExpense(id: string, data: Partial<InsertExpense>) {
+    const [expense] = await db.update(expenses).set(data).where(eq(expenses.id, id)).returning();
+    return expense;
+  }
+
+  async getGeneralLedger(accountId: string, from: string, to: string) {
+    const openingLines = await db
+      .select({
+        debit: sql<string>`COALESCE(SUM(${journalEntryLines.debit}), '0')`,
+        credit: sql<string>`COALESCE(SUM(${journalEntryLines.credit}), '0')`,
+      })
+      .from(journalEntryLines)
+      .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+      .where(and(
+        eq(journalEntryLines.accountId, accountId),
+        lt(journalEntries.date, from),
+        eq(journalEntries.status, "posted"),
+      ));
+
+    const [acct] = await db.select().from(accounts).where(eq(accounts.id, accountId));
+    const debitTotal = parseFloat(openingLines[0]?.debit || "0");
+    const creditTotal = parseFloat(openingLines[0]?.credit || "0");
+    let openingBalance = 0;
+    if (acct && (acct.type === "asset" || acct.type === "expense")) {
+      openingBalance = debitTotal - creditTotal;
+    } else {
+      openingBalance = creditTotal - debitTotal;
+    }
+
+    const entries = await db
+      .select({
+        date: journalEntries.date,
+        entryNumber: journalEntries.entryNumber,
+        description: journalEntries.description,
+        reference: journalEntries.reference,
+        debit: journalEntryLines.debit,
+        credit: journalEntryLines.credit,
+        lineDescription: journalEntryLines.description,
+        journalEntryId: journalEntries.id,
+      })
+      .from(journalEntryLines)
+      .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+      .where(and(
+        eq(journalEntryLines.accountId, accountId),
+        gte(journalEntries.date, from),
+        lte(journalEntries.date, to),
+        eq(journalEntries.status, "posted"),
+      ))
+      .orderBy(journalEntries.date, journalEntries.createdAt);
+
+    return { entries, openingBalance: openingBalance.toFixed(2) };
+  }
+
+  async getTrialBalance() {
+    const allAccounts = await db
+      .select({ id: accounts.id, code: accounts.code, name: accounts.name, type: accounts.type })
+      .from(accounts)
+      .where(eq(accounts.active, true))
+      .orderBy(accounts.code);
+
+    const lineTotals = await db.select({
+      accountId: journalEntryLines.accountId,
+      totalDebit: sql<string>`COALESCE(SUM(${journalEntryLines.debit}), '0')`,
+      totalCredit: sql<string>`COALESCE(SUM(${journalEntryLines.credit}), '0')`,
+    })
+    .from(journalEntryLines)
+    .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+    .where(eq(journalEntries.status, "posted"))
+    .groupBy(journalEntryLines.accountId);
+
+    const totalsMap = new Map(lineTotals.map(r => [r.accountId, { d: parseFloat(r.totalDebit), c: parseFloat(r.totalCredit) }]));
+
+    let totalDebits = 0;
+    let totalCredits = 0;
+    const accts = allAccounts.map(a => {
+      const t = totalsMap.get(a.id) || { d: 0, c: 0 };
+      let debit = "0.00";
+      let credit = "0.00";
+      if (t.d > t.c) {
+        debit = (t.d - t.c).toFixed(2);
+        totalDebits += t.d - t.c;
+      } else if (t.c > t.d) {
+        credit = (t.c - t.d).toFixed(2);
+        totalCredits += t.c - t.d;
+      }
+      return { ...a, balance: (t.d - t.c).toFixed(2), debit, credit };
+    }).filter(a => a.debit !== "0.00" || a.credit !== "0.00");
+
+    return { accounts: accts, totalDebits: totalDebits.toFixed(2), totalCredits: totalCredits.toFixed(2) };
+  }
+
+  async getProfitAndLoss(from: string, to: string) {
+    const revenueAccounts = await db.select().from(accounts)
+      .where(and(eq(accounts.type, "revenue"), eq(accounts.active, true)))
+      .orderBy(accounts.code);
+
+    const expenseAccounts = await db.select().from(accounts)
+      .where(and(eq(accounts.type, "expense"), eq(accounts.active, true)))
+      .orderBy(accounts.code);
+
+    const getAccountPeriodBalance = async (accountId: string, type: string) => {
+      const [result] = await db.select({
+        debit: sql<string>`COALESCE(SUM(${journalEntryLines.debit}), '0')`,
+        credit: sql<string>`COALESCE(SUM(${journalEntryLines.credit}), '0')`,
+      })
+      .from(journalEntryLines)
+      .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+      .where(and(
+        eq(journalEntryLines.accountId, accountId),
+        gte(journalEntries.date, from),
+        lte(journalEntries.date, to),
+        eq(journalEntries.status, "posted"),
+      ));
+
+      const d = parseFloat(result?.debit || "0");
+      const c = parseFloat(result?.credit || "0");
+      if (type === "revenue") return (c - d).toFixed(2);
+      return (d - c).toFixed(2);
+    };
+
+    const revenue = await Promise.all(revenueAccounts.map(async a => ({
+      ...a,
+      periodBalance: await getAccountPeriodBalance(a.id, "revenue"),
+    })));
+
+    const expensesList = await Promise.all(expenseAccounts.map(async a => ({
+      ...a,
+      periodBalance: await getAccountPeriodBalance(a.id, "expense"),
+    })));
+
+    const totalRevenue = revenue.reduce((s, a) => s + parseFloat(a.periodBalance), 0);
+    const totalExpenses = expensesList.reduce((s, a) => s + parseFloat(a.periodBalance), 0);
+
+    return {
+      revenue: revenue.filter(a => parseFloat(a.periodBalance) !== 0),
+      expenses: expensesList.filter(a => parseFloat(a.periodBalance) !== 0),
+      totalRevenue: totalRevenue.toFixed(2),
+      totalExpenses: totalExpenses.toFixed(2),
+      netIncome: (totalRevenue - totalExpenses).toFixed(2),
+    };
+  }
+
+  async getBalanceSheet(asOf: string) {
+    const allAccounts = await db
+      .select({ id: accounts.id, code: accounts.code, name: accounts.name, type: accounts.type })
+      .from(accounts)
+      .where(eq(accounts.active, true))
+      .orderBy(accounts.code);
+
+    // Compute balances from journal entry lines up to asOf date
+    const lineTotals = await db.select({
+      accountId: journalEntryLines.accountId,
+      totalDebit: sql<string>`COALESCE(SUM(${journalEntryLines.debit}), '0')`,
+      totalCredit: sql<string>`COALESCE(SUM(${journalEntryLines.credit}), '0')`,
+    })
+    .from(journalEntryLines)
+    .innerJoin(journalEntries, eq(journalEntryLines.journalEntryId, journalEntries.id))
+    .where(and(eq(journalEntries.status, "posted"), lte(journalEntries.date, asOf)))
+    .groupBy(journalEntryLines.accountId);
+
+    const totalsMap = new Map(lineTotals.map(r => [r.accountId, { d: parseFloat(r.totalDebit), c: parseFloat(r.totalCredit) }]));
+
+    const getBalance = (accountId: string, type: string): number => {
+      const t = totalsMap.get(accountId) || { d: 0, c: 0 };
+      if (type === "asset" || type === "expense") return t.d - t.c;
+      return t.c - t.d; // liability, equity, revenue: credit-normal
+    };
+
+    const assetAccounts = allAccounts.filter(a => a.type === "asset")
+      .map(a => ({ ...a, balance: getBalance(a.id, "asset").toFixed(2) }))
+      .filter(a => parseFloat(a.balance) !== 0);
+
+    const liabilityAccounts = allAccounts.filter(a => a.type === "liability")
+      .map(a => ({ ...a, balance: getBalance(a.id, "liability").toFixed(2) }))
+      .filter(a => parseFloat(a.balance) !== 0);
+
+    const equityAccounts = allAccounts.filter(a => a.type === "equity")
+      .map(a => ({ ...a, balance: getBalance(a.id, "equity").toFixed(2) }))
+      .filter(a => parseFloat(a.balance) !== 0);
+
+    // Net income (revenue - expenses) must be included in equity to balance the sheet
+    const revenueTotal = allAccounts.filter(a => a.type === "revenue")
+      .reduce((s, a) => s + getBalance(a.id, "revenue"), 0);
+    const expenseTotal = allAccounts.filter(a => a.type === "expense")
+      .reduce((s, a) => s + getBalance(a.id, "expense"), 0);
+    const netIncome = revenueTotal - expenseTotal;
+
+    const totalAssets = assetAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
+    const totalLiabilities = liabilityAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
+    const totalEquityAccounts = equityAccounts.reduce((s, a) => s + parseFloat(a.balance), 0);
+    const totalEquity = totalEquityAccounts + netIncome;
+
+    return {
+      assets: assetAccounts,
+      liabilities: liabilityAccounts,
+      equity: equityAccounts,
+      netIncome: netIncome.toFixed(2),
+      totalAssets: totalAssets.toFixed(2),
+      totalLiabilities: totalLiabilities.toFixed(2),
+      totalEquity: totalEquity.toFixed(2),
+    };
+  }
+
+  async getPurchaseInvoiceSummary() {
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+    const thisMonthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const nextMonthStart = (() => {
+      const d = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+    })();
+
+    const unpaidInvoices = await db.select().from(purchaseInvoices).where(
+      sql`${purchaseInvoices.status} NOT IN ('paid', 'cancelled')`
+    );
+
+    let totalOutstanding = 0;
+    let dueThisMonth = 0;
+    let overdue = 0;
+    let overdueCount = 0;
+    for (const inv of unpaidInvoices) {
+      const amt = parseFloat(String(inv.total || 0));
+      totalOutstanding += amt;
+      if (inv.dueDate) {
+        if (inv.dueDate < thisMonthStart) {
+          overdue += amt;
+          overdueCount++;
+        } else if (inv.dueDate >= thisMonthStart && inv.dueDate < nextMonthStart) {
+          dueThisMonth += amt;
+        }
+      }
+    }
+
+    const [countRow] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(purchaseInvoices)
+      .where(sql`${purchaseInvoices.status} NOT IN ('paid', 'cancelled')`);
+
+    return {
+      totalOutstanding: totalOutstanding.toFixed(2),
+      totalCount: Number(countRow?.count || 0),
+      dueThisMonth: dueThisMonth.toFixed(2),
+      overdue: overdue.toFixed(2),
+      overdueCount,
+    };
+  }
+
+  async getStockSuggestions() {
+    const allItems = await db.select().from(items).where(eq(items.active, true));
+    const allCategories = await db.select().from(categories);
+    const catMap = new Map(allCategories.map(c => [c.id, c.name]));
+
+    // Read configurable weeks of cover (default 8 weeks)
+    const weeksSettingRow = await this.getSetting("reorder_weeks_cover");
+    const weeksOfCover = Math.max(1, parseFloat(weeksSettingRow?.value || "8") || 8);
+    const coverDays = weeksOfCover * 7;
+
+    // Compute 60-day sales volumes per item from invoice lines
+    const sixtyDaysAgo = new Date();
+    sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+    const sixtyDaysAgoStr = sixtyDaysAgo.toISOString().split("T")[0];
+
+    // Join items to get packSize for unit conversion (pack sales → bottle equivalents)
+    const salesRows = await db
+      .select({
+        itemId: invoiceItems.itemId,
+        quantity: invoiceItems.quantity,
+        saleUnit: invoiceItems.saleUnit,
+        packSize: items.packSize,
+      })
+      .from(invoiceItems)
+      .innerJoin(invoices, eq(invoiceItems.invoiceId, invoices.id))
+      .innerJoin(items, eq(invoiceItems.itemId, items.id))
+      .where(
+        and(
+          eq(invoices.type, "invoice"),
+          sql`${invoices.status} != 'cancelled'`,
+          sql`${invoices.date} >= ${sixtyDaysAgoStr}`,
+        )
+      );
+
+    // Aggregate bottle-equivalent quantities per item
+    const bottlesMap = new Map<string, number>();
+    for (const row of salesRows) {
+      if (!row.itemId) continue;
+      const qty = parseFloat(String(row.quantity || 0));
+      const ps = parseFloat(String(row.packSize || 1));
+      const bottles = row.saleUnit === "pack" ? qty * ps : qty;
+      bottlesMap.set(row.itemId, (bottlesMap.get(row.itemId) || 0) + bottles);
+    }
+    const salesMap = bottlesMap;
+
+    const candidates = allItems.filter(item => {
+      const qty = parseFloat(String(item.stockQuantity || 0));
+      const reorder = parseFloat(String(item.reorderLevel || 0));
+      const avgDaily = (salesMap.get(item.id) || 0) / 60;
+      return qty <= reorder || qty < avgDaily * coverDays;
+    });
+
+    return candidates
+      .map(item => {
+        const qty = parseFloat(String(item.stockQuantity || 0));
+        const reorder = parseFloat(String(item.reorderLevel || 0));
+        const packSize = parseFloat(String(item.packSize || 1));
+        const salesIn60Days = salesMap.get(item.id) || 0;
+        const avgMonthly = Math.round((salesIn60Days / 2) * 10) / 10;
+        // Suggested = enough to cover weeksOfCover weeks at avg daily rate, rounded up to nearest pack
+        const avgDaily = salesIn60Days / 60;
+        const rawBase = avgDaily * coverDays;
+        const suggestedOrder = rawBase > 0
+          ? (packSize > 1 ? Math.ceil(rawBase / packSize) * packSize : Math.ceil(rawBase))
+          : 0;
+        let urgency: "critical" | "warning" | "info";
+        if (qty <= 0) urgency = "critical";
+        else if (qty < reorder) urgency = "warning";
+        else urgency = "info";
+        return {
+          id: item.id,
+          name: item.name,
+          sku: item.sku,
+          stockQuantity: qty,
+          reorderLevel: reorder,
+          packSize,
+          categoryName: item.categoryId ? catMap.get(item.categoryId) : undefined,
+          avgMonthly,
+          suggestedOrder,
+          urgency,
+        };
+      })
+      .sort((a, b) => {
+        const order = { critical: 0, warning: 1, info: 2 };
+        if (order[a.urgency] !== order[b.urgency]) return order[a.urgency] - order[b.urgency];
+        return a.stockQuantity - b.stockQuantity;
+      });
+  }
+
+  // ─── Version Control ──────────────────────────────────────────────────────
+  async listVersionSnapshots() {
+    const rows = await db.select({
+      id: versionSnapshots.id,
+      name: versionSnapshots.name,
+      description: versionSnapshots.description,
+      type: versionSnapshots.type,
+      createdBy: versionSnapshots.createdBy,
+      createdAt: versionSnapshots.createdAt,
+      appVersion: versionSnapshots.appVersion,
+      tableCounts: versionSnapshots.tableCounts,
+    }).from(versionSnapshots).orderBy(desc(versionSnapshots.createdAt));
+    return rows;
+  }
+
+  async createVersionSnapshot(name: string, description: string, type: string, createdBy: string, dataSnapshot: string, appVersion: string, tableCounts: string) {
+    const [row] = await db.insert(versionSnapshots).values({ name, description, type, createdBy, dataSnapshot, appVersion, tableCounts }).returning();
+    return row;
+  }
+
+  async getVersionSnapshot(id: string) {
+    const [row] = await db.select().from(versionSnapshots).where(eq(versionSnapshots.id, id));
+    return row;
+  }
+
+  async deleteVersionSnapshot(id: string) {
+    await db.delete(versionSnapshots).where(eq(versionSnapshots.id, id));
+  }
+
+  // ─── POS Locations ────────────────────────────────────────────────────────
+  async getPosLocations(): Promise<PosLocation[]> {
+    return db.select().from(posLocations).orderBy(posLocations.name);
+  }
+  async getPosLocation(id: string): Promise<PosLocation | undefined> {
+    const [row] = await db.select().from(posLocations).where(eq(posLocations.id, id));
+    return row;
+  }
+  async createPosLocation(data: InsertPosLocation): Promise<PosLocation> {
+    const [row] = await db.insert(posLocations).values(data).returning();
+    return row;
+  }
+  async updatePosLocation(id: string, data: Partial<InsertPosLocation>): Promise<PosLocation | undefined> {
+    const [row] = await db.update(posLocations).set(data).where(eq(posLocations.id, id)).returning();
+    return row;
+  }
+  async deletePosLocation(id: string): Promise<void> {
+    await db.delete(posLocations).where(eq(posLocations.id, id));
+  }
+
+  // ─── POS Terminals ────────────────────────────────────────────────────────
+  async getPosTerminals(locationId?: string): Promise<(PosTerminal & { locationName?: string })[]> {
+    const rows = await db.select({
+      id: posTerminals.id, locationId: posTerminals.locationId, name: posTerminals.name,
+      code: posTerminals.code, description: posTerminals.description, hardwareType: posTerminals.hardwareType,
+      layoutSetId: posTerminals.layoutSetId, lastSeenAt: posTerminals.lastSeenAt, lastSyncAt: posTerminals.lastSyncAt,
+      outboxQueueSize: posTerminals.outboxQueueSize, active: posTerminals.active, createdAt: posTerminals.createdAt,
+      peripheralConfig: posTerminals.peripheralConfig, peripheralStatus: posTerminals.peripheralStatus,
+      locationName: posLocations.name,
+    }).from(posTerminals).leftJoin(posLocations, eq(posTerminals.locationId, posLocations.id))
+      .orderBy(posTerminals.name);
+    const mapped = rows.map(r => ({ ...r, locationName: r.locationName ?? undefined }));
+    if (locationId) return mapped.filter(r => r.locationId === locationId);
+    return mapped;
+  }
+  async getPosTerminal(id: string): Promise<PosTerminal | undefined> {
+    const [row] = await db.select().from(posTerminals).where(eq(posTerminals.id, id));
+    return row;
+  }
+  async getPosTerminalByCode(code: string): Promise<PosTerminal | undefined> {
+    const [row] = await db.select().from(posTerminals).where(eq(posTerminals.code, code));
+    return row;
+  }
+  async createPosTerminal(data: InsertPosTerminal): Promise<PosTerminal> {
+    const [row] = await db.insert(posTerminals).values(data).returning();
+    return row;
+  }
+  async updatePosTerminal(id: string, data: Partial<InsertPosTerminal & { lastSeenAt?: Date; lastSyncAt?: Date }>): Promise<PosTerminal | undefined> {
+    const [row] = await db.update(posTerminals).set(data as any).where(eq(posTerminals.id, id)).returning();
+    return row;
+  }
+  async deletePosTerminal(id: string): Promise<void> {
+    await db.delete(posTerminals).where(eq(posTerminals.id, id));
+  }
+
+  // ─── Digital Signage ──────────────────────────────────────────────────────
+  async getSignageMedia(): Promise<SignageMedia[]> {
+    return db.select().from(signageMedia).orderBy(desc(signageMedia.createdAt));
+  }
+  async createSignageMedia(data: InsertSignageMedia): Promise<SignageMedia> {
+    const [row] = await db.insert(signageMedia).values(data).returning();
+    return row;
+  }
+  async deleteSignageMedia(id: string): Promise<void> {
+    await db.delete(signageMedia).where(eq(signageMedia.id, id));
+  }
+
+  async getSignagePlaylists(): Promise<SignagePlaylist[]> {
+    return db.select().from(signagePlaylists).orderBy(signagePlaylists.name);
+  }
+  async getSignagePlaylist(id: string): Promise<SignagePlaylist | undefined> {
+    const [row] = await db.select().from(signagePlaylists).where(eq(signagePlaylists.id, id));
+    return row;
+  }
+  async createSignagePlaylist(data: InsertSignagePlaylist): Promise<SignagePlaylist> {
+    const [row] = await db.insert(signagePlaylists).values(data).returning();
+    return row;
+  }
+  async updateSignagePlaylist(id: string, data: Partial<InsertSignagePlaylist>): Promise<SignagePlaylist | undefined> {
+    const [row] = await db.update(signagePlaylists).set(data).where(eq(signagePlaylists.id, id)).returning();
+    return row;
+  }
+  async deleteSignagePlaylist(id: string): Promise<void> {
+    await db.delete(signagePlaylistItems).where(eq(signagePlaylistItems.playlistId, id));
+    await db.delete(signagePlaylists).where(eq(signagePlaylists.id, id));
+  }
+
+  async getSignagePlaylistItems(playlistId: string): Promise<SignagePlaylistItem[]> {
+    return db.select().from(signagePlaylistItems).where(eq(signagePlaylistItems.playlistId, playlistId)).orderBy(signagePlaylistItems.sortOrder);
+  }
+  async createSignagePlaylistItem(data: InsertSignagePlaylistItem): Promise<SignagePlaylistItem> {
+    const [row] = await db.insert(signagePlaylistItems).values(data).returning();
+    return row;
+  }
+  async updateSignagePlaylistItem(id: string, data: Partial<InsertSignagePlaylistItem>): Promise<SignagePlaylistItem | undefined> {
+    const [row] = await db.update(signagePlaylistItems).set(data).where(eq(signagePlaylistItems.id, id)).returning();
+    return row;
+  }
+  async deleteSignagePlaylistItem(id: string): Promise<void> {
+    await db.delete(signagePlaylistItems).where(eq(signagePlaylistItems.id, id));
+  }
+  async reorderSignagePlaylistItems(playlistId: string, orderedIds: string[]): Promise<void> {
+    for (let i = 0; i < orderedIds.length; i++) {
+      await db.update(signagePlaylistItems).set({ sortOrder: i }).where(and(eq(signagePlaylistItems.id, orderedIds[i]), eq(signagePlaylistItems.playlistId, playlistId)));
+    }
+  }
+
+  async getSignageScreens(): Promise<SignageScreen[]> {
+    return db.select().from(signageScreens).orderBy(signageScreens.name);
+  }
+  async getSignageScreen(id: string): Promise<SignageScreen | undefined> {
+    const [row] = await db.select().from(signageScreens).where(eq(signageScreens.id, id));
+    return row;
+  }
+  async getSignageScreenByCode(code: string): Promise<SignageScreen | undefined> {
+    const [row] = await db.select().from(signageScreens).where(eq(signageScreens.pairingCode, code));
+    return row;
+  }
+  async getSignageScreenByTerminalId(terminalId: string): Promise<SignageScreen | undefined> {
+    const [row] = await db.select().from(signageScreens).where(eq(signageScreens.posTerminalId, terminalId));
+    return row;
+  }
+  async createSignageScreen(data: InsertSignageScreen & { pairingCode: string }): Promise<SignageScreen> {
+    const [row] = await db.insert(signageScreens).values(data).returning();
+    return row;
+  }
+  async updateSignageScreen(id: string, data: Partial<InsertSignageScreen> & { status?: string; lastSeenAt?: Date }): Promise<SignageScreen | undefined> {
+    const [row] = await db.update(signageScreens).set(data as any).where(eq(signageScreens.id, id)).returning();
+    return row;
+  }
+  async deleteSignageScreen(id: string): Promise<void> {
+    await db.delete(signageScreens).where(eq(signageScreens.id, id));
+  }
+  async markSignageScreenSeen(pairingCode: string): Promise<void> {
+    await db.update(signageScreens).set({ status: "online", lastSeenAt: new Date() }).where(eq(signageScreens.pairingCode, pairingCode));
+  }
+
+  // ─── POS Layout Sets ──────────────────────────────────────────────────────
+  async getPosLayoutSets(): Promise<PosLayoutSet[]> {
+    return db.select().from(posLayoutSets).orderBy(posLayoutSets.name);
+  }
+  async getPosLayoutSet(id: string): Promise<PosLayoutSet | undefined> {
+    const [row] = await db.select().from(posLayoutSets).where(eq(posLayoutSets.id, id));
+    return row;
+  }
+  async createPosLayoutSet(data: InsertPosLayoutSet): Promise<PosLayoutSet> {
+    const [row] = await db.insert(posLayoutSets).values(data).returning();
+    return row;
+  }
+  async updatePosLayoutSet(id: string, data: Partial<InsertPosLayoutSet>): Promise<PosLayoutSet | undefined> {
+    const [row] = await db.update(posLayoutSets).set(data).where(eq(posLayoutSets.id, id)).returning();
+    return row;
+  }
+  async deletePosLayoutSet(id: string): Promise<void> {
+    await db.delete(posLayoutButtons).where(eq(posLayoutButtons.layoutSetId, id));
+    await db.delete(posLayoutSets).where(eq(posLayoutSets.id, id));
+  }
+  async clonePosLayoutSet(id: string, newName?: string): Promise<PosLayoutSet> {
+    const source = await this.getPosLayoutSet(id);
+    if (!source) throw new Error("Layout not found");
+    const { id: _id, ...rest } = source as any;
+    const clonedName = newName?.trim() || `${source.name} (Copy)`;
+    const [cloned] = await db.insert(posLayoutSets).values({ ...rest, name: clonedName, active: false }).returning();
+    const buttons = await this.getPosLayoutButtons(id);
+    if (buttons.length) {
+      await db.insert(posLayoutButtons).values(
+        buttons.map(b => {
+          const { id: _bid, layoutSetId: _lsid, ...bRest } = b as any;
+          return { ...bRest, layoutSetId: cloned.id };
+        })
+      );
+    }
+    return cloned;
+  }
+  async getPosLayoutButtons(layoutSetId: string): Promise<PosLayoutButton[]> {
+    return db.select().from(posLayoutButtons).where(eq(posLayoutButtons.layoutSetId, layoutSetId)).orderBy(posLayoutButtons.position);
+  }
+  async setPosLayoutButtons(layoutSetId: string, buttons: InsertPosLayoutButton[]): Promise<PosLayoutButton[]> {
+    await db.delete(posLayoutButtons).where(eq(posLayoutButtons.layoutSetId, layoutSetId));
+    if (!buttons.length) return [];
+    const rows = await db.insert(posLayoutButtons).values(buttons).returning();
+    return rows;
+  }
+  async upsertPosLayoutButton(data: InsertPosLayoutButton): Promise<PosLayoutButton> {
+    if ((data as any).id) {
+      const [row] = await db.update(posLayoutButtons).set(data).where(eq(posLayoutButtons.id, (data as any).id)).returning();
+      return row;
+    }
+    const [row] = await db.insert(posLayoutButtons).values(data).returning();
+    return row;
+  }
+  async deletePosLayoutButton(id: string): Promise<void> {
+    await db.delete(posLayoutButtons).where(eq(posLayoutButtons.id, id));
+  }
+
+  // ─── POS Orders ───────────────────────────────────────────────────────────
+  async getPosOrders(locationId?: string, terminalId?: string, limit = 200): Promise<(PosOrder & { locationName?: string; terminalName?: string })[]> {
+    const rows = await db.select({
+      id: posOrders.id, orderNumber: posOrders.orderNumber, terminalId: posOrders.terminalId,
+      locationId: posOrders.locationId, shiftId: posOrders.shiftId, customerId: posOrders.customerId,
+      cashierId: posOrders.cashierId, cashierName: posOrders.cashierName,
+      subtotal: posOrders.subtotal, discountAmount: posOrders.discountAmount,
+      vatAmount: posOrders.vatAmount, total: posOrders.total, paymentMethod: posOrders.paymentMethod,
+      amountTendered: posOrders.amountTendered, changeDue: posOrders.changeDue,
+      status: posOrders.status, notes: posOrders.notes, receiptPrinted: posOrders.receiptPrinted,
+      syncedAt: posOrders.syncedAt, createdAt: posOrders.createdAt, cardTerminalRef: posOrders.cardTerminalRef,
+      idempotencyKey: posOrders.idempotencyKey, chargeAttemptedAt: posOrders.chargeAttemptedAt,
+      locationName: posLocations.name, terminalName: posTerminals.name,
+    }).from(posOrders)
+      .leftJoin(posLocations, eq(posOrders.locationId, posLocations.id))
+      .leftJoin(posTerminals, eq(posOrders.terminalId, posTerminals.id))
+      .orderBy(desc(posOrders.createdAt))
+      .limit(limit);
+    const mapped = rows.map(r => ({ ...r, locationName: r.locationName ?? undefined, terminalName: r.terminalName ?? undefined }));
+    if (locationId) return mapped.filter(r => r.locationId === locationId);
+    if (terminalId) return mapped.filter(r => r.terminalId === terminalId);
+    return mapped;
+  }
+  async getPosOrder(id: string): Promise<(PosOrder & { lines: PosOrderLine[] }) | undefined> {
+    const [order] = await db.select().from(posOrders).where(eq(posOrders.id, id));
+    if (!order) return undefined;
+    const lines = await db.select().from(posOrderLines).where(eq(posOrderLines.orderId, id));
+    return { ...order, lines };
+  }
+  async createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder> {
+    if (
+      data.paymentMethod?.startsWith("card") &&
+      (data.status ?? "completed") === "completed" &&
+      !data.cardTerminalRef?.trim()
+    ) {
+      throw new Error("Completed card orders require a card terminal reference");
+    }
+    const [order] = await db.insert(posOrders).values(data).returning();
+    if (lines.length) {
+      await db.insert(posOrderLines).values(lines.map(l => ({ ...l, orderId: order.id })));
+    }
+    return order;
+  }
+  async updatePosOrderStatus(id: string, status: string): Promise<void> {
+    if (status === "completed") {
+      const [order] = await db.select({
+        paymentMethod: posOrders.paymentMethod,
+        cardTerminalRef: posOrders.cardTerminalRef,
+      }).from(posOrders).where(eq(posOrders.id, id));
+      if (order?.paymentMethod.startsWith("card") && !order.cardTerminalRef?.trim()) {
+        throw new Error("Cannot complete a card order without a card terminal reference");
+      }
+    }
+    await db.update(posOrders).set({ status }).where(eq(posOrders.id, id));
+  }
+  async updatePosOrderCardRef(id: string, cardTerminalRef: string): Promise<void> {
+    if (!cardTerminalRef.trim()) {
+      throw new Error("Card terminal reference cannot be empty");
+    }
+    await db.update(posOrders).set({ cardTerminalRef }).where(eq(posOrders.id, id));
+  }
+  async completeCardPosOrder(id: string, cardTerminalRef: string, amountTendered: string): Promise<void> {
+    const normalizedRef = cardTerminalRef.trim();
+    if (!normalizedRef) {
+      throw new Error("Cannot complete a card order without a card terminal reference");
+    }
+    const [completed] = await db.update(posOrders).set({
+      status: "completed",
+      cardTerminalRef: normalizedRef,
+      amountTendered,
+      changeDue: "0",
+      receiptPrinted: true,
+    }).where(and(
+      eq(posOrders.id, id),
+      ilike(posOrders.paymentMethod, "card%"),
+      eq(posOrders.status, "held"),
+    )).returning({ id: posOrders.id });
+    if (!completed) {
+      throw new Error("Card order must exist, use card payment, and be held before completion");
+    }
+  }
+  async voidPosOrder(id: string): Promise<void> {
+    await db.update(posOrders).set({ status: "voided" }).where(eq(posOrders.id, id));
+  }
+
+  // Atomically claims the "in-flight" slot for a card charge attempt by persisting
+  // the idempotency key + attempt timestamp on the order row. This survives a
+  // server restart (unlike the in-memory chargeInflightKeys Set): if the row
+  // already has a recent attempt recorded, the claim fails so a duplicate/late
+  // retry after a crash cannot slip through the guard and re-charge the provider.
+  // Only claims when there is NO existing recent attempt on record — i.e. this
+  // is either the very first attempt (no key yet) or the prior attempt is
+  // older than `staleAfterMs` and is treated as abandoned. Deliberately does
+  // NOT special-case "same key resubmitted": a matching key with a still-recent
+  // attempt means the previous call to this same endpoint has not yet reached a
+  // definitive outcome, so it must be blocked and routed to verification rather
+  // than allowed to re-initiate a real charge against the payment provider a
+  // second time (that would defeat the whole point of the guard). Once the
+  // window elapses without a definitive outcome, the prior attempt is treated
+  // as abandoned so a fresh attempt is allowed to proceed — otherwise a single
+  // ambiguous timeout would lock the order out of card payment forever.
+  async beginCardCharge(id: string, idempotencyKey: string, staleAfterMs: number): Promise<boolean> {
+    const staleCutoff = new Date(Date.now() - staleAfterMs);
+    const result = await db.update(posOrders)
+      .set({ idempotencyKey, chargeAttemptedAt: new Date() })
+      .where(and(
+        eq(posOrders.id, id),
+        eq(posOrders.status, "held"),
+        or(
+          isNull(posOrders.idempotencyKey),
+          lt(posOrders.chargeAttemptedAt, staleCutoff)
+        )
+      ))
+      .returning({ id: posOrders.id });
+    return result.length > 0;
+  }
+  // Releases the persisted in-flight claim once the provider gave a definitive
+  // (non-ambiguous) answer — e.g. an explicit decline — so a genuine retry with a
+  // freshly rotated key is not blocked by the stale claim.
+  async clearCardChargeAttempt(id: string): Promise<void> {
+    await db.update(posOrders).set({ idempotencyKey: null, chargeAttemptedAt: null }).where(eq(posOrders.id, id));
+  }
+  // Used on server boot (and by the charge-status endpoint) to find held orders
+  // whose most recent charge attempt is recent enough that it may still be
+  // in-flight with the payment provider — i.e. the server may have restarted
+  // mid-charge before it could record a definitive outcome.
+  async getHeldOrdersWithRecentChargeAttempt(sinceMs: number): Promise<PosOrder[]> {
+    const cutoff = new Date(Date.now() - sinceMs);
+    return db.select().from(posOrders).where(and(
+      eq(posOrders.status, "held"),
+      isNotNull(posOrders.chargeAttemptedAt),
+      gte(posOrders.chargeAttemptedAt, cutoff)
+    ));
+  }
+
+  // ─── POS Shifts ───────────────────────────────────────────────────────────
+  async getPosShifts(terminalId?: string): Promise<PosShift[]> {
+    const rows = await db.select().from(posShifts).orderBy(desc(posShifts.openedAt));
+    if (terminalId) return rows.filter(r => r.terminalId === terminalId);
+    return rows;
+  }
+  async createPosShift(data: InsertPosShift): Promise<PosShift> {
+    const [row] = await db.insert(posShifts).values(data).returning();
+    return row;
+  }
+  async updatePosShift(id: string, data: Partial<InsertPosShift & { syncedAt?: Date }>): Promise<PosShift | undefined> {
+    const [row] = await db.update(posShifts).set(data as any).where(eq(posShifts.id, id)).returning();
+    return row;
+  }
+
+  // ─── POS Audit Logs (synced from terminals) ───────────────────────────────
+  async insertPosAuditLogs(rows: InsertPosAuditLog[]): Promise<number> {
+    if (!rows.length) return 0;
+    const inserted = await db.insert(posAuditLogs).values(rows)
+      .onConflictDoNothing({ target: [posAuditLogs.terminalId, posAuditLogs.localId] })
+      .returning({ id: posAuditLogs.id });
+    return inserted.length;
+  }
+  async getPosAuditLogs(filters?: { terminalId?: string; cashierId?: string; action?: string; limit?: number }): Promise<PosAuditLog[]> {
+    const conds = [];
+    if (filters?.terminalId) conds.push(eq(posAuditLogs.terminalId, filters.terminalId));
+    if (filters?.cashierId) conds.push(eq(posAuditLogs.cashierId, filters.cashierId));
+    if (filters?.action) conds.push(eq(posAuditLogs.action, filters.action));
+    const base = db.select().from(posAuditLogs);
+    const q = conds.length ? base.where(and(...conds)) : base;
+    return q.orderBy(desc(posAuditLogs.createdAt)).limit(filters?.limit ?? 300);
+  }
+
+  async getPosCashierActivity(start: Date, end: Date): Promise<{ orders: { cashierId: string | null; cashierName: string | null; orders: number; sales: number; voids: number }[]; audits: { cashierId: string | null; cashierName: string | null; action: string; count: number }[] }> {
+    // SQL-side aggregation with date filtering — no row limits, so totals stay accurate at any volume
+    const orderRows = await db.execute(sql`
+      SELECT cashier_id, cashier_name,
+        COUNT(*) FILTER (WHERE status <> 'voided')::int AS orders,
+        COALESCE(SUM(total::numeric) FILTER (WHERE status <> 'voided'), 0)::float AS sales,
+        COUNT(*) FILTER (WHERE status = 'voided')::int AS voids
+      FROM pos_orders
+      WHERE created_at >= ${start} AND created_at <= ${end}
+      GROUP BY cashier_id, cashier_name
+    `);
+    const auditRows = await db.execute(sql`
+      SELECT cashier_id, cashier_name, action, COUNT(*)::int AS count
+      FROM pos_audit_logs
+      WHERE COALESCE(
+        CASE WHEN device_created_at ~ '^\\d{4}-\\d{2}-\\d{2}' THEN device_created_at::timestamp END,
+        created_at
+      ) BETWEEN ${start} AND ${end}
+      GROUP BY cashier_id, cashier_name, action
+    `);
+    return {
+      orders: (orderRows.rows as any[]).map(r => ({ cashierId: r.cashier_id, cashierName: r.cashier_name, orders: r.orders, sales: r.sales, voids: r.voids })),
+      audits: (auditRows.rows as any[]).map(r => ({ cashierId: r.cashier_id, cashierName: r.cashier_name, action: r.action, count: r.count })),
+    };
+  }
+
+  // ─── POS Sync Config ──────────────────────────────────────────────────────
+  async getPosSyncConfig(): Promise<PosSyncConfig[]> {
+    return db.select().from(posSyncConfig).orderBy(posSyncConfig.ruleKey);
+  }
+  async upsertPosSyncConfig(ruleKey: string, label: string, offlineBehavior: string, description?: string): Promise<PosSyncConfig> {
+    const existing = await db.select().from(posSyncConfig).where(eq(posSyncConfig.ruleKey, ruleKey));
+    if (existing.length) {
+      const [row] = await db.update(posSyncConfig).set({ label, offlineBehavior, description, updatedAt: new Date() }).where(eq(posSyncConfig.ruleKey, ruleKey)).returning();
+      return row;
+    }
+    const [row] = await db.insert(posSyncConfig).values({ ruleKey, label, offlineBehavior, description }).returning();
+    return row;
+  }
+
+  // ─── POS Inbox ────────────────────────────────────────────────────────────
+  async getPosInbox(terminalId?: string, since?: Date): Promise<PosInbox[]> {
+    const now = new Date();
+    const rows = await db.select().from(posInbox)
+      .where(eq(posInbox.acknowledged, false))
+      .orderBy(desc(posInbox.createdAt));
+    return rows.filter(r => {
+      if (r.expiresAt && r.expiresAt < now) return false;
+      if (terminalId && r.terminalId && r.terminalId !== terminalId) return false;
+      if (since && r.createdAt && new Date(r.createdAt) <= since) return false;
+      return true;
+    });
+  }
+  async createPosInboxItem(data: InsertPosInbox): Promise<PosInbox> {
+    const [row] = await db.insert(posInbox).values(data).returning();
+    return row;
+  }
+  async deletePosInboxItem(id: string): Promise<void> {
+    await db.delete(posInbox).where(eq(posInbox.id, id));
+  }
+
+  // ─── POS Cashiers ──────────────────────────────────────────────────────────
+  async getPosCashiers(locationId?: string) {
+    const { posCashiers } = await import("@shared/schema");
+    const rows = await db.select().from(posCashiers).orderBy(posCashiers.name);
+    if (locationId) return rows.filter(r => !r.locationId || r.locationId === locationId);
+    return rows;
+  }
+  async getPosCashier(id: string) {
+    const { posCashiers } = await import("@shared/schema");
+    const [row] = await db.select().from(posCashiers).where(eq(posCashiers.id, id));
+    return row;
+  }
+  async createPosCashier(data: import("@shared/schema").InsertPosCashier) {
+    const { posCashiers } = await import("@shared/schema");
+    const [row] = await db.insert(posCashiers).values(data).returning();
+    return row;
+  }
+  async updatePosCashier(id: string, data: Partial<import("@shared/schema").InsertPosCashier>) {
+    const { posCashiers } = await import("@shared/schema");
+    const [row] = await db.update(posCashiers).set(data).where(eq(posCashiers.id, id)).returning();
+    return row;
+  }
+  async deletePosCashier(id: string): Promise<void> {
+    const { posCashiers } = await import("@shared/schema");
+    await db.delete(posCashiers).where(eq(posCashiers.id, id));
+  }
+
+  // ─── PDA: Stock Take ─────────────────────────────────────────────────────────
+  async getStockTakeSessions() {
+    const { stockTakeSessions } = await import("@shared/schema");
+    return db.select().from(stockTakeSessions).orderBy(desc(stockTakeSessions.createdAt));
+  }
+  async getStockTakeSession(id: string) {
+    const { stockTakeSessions, stockTakeLines } = await import("@shared/schema");
+    const [session] = await db.select().from(stockTakeSessions).where(eq(stockTakeSessions.id, id));
+    if (!session) return undefined;
+    const lines = await db.select().from(stockTakeLines).where(eq(stockTakeLines.sessionId, id)).orderBy(desc(stockTakeLines.scannedAt));
+    return { ...session, lines };
+  }
+  async createStockTakeSession(data: import("@shared/schema").InsertStockTakeSession) {
+    const { stockTakeSessions } = await import("@shared/schema");
+    const [session] = await db.insert(stockTakeSessions).values(data).returning();
+    return session;
+  }
+  async upsertStockTakeLine(data: import("@shared/schema").InsertStockTakeLine) {
+    const { stockTakeLines } = await import("@shared/schema");
+    const [existing] = await db.select().from(stockTakeLines)
+      .where(and(eq(stockTakeLines.sessionId, data.sessionId), eq(stockTakeLines.itemId, data.itemId)));
+    if (existing) {
+      const [updated] = await db.update(stockTakeLines)
+        .set({ countedQuantity: data.countedQuantity, notes: data.notes, scannedAt: new Date() })
+        .where(eq(stockTakeLines.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [line] = await db.insert(stockTakeLines).values(data).returning();
+    return line;
+  }
+  async submitStockTakeSession(id: string) {
+    const { stockTakeSessions, stockTakeLines } = await import("@shared/schema");
+    const lines = await db.select().from(stockTakeLines).where(eq(stockTakeLines.sessionId, id));
+    for (const line of lines) {
+      await db.update(items).set({ stockQuantity: line.countedQuantity }).where(eq(items.id, line.itemId));
+    }
+    const [session] = await db.update(stockTakeSessions)
+      .set({ status: "submitted", submittedAt: new Date() })
+      .where(eq(stockTakeSessions.id, id))
+      .returning();
+    return session;
+  }
+
+  // ─── PDA: Stock Transfers ────────────────────────────────────────────────────
+  async getStockTransfers() {
+    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
+    const transfers = await db.select().from(stockTransfers).orderBy(desc(stockTransfers.createdAt));
+    const allItems = await db.select().from(stockTransferItems);
+    return transfers.map(t => ({ ...t, items: allItems.filter(i => i.transferId === t.id) }));
+  }
+  async getStockTransfer(id: string) {
+    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
+    const [transfer] = await db.select().from(stockTransfers).where(eq(stockTransfers.id, id));
+    if (!transfer) return undefined;
+    const transferItems = await db.select().from(stockTransferItems).where(eq(stockTransferItems.transferId, id));
+    return { ...transfer, items: transferItems };
+  }
+  async getNextTransferNumber() {
+    const { stockTransfers } = await import("@shared/schema");
+    const [result] = await db
+      .select({ maxNum: sql<string>`MAX(CAST(NULLIF(REGEXP_REPLACE(transfer_number, '[^0-9]', '', 'g'), '') AS INTEGER))` })
+      .from(stockTransfers);
+    const num = (parseInt(result?.maxNum || "0") || 0) + 1;
+    return `TRF${String(num).padStart(5, "0")}`;
+  }
+  async createStockTransfer(data: import("@shared/schema").InsertStockTransfer, transferItems: import("@shared/schema").InsertStockTransferItem[]) {
+    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
+    const [transfer] = await db.insert(stockTransfers).values(data).returning();
+    if (transferItems.length) {
+      await db.insert(stockTransferItems).values(transferItems.map(i => ({ ...i, transferId: transfer.id })));
+    }
+    return transfer;
+  }
+  async completeStockTransfer(id: string) {
+    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
+    const [existing] = await db.select().from(stockTransfers).where(eq(stockTransfers.id, id));
+    if (!existing) return undefined;
+    if (existing.status === "completed") return existing;
+
+    const transferItems = await db.select().from(stockTransferItems).where(eq(stockTransferItems.transferId, id));
+    const isWarehouse = (label: string) => /warehouse/i.test(label);
+    const fromIsWarehouse = isWarehouse(existing.fromLocation);
+    const toIsWarehouse = isWarehouse(existing.toLocation);
+
+    // Since GlobiPOS tracks a single stockQuantity per item (no per-location split),
+    // moving OUT of the tracked warehouse decrements it, and moving IN increments it.
+    // Movements between two non-warehouse locations are logged but don't change
+    // items.stockQuantity, since neither side is the tracked pool.
+    if (fromIsWarehouse && !toIsWarehouse) {
+      for (const line of transferItems) {
+        const item = await this.getItem(line.itemId);
+        if (!item) continue;
+        if (item.stockQuantity < line.quantity) {
+          throw new Error(`Insufficient warehouse stock for ${line.itemName}: have ${item.stockQuantity}, need ${line.quantity}`);
+        }
+      }
+      for (const line of transferItems) {
+        const item = await this.getItem(line.itemId);
+        if (!item) continue;
+        await db.update(items).set({ stockQuantity: item.stockQuantity - line.quantity }).where(eq(items.id, line.itemId));
+      }
+    } else if (toIsWarehouse && !fromIsWarehouse) {
+      for (const line of transferItems) {
+        const item = await this.getItem(line.itemId);
+        if (!item) continue;
+        await db.update(items).set({ stockQuantity: item.stockQuantity + line.quantity }).where(eq(items.id, line.itemId));
+      }
+    }
+
+    // Per-location stock pools: move quantity out of fromLocation and into
+    // toLocation regardless of the warehouse heuristic above, so per-location
+    // visibility (e.g. textile stores) reflects every transfer.
+    const allLocations = await db.select().from(posLocations);
+    const fromLoc = allLocations.find(l => l.name.toLowerCase() === existing.fromLocation.toLowerCase());
+    const toLoc = allLocations.find(l => l.name.toLowerCase() === existing.toLocation.toLowerCase());
+    for (const line of transferItems) {
+      if (fromLoc) {
+        await this.adjustLocationStock(line.itemId, (line as any).variantId || null, fromLoc.id, -line.quantity);
+      }
+      if (toLoc) {
+        await this.adjustLocationStock(line.itemId, (line as any).variantId || null, toLoc.id, line.quantity);
+      }
+    }
+
+    const [transfer] = await db.update(stockTransfers)
+      .set({ status: "completed", completedAt: new Date() })
+      .where(eq(stockTransfers.id, id))
+      .returning();
+    return transfer;
+  }
+
+  // ─── PDA: Agoranomia label compliance ────────────────────────────────────────
+  async getAgoranomiaLabelPrint(itemId: string) {
+    const { agoranomiaLabelPrints } = await import("@shared/schema");
+    const [row] = await db.select().from(agoranomiaLabelPrints)
+      .where(eq(agoranomiaLabelPrints.itemId, itemId))
+      .orderBy(desc(agoranomiaLabelPrints.printedAt), desc(agoranomiaLabelPrints.id))
+      .limit(1);
+    return row;
+  }
+  async getAllAgoranomiaLabelPrints() {
+    const { agoranomiaLabelPrints } = await import("@shared/schema");
+    return db.select().from(agoranomiaLabelPrints)
+      .orderBy(agoranomiaLabelPrints.printedAt, agoranomiaLabelPrints.id);
+  }
+  async recordAgoranomiaLabelPrints(records: import("@shared/schema").InsertAgoranomiaLabelPrint[]) {
+    const { agoranomiaLabelPrints } = await import("@shared/schema");
+    const results: import("@shared/schema").AgoranomiaLabelPrint[] = [];
+    for (const rec of records) {
+      const [created] = await db.insert(agoranomiaLabelPrints).values(rec).returning();
+      results.push(created);
+    }
+    return results;
+  }
+
+  // ─── PDA: Goods Received Vouchers (OCR invoice import + receiving verification) ─
+  async getGoodsReceivedVouchers() {
+    const { goodsReceivedVouchers, goodsReceivedVoucherItems } = await import("@shared/schema");
+    const grvs = await db.select().from(goodsReceivedVouchers).orderBy(desc(goodsReceivedVouchers.createdAt));
+    const allItems = await db.select().from(goodsReceivedVoucherItems);
+    return grvs.map(g => ({ ...g, items: allItems.filter(i => i.grvId === g.id) }));
+  }
+  async getGoodsReceivedVoucher(id: string) {
+    const { goodsReceivedVouchers, goodsReceivedVoucherItems } = await import("@shared/schema");
+    const [grv] = await db.select().from(goodsReceivedVouchers).where(eq(goodsReceivedVouchers.id, id));
+    if (!grv) return undefined;
+    const lineItems = await db.select().from(goodsReceivedVoucherItems).where(eq(goodsReceivedVoucherItems.grvId, id));
+    return { ...grv, items: lineItems };
+  }
+  async getNextGrvNumber() {
+    const { goodsReceivedVouchers } = await import("@shared/schema");
+    const [result] = await db
+      .select({ maxNum: sql<string>`MAX(CAST(NULLIF(REGEXP_REPLACE(grv_number, '[^0-9]', '', 'g'), '') AS INTEGER))` })
+      .from(goodsReceivedVouchers);
+    const num = (parseInt(result?.maxNum || "0") || 0) + 1;
+    return `GRV${String(num).padStart(5, "0")}`;
+  }
+  async createGoodsReceivedVoucher(data: import("@shared/schema").InsertGoodsReceivedVoucher, lineItems: import("@shared/schema").InsertGoodsReceivedVoucherItem[]) {
+    const { goodsReceivedVouchers, goodsReceivedVoucherItems } = await import("@shared/schema");
+    const [grv] = await db.insert(goodsReceivedVouchers).values(data).returning();
+    if (lineItems.length) {
+      await db.insert(goodsReceivedVoucherItems).values(lineItems.map(i => ({ ...i, grvId: grv.id })));
+    }
+    return grv;
+  }
+  async updateGoodsReceivedVoucher(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucher>) {
+    const { goodsReceivedVouchers } = await import("@shared/schema");
+    const [updated] = await db.update(goodsReceivedVouchers).set(data).where(eq(goodsReceivedVouchers.id, id)).returning();
+    return updated;
+  }
+  async updateGoodsReceivedVoucherItem(id: string, data: Partial<import("@shared/schema").InsertGoodsReceivedVoucherItem>) {
+    const { goodsReceivedVoucherItems } = await import("@shared/schema");
+    const [updated] = await db.update(goodsReceivedVoucherItems).set(data).where(eq(goodsReceivedVoucherItems.id, id)).returning();
+    return updated;
+  }
+  async scanGoodsReceivedVoucherLine(grvId: string, code: string, eventKey: string, incrementBy: number = 1) {
+    const { goodsReceivedVoucherItems, goodsReceivedVoucherScanEvents } = await import("@shared/schema");
+    const lineItems = await db.select().from(goodsReceivedVoucherItems).where(eq(goodsReceivedVoucherItems.grvId, grvId));
+    let line = lineItems.find(i => i.barcode && i.barcode === code);
+    let matchedBy: "barcode" | "sku" | "none" = line ? "barcode" : "none";
+    if (!line) {
+      line = lineItems.find(i => i.sku && i.sku === code);
+      if (line) matchedBy = "sku";
+    }
+    if (!line) return undefined;
+    return db.transaction(async (tx) => {
+      const [claim] = await tx.insert(goodsReceivedVoucherScanEvents).values({
+        grvId,
+        eventKey,
+        lineId: line!.id,
+        matchedBy,
+      }).onConflictDoNothing().returning();
+      if (!claim) {
+        const [existingEvent] = await tx.select().from(goodsReceivedVoucherScanEvents)
+          .where(and(eq(goodsReceivedVoucherScanEvents.grvId, grvId), eq(goodsReceivedVoucherScanEvents.eventKey, eventKey)));
+        if (!existingEvent) return undefined;
+        const [existingLine] = await tx.select().from(goodsReceivedVoucherItems)
+          .where(eq(goodsReceivedVoucherItems.id, existingEvent.lineId));
+        return existingLine
+          ? { line: existingLine, matchedBy: existingEvent.matchedBy as "barcode" | "sku" | "none" }
+          : undefined;
+      }
+      const [updated] = await tx.update(goodsReceivedVoucherItems)
+        .set({ receivedQuantity: sql`${goodsReceivedVoucherItems.receivedQuantity} + ${incrementBy}` })
+        .where(eq(goodsReceivedVoucherItems.id, line!.id))
+        .returning();
+      return { line: updated, matchedBy };
+    });
+  }
+  // Validates a GRV and builds the purchase-invoice payload that would represent it, WITHOUT
+  // creating anything yet. The caller (routes.ts) is responsible for posting the invoice through
+  // the same shared helper used by the manual /api/purchase-invoices route, so stock updates,
+  // supplier-balance updates, due-date derivation, and journal-entry creation are never duplicated.
+  async prepareGrvFinalization(id: string) {
+    const { goodsReceivedVouchers, goodsReceivedVoucherItems } = await import("@shared/schema");
+    const [existing] = await db.select().from(goodsReceivedVouchers).where(eq(goodsReceivedVouchers.id, id));
+    if (!existing) return undefined;
+    if (existing.status === "completed") return { existing, alreadyCompleted: true as const };
+    if (!existing.supplierId) {
+      throw new Error("A supplier must be selected before finalizing this GRV");
+    }
+
+    const lineItems = await db.select().from(goodsReceivedVoucherItems).where(eq(goodsReceivedVoucherItems.grvId, id));
+    const unmatched = lineItems.filter(i => !i.itemId);
+    if (unmatched.length) {
+      throw new Error(`${unmatched.length} line(s) are not matched to a catalog item yet`);
+    }
+
+    const hasDiscrepancies = lineItems.some(i => i.receivedQuantity !== i.expectedQuantity);
+
+    const invoiceLineItems: import("@shared/schema").InsertPurchaseInvoiceItem[] = lineItems.map(li => {
+      const qty = li.receivedQuantity;
+      const unitCost = parseFloat(li.unitCost || "0");
+      const vatRate = parseFloat(li.vatRate || "19");
+      const lineTotal = qty * unitCost;
+      return {
+        // purchaseInvoiceId is a required field on the insert schema but is always overwritten by
+        // storage.createPurchaseInvoice() with the real invoice id — mirrors the manual form's
+        // placeholder and is discarded on insert.
+        purchaseInvoiceId: "TEMP",
+        itemId: li.itemId!,
+        description: li.descriptionRaw,
+        quantity: qty,
+        purchaseUnit: "pc",
+        unitCost: unitCost.toFixed(2),
+        discountPercent: "0",
+        discount: "0",
+        vatRate: vatRate.toFixed(2),
+        total: lineTotal.toFixed(2),
+      };
+    });
+    const subtotal = invoiceLineItems.reduce((sum, li) => sum + parseFloat(li.total), 0);
+    const vatAmount = invoiceLineItems.reduce((sum, li) => sum + parseFloat(li.total) * (parseFloat(li.vatRate || "0") / 100), 0);
+    const total = subtotal + vatAmount;
+    const discrepancyNote = hasDiscrepancies
+      ? `GRV ${existing.grvNumber}: received quantities differ from the invoice — ${lineItems.filter(i => i.receivedQuantity !== i.expectedQuantity).map(i => `${i.descriptionRaw} (expected ${i.expectedQuantity}, received ${i.receivedQuantity})`).join("; ")}`
+      : `Created from GRV ${existing.grvNumber}`;
+
+    return {
+      existing,
+      alreadyCompleted: false as const,
+      hasDiscrepancies,
+      invoiceLineItems,
+      invoiceData: {
+        // invoiceNumber is a required field on the insert schema but is always regenerated by
+        // storage.createPurchaseInvoice() via getNextPurchaseInvoiceNumber() — this placeholder
+        // mirrors what the manual purchase-invoices form sends and is discarded on insert.
+        invoiceNumber: "TEMP",
+        supplierId: existing.supplierId,
+        supplierInvoiceRef: existing.invoiceNumberRaw || undefined,
+        date: existing.invoiceDateRaw || new Date().toISOString().slice(0, 10),
+        subtotal: subtotal.toFixed(2),
+        vatAmount: vatAmount.toFixed(2),
+        total: total.toFixed(2),
+        status: "draft",
+        notes: discrepancyNote,
+      },
+    };
+  }
+
+  // Marks the GRV completed once the caller has posted the purchase invoice through the shared
+  // helper (same code path as the manual purchase-invoices route).
+  async completeGrvFinalization(id: string, purchaseInvoiceId: string, hasDiscrepancies: boolean) {
+    const { goodsReceivedVouchers } = await import("@shared/schema");
+    const [grv] = await db.update(goodsReceivedVouchers)
+      .set({ status: "completed", purchaseInvoiceId, hasDiscrepancies, completedAt: new Date() })
+      .where(eq(goodsReceivedVouchers.id, id))
+      .returning();
+    return grv;
+  }
+}
+
+export const storage = new DatabaseStorage();

@@ -1,152 +1,20 @@
-modules = ["nodejs-20", "web", "python-3.11", "rust-stable", "postgresql-16"]
-run = "npm run dev"
-hidden = [
-  ".agents",
-  ".cache",
-  ".config",
-  ".git",
-  ".local",
-  "artifacts",
-  "attached_assets",
-  "customer-app/node_modules",
-  "dist",
-  "generated-icon.png",
-  "node_modules",
-  "pda-app/node_modules",
-  "pos-app/node_modules",
-  "pos-app/src-tauri/target"
-]
-
-[nix]
-channel = "stable-24_05"
-packages = ["wget"]
-
-[[ports]]
-localPort = 3000
-externalPort = 4200
-
-[[ports]]
-localPort = 5000
-externalPort = 80
-
-[[ports]]
-localPort = 5001
-externalPort = 3003
-
-[[ports]]
-localPort = 5100
-externalPort = 6800
-
-[[ports]]
-localPort = 5173
-externalPort = 5173
-exposeLocalhost = true
-
-[[ports]]
-localPort = 5174
-externalPort = 3001
-exposeLocalhost = true
-
-[[ports]]
-localPort = 5904
-externalPort = 3000
-
-[[ports]]
-localPort = 6000
-externalPort = 6000
-
-[[ports]]
-localPort = 23636
-externalPort = 3002
-
-[env]
-PORT = "5000"
+modules = ["nodejs-24", "python-base-3.13"]
 
 [deployment]
+router = "application"
 deploymentTarget = "autoscale"
-run = ["node", "./dist/index.cjs"]
-build = ["npm", "run", "build"]
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
 
 [workflows]
 runButton = "Project"
 
-[[workflows.workflow]]
-name = "Project"
-mode = "parallel"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Start application"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Customer App"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "PDA App"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "POS Development Preview"
-
-[[workflows.workflow]]
-name = "Start application"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "npm run dev"
-waitForPort = 5000
-
-[[workflows.workflow]]
-name = "Customer App"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd customer-app && npx vite --port 5173"
-waitForPort = 5173
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "PDA App"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd pda-app && npx vite --port 6000"
-waitForPort = 6000
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "POS Development Preview"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd pos-app && npx vite --host 0.0.0.0 --port 3000"
-waitForPort = 3000
-
-[workflows.workflow.metadata]
-outputType = "console"
-
 [agent]
-integrations = ["sendgrid:1.0.0", "resend:1.0.0"]
+stack = "PNPM_WORKSPACE"
+expertMode = true
 
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
-
-[userenv]
-
-[userenv.shared]
-VAPID_PUBLIC_KEY = "BFnKrtJ3HmjphoYmBI-EfxSyZ9SiXCB5R_0ICUmuksWFJO7cjrqT4UtSI49t1v8GXpWh4DPZvGOUjeRAYBqkQXk"
-VAPID_SUBJECT = "mailto:admin@globipos.com"
-
-[userenv.development]

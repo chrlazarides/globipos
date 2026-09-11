@@ -1,0 +1,12552 @@
+// @ts-nocheck
+import type { Express, Request, Response, NextFunction } from "express";
+import { createServer, type Server } from "http";
+import { storage } from "../storage";
+import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, itemLocationStock, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@workspace/db";
+import { customerPreferences, customerFeedback, customerNotifications } from "@workspace/db";
+import { productFamilies, insertProductFamilySchema } from "@workspace/db";
+import { labelProfiles } from "@workspace/db";
+import { parseAdminImportRequest, shouldRestoreBackupSettings } from "../import-settings-policy";
+import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "../chatbot-service";
+import { z } from "zod/v4";
+import multer from "multer";
+import ExcelJS from "exceljs";
+import { Readable } from "stream";
+import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail, sendEmailWithContent } from "../email";
+import { db } from "../db";
+import { sql, and, or, eq, gte, lte, lt, gt, desc, isNull, ilike, inArray, count } from "drizzle-orm";
+import crypto from "crypto";
+import fs from "fs";
+import path from "path";
+import webpush from "web-push";
+import { hashPassword, verifyPassword, signToken, signTempToken, verifyTempToken, sign2faRecoveryToken, verify2faRecoveryToken, sign2faRecoverySetupToken, verify2faRecoverySetupToken, setAuthCookie, clearAuthCookie, requireAdmin, requireSuperuser, requireStaff, requireModule } from "../auth";
+import jwt from "jsonwebtoken";
+import { generateSecret as totpGenerateSecret, generateURI as totpGenerateURI, verifySync as totpVerify } from "otplib";
+import QRCode from "qrcode";
+import { gzipSync, gunzip } from "zlib";
+import { promisify } from "util";
+
+// ─── LOGO BASE64 (embedded so it shows in emails, print, and offline) ────────
+import { applyScaleBarcodeSaleValues, isEmbeddedPriceLabelAuthorized, parseScaleBarcode, parseScaleBarcodeAfterVariantLookup, resolveScaleBarcodeExactFirst } from "../barcode-utils";
+import { CatalogImportBarcodeAllocator, persistBarcodeAssignment, type BarcodeIssue } from "../catalog-import-barcodes";
+import { pool } from "../db";
+import { isValidIanaTimeZone } from "../quiet-hours";
+import { registerDeploymentControlRoutes } from "../deployment-control";
+import { registerDeploymentPackageRoutes } from "../deployment-package-routes";
+import { createItemImageSet, deleteItemImageSet, downloadItemImage, ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_MIME_TYPES, type ItemImageSize, uploadItemImageSet } from "../item-images";
+
+import { createPosBuildsResolver } from "../pos-builds";
+import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "../customer-ai-service";
+import { createCustomerAiHealthPersistence } from "../customer-ai-health-persistence";
+import { registerErpIntegrationRoutes } from "../erp-integration";
+
+function getLogoDataUrl(): string {
+  const candidates = [
+    path.resolve(process.cwd(), "dist", "public", "logo.png"),
+    path.resolve(process.cwd(), "client", "public", "logo.png"),
+  ];
+  for (const p of candidates) {
+    try {
+      const data = fs.readFileSync(p);
+      return `data:image/png;base64,${data.toString("base64")}`;
+    } catch { /* try next */ }
+  }
+  return "/logo.png"; // fallback if file not found
+}
+// Derived per-request from DB settings (company_logo), falls back to file
+function resolveLogoDataUrl(settings: Record<string, string>): string {
+  const custom = settings.company_logo;
+  if (custom && custom.startsWith("data:image/")) return custom;
+  return getLogoDataUrl();
+}
+
+// ─── HTML ESCAPING HELPER ────────────────────────────────────────────────────
+function escHtml(str: unknown): string {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// ─── RATE LIMITER (in-memory, per IP) ────────────────────────────────────────
+const RATE_WINDOW_MS = 15 * 60 * 1000;
+const RATE_MAX_ATTEMPTS = 10;
+const failedAttempts = new Map<string, { count: number; windowStart: number; alerted: boolean }>();
+
+function checkRateLimit(ip: string): { blocked: boolean; count: number } {
+  const now = Date.now();
+  const entry = failedAttempts.get(ip);
+  if (!entry || now - entry.windowStart > RATE_WINDOW_MS) {
+    return { blocked: false, count: 0 };
+  }
+  return { blocked: entry.count >= RATE_MAX_ATTEMPTS, count: entry.count };
+}
+
+function recordFailedAttempt(ip: string): number {
+  const now = Date.now();
+  const entry = failedAttempts.get(ip);
+  if (!entry || now - entry.windowStart > RATE_WINDOW_MS) {
+    failedAttempts.set(ip, { count: 1, windowStart: now, alerted: false });
+    return 1;
+  }
+  entry.count++;
+  return entry.count;
+}
+
+function clearFailedAttempts(ip: string) {
+  failedAttempts.delete(ip);
+}
+
+function twoFactorFailureKey(userId: string): string {
+  return `2fa-fail:${userId}`;
+}
+
+async function getAdminEmails(): Promise<string[]> {
+  try {
+    const admins = await db.select({ email: users.email }).from(users)
+      .where(and(eq(users.role, "admin"), eq(users.active, true)));
+    return admins.map(a => a.email).filter(Boolean) as string[];
+  } catch { return []; }
+}
+
+async function getLoyaltyPointsPerEuro(): Promise<number> {
+  // Each client deployment represents one store, so system_settings provides
+  // the store-scoped value without coupling it to individual POS locations.
+  const setting = await storage.getSetting("loyalty_points_per_euro");
+  const rate = Number(setting?.value);
+  return Number.isFinite(rate) && rate >= 0 ? rate : 1;
+}
+
+async function getLoyaltyPolicy() {
+  const rows = await storage.getSettings();
+  const values = new Map(rows.map((row) => [row.key, row.value]));
+  const numberValue = (key: string, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER) => {
+    const value = Number(values.get(key));
+    return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+  };
+  return {
+    loyaltyEnabled: values.get("loyalty_enabled") !== "false",
+    cashbackEnabled: values.get("cashback_enabled") !== "false",
+    pointsPerEuro: numberValue("loyalty_points_per_euro", 1),
+    redeemPointsPerEuro: Math.round(numberValue("loyalty_redeem_points_per_euro", 100, 1)),
+    minimumRedemptionPoints: Math.round(numberValue("loyalty_redeem_min_points", 100, 1)),
+    silverThreshold: Math.round(numberValue("loyalty_silver_threshold", 1000)),
+    goldThreshold: Math.round(numberValue("loyalty_gold_threshold", 5000)),
+    bronzeCashbackPercent: numberValue("loyalty_cashback_bronze_percent", 1, 0, 100),
+    silverCashbackPercent: numberValue("loyalty_cashback_silver_percent", 1.5, 0, 100),
+    goldCashbackPercent: numberValue("loyalty_cashback_gold_percent", 2, 0, 100),
+    maxCashbackOrderPercent: numberValue("loyalty_max_cashback_order_percent", 100, 0, 100),
+  };
+}
+
+function loyaltyTier(balance: number, policy: Awaited<ReturnType<typeof getLoyaltyPolicy>>) {
+  return balance >= policy.goldThreshold ? "Gold" : balance >= policy.silverThreshold ? "Silver" : "Bronze";
+}
+
+function cashbackRateForTier(tier: string, policy: Awaited<ReturnType<typeof getLoyaltyPolicy>>) {
+  const percent = tier === "Gold"
+    ? policy.goldCashbackPercent
+    : tier === "Silver"
+      ? policy.silverCashbackPercent
+      : policy.bronzeCashbackPercent;
+  return percent / 100;
+}
+function hashSettingsPassword(pw: string) {
+  return crypto.createHash("sha256").update(pw).digest("hex");
+}
+
+async function readExcelWorkbook(buffer: Buffer, filename: string): Promise<ExcelJS.Workbook> {
+  const workbook = new ExcelJS.Workbook();
+  const ext = (filename || "").toLowerCase().split(".").pop();
+  if (ext === "csv") {
+    const stream = Readable.from(buffer.toString("utf-8"));
+    await workbook.csv.read(stream);
+  } else {
+    await workbook.xlsx.load(buffer);
+  }
+  return workbook;
+}
+
+function worksheetToJson(sheet: ExcelJS.Worksheet, defval: any = ""): any[] {
+  const rows: any[] = [];
+  let headers: string[] = [];
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const values = (row.values as any[]).slice(1);
+    if (rowNumber === 1) {
+      headers = values.map((v) => (v !== null && v !== undefined ? String(v) : ""));
+    } else {
+      const obj: any = {};
+      headers.forEach((h, i) => {
+        const v = values[i];
+        obj[h] = v !== undefined && v !== null ? v : defval;
+      });
+      rows.push(obj);
+    }
+  });
+  return rows;
+}
+
+async function logActivity(userId: string | null, username: string | null, action: string, entity: string | null, entityId: string | null, description: string | null, ipAddress: string | null, userAgent: string | null) {
+  try {
+    await db.insert(activityLogs).values({ userId, username, action, entity, entityId, description, ipAddress, userAgent });
+  } catch {}
+}
+
+function activityMiddleware(app: Express) {
+  const SKIP_PATHS = ["/api/auth/", "/api/portal/"];
+  const ENTITY_MAP: Record<string, string> = {
+    "/api/items": "item", "/api/customers": "customer", "/api/invoices": "invoice",
+    "/api/suppliers": "supplier", "/api/categories": "category", "/api/price-contracts": "price_contract",
+    "/api/seasonal-offers": "seasonal_offer", "/api/purchase-invoices": "purchase_invoice",
+    "/api/payments": "payment", "/api/supplier-payments": "supplier_payment",
+    "/api/expenses": "expense", "/api/journal-entries": "journal_entry",
+    "/api/accounts": "account", "/api/users": "user", "/api/settings": "settings",
+    "/api/backup": "backup",
+  };
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
+    if (!req.path.startsWith("/api/")) return next();
+    if (SKIP_PATHS.some(p => req.path.startsWith(p))) return next();
+
+    const origJson = res.json.bind(res);
+    res.json = (body: any) => {
+      if (res.statusCode < 400 && req.user) {
+        const entity = Object.entries(ENTITY_MAP).find(([k]) => req.path.startsWith(k))?.[1] || null;
+        const action = req.method === "POST" ? "create" : req.method === "DELETE" ? "delete" : "update";
+        const entityId = body?.id ?? (Array.isArray(body) ? body[0]?.id : null) ?? null;
+        const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.ip || null;
+        const ua = req.headers["user-agent"] || null;
+        logActivity(req.user.id, req.user.username, action, entity, entityId?.toString() || null, `${req.method} ${req.path}`, ip, ua);
+      }
+      return origJson(body);
+    };
+    next();
+  });
+}
+
+export async function generateBackupJson(since?: string): Promise<string> {
+  const sinceDate = since ? new Date(since) : null;
+
+  // Config tables — always exported in full (small, frequently mutated)
+  const [cats, itms, custs, supps, pcList, pcRules, pcItems, soList, soItems, accts, settings] = await Promise.all([
+    db.select().from(categories),
+    db.select().from(items),
+    db.select().from(customers),
+    db.select().from(suppliers),
+    db.select().from(priceContracts),
+    db.select().from(priceContractRules),
+    db.select().from(priceContractItems),
+    db.select().from(seasonalOffers),
+    db.select().from(seasonalOfferItems),
+    db.select().from(accounts),
+    db.select().from(systemSettings).then(rows => rows.filter(r => r.key !== "settings_password")),
+  ]);
+
+  // Transaction tables — differential if sinceDate provided, otherwise full
+  let invs: any[], invItems: any[], piList: any[], piItems: any[],
+      pays: any[], suppPays: any[], jes: any[], jeLines: any[], exps: any[];
+
+  if (sinceDate) {
+    invs = await db.select().from(invoices).where(gte(invoices.createdAt, sinceDate));
+    const invIds = invs.map(i => i.id);
+    invItems = invIds.length
+      ? await db.select().from(invoiceItems).where(sql`${invoiceItems.invoiceId} = ANY(ARRAY[${sql.raw(invIds.map(id => `'${id}'`).join(","))}]::text[])`)
+      : [];
+
+    piList = await db.select().from(purchaseInvoices).where(gte(purchaseInvoices.createdAt, sinceDate));
+    const piIds = piList.map(i => i.id);
+    piItems = piIds.length
+      ? await db.select().from(purchaseInvoiceItems).where(sql`${purchaseInvoiceItems.purchaseInvoiceId} = ANY(ARRAY[${sql.raw(piIds.map(id => `'${id}'`).join(","))}]::text[])`)
+      : [];
+
+    pays = await db.select().from(payments).where(gte(payments.createdAt, sinceDate));
+    suppPays = await db.select().from(supplierPayments).where(gte(supplierPayments.createdAt, sinceDate));
+
+    jes = await db.select().from(journalEntries).where(gte(journalEntries.createdAt, sinceDate));
+    const jeIds = jes.map(j => j.id);
+    jeLines = jeIds.length
+      ? await db.select().from(journalEntryLines).where(sql`${journalEntryLines.journalEntryId} = ANY(ARRAY[${sql.raw(jeIds.map(id => `'${id}'`).join(","))}]::text[])`)
+      : [];
+
+    exps = await db.select().from(expenses).where(gte(expenses.createdAt, sinceDate));
+  } else {
+    [invs, invItems, piList, piItems, pays, suppPays, jes, jeLines, exps] = await Promise.all([
+      db.select().from(invoices),
+      db.select().from(invoiceItems),
+      db.select().from(purchaseInvoices),
+      db.select().from(purchaseInvoiceItems),
+      db.select().from(payments),
+      db.select().from(supplierPayments),
+      db.select().from(journalEntries),
+      db.select().from(journalEntryLines),
+      db.select().from(expenses),
+    ]);
+  }
+
+  const data = {
+    categories: cats, items: itms, customers: custs, suppliers: supps,
+    invoices: invs, invoiceItems: invItems,
+    purchaseInvoices: piList, purchaseInvoiceItems: piItems,
+    payments: pays, supplierPayments: suppPays,
+    priceContracts: pcList, priceContractRules: pcRules, priceContractItems: pcItems,
+    seasonalOffers: soList, seasonalOfferItems: soItems,
+    accounts: accts, journalEntries: jes, journalEntryLines: jeLines,
+    expenses: exps, settings,
+  };
+
+  const tableCounts: Record<string, number> = {};
+  for (const [k, v] of Object.entries(data)) {
+    tableCounts[k] = Array.isArray(v) ? v.length : 0;
+  }
+
+  return JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    version: 1,
+    backupType: sinceDate ? "differential" : "full",
+    sinceDate: sinceDate ? sinceDate.toISOString() : null,
+    tableCounts,
+    data,
+  }, null, 2);
+}
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const catalogUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const itemPhotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: ITEM_IMAGE_MAX_BYTES, files: 1 } });
+const gunzipCatalog = promisify(gunzip);
+
+async function autoCreateJournalEntry(opts: {
+  sourceType: string;
+  sourceId: string;
+  date: string;
+  description: string;
+  reference: string;
+  lines: { accountCode: string; debit: number; credit: number; description: string }[];
+}) {
+  try {
+    const resolvedLines = [];
+    for (const line of opts.lines) {
+      const account = await storage.getAccountByCode(line.accountCode);
+      if (!account) continue;
+      if (line.debit === 0 && line.credit === 0) continue;
+      resolvedLines.push({
+        journalEntryId: "",
+        accountId: account.id,
+        debit: line.debit.toFixed(2),
+        credit: line.credit.toFixed(2),
+        description: line.description,
+      });
+    }
+    if (resolvedLines.length < 2) return null;
+
+    const totalDebits = resolvedLines.reduce((s, l) => s + parseFloat(l.debit), 0);
+    const totalCredits = resolvedLines.reduce((s, l) => s + parseFloat(l.credit), 0);
+    if (Math.abs(totalDebits - totalCredits) > 0.01) {
+      console.error(`Auto journal entry aborted: debits (${totalDebits}) != credits (${totalCredits}) for ${opts.sourceType}/${opts.sourceId}`);
+      return null;
+    }
+
+    const entryNumber = await storage.getNextJournalEntryNumber();
+    return await storage.createJournalEntry(
+      {
+        entryNumber,
+        date: opts.date,
+        description: opts.description,
+        reference: opts.reference,
+        sourceType: opts.sourceType,
+        sourceId: opts.sourceId,
+        status: "posted",
+        totalAmount: resolvedLines.reduce((s, l) => s + parseFloat(l.debit), 0).toFixed(2),
+      },
+      resolvedLines
+    );
+  } catch (e) {
+    console.error("Auto journal entry failed:", e);
+    return null;
+  }
+}
+
+// In-flight idempotency key tracker for card-terminal charges.
+// Tracks keys that are currently being processed (or were recently sent to a provider).
+// Because Node.js is single-threaded, the synchronous check+add before the first `await`
+// is race-free: a second request with the same key arriving while the first is awaiting
+// will always see the key already in the Set and receive a 409.
+const chargeInflightKeys = new Set<string>();
+
+// How long a "held" order's most recent charge attempt is considered possibly
+// still in-flight with the payment provider (matches the 60s poll windows used
+// by JCC/Viva/Worldpay below, plus a buffer for network/DB latency). After this
+// window elapses without a definitive outcome, the persisted claim is treated
+// as abandoned so a fresh idempotency key is allowed to try again — otherwise a
+// single ambiguous timeout would lock the order out of card payment forever.
+const CHARGE_IN_PROGRESS_WINDOW_MS = 90_000;
+
+export async function registerRoutes(
+  httpServer: Server,
+  app: Express,
+  options: { skipBackgroundJobs?: boolean } = {},
+): Promise<Server> {
+  configureCustomerAiHealthPersistence(createCustomerAiHealthPersistence());
+  registerDeploymentControlRoutes(app);
+  registerDeploymentPackageRoutes(app);
+
+  // ── Boot-time reconciliation for card-terminal charges ──────────────────────
+  // The in-memory chargeInflightKeys Set is always empty right after a restart, so
+  // it can no longer flag a charge that was in-flight when the process died. Any
+  // "held" order whose charge attempt is still within the in-progress window is
+  // logged here so ops can see it, and the /api/pos/card-terminal/charge-status
+  // endpoint will independently report it to the POS UI as "still being verified".
+  if (!options.skipBackgroundJobs) storage.getHeldOrdersWithRecentChargeAttempt(CHARGE_IN_PROGRESS_WINDOW_MS).then(orders => {
+    if (orders.length > 0) {
+      console.warn(
+        `[card-terminal] Server restarted with ${orders.length} held order(s) whose card charge may still be in-flight: ` +
+        orders.map(o => o.id).join(", ") +
+        `. These will be reported as "in progress" to the POS until the window elapses or they are resolved.`
+      );
+    }
+  }).catch(e => console.error("[card-terminal] Boot reconciliation check failed:", e));
+
+  // Serve sw.js with no-cache headers so browsers always get the latest version
+  app.get("/sw.js", (req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
+    next();
+  });
+
+  // Public logo endpoint — no auth required, used on login page
+  app.get("/api/public/logo", async (_req: Request, res: Response) => {
+    // Always returns an image — custom from DB if set, otherwise the default file.
+    // no-cache so the browser always revalidates after a logo change.
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    try {
+      const settings = await storage.getSettings();
+      const logoSetting = settings.find((s: any) => s.key === "company_logo");
+      if (logoSetting?.value && logoSetting.value.startsWith("data:image/")) {
+        const matches = logoSetting.value.match(/^data:([^;]+);base64,(.+)$/);
+        if (matches) {
+          const mimeType = matches[1];
+          const buffer = Buffer.from(matches[2], "base64");
+          res.setHeader("Content-Type", mimeType);
+          return res.send(buffer);
+        }
+      }
+      // Fall back to default logo file
+      const defaultCandidates = [
+        path.resolve(process.cwd(), "dist", "public", "logo.png"),
+        path.resolve(process.cwd(), "client", "public", "logo.png"),
+      ];
+      for (const p of defaultCandidates) {
+        if (fs.existsSync(p)) {
+          res.setHeader("Content-Type", "image/png");
+          return res.send(fs.readFileSync(p));
+        }
+      }
+      res.status(404).json({ message: "No logo found" });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  activityMiddleware(app);
+  registerErpIntegrationRoutes(app);
+
+  // ─── AUTH ───────────────────────────────────────────────────────────────────
+  async function completeLogin(res: Response, user: any, ip: string, ua: string, timestamp: string): Promise<string> {
+    clearFailedAttempts(ip);
+    await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+    const permissions: string[] = JSON.parse(user.permissions || "[]");
+    const token = signToken({ id: user.id, username: user.username, email: user.email, role: user.role, permissions });
+    setAuthCookie(res, token);
+    logActivity(user.id, user.username, "login", "auth", null, `Login from ${ip}`, ip, ua);
+
+    const recentLogins = await db.select({ ipAddress: activityLogs.ipAddress })
+      .from(activityLogs)
+      .where(and(
+        eq(activityLogs.userId, user.id),
+        eq(activityLogs.action, "login"),
+        gte(activityLogs.createdAt, new Date(Date.now() - 60 * 24 * 60 * 60 * 1000))
+      ))
+      .limit(100);
+
+    const knownIps = new Set(recentLogins.map((r: any) => r.ipAddress).filter(Boolean));
+    knownIps.delete(ip);
+    if (!knownIps.has(ip)) {
+      getAdminEmails().then(emails => {
+        if (emails.length) sendLoginAlertEmail(emails, user.username, ip, ua, timestamp);
+      });
+    }
+
+    return token;
+  }
+
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    try {
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+      const ua = req.headers["user-agent"] || "unknown";
+      const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+
+      // Rate limiting — block after 10 failed attempts in 15 minutes
+      const { blocked } = checkRateLimit(ip);
+      if (blocked) {
+        return res.status(429).json({ message: "Too many failed attempts. Please try again in 15 minutes." });
+      }
+
+      const { username, password } = req.body;
+      if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+
+      const [user] = await db.select().from(users).where(eq(users.username, username.toLowerCase().trim()));
+
+      if (!user || !user.active || !verifyPassword(password, user.password)) {
+        // Record failed attempt
+        const failCount = recordFailedAttempt(ip);
+        logActivity(null, username || null, "login_failed", "auth", null, `Failed login attempt for "${username}" from ${ip}`, ip, ua);
+
+        // Send alert after 3 failures, then every 5 thereafter
+        if (failCount === 3 || (failCount > 3 && failCount % 5 === 0)) {
+          const entry = failedAttempts.get(ip);
+          if (entry && !entry.alerted) {
+            entry.alerted = true;
+            getAdminEmails().then(emails => {
+              if (emails.length) sendFailedLoginAlertEmail(emails, username, ip, failCount, timestamp);
+            });
+          } else if (entry && failCount % 5 === 0) {
+            getAdminEmails().then(emails => {
+              if (emails.length) sendFailedLoginAlertEmail(emails, username, ip, failCount, timestamp);
+            });
+          }
+        }
+
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      // If 2FA is enabled, issue a temp token and require TOTP verification
+      if (user.totpEnabled && user.totpSecret) {
+        const failureKey = twoFactorFailureKey(user.id);
+        const recentFailures = await db.select({ id: customerOtpTokens.id }).from(customerOtpTokens).where(and(
+          eq(customerOtpTokens.customerId, failureKey),
+          eq(customerOtpTokens.used, false),
+          gte(customerOtpTokens.expiresAt, new Date()),
+        )).limit(5);
+        if (recentFailures.length >= 5) {
+          return res.status(429).json({ message: "Too many authentication-code attempts. Please try again in 15 minutes." });
+        }
+        const tempToken = signTempToken(user.id, "2fa-login");
+        return res.json({ requires2fa: true, tempToken });
+      }
+
+      // No 2FA configured — force setup before completing login
+      const tempToken = signTempToken(user.id, "2fa-setup");
+      return res.json({ requires2faSetup: true, tempToken });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Verify TOTP during login ──────────────────────────────────────────
+  app.post("/api/auth/2fa/verify", async (req: Request, res: Response) => {
+    try {
+      const { tempToken, code } = req.body;
+      if (!tempToken || !code) return res.status(400).json({ message: "Token and code required" });
+
+      const userId = verifyTempToken(tempToken, "2fa-login");
+      if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
+
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.active || !user.totpSecret) return res.status(401).json({ message: "Invalid session" });
+
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+      const ua = req.headers["user-agent"] || "unknown";
+      const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+      const failureKey = twoFactorFailureKey(user.id);
+      const verification = await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${failureKey}))`);
+        const failures = await tx.select({ id: customerOtpTokens.id }).from(customerOtpTokens).where(and(
+          eq(customerOtpTokens.customerId, failureKey),
+          eq(customerOtpTokens.used, false),
+          gte(customerOtpTokens.expiresAt, new Date()),
+        )).limit(5);
+        if (failures.length >= 5) return "locked" as const;
+        const cleanToken2fa = String(code).replace(/\s/g, "");
+        // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+        const result = (totpVerify as any)({ token: cleanToken2fa, secret: user.totpSecret, window: 1 });
+        if (!result.valid) {
+          await tx.insert(customerOtpTokens).values({
+            customerId: failureKey,
+            email: user.email || "",
+            code: "failed",
+            expiresAt: new Date(Date.now() + 15 * 60_000),
+            used: false,
+          });
+          return "invalid" as const;
+        }
+        await tx.update(customerOtpTokens).set({ used: true }).where(and(
+          eq(customerOtpTokens.customerId, failureKey),
+          eq(customerOtpTokens.used, false),
+        ));
+        return "valid" as const;
+      });
+      if (verification === "locked") {
+        return res.status(429).json({ message: "Too many authentication-code attempts. Please try again in 15 minutes." });
+      }
+      if (verification === "invalid") return res.status(401).json({ message: "Invalid authentication code" });
+
+      const token = await completeLogin(res, user, ip, ua, timestamp);
+      res.json({ id: user.id, username: user.username, email: user.email, role: user.role, token });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/auth/2fa/recovery/request", async (req: Request, res: Response) => {
+    try {
+      const userId = verifyTempToken(req.body?.tempToken, "2fa-login");
+      if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.active || !user.totpEnabled || !user.email) {
+        return res.status(400).json({ message: "Authenticator recovery is not available for this account." });
+      }
+      const code = crypto.randomInt(0, 100_000_000).toString().padStart(8, "0");
+      const staffChallengeId = `2fa:${userId}`;
+      const challenge = await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${staffChallengeId}))`);
+        const [recent] = await tx.select({ id: customerOtpTokens.id }).from(customerOtpTokens).where(and(
+          eq(customerOtpTokens.customerId, staffChallengeId),
+          gt(customerOtpTokens.createdAt, new Date(Date.now() - 60_000)),
+        )).limit(1);
+        if (recent) throw new Error("RECOVERY_RATE_LIMIT");
+        await tx.update(customerOtpTokens).set({ used: true }).where(and(
+          eq(customerOtpTokens.customerId, staffChallengeId),
+          eq(customerOtpTokens.used, false),
+        ));
+        const [created] = await tx.insert(customerOtpTokens).values({
+          customerId: staffChallengeId,
+          email: user.email!.toLowerCase().trim(),
+          code: hashPassword(code),
+          expiresAt: new Date(Date.now() + 10 * 60_000),
+          used: false,
+        }).returning({ id: customerOtpTokens.id });
+        return created;
+      }).catch((error: unknown) => {
+        if (error instanceof Error && error.message === "RECOVERY_RATE_LIMIT") return null;
+        throw error;
+      });
+      if (!challenge) {
+        return res.status(429).json({ message: "A recovery code was already sent. Please wait one minute before requesting another." });
+      }
+      const recoveryToken = sign2faRecoveryToken(userId, challenge.id);
+      const sent = await sendEmailWithContent(
+        user.email,
+        "Your GlobiPOS authenticator recovery code",
+        `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px">
+          <h2>Authenticator recovery</h2>
+          <p>Enter this code to reset two-factor authentication for <strong>${escHtml(user.username)}</strong>:</p>
+          <p style="font-size:28px;letter-spacing:6px;font-weight:bold">${code}</p>
+          <p>This code expires in 10 minutes. If you did not request this, do not share the code.</p>
+        </div>`,
+      );
+      if (!sent.success) {
+        await db.update(customerOtpTokens).set({ used: true }).where(eq(customerOtpTokens.id, challenge.id));
+        return res.status(503).json({ message: "The recovery email could not be sent. Please contact an administrator." });
+      }
+      logActivity(user.id, user.username, "request", "user", user.id, "Requested email-verified 2FA recovery", null, null);
+      res.json({ recoveryToken, message: "Recovery code sent to your account email." });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/auth/2fa/recovery/confirm", async (req: Request, res: Response) => {
+    try {
+      const code = String(req.body?.code || "").replace(/\D/g, "");
+      const recovery = verify2faRecoveryToken(String(req.body?.recoveryToken || ""));
+      if (!recovery) return res.status(401).json({ message: "Invalid or expired recovery code." });
+      const [challenge] = await db.update(customerOtpTokens).set({ used: true }).where(and(
+        eq(customerOtpTokens.id, recovery.challengeId),
+        eq(customerOtpTokens.customerId, `2fa:${recovery.userId}`),
+        eq(customerOtpTokens.used, false),
+        gte(customerOtpTokens.expiresAt, new Date()),
+      )).returning({ code: customerOtpTokens.code });
+      if (!challenge || !verifyPassword(code, challenge.code)) {
+        return res.status(401).json({ message: "Invalid or expired recovery code. Request a new code and try again." });
+      }
+      const userId = recovery.userId;
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.active || !user.totpEnabled) {
+        return res.status(400).json({ message: "Authenticator recovery is no longer required." });
+      }
+      const replacementSecret = totpGenerateSecret();
+      const otpauth = totpGenerateURI({ secret: replacementSecret, label: user.username, issuer: "GlobiPOS" });
+      const qrDataUrl = await QRCode.toDataURL(String(otpauth));
+      const replacementKey = `2fa-replace:${userId}`;
+      const [replacementGrant] = await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${replacementKey}))`);
+        await tx.update(customerOtpTokens).set({ used: true }).where(and(
+          eq(customerOtpTokens.customerId, replacementKey),
+          eq(customerOtpTokens.used, false),
+        ));
+        return tx.insert(customerOtpTokens).values({
+          customerId: replacementKey,
+          email: user.email || "",
+          code: crypto.createHash("sha256").update(user.totpSecret!).digest("hex"),
+          expiresAt: new Date(Date.now() + 5 * 60_000),
+          used: false,
+        }).returning({ id: customerOtpTokens.id });
+      });
+      logActivity(user.id, user.username, "update", "user", user.id, "Reset 2FA using verified recovery email", null, null);
+      res.json({
+        tempToken: sign2faRecoverySetupToken(user.id, replacementGrant.id, replacementSecret),
+        qrDataUrl,
+        secret: replacementSecret,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/auth/2fa/recovery/complete", async (req: Request, res: Response) => {
+    try {
+      const setup = verify2faRecoverySetupToken(String(req.body?.tempToken || ""));
+      if (!setup) return res.status(401).json({ message: "Recovery setup expired. Please request a new recovery code." });
+      const code = String(req.body?.code || "").replace(/\D/g, "");
+      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+      const result = (totpVerify as any)({ token: code, secret: setup.secret, window: 1 });
+      if (!result.valid) return res.status(400).json({ message: "Invalid code — please scan the new QR code and try again." });
+      const user = await db.transaction(async (tx) => {
+        const replacementKey = `2fa-replace:${setup.userId}`;
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${replacementKey}))`);
+        const [grant] = await tx.update(customerOtpTokens).set({ used: true }).where(and(
+          eq(customerOtpTokens.id, setup.grantId),
+          eq(customerOtpTokens.customerId, replacementKey),
+          eq(customerOtpTokens.used, false),
+          gte(customerOtpTokens.expiresAt, new Date()),
+        )).returning({ authenticatorFingerprint: customerOtpTokens.code });
+        if (!grant) return null;
+        const [current] = await tx.select().from(users).where(eq(users.id, setup.userId));
+        if (!current || !current.active || !current.totpEnabled || !current.totpSecret) return null;
+        const currentFingerprint = crypto.createHash("sha256").update(current.totpSecret).digest("hex");
+        if (currentFingerprint !== grant.authenticatorFingerprint) return null;
+        const [updated] = await tx.update(users).set({ totpSecret: setup.secret }).where(and(
+          eq(users.id, setup.userId),
+          eq(users.totpEnabled, true),
+          eq(users.totpSecret, current.totpSecret),
+        )).returning({ id: users.id });
+        return updated ? current : null;
+      });
+      if (!user) return res.status(409).json({ message: "Recovery setup was already used, expired, or became stale. Please start again." });
+      const ip = req.ip || "unknown";
+      const ua = req.headers["user-agent"] || "unknown";
+      const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+      logActivity(user.id, user.username, "update", "user", user.id, "Completed email-verified 2FA replacement", ip, ua);
+      const token = await completeLogin(res, user, ip, String(ua), timestamp);
+      res.json({ id: user.id, username: user.username, email: user.email, role: user.role, token });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Generate setup QR code ────────────────────────────────────────────
+  app.get("/api/auth/2fa/setup", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const secret = totpGenerateSecret();
+      const otpauth = totpGenerateURI({ secret, label: req.user.username, issuer: "GlobiPOS" });
+      const qrDataUrl = await QRCode.toDataURL(String(otpauth));
+      res.json({ secret, qrDataUrl });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Enable TOTP (confirm with code) ───────────────────────────────────
+  app.post("/api/auth/2fa/enable", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const { secret, code } = req.body;
+      if (!secret || !code) return res.status(400).json({ message: "Secret and code required" });
+
+      const cleanToken = code.replace(/\s/g, "");
+      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+      const result = (totpVerify as any)({ token: cleanToken, secret, window: 1 });
+      // [2FA enable] result logged without exposing secret or token
+      if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
+
+      await db.update(users).set({ totpSecret: secret, totpEnabled: true }).where(eq(users.id, req.user.id));
+      logActivity(req.user.id, req.user.username, "update", "user", req.user.id, "Two-factor authentication enabled", null, null);
+      res.json({ message: "Two-factor authentication enabled" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Disable TOTP ──────────────────────────────────────────────────────
+  app.post("/api/auth/2fa/disable", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const { code } = req.body;
+      const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
+      if (!user || !user.totpSecret || !user.totpEnabled) return res.status(400).json({ message: "2FA is not enabled" });
+
+      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+      const result = (totpVerify as any)({ token: (code || "").replace(/\s/g, ""), secret: user.totpSecret, window: 1 });
+      if (!result.valid) return res.status(400).json({ message: "Invalid authentication code" });
+
+      await db.update(users).set({ totpSecret: null, totpEnabled: false }).where(eq(users.id, req.user.id));
+      logActivity(req.user.id, req.user.username, "update", "user", req.user.id, "Two-factor authentication disabled", null, null);
+      res.json({ message: "Two-factor authentication disabled" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Status ────────────────────────────────────────────────────────────
+  app.get("/api/auth/2fa/status", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const [user] = await db.select({ totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, req.user.id));
+      res.json({ totpEnabled: user?.totpEnabled ?? false });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── 2FA: Initial forced setup (pre-login, using tempToken) ─────────────────
+  // Pending secret is stored in the DB (totpSecret, totpEnabled=false) so it
+  // survives server restarts. No in-memory state needed.
+
+  app.post("/api/auth/2fa/setup-initial/details", async (req: Request, res: Response) => {
+    try {
+      const userId = verifyTempToken(req.body?.tempToken, "2fa-setup");
+      if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
+      const [user] = await db.select({ username: users.username, totpSecret: users.totpSecret, totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, userId));
+      if (!user) return res.status(401).json({ message: "User not found" });
+      if (user.totpEnabled) return res.status(409).json({ message: "Two-factor authentication is already enabled. Please log in again." });
+      // Reuse any already-pending secret (not yet enabled) so repeated calls return the same QR
+      let secret = user.totpSecret;
+      if (!secret) {
+        secret = totpGenerateSecret();
+        const [updated] = await db.update(users).set({ totpSecret: secret }).where(and(
+          eq(users.id, userId),
+          eq(users.totpEnabled, false),
+          isNull(users.totpSecret),
+        )).returning({ totpSecret: users.totpSecret });
+        if (!updated) {
+          const [current] = await db.select({ totpSecret: users.totpSecret, totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, userId));
+          if (current?.totpEnabled || !current?.totpSecret) {
+            return res.status(409).json({ message: "Two-factor setup state changed. Please log in again." });
+          }
+          secret = current.totpSecret;
+        }
+      }
+      const otpauth = totpGenerateURI({ secret, label: user.username, issuer: "GlobiPOS" });
+      const qrDataUrl = await QRCode.toDataURL(String(otpauth));
+      res.json({ secret, qrDataUrl });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/auth/2fa/setup-initial", async (req: Request, res: Response) => {
+    try {
+      const { tempToken, code } = req.body;
+      if (!tempToken || !code) return res.status(400).json({ message: "Token and code required" });
+      const userId = verifyTempToken(tempToken, "2fa-setup");
+      if (!userId) return res.status(401).json({ message: "Session expired. Please log in again." });
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.active) return res.status(401).json({ message: "Invalid session" });
+      if (!user.totpSecret || user.totpEnabled) return res.status(400).json({ message: "No pending 2FA setup. Please log in again." });
+      // @ts-ignore — otplib types omit the window tolerance option but it is supported at runtime
+      const result = (totpVerify as any)({ token: code.replace(/\s/g, ""), secret: user.totpSecret, window: 1 });
+      if (!result.valid) return res.status(400).json({ message: "Invalid code — please try again" });
+      const [enabled] = await db.update(users).set({ totpEnabled: true }).where(and(
+        eq(users.id, userId),
+        eq(users.totpEnabled, false),
+      )).returning({ id: users.id });
+      if (!enabled) return res.status(409).json({ message: "Two-factor setup state changed. Please log in again." });
+      logActivity(userId, user.username, "update", "user", userId, "Two-factor authentication enabled (forced setup)", null, null);
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+      const ua = req.headers["user-agent"] || "unknown";
+      const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+      const token = await completeLogin(res, user, ip, ua, timestamp);
+      res.json({ id: user.id, username: user.username, email: user.email, role: user.role, token });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Admin: Reset another user's 2FA ────────────────────────────────────────
+  app.post("/api/users/:id/reset-2fa", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      if (id === req.user!.id) return res.status(400).json({ message: "Use the 2FA settings to manage your own 2FA" });
+      const [target] = await db.select({ id: users.id, username: users.username }).from(users).where(eq(users.id, id));
+      if (!target) return res.status(404).json({ message: "User not found" });
+      await db.update(users).set({ totpSecret: null, totpEnabled: false }).where(eq(users.id, id));
+      logActivity(req.user!.id, req.user!.username, "update", "user", id, `Reset 2FA for user ${target.username}`, null, null);
+      res.json({ message: "2FA reset — user will be prompted to set it up on next login" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/auth/me", async (req: Request, res: Response) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    // Always fetch fresh from DB so permissions/role changes take effect without re-login
+    const [dbUser] = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, permissions: users.permissions }).from(users).where(eq(users.id, req.user.id));
+    if (!dbUser) return res.status(401).json({ message: "User not found" });
+    res.json({ ...dbUser, permissions: JSON.parse(dbUser.permissions || "[]") });
+  });
+
+  const whatsappQuietHoursSchema = z.object({
+    enabled: z.boolean(),
+    startHour: z.number().int().min(0).max(23),
+    endHour: z.number().int().min(0).max(23),
+    timezone: z.string().refine(isValidIanaTimeZone, "Timezone must be a valid IANA time zone").optional(),
+    migrateLegacy: z.boolean().optional(),
+  }).strict();
+
+  app.get("/api/users/me/whatsapp-quiet-hours", requireStaff, async (req: Request, res: Response) => {
+    try {
+      const [preference] = await db.select({
+        enabled: users.whatsappQuietHoursEnabled,
+        startHour: users.whatsappQuietHoursStart,
+        endHour: users.whatsappQuietHoursEnd,
+        timezone: users.whatsappQuietHoursTimezone,
+        migrated: users.whatsappQuietHoursMigrated,
+      }).from(users).where(eq(users.id, req.user!.id));
+      if (!preference) return res.status(404).json({ message: "User not found" });
+      res.json({ ...preference, serverTime: new Date().toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/users/me/whatsapp-quiet-hours", requireStaff, async (req: Request, res: Response) => {
+    try {
+      const preference = whatsappQuietHoursSchema.parse(req.body);
+      const updateCondition = preference.migrateLegacy
+        ? and(eq(users.id, req.user!.id), eq(users.whatsappQuietHoursMigrated, false))
+        : eq(users.id, req.user!.id);
+      const [updated] = await db.update(users).set({
+        whatsappQuietHoursEnabled: preference.enabled,
+        whatsappQuietHoursStart: preference.startHour,
+        whatsappQuietHoursEnd: preference.endHour,
+        ...(preference.timezone ? { whatsappQuietHoursTimezone: preference.timezone } : {}),
+        whatsappQuietHoursMigrated: true,
+      }).where(updateCondition).returning({
+        enabled: users.whatsappQuietHoursEnabled,
+        startHour: users.whatsappQuietHoursStart,
+        endHour: users.whatsappQuietHoursEnd,
+        timezone: users.whatsappQuietHoursTimezone,
+        migrated: users.whatsappQuietHoursMigrated,
+      });
+      if (updated) return res.json({ ...updated, serverTime: new Date().toISOString() });
+
+      const [current] = await db.select({
+        enabled: users.whatsappQuietHoursEnabled,
+        startHour: users.whatsappQuietHoursStart,
+        endHour: users.whatsappQuietHoursEnd,
+        timezone: users.whatsappQuietHoursTimezone,
+        migrated: users.whatsappQuietHoursMigrated,
+      }).from(users).where(eq(users.id, req.user!.id));
+      if (!current) return res.status(404).json({ message: "User not found" });
+      res.json({ ...current, serverTime: new Date().toISOString() });
+    } catch (e: any) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ message: "Quiet hours must include enabled and start/end hours from 0 to 23" });
+      }
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/auth/logout", async (req: Request, res: Response) => {
+    if (req.user) {
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.ip || null;
+      const ua = req.headers["user-agent"] || null;
+      logActivity(req.user.id, req.user.username, "logout", "auth", null, "Logout", ip, ua);
+    }
+    clearAuthCookie(res);
+    res.json({ message: "Logged out" });
+  });
+
+  // ─── USERS (admin only) ──────────────────────────────────────────────────────
+  app.get("/api/users", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const rows = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, lastLoginAt: users.lastLoginAt, totpEnabled: users.totpEnabled, permissions: users.permissions, whatsappQuietHoursTimezone: users.whatsappQuietHoursTimezone }).from(users).orderBy(users.createdAt);
+      res.json(rows.map(r => ({ ...r, permissions: JSON.parse(r.permissions || "[]") })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/users", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { username, email, password, role, permissions } = req.body;
+      if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+      const allowedRoles = ["staff", "admin", "superuser"];
+      if (role && !allowedRoles.includes(role)) return res.status(400).json({ message: "Invalid role" });
+      const existing = await db.select({ id: users.id }).from(users).where(eq(users.username, username.toLowerCase().trim()));
+      if (existing.length > 0) return res.status(409).json({ message: "Username already exists" });
+      const [user] = await db.insert(users).values({ username: username.toLowerCase().trim(), email: email || null, password: hashPassword(password), role: role || "staff", active: true, permissions: JSON.stringify(Array.isArray(permissions) ? permissions : []) }).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, permissions: users.permissions });
+
+      // Alert all admins when a new admin/superuser is created
+      if ((role || "staff") !== "staff" && req.user) {
+        const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+        const timestamp = new Date().toLocaleString("en-GB", { timeZone: "Europe/Nicosia", hour12: false });
+        getAdminEmails().then(emails => {
+          if (emails.length) sendNewAdminAlertEmail(emails, username.toLowerCase().trim(), req.user!.username, ip, timestamp);
+        });
+      }
+
+      res.status(201).json({ ...user, permissions: JSON.parse(user.permissions || "[]") });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.put("/api/users/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { username, email, role, active, password, permissions, whatsappQuietHoursTimezone } = req.body;
+      const allowedRoles = ["staff", "admin", "superuser"];
+      if (role && !allowedRoles.includes(role)) return res.status(400).json({ message: "Invalid role" });
+      const updates: any = {};
+      if (username) updates.username = username.toLowerCase().trim();
+      if (email !== undefined) updates.email = email || null;
+      if (role) updates.role = role;
+      if (active !== undefined) updates.active = active;
+      if (password) updates.password = hashPassword(password);
+      if (permissions !== undefined) updates.permissions = JSON.stringify(Array.isArray(permissions) ? permissions : []);
+      if (whatsappQuietHoursTimezone !== undefined) {
+        if (typeof whatsappQuietHoursTimezone !== "string" || !isValidIanaTimeZone(whatsappQuietHoursTimezone)) {
+          return res.status(400).json({ message: "Quiet-hours time zone must be a valid IANA time zone" });
+        }
+        updates.whatsappQuietHoursTimezone = whatsappQuietHoursTimezone;
+      }
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, (req.params.id as string))).returning({ id: users.id, username: users.username, email: users.email, role: users.role, active: users.active, permissions: users.permissions, whatsappQuietHoursTimezone: users.whatsappQuietHoursTimezone });
+      if (!updated) return res.status(404).json({ message: "User not found" });
+      res.json({ ...updated, permissions: JSON.parse(updated.permissions || "[]") });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/users/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      if (req.user?.id === (req.params.id as string)) return res.status(400).json({ message: "Cannot delete your own account" });
+      await db.delete(users).where(eq(users.id, (req.params.id as string)));
+      res.json({ message: "User deleted" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Change own password
+  app.post("/api/users/change-password", async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+      const { currentPassword, newPassword } = req.body;
+      const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
+      if (!user || !verifyPassword(currentPassword, user.password)) return res.status(400).json({ message: "Current password is incorrect" });
+      await db.update(users).set({ password: hashPassword(newPassword) }).where(eq(users.id, req.user.id));
+      res.json({ message: "Password changed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── ACTIVITY LOGS (admin only) ─────────────────────────────────────────────
+  app.get("/api/activity-logs", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 200;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const rows = await db.select().from(activityLogs).orderBy(desc(activityLogs.createdAt)).limit(limit).offset(offset);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── DATA EXPORT / IMPORT (admin only) ──────────────────────────────────────
+  app.get("/api/admin/export", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const [
+        settingsRows, categoriesRows, itemsRows, customersRows, suppliersRows,
+        invoicesRows, invoiceItemsRows, paymentsRows,
+        purchaseInvoicesRows, purchaseInvoiceItemsRows, supplierPaymentsRows,
+        accountsRows, journalEntriesRows, journalEntryLinesRows, expensesRows,
+        priceContractsRows, priceContractRulesRows, priceContractItemsRows,
+        seasonalOffersRows, seasonalOfferItemsRows,
+      ] = await Promise.all([
+        db.select().from(systemSettings),
+        db.select().from(categories),
+        db.select().from(items),
+        db.select().from(customers),
+        db.select().from(suppliers),
+        db.select().from(invoices),
+        db.select().from(invoiceItems),
+        db.select().from(payments),
+        db.select().from(purchaseInvoices),
+        db.select().from(purchaseInvoiceItems),
+        db.select().from(supplierPayments),
+        db.select().from(accounts),
+        db.select().from(journalEntries),
+        db.select().from(journalEntryLines),
+        db.select().from(expenses),
+        db.select().from(priceContracts),
+        db.select().from(priceContractRules),
+        db.select().from(priceContractItems),
+        db.select().from(seasonalOffers),
+        db.select().from(seasonalOfferItems),
+      ]);
+      const companyRow = settingsRows.find((s: any) => s.key === "company_name");
+      const slug = fileSlug(companyRow?.value || "globi-pos");
+      const exportDate = new Date().toISOString().split("T")[0];
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-export-${exportDate}.json"`);
+      res.json({
+        exportedAt: new Date().toISOString(),
+        version: 1,
+        systemSettings: settingsRows,
+        categories: categoriesRows,
+        items: itemsRows,
+        customers: customersRows,
+        suppliers: suppliersRows,
+        invoices: invoicesRows,
+        invoiceItems: invoiceItemsRows,
+        payments: paymentsRows,
+        purchaseInvoices: purchaseInvoicesRows,
+        purchaseInvoiceItems: purchaseInvoiceItemsRows,
+        supplierPayments: supplierPaymentsRows,
+        accounts: accountsRows,
+        journalEntries: journalEntriesRows,
+        journalEntryLines: journalEntryLinesRows,
+        expenses: expensesRows,
+        priceContracts: priceContractsRows,
+        priceContractRules: priceContractRulesRows,
+        priceContractItems: priceContractItemsRows,
+        seasonalOffers: seasonalOffersRows,
+        seasonalOfferItems: seasonalOfferItemsRows,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/import", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { data, restoreSystemSettings } = parseAdminImportRequest(req.body);
+      if (!data || data.version !== 1) return res.status(400).json({ message: "Invalid export file" });
+
+      // Clear all data tables (preserve users and, by default, deployment-specific settings)
+      await db.delete(journalEntryLines);
+      await db.delete(journalEntries);
+      await db.delete(expenses);
+      await db.delete(supplierPayments);
+      await db.delete(purchaseInvoiceItems);
+      await db.delete(purchaseInvoices);
+      await db.delete(payments);
+      await db.delete(invoiceItems);
+      await db.delete(invoices);
+      await db.delete(priceContractRules);
+      await db.delete(priceContractItems);
+      await db.delete(priceContracts);
+      await db.delete(seasonalOfferItems);
+      await db.delete(seasonalOffers);
+      await db.delete(customers);
+      await db.delete(suppliers);
+      await db.delete(items);
+      await db.delete(categories);
+      await db.delete(accounts);
+      if (restoreSystemSettings) {
+        await db.delete(systemSettings);
+      }
+
+      const ins = async (table: any, rows: any[]) => { if (rows?.length) await db.insert(table).values(rows); };
+
+      if (restoreSystemSettings) {
+        await ins(systemSettings, data.systemSettings);
+      }
+      await ins(categories, data.categories);
+      await ins(items, data.items);
+      await ins(customers, data.customers);
+      await ins(suppliers, data.suppliers);
+      await ins(accounts, data.accounts);
+      await ins(invoices, data.invoices);
+      await ins(invoiceItems, data.invoiceItems);
+      await ins(payments, data.payments);
+      await ins(purchaseInvoices, data.purchaseInvoices);
+      await ins(purchaseInvoiceItems, data.purchaseInvoiceItems);
+      await ins(supplierPayments, data.supplierPayments);
+      await ins(journalEntries, data.journalEntries);
+      await ins(journalEntryLines, data.journalEntryLines);
+      await ins(expenses, data.expenses);
+      await ins(priceContracts, data.priceContracts);
+      await ins(priceContractRules, data.priceContractRules);
+      await ins(priceContractItems, data.priceContractItems);
+      await ins(seasonalOffers, data.seasonalOffers);
+      await ins(seasonalOfferItems, data.seasonalOfferItems);
+
+      res.json({
+        message: "Data imported successfully",
+        systemSettingsRestored: restoreSystemSettings,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/admin/catalog-transfer/export", requireSuperuser, async (_req: Request, res: Response) => {
+    try {
+      if (process.env.NODE_ENV === "production") {
+        return res.status(403).json({ message: "Catalog export is disabled in production. Export from the development workspace." });
+      }
+      const [categoryResult, familyResult, itemResult, variantResult, barcodeResult] = await Promise.all([
+        pool.query("SELECT * FROM categories"),
+        pool.query("SELECT * FROM product_families"),
+        pool.query("SELECT * FROM items"),
+        pool.query(`
+          SELECT v.*, i.sku AS parent_sku
+          FROM item_variants v
+          JOIN items i ON i.id = v.item_id
+        `),
+        pool.query(`
+          SELECT b.barcode, i.sku AS item_sku, b.country, b.note, b.is_primary
+          FROM item_barcodes b
+          JOIN items i ON i.id = b.item_id
+        `),
+      ]);
+      const payload = {
+        type: "globipos-catalog-transfer",
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        stockPolicy: "replace-with-exported",
+        categories: categoryResult.rows,
+        families: familyResult.rows,
+        items: itemResult.rows,
+        variants: variantResult.rows,
+        barcodes: barcodeResult.rows,
+      };
+      const compressed = gzipSync(Buffer.from(JSON.stringify(payload)), { level: 9 });
+      res.setHeader("Content-Type", "application/gzip");
+      res.setHeader("Content-Disposition", `attachment; filename="globipos-catalog-${new Date().toISOString().slice(0, 10)}.json.gz"`);
+      res.setHeader("Content-Length", String(compressed.length));
+      res.send(compressed);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/admin/catalog-transfer/import", requireSuperuser, catalogUpload.single("file"), async (req: Request, res: Response) => {
+    try {
+      if (!req.file?.buffer) return res.status(400).json({ message: "Catalog transfer file required" });
+      const decompressed = await gunzipCatalog(req.file.buffer, { maxOutputLength: 125 * 1024 * 1024 });
+      const payload = JSON.parse(decompressed.toString("utf8"));
+      if (payload?.type !== "globipos-catalog-transfer" || ![1, 2].includes(payload?.version)) {
+        return res.status(400).json({ message: "Invalid catalog transfer file" });
+      }
+      if (!Array.isArray(payload.categories) || !Array.isArray(payload.items) || !Array.isArray(payload.variants) || !Array.isArray(payload.barcodes)) {
+        return res.status(400).json({ message: "Catalog transfer is incomplete" });
+      }
+      payload.families = Array.isArray(payload.families) ? payload.families : [];
+      const transfersFamilies = payload.version >= 2;
+      if (payload.items.length > 250_000 || payload.categories.length > 10_000 || payload.variants.length > 500_000 || payload.barcodes.length > 500_000) {
+        return res.status(400).json({ message: "Catalog transfer exceeds safety limits" });
+      }
+      const uniqueStrings = (rows: any[], key: string, label: string): Set<string> => {
+        const values = new Set<string>();
+        for (const row of rows) {
+          const value = row?.[key];
+          if (typeof value !== "string" || !value.trim()) throw new Error(`${label} contains a missing ${key}`);
+          if (values.has(value)) throw new Error(`${label} contains duplicate ${key}: ${value}`);
+          values.add(value);
+        }
+        return values;
+      };
+      uniqueStrings(payload.categories, "id", "Categories");
+      uniqueStrings(payload.families, "id", "Product families");
+      const itemSkus = uniqueStrings(payload.items, "sku", "Items");
+      const variantSkus = uniqueStrings(payload.variants, "sku", "Variants");
+      for (const sku of variantSkus) if (itemSkus.has(sku)) throw new Error(`SKU is used by both an item and variant: ${sku}`);
+      uniqueStrings(payload.barcodes, "barcode", "Barcodes");
+      const incomingBarcodeOwners = new Map<string, string>();
+      const claimBarcode = (barcode: unknown, owner: string) => {
+        if (barcode == null || barcode === "") return;
+        if (typeof barcode !== "string") throw new Error(`Invalid barcode for ${owner}`);
+        const existing = incomingBarcodeOwners.get(barcode);
+        if (existing && existing !== owner) {
+          throw new Error(`Barcode ${barcode} is assigned to both ${existing} and ${owner}`);
+        }
+        incomingBarcodeOwners.set(barcode, owner);
+      };
+      for (const row of payload.items) claimBarcode(row.barcode, `item:${row.sku}`);
+      for (const row of payload.variants) {
+        if (typeof row.parent_sku !== "string" || !itemSkus.has(row.parent_sku)) {
+          throw new Error(`Variant ${row.sku} refers to a missing parent SKU`);
+        }
+        claimBarcode(row.barcode, `variant:${row.sku}`);
+      }
+      for (const row of payload.barcodes) {
+        if (typeof row.item_sku !== "string" || !itemSkus.has(row.item_sku)) {
+          throw new Error(`Barcode ${row.barcode} refers to a missing item SKU`);
+        }
+        claimBarcode(row.barcode, `item:${row.item_sku}`);
+      }
+
+      const chunk = <T,>(rows: T[], size = 1000): T[][] => {
+        const batches: T[][] = [];
+        for (let i = 0; i < rows.length; i += size) batches.push(rows.slice(i, i + size));
+        return batches;
+      };
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('globipos-catalog-transfer'))");
+        await client.query("LOCK TABLE product_families, items, item_variants, item_barcodes IN SHARE ROW EXCLUSIVE MODE");
+        const locationStock = await client.query("SELECT 1 FROM item_location_stock LIMIT 1");
+        if (locationStock.rowCount) throw new Error("Catalog stock cannot be replaced while location-level stock allocations exist");
+        const targetBarcodeRows = await client.query(`
+          SELECT barcode, 'item:' || sku AS owner FROM items WHERE barcode IS NOT NULL AND barcode <> ''
+          UNION ALL
+          SELECT barcode, 'variant:' || sku AS owner FROM item_variants WHERE barcode IS NOT NULL AND barcode <> ''
+          UNION ALL
+          SELECT b.barcode, 'item:' || i.sku AS owner
+          FROM item_barcodes b JOIN items i ON i.id = b.item_id
+        `);
+        for (const row of targetBarcodeRows.rows) {
+          const incomingOwner = incomingBarcodeOwners.get(row.barcode);
+          if (incomingOwner && incomingOwner !== row.owner) {
+            throw new Error(`Barcode ${row.barcode} belongs to ${row.owner} in this deployment, not ${incomingOwner}`);
+          }
+        }
+        for (const batch of chunk(payload.barcodes)) {
+          const conflicts = await client.query(`
+            SELECT x.barcode, x.item_sku AS incoming_sku, i.sku AS existing_sku
+            FROM jsonb_to_recordset($1::jsonb) AS x(barcode text, item_sku text)
+            JOIN item_barcodes b ON b.barcode = x.barcode
+            JOIN items i ON i.id = b.item_id
+            WHERE i.sku <> x.item_sku
+            LIMIT 1
+          `, [JSON.stringify(batch)]);
+          if (conflicts.rowCount) {
+            const conflict = conflicts.rows[0];
+            throw new Error(`Barcode ${conflict.barcode} already belongs to ${conflict.existing_sku}, not ${conflict.incoming_sku}`);
+          }
+        }
+        for (const batch of chunk(payload.categories)) {
+          await client.query(`
+            INSERT INTO categories
+            SELECT * FROM jsonb_populate_recordset(NULL::categories, $1::jsonb)
+            ON CONFLICT (id) DO UPDATE SET
+              name = EXCLUDED.name, description = EXCLUDED.description,
+              parent_id = EXCLUDED.parent_id, vat_rate = EXCLUDED.vat_rate,
+              active = EXCLUDED.active, updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(batch)]);
+        }
+        const sourceFamilyCodeById = new Map<string, string | null>(
+          payload.families.map((family: any) => [family.id, family.code || null]),
+        );
+        for (const batch of chunk(payload.families.filter((family: any) => family.code))) {
+          await client.query(`
+            INSERT INTO product_families
+            SELECT * FROM jsonb_populate_recordset(NULL::product_families, $1::jsonb)
+            ON CONFLICT (code) DO UPDATE SET
+              name = EXCLUDED.name,
+              active = EXCLUDED.active, updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(batch)]);
+        }
+        for (const batch of chunk(payload.families.filter((family: any) => !family.code))) {
+          await client.query(`
+            INSERT INTO product_families
+            SELECT * FROM jsonb_populate_recordset(NULL::product_families, $1::jsonb)
+            ON CONFLICT (id) DO UPDATE SET
+              name = EXCLUDED.name, active = EXCLUDED.active, updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(batch)]);
+        }
+        const targetFamilyRows = await client.query("SELECT id, code FROM product_families");
+        const targetFamilyByCode = new Map(targetFamilyRows.rows.filter((row: any) => row.code).map((row: any) => [row.code, row.id]));
+        const targetFamilyIds = new Set(targetFamilyRows.rows.map((row: any) => row.id));
+        const mapFamilyId = (sourceId: unknown) => {
+          if (!sourceId) return null;
+          const source = String(sourceId);
+          const code = sourceFamilyCodeById.get(source);
+          if (code) return targetFamilyByCode.get(code) || null;
+          return targetFamilyIds.has(source) ? source : null;
+        };
+        for (const batch of chunk(payload.items)) {
+          const mappedBatch = transfersFamilies
+            ? batch.map((item: any) => ({ ...item, family_id: mapFamilyId(item.family_id) }))
+            : batch;
+          await client.query(`
+            INSERT INTO items
+            SELECT * FROM jsonb_populate_recordset(NULL::items, $1::jsonb)
+            ON CONFLICT (sku) DO UPDATE SET
+              name = EXCLUDED.name, barcode = EXCLUDED.barcode, description = EXCLUDED.description,
+              category_id = EXCLUDED.category_id, ${transfersFamilies ? "family_id = EXCLUDED.family_id," : ""} unit_type = EXCLUDED.unit_type,
+              pack_size = EXCLUDED.pack_size, price_1 = EXCLUDED.price_1,
+              price_2 = EXCLUDED.price_2, price_3 = EXCLUDED.price_3,
+              price_4 = EXCLUDED.price_4, price_5 = EXCLUDED.price_5,
+              cost_price = EXCLUDED.cost_price, vat_rate = EXCLUDED.vat_rate,
+              stock_quantity = EXCLUDED.stock_quantity, reorder_level = EXCLUDED.reorder_level,
+              volume = EXCLUDED.volume, alcohol_percentage = EXCLUDED.alcohol_percentage,
+              brand = EXCLUDED.brand, origin = EXCLUDED.origin, vintage = EXCLUDED.vintage,
+              image_url = EXCLUDED.image_url, active = EXCLUDED.active,
+              has_variants = EXCLUDED.has_variants, season = EXCLUDED.season,
+              updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(mappedBatch)]);
+        }
+        for (const batch of chunk(payload.variants)) {
+          const result = await client.query(`
+            INSERT INTO item_variants (
+              id, item_id, sku, barcode, option1_name, option1_value,
+              option2_name, option2_value, option3_name, option3_value,
+              price_1, price_2, price_3, price_4, price_5, cost_price,
+              stock_quantity, reorder_level, image_url, active, updated_at
+            )
+            SELECT
+              x.id, i.id, x.sku, x.barcode, x.option1_name, x.option1_value,
+              x.option2_name, x.option2_value, x.option3_name, x.option3_value,
+              x.price_1, x.price_2, x.price_3, x.price_4, x.price_5, x.cost_price,
+              x.stock_quantity, x.reorder_level, x.image_url, x.active, x.updated_at
+            FROM jsonb_to_recordset($1::jsonb) AS x(
+              id varchar, parent_sku text, sku text, barcode text,
+              option1_name text, option1_value text, option2_name text, option2_value text,
+              option3_name text, option3_value text, price_1 numeric, price_2 numeric,
+              price_3 numeric, price_4 numeric, price_5 numeric, cost_price numeric,
+              stock_quantity integer, reorder_level integer, image_url text,
+              active boolean, updated_at timestamp
+            )
+            JOIN items i ON i.sku = x.parent_sku
+            ON CONFLICT (sku) DO UPDATE SET
+              item_id = EXCLUDED.item_id, barcode = EXCLUDED.barcode,
+              option1_name = EXCLUDED.option1_name, option1_value = EXCLUDED.option1_value,
+              option2_name = EXCLUDED.option2_name, option2_value = EXCLUDED.option2_value,
+              option3_name = EXCLUDED.option3_name, option3_value = EXCLUDED.option3_value,
+              price_1 = EXCLUDED.price_1, price_2 = EXCLUDED.price_2,
+              price_3 = EXCLUDED.price_3, price_4 = EXCLUDED.price_4,
+              price_5 = EXCLUDED.price_5, cost_price = EXCLUDED.cost_price,
+              stock_quantity = EXCLUDED.stock_quantity, reorder_level = EXCLUDED.reorder_level,
+              image_url = EXCLUDED.image_url, active = EXCLUDED.active, updated_at = EXCLUDED.updated_at
+          `, [JSON.stringify(batch)]);
+          if (result.rowCount !== batch.length) throw new Error("One or more variants refer to a missing parent SKU");
+        }
+        for (const batch of chunk(payload.barcodes)) {
+          const result = await client.query(`
+            INSERT INTO item_barcodes (item_id, barcode, country, note, is_primary)
+            SELECT i.id, x.barcode, x.country, x.note, x.is_primary
+            FROM jsonb_to_recordset($1::jsonb)
+              AS x(barcode text, item_sku text, country text, note text, is_primary boolean)
+            JOIN items i ON i.sku = x.item_sku
+            ON CONFLICT (barcode) DO UPDATE SET
+              item_id = EXCLUDED.item_id, country = EXCLUDED.country,
+              note = EXCLUDED.note, is_primary = EXCLUDED.is_primary
+          `, [JSON.stringify(batch)]);
+          if (result.rowCount !== batch.length) throw new Error("One or more barcodes could not be mapped to an item SKU");
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      logActivity(req.user!.id, req.user!.username, "import", "catalog", null,
+        `Catalog transfer imported: ${payload.categories.length} categories, ${payload.items.length} items, ${payload.barcodes.length} barcodes`, req.ip || null, String(req.headers["user-agent"] || ""));
+      res.json({
+        success: true,
+        categories: payload.categories.length,
+        families: payload.families.length,
+        items: payload.items.length,
+        variants: payload.variants.length,
+        barcodes: payload.barcodes.length,
+        stockPolicy: "development quantities applied",
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Dashboard
+  app.get("/api/dashboard/stats", async (_req, res) => {
+    try {
+      const stats = await storage.getDashboardStats();
+      res.json(stats);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/dashboard/charts", async (_req, res) => {
+    try {
+      const charts = await storage.getDashboardCharts();
+      res.json(charts);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Categories
+  app.get("/api/categories", async (_req, res) => {
+    const cats = await storage.getCategories();
+    res.json(cats);
+  });
+
+  app.post("/api/categories", async (req, res) => {
+    try {
+      const data = insertCategorySchema.parse(req.body);
+      if (data.parentId === "none" || data.parentId === "") data.parentId = null;
+      if (data.parentId && !(await storage.getCategory(data.parentId))) {
+        return res.status(400).json({ message: "Parent category not found" });
+      }
+      const cat = await storage.createCategory(data);
+      res.json(cat);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/categories/:id", async (req, res) => {
+    try {
+      const { name, description, parentId, vatRate, active } = req.body;
+      const update: any = {};
+      if (name !== undefined) update.name = name;
+      if (description !== undefined) update.description = description;
+      if (parentId !== undefined) update.parentId = (parentId === "none" || parentId === "") ? null : parentId;
+      if (vatRate !== undefined) update.vatRate = vatRate === "" ? null : vatRate;
+      if (active !== undefined) update.active = active;
+      if (update.parentId) {
+        const allCategories = await db.select({ id: categories.id, parentId: categories.parentId }).from(categories);
+        const parentById = new Map(allCategories.map(category => [category.id, category.parentId]));
+        if (!parentById.has(update.parentId)) {
+          return res.status(400).json({ message: "Parent category not found" });
+        }
+        const visited = new Set<string>();
+        let ancestorId: string | null = update.parentId;
+        while (ancestorId) {
+          if (ancestorId === (req.params.id as string)) {
+            return res.status(400).json({ message: "A category cannot be moved beneath one of its children" });
+          }
+          if (visited.has(ancestorId)) {
+            return res.status(400).json({ message: "The selected parent belongs to an invalid category cycle" });
+          }
+          visited.add(ancestorId);
+          ancestorId = parentById.get(ancestorId) || null;
+        }
+      }
+      const [updated] = await db.update(categories).set(update).where(eq(categories.id, (req.params.id as string))).returning();
+      if (!updated) return res.status(404).json({ message: "Category not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Product families — optional horizontal grouping across categories
+  app.get("/api/product-families", async (_req, res) => {
+    const rows = await db.select().from(productFamilies).where(eq(productFamilies.active, true)).orderBy(productFamilies.name);
+    res.json(rows);
+  });
+
+  app.post("/api/product-families", requireAdmin, async (req, res) => {
+    try {
+      const data = insertProductFamilySchema.parse(req.body);
+      const [row] = await db.insert(productFamilies).values(data).returning();
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.patch("/api/product-families/:id", requireAdmin, async (req, res) => {
+    try {
+      const data = insertProductFamilySchema.partial().parse(req.body);
+      const [row] = await db.update(productFamilies).set(data).where(eq(productFamilies.id, req.params.id as string)).returning();
+      if (!row) return res.status(404).json({ message: "Product family not found" });
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Colors (textile/shoes/apparel master list)
+  app.get("/api/colors", async (_req, res) => {
+    const rows = await storage.getColors();
+    res.json(rows);
+  });
+  app.post("/api/colors", async (req, res) => {
+    try {
+      const data = insertColorSchema.parse(req.body);
+      const row = await storage.createColor(data);
+      res.json(row);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.patch("/api/colors/:id", async (req, res) => {
+    try {
+      const { name, hexCode, active } = req.body;
+      const update: any = {};
+      if (name !== undefined) update.name = name;
+      if (hexCode !== undefined) update.hexCode = hexCode || null;
+      if (active !== undefined) update.active = active;
+      const updated = await storage.updateColor(req.params.id as string, update);
+      if (!updated) return res.status(404).json({ message: "Color not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.delete("/api/colors/:id", async (req, res) => {
+    try {
+      await storage.deleteColor(req.params.id as string);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Sizes (textile/shoes/apparel master list)
+  app.get("/api/sizes", async (_req, res) => {
+    const rows = await storage.getSizes();
+    res.json(rows);
+  });
+  app.post("/api/sizes", async (req, res) => {
+    try {
+      const data = insertSizeSchema.parse(req.body);
+      const row = await storage.createSize(data);
+      res.json(row);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.patch("/api/sizes/:id", async (req, res) => {
+    try {
+      const { name, sortOrder, active } = req.body;
+      const update: any = {};
+      if (name !== undefined) update.name = name;
+      if (sortOrder !== undefined) update.sortOrder = sortOrder;
+      if (active !== undefined) update.active = active;
+      const updated = await storage.updateSize(req.params.id as string, update);
+      if (!updated) return res.status(404).json({ message: "Size not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.delete("/api/sizes/:id", async (req, res) => {
+    try {
+      await storage.deleteSize(req.params.id as string);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Per-location stock (multi-location inventory — critical for textile/shoe shops
+  // where the same item/variant needs different stock counts per store).
+  app.get("/api/location-stock", async (req, res) => {
+    try {
+      const locationId = req.query.locationId as string | undefined;
+      const itemId = req.query.itemId as string | undefined;
+      const rows = await storage.getLocationStock(locationId, itemId);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.get("/api/location-stock/batch", requireStaff, async (req, res) => {
+    try {
+      const locationId = String(req.query.locationId || "");
+      const itemIds = String(req.query.itemIds || "").split(",").map(id => id.trim()).filter(Boolean);
+      if (!locationId || itemIds.length === 0) return res.json([]);
+      if (itemIds.length > 200) return res.status(400).json({ message: "At most 200 item IDs are allowed" });
+      res.json(await db.select().from(itemLocationStock).where(and(
+        eq(itemLocationStock.locationId, locationId),
+        inArray(itemLocationStock.itemId, itemIds),
+      )));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.get("/api/location-stock/item/:itemId", async (req, res) => {
+    try {
+      const rows = await storage.getStockForItemAcrossLocations(req.params.itemId as string);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.post("/api/location-stock", async (req, res) => {
+    try {
+      const data = insertItemLocationStockSchema.parse(req.body);
+      const row = await storage.setLocationStock(data.itemId, data.variantId || null, data.locationId, data.quantity ?? 0);
+      res.json(row);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Create a stock/warehouse location from the stock context (Location Stock &
+  // Inventory In pages). Mirrors POST /api/pos/locations but is accessible to
+  // items-module staff, who manage stock but may not have POS admin access.
+  app.post("/api/stock-locations", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const data = insertPosLocationSchema.parse(req.body);
+      // Changing the global default-receiving location is an admin-only action;
+      // items-module staff can create locations but not reassign the default.
+      const isAdmin = req.user?.role === "admin" || req.user?.role === "superuser";
+      const makeDefault = isAdmin && !!data.isDefaultReceiving;
+      const loc = await storage.createPosLocation({ ...data, isDefaultReceiving: false });
+      if (makeDefault) {
+        await storage.setDefaultReceivingLocation(loc.id);
+      }
+      res.json(loc);
+    } catch (e: any) {
+      if (e instanceof z.ZodError) return res.status(400).json({ message: "Invalid data", errors: e.errors });
+      res.status(400).json({ message: e.message });
+    }
+  });
+  app.patch("/api/location-stock/adjust", async (req, res) => {
+    try {
+      const { itemId, variantId, locationId, delta } = req.body;
+      if (!itemId || !locationId || typeof delta !== "number") {
+        return res.status(400).json({ message: "itemId, locationId and numeric delta are required" });
+      }
+      const row = await storage.adjustLocationStock(itemId, variantId || null, locationId, delta);
+      res.json(row);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Items
+  app.get("/api/items", async (req, res) => {
+    const paginated = req.query.page !== undefined || req.query.limit !== undefined;
+    if (!paginated) {
+      const allItems = await storage.getItems();
+      return res.json(allItems);
+    }
+    const page = Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number.parseInt(String(req.query.limit || "100"), 10) || 100));
+    const search = String(req.query.search || "").trim();
+    const categoryId = String(req.query.categoryId || "").trim();
+    const familyId = String(req.query.familyId || "").trim();
+    const filters = [];
+    if (search) {
+      const term = `%${search.replace(/[%_]/g, "\\$&")}%`;
+      filters.push(or(ilike(items.name, term), ilike(items.sku, term), ilike(items.barcode, term), ilike(items.brand, term)));
+    }
+    if (categoryId && categoryId !== "all") filters.push(eq(items.categoryId, categoryId));
+    if (familyId && familyId !== "all") filters.push(familyId === "none" ? isNull(items.familyId) : eq(items.familyId, familyId));
+    const where = filters.length ? and(...filters) : undefined;
+    const [[totalRow], rows] = await Promise.all([
+      db.select({ count: count() }).from(items).where(where),
+      db.select().from(items).where(where).orderBy(items.name).limit(pageSize).offset((page - 1) * pageSize),
+    ]);
+    res.json({ items: rows, total: Number(totalRow.count), page, pageSize });
+  });
+
+  app.get("/api/items/brands", async (_req, res) => {
+    const allItems = await storage.getItems();
+    const brandSet = new Set<string>();
+    allItems.forEach(i => { if (i.brand) brandSet.add(i.brand); });
+    const brands = Array.from(brandSet).sort();
+    res.json(brands);
+  });
+
+  app.get("/api/items/stock-suggestions", async (_req, res) => {
+    const suggestions = await storage.getStockSuggestions();
+    res.json(suggestions);
+  });
+
+  function mergeVariantIntoItem(item: any, variant: any) {
+    const optionParts = [variant.option1Value, variant.option2Value, variant.option3Value].filter(Boolean);
+    return {
+      ...item,
+      variantId: variant.id,
+      variantSku: variant.sku,
+      variantLabel: optionParts.join(" / "),
+      barcode: variant.barcode || item.barcode,
+      stockQuantity: variant.stockQuantity,
+      price1: variant.price1 ?? item.price1,
+      price2: variant.price2 ?? item.price2,
+      price3: variant.price3 ?? item.price3,
+      price4: variant.price4 ?? item.price4,
+      price5: variant.price5 ?? item.price5,
+      costPrice: variant.costPrice ?? item.costPrice,
+    };
+  }
+
+  app.get("/api/items/barcode/:barcode", async (req, res) => {
+    const barcode = req.params.barcode as string;
+    // Synthesized variants can legitimately use a configured scale prefix (notably
+    // "29"). An exact variant must therefore win before scale interpretation.
+    const exactVariant = await storage.getItemVariantByBarcode(barcode);
+    if (exactVariant) {
+      const item = await storage.getItem(exactVariant.itemId);
+      if (item) return res.json({ ...mergeVariantIntoItem(item, exactVariant), scaleBarcode: null });
+    }
+    const scaleBarcode = parseScaleBarcodeAfterVariantLookup(barcode, !!exactVariant);
+    const lookupBarcode = scaleBarcode?.plu || barcode;
+    let variant = await storage.getItemVariantByBarcode(lookupBarcode);
+    if (variant) {
+      const item = await storage.getItem(variant.itemId);
+      if (item) return res.json({ ...mergeVariantIntoItem(item, variant), scaleBarcode });
+    }
+    let item = await storage.getItemByAnyBarcode(lookupBarcode);
+    if (!item && lookupBarcode !== barcode) item = await storage.getItemByAnyBarcode(barcode);
+    if (!item) return res.status(404).json({ message: "Item not found" });
+    res.json({ ...item, scaleBarcode });
+  });
+
+  app.get("/api/items/:id/barcodes", async (req, res) => {
+    try {
+      const barcodes = await storage.getItemBarcodes(req.params.id as string);
+      res.json(barcodes);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/items/:id/barcodes", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
+    try {
+      const itemId = req.params.id as string;
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      const data = insertItemBarcodeSchema.parse({ ...req.body, itemId });
+      // Validate EAN-13 check digit if 13 digits
+      const bc = data.barcode.replace(/\s/g, "");
+      if (/^\d{13}$/.test(bc)) {
+        const sum = bc.split("").slice(0, 12).reduce((acc, d, i) => acc + parseInt(d) * (i % 2 === 0 ? 1 : 3), 0);
+        const check = (10 - (sum % 10)) % 10;
+        if (check !== parseInt(bc[12])) return res.status(400).json({ message: `Invalid EAN-13 check digit — expected ${check}` });
+      }
+      releaseBarcodeLock = await acquireCatalogImportLock();
+      await assertBarcodeAvailable(bc, `item:${itemId}`);
+      const row = await storage.addItemBarcode({ ...data, barcode: bc });
+      res.json(row);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+    finally { await releaseBarcodeLock?.(); }
+  });
+
+  app.delete("/api/item-barcodes/:id", async (req, res) => {
+    try {
+      await storage.deleteItemBarcode(req.params.id as string);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/items/:id", async (req, res) => {
+    const item = await storage.getItem((req.params.id as string));
+    if (!item) return res.status(404).json({ message: "Item not found" });
+    res.json(item);
+  });
+
+  app.get("/api/items/suggest-sku/:categoryId", async (req, res) => {
+    try {
+      const allItems = await storage.getItems();
+      const categories = await storage.getCategories();
+      const category = categories.find(c => c.id === (req.params.categoryId as string));
+      const prefix = category
+        ? category.name.split(/\s+/).map(w => w[0]?.toUpperCase()).join("").substring(0, 3)
+        : "ITM";
+      const existing = allItems
+        .filter(i => i.sku.startsWith(prefix + "-"))
+        .map(i => parseInt(i.sku.replace(prefix + "-", "")) || 0);
+      const next = (existing.length > 0 ? Math.max(...existing) : 0) + 1;
+      res.json({ sku: `${prefix}-${String(next).padStart(3, "0")}` });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  const numericStringFields = ["price1", "price2", "price3", "price4", "price5", "costPrice", "vatRate", "alcoholPercentage", "shelfLabelQuantity", "shelfLabelPreviousPrice"];
+  const numericIntFields = ["stockQuantity", "reorderLevel", "packSize"];
+  const shelfLabelUnits = new Set(["g", "kg", "ml", "L", "pc", "m", "m2", "m3"]);
+  function normalizeShelfLabelUnit(value: unknown) {
+    const raw = String(value || "").trim();
+    const aliases: Record<string, string> = {
+      l: "L",
+      litre: "L",
+      liter: "L",
+      piece: "pc",
+      item: "pc",
+      pcs: "pc",
+      metre: "m",
+      meter: "m",
+      "m²": "m2",
+      sqm: "m2",
+      "m³": "m3",
+      cbm: "m3",
+    };
+    return aliases[raw.toLowerCase()] || raw;
+  }
+  function normalizeAndValidateItemDetails(body: any, base: any = {}) {
+    const discountTouched = ["shelfLabelDiscountEnabled", "shelfLabelPreviousPrice", "price1"]
+      .some((field) => Object.prototype.hasOwnProperty.call(body, field));
+    const previousPriceConfirmed = body.confirmPreviousPrice30Days === true;
+    delete body.confirmPreviousPrice30Days;
+    delete body.shelfLabelPreviousPriceProvenance;
+    const merged = { ...base, ...body };
+    const itemType = merged.itemType || "general";
+    if (!["general", "garment"].includes(itemType)) throw new Error("Item type must be general or garment");
+    body.itemType = itemType;
+    if (itemType === "garment") {
+      body.shelfLabelUomEnabled = false;
+      body.shelfLabelQuantity = null;
+      body.shelfLabelUnit = null;
+    } else {
+      body.garmentGender = null;
+      body.garmentMaterial = null;
+      body.garmentStyle = null;
+      body.garmentCare = null;
+      if (merged.shelfLabelUomEnabled) {
+        const quantity = Number(merged.shelfLabelQuantity);
+        const shelfLabelUnit = normalizeShelfLabelUnit(merged.shelfLabelUnit);
+        if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Shelf label quantity must be greater than zero");
+        if (!shelfLabelUnits.has(shelfLabelUnit)) throw new Error("Select a supported shelf label unit");
+        body.shelfLabelUomEnabled = true;
+        body.shelfLabelQuantity = String(quantity);
+        body.shelfLabelUnit = shelfLabelUnit;
+      } else {
+        body.shelfLabelUomEnabled = false;
+        body.shelfLabelQuantity = null;
+        body.shelfLabelUnit = null;
+      }
+    }
+    const discountEnabled = merged.shelfLabelDiscountEnabled === true;
+    if (discountEnabled) {
+      const currentPrice = Number(merged.price1);
+      const previousPrice = Number(merged.shelfLabelPreviousPrice);
+      if (!Number.isFinite(previousPrice) || previousPrice <= currentPrice) {
+        throw new Error("The prior shelf-label price must be higher than the current selling price");
+      }
+      if (discountTouched && !previousPriceConfirmed) {
+        throw new Error("Confirm that the prior price is the applicable lowest selling price from the preceding 30 days");
+      }
+      body.shelfLabelDiscountEnabled = true;
+      body.shelfLabelPreviousPrice = previousPrice.toFixed(2);
+      body.shelfLabelPreviousPriceVerifiedAt = discountTouched
+        ? new Date()
+        : merged.shelfLabelPreviousPriceVerifiedAt;
+    } else {
+      body.shelfLabelDiscountEnabled = false;
+      body.shelfLabelPreviousPrice = null;
+      body.shelfLabelPreviousPriceVerifiedAt = null;
+      body.shelfLabelPreviousPriceProvenance = null;
+    }
+    return body;
+  }
+  function sanitizeItemNumericFields(body: any, partial = false) {
+    for (const field of numericStringFields) {
+      if (partial && !Object.prototype.hasOwnProperty.call(body, field)) continue;
+      if (field === "vatRate") {
+        // null/undefined/empty means "inherit from category" — keep as null
+        if (body[field] === "") body[field] = null;
+      } else if (field === "shelfLabelQuantity" && (body[field] === "" || body[field] === null || body[field] === undefined)) {
+        body[field] = null;
+      } else if (body[field] === "" || body[field] === null || body[field] === undefined) {
+        body[field] = "0";
+      }
+    }
+    for (const field of numericIntFields) {
+      if (partial && !Object.prototype.hasOwnProperty.call(body, field)) continue;
+      if (body[field] === "" || body[field] === null || body[field] === undefined) {
+        body[field] = field === "packSize" ? 1 : 0;
+      } else if (typeof body[field] === "string") {
+        body[field] = parseInt(body[field], 10) || (field === "packSize" ? 1 : 0);
+      }
+    }
+    return body;
+  }
+
+  function sanitizeNumericFields(body: any, fields: string[], defaultVal = "0") {
+    for (const field of fields) {
+      if (body[field] === "" || body[field] === null || body[field] === undefined) {
+        body[field] = defaultVal;
+      }
+    }
+    return body;
+  }
+
+  // Bulk-sync: set each item's vatRate from its category's vatRate (where category has one set)
+  app.post("/api/items/sync-vat-from-categories", async (_req, res) => {
+    try {
+      const [allItems, allCategories] = await Promise.all([storage.getItems(), storage.getCategories()]);
+      const catMap = new Map(allCategories.map((c: any) => [c.id, c]));
+      let updated = 0;
+      for (const item of allItems) {
+        if (!item.categoryId) continue;
+        const cat = catMap.get(item.categoryId) as any;
+        if (!cat || cat.vatRate == null || cat.vatRate === "") continue;
+        const catRate = parseFloat(cat.vatRate);
+        const itemRate = (item as any).vatRate != null ? parseFloat((item as any).vatRate) : null;
+        if (itemRate !== catRate) {
+          await storage.updateItem(item.id, { vatRate: String(catRate) } as any);
+          updated++;
+        }
+      }
+      res.json({ updated });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/items", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
+    try {
+      delete req.body.imageUrl;
+      delete req.body.imageThumbnailUrl;
+      delete req.body.imageCardUrl;
+      delete req.body.imageFullUrl;
+      delete req.body.imageVersion;
+      normalizeAndValidateItemDetails(req.body);
+      sanitizeItemNumericFields(req.body);
+      const data = insertItemSchema.parse(req.body);
+      if (data.categoryId === "") data.categoryId = null;
+      if (data.barcode) {
+        releaseBarcodeLock = await acquireCatalogImportLock();
+        await assertBarcodeAvailable(data.barcode);
+      }
+      const item = await storage.createItem(data);
+      res.json(item);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    } finally { await releaseBarcodeLock?.(); }
+  });
+
+  app.patch("/api/items/:id", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
+    try {
+      const itemId = req.params.id as string;
+      const existingItem = await storage.getItem(itemId);
+      if (!existingItem) return res.status(404).json({ message: "Item not found" });
+      delete req.body.imageUrl;
+      delete req.body.imageThumbnailUrl;
+      delete req.body.imageCardUrl;
+      delete req.body.imageFullUrl;
+      delete req.body.imageVersion;
+      normalizeAndValidateItemDetails(req.body, existingItem);
+      sanitizeItemNumericFields(req.body, true);
+      if (req.body.categoryId === "") req.body.categoryId = null;
+      req.body = insertItemSchema.partial().parse(req.body);
+      if (req.body.barcode) {
+        releaseBarcodeLock = await acquireCatalogImportLock();
+        await assertBarcodeAvailable(req.body.barcode, `item:${itemId}`);
+      }
+      const item = await storage.updateItem(itemId, req.body);
+      res.json(item);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    } finally { await releaseBarcodeLock?.(); }
+  });
+
+  app.post("/api/items/:id/photo", itemPhotoUpload.single("photo"), async (req, res) => {
+    const itemId = req.params.id as string;
+    try {
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      if (!req.file) return res.status(400).json({ message: "Choose a photo to upload" });
+      if (!ITEM_IMAGE_MIME_TYPES.has(req.file.mimetype)) {
+        return res.status(415).json({ message: "Use a JPEG, PNG, WebP, HEIC, or HEIF photo" });
+      }
+
+      const imageSet = await createItemImageSet(req.file.buffer);
+      await uploadItemImageSet(itemId, imageSet);
+      const base = `/api/public/items/${encodeURIComponent(itemId)}/images/${imageSet.version}`;
+      const updated = await storage.updateItem(itemId, {
+        imageUrl: `${base}/card.webp`,
+        imageThumbnailUrl: `${base}/thumbnail.webp`,
+        imageCardUrl: `${base}/card.webp`,
+        imageFullUrl: `${base}/full.webp`,
+        imageVersion: imageSet.version,
+      });
+      if (!updated) {
+        await deleteItemImageSet(itemId, imageSet.version);
+        return res.status(404).json({ message: "Item not found" });
+      }
+      if (item.imageVersion && item.imageVersion !== imageSet.version) {
+        void deleteItemImageSet(itemId, item.imageVersion);
+      }
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message || "Could not process item photo" });
+    }
+  });
+
+  app.delete("/api/items/:id/photo", async (req, res) => {
+    const itemId = req.params.id as string;
+    try {
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      const updated = await storage.updateItem(itemId, {
+        imageUrl: null,
+        imageThumbnailUrl: null,
+        imageCardUrl: null,
+        imageFullUrl: null,
+        imageVersion: null,
+      });
+      if (item.imageVersion) void deleteItemImageSet(itemId, item.imageVersion);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Could not remove item photo" });
+    }
+  });
+
+  app.get("/api/public/items/:id/images/:version/:filename", async (req, res) => {
+    try {
+      const itemId = req.params.id as string;
+      const version = req.params.version as string;
+      const size = String(req.params.filename).replace(/\.webp$/i, "") as ItemImageSize;
+      if (!["thumbnail", "card", "full"].includes(size)) return res.status(404).end();
+      const item = await storage.getItem(itemId);
+      if (!item || item.imageVersion !== version) return res.status(404).end();
+      const bytes = await downloadItemImage(itemId, version, size);
+      if (!bytes) return res.status(404).end();
+      res.setHeader("Content-Type", "image/webp");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.send(bytes);
+    } catch {
+      res.status(404).end();
+    }
+  });
+
+  // --- Item Variants (color/size/textile/quality etc.) ---
+  app.get("/api/items/:id/variants", async (req, res) => {
+    try {
+      const variants = await storage.getItemVariants((req.params.id as string));
+      res.json(variants);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/item-variants", async (_req, res) => {
+    const variants = await storage.getAllItemVariants();
+    res.json(variants);
+  });
+
+  app.get("/api/item-variants/barcode/:barcode", async (req, res) => {
+    const variant = await storage.getItemVariantByBarcode((req.params.barcode as string));
+    if (!variant) return res.status(404).json({ message: "Variant not found" });
+    res.json(variant);
+  });
+
+  app.get("/api/item-variants/:id", async (req, res) => {
+    const variant = await storage.getItemVariant((req.params.id as string));
+    if (!variant) return res.status(404).json({ message: "Variant not found" });
+    res.json(variant);
+  });
+
+  app.post("/api/items/:id/variants", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
+    try {
+      const body = { ...req.body, itemId: (req.params.id as string) };
+      sanitizeNumericFields(body, ["price1", "price2", "price3", "price4", "price5", "costPrice"], null as any);
+      const data = insertItemVariantSchema.parse(body);
+      if (data.barcode) {
+        releaseBarcodeLock = await acquireCatalogImportLock();
+        await assertBarcodeAvailable(data.barcode);
+      }
+      const variant = await storage.createItemVariant(data);
+      res.json(variant);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    } finally { await releaseBarcodeLock?.(); }
+  });
+
+  app.post("/api/items/:id/variants/matrix", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
+    try {
+      const itemId = req.params.id as string;
+      const { season, qualities, cells } = req.body as {
+        season?: string | null;
+        qualities?: string[];
+        cells: { colorId: string; sizeId: string; quality?: string | null; quantity: number }[];
+      };
+      if (!Array.isArray(cells) || cells.length === 0) {
+        return res.status(400).json({ message: "cells array is required" });
+      }
+      const allColors = await storage.getColors();
+      const allSizes = await storage.getSizes();
+      const sortedColors = [...allColors].sort((a, b) => a.name.localeCompare(b.name));
+      const sortedSizes = [...allSizes].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+      const sortedQualities = Array.isArray(qualities) ? [...qualities] : [];
+
+      const resolvedCells = cells
+        .filter(c => c.quantity > 0)
+        .map(c => {
+          const color = sortedColors.find(x => x.id === c.colorId);
+          const size = sortedSizes.find(x => x.id === c.sizeId);
+          if (!color || !size) return null;
+          const qualityIndex = c.quality ? sortedQualities.indexOf(c.quality) : -1;
+          return {
+            colorId: color.id,
+            colorName: color.name,
+            colorIndex: sortedColors.indexOf(color),
+            sizeId: size.id,
+            sizeName: size.name,
+            sizeIndex: sortedSizes.indexOf(size),
+            quality: c.quality || null,
+            qualityIndex: qualityIndex >= 0 ? qualityIndex : undefined,
+            quantity: c.quantity,
+          };
+        })
+        .filter((c): c is NonNullable<typeof c> => c !== null);
+
+      releaseBarcodeLock = await acquireCatalogImportLock();
+      const variants = await storage.bulkUpsertVariantMatrix(itemId, season || null, resolvedCells);
+      res.json(variants);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    } finally { await releaseBarcodeLock?.(); }
+  });
+
+  app.get("/api/inventory-in", async (req, res) => {
+    try {
+      const postedParam = req.query.posted as string | undefined;
+      const posted = postedParam === "true" ? true : postedParam === "false" ? false : undefined;
+      const lines = await storage.getInventoryInLines(posted);
+      res.json(lines);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/inventory-in", async (req, res) => {
+    try {
+      const { categoryId, style, description, costPrice, price1, vatRate, season, codeMethod, locationId, cells } = req.body as {
+        categoryId: string; style: string; description: string; costPrice: string; price1: string; vatRate: string;
+        season?: string | null; codeMethod?: string; locationId?: string | null;
+        cells: { colorId: string; sizeId: string; quantity: number }[];
+      };
+      if (!Array.isArray(cells) || cells.length === 0) {
+        return res.status(400).json({ message: "cells array is required" });
+      }
+      const normalizedCodeMethod = codeMethod || "descriptive";
+      if (!["descriptive", "sequential", "qr"].includes(normalizedCodeMethod)) {
+        return res.status(400).json({ message: "Invalid code synthesis method" });
+      }
+      const allColors = await storage.getColors();
+      const allSizes = await storage.getSizes();
+      const resolvedCells = cells
+        .filter(c => c.quantity > 0)
+        .map(c => {
+          const color = allColors.find(x => x.id === c.colorId);
+          const size = allSizes.find(x => x.id === c.sizeId);
+          if (!color || !size) return null;
+          return { colorId: color.id, colorName: color.name, sizeId: size.id, sizeName: size.name, quantity: c.quantity };
+        })
+        .filter((c): c is NonNullable<typeof c> => c !== null);
+
+      const header = insertInventoryInLineSchema.omit({ colorId: true, colorName: true, sizeId: true, sizeName: true, quantity: true }).parse({
+        categoryId, style, description, costPrice, price1, vatRate, season: season || null, codeMethod: normalizedCodeMethod,
+        locationId: locationId || null,
+      });
+      const lines = await storage.appendInventoryInLines(header, resolvedCells);
+      res.json(lines);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/inventory-in/:id", async (req, res) => {
+    try {
+      await storage.deleteInventoryInLine(req.params.id as string);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/inventory-in/post", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
+    try {
+      const { ids } = req.body as { ids: string[] };
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ message: "ids array is required" });
+      }
+      releaseBarcodeLock = await acquireCatalogImportLock();
+      const result = await storage.postInventoryInLines(ids);
+      res.json(result);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    } finally { await releaseBarcodeLock?.(); }
+  });
+
+  app.get("/api/variant-templates", async (_req, res) => {
+    try {
+      const templates = await storage.getVariantTemplates();
+      res.json(templates);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/variant-templates", async (req, res) => {
+    try {
+      const parsed = insertVariantTemplateSchema.parse(req.body);
+      const template = await storage.createVariantTemplate(parsed);
+      res.json(template);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/variant-templates/:id", async (req, res) => {
+    try {
+      await storage.deleteVariantTemplate(req.params.id as string);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/item-variants/:id", async (req, res) => {
+    let releaseBarcodeLock: (() => Promise<void>) | undefined;
+    try {
+      sanitizeNumericFields(req.body, ["price1", "price2", "price3", "price4", "price5", "costPrice"], null as any);
+      const variantId = req.params.id as string;
+      if (req.body.barcode) {
+        releaseBarcodeLock = await acquireCatalogImportLock();
+        await assertBarcodeAvailable(req.body.barcode, `variant:${variantId}`);
+      }
+      const variant = await storage.updateItemVariant(variantId, req.body);
+      if (!variant) return res.status(404).json({ message: "Variant not found" });
+      res.json(variant);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    } finally { await releaseBarcodeLock?.(); }
+  });
+
+  app.delete("/api/item-variants/:id", async (req, res) => {
+    try {
+      await storage.deleteItemVariant((req.params.id as string));
+      res.status(204).end();
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/items/:id/price-history", async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const history = await storage.getItemPriceHistory((req.params.id as string), limit, from, to);
+      res.json(history);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/items/import", upload.single("file"), async (req, res) => {
+    let releaseImportLock: (() => Promise<void>) | undefined;
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = worksheetToJson(sheet, "");
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const upsert = req.body.mode === "upsert";
+      releaseImportLock = await acquireCatalogImportLock();
+      const categories = await storage.getCategories();
+      const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
+      const allExistingItems = await storage.getItems();
+      const existingBySku = new Map<string, any[]>();
+      if (upsert) {
+        for (const item of allExistingItems) {
+          const key = item.sku.toLowerCase();
+          existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
+        }
+      }
+      const [existingVariants, existingAliases] = await Promise.all([
+        storage.getAllItemVariantsIncludingInactive(),
+        storage.getAllItemBarcodes(),
+      ]);
+      const barcodeAllocator = new CatalogImportBarcodeAllocator([
+        ...allExistingItems.map((it) => ({ barcode: it.barcode, ownerKey: `item:${it.id}` })),
+        ...existingVariants.map((variant) => ({ barcode: variant.barcode, ownerKey: `variant:${variant.id}` })),
+        ...existingAliases.map((alias) => ({
+          barcode: alias.barcode,
+          ownerKey: `item:${alias.itemId}`,
+        })),
+      ]);
+
+      const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: BarcodeIssue[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
+          };
+
+          const name = getValue("name");
+          const sku = getValue("sku");
+          if (!name || !sku) {
+            results.errors.push({ row: i + 2, message: "Name and SKU are required" });
+            continue;
+          }
+
+          const categoryName = getValue("category");
+          let categoryId: string | null = null;
+          if (categoryName) {
+            categoryId = catMap.get(categoryName.toLowerCase()) || null;
+            if (!categoryId) {
+              const newCat = await storage.createCategory({ name: categoryName, description: null, parentId: null, active: true });
+              categoryId = newCat.id;
+              catMap.set(categoryName.toLowerCase(), newCat.id);
+            }
+          }
+
+          const existingMatches = upsert ? existingBySku.get(sku.toLowerCase()) || [] : [];
+          if (existingMatches.length > 1) {
+            results.errors.push({ row: i + 2, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
+            continue;
+          }
+          const existing = existingMatches[0];
+          const sourceBarcode = getValue("barcode");
+          const provisionalOwnerKey = existing ? `item:${existing.id}` : `import-row:${i}`;
+          const barcodeAssignment = barcodeAllocator.assign(
+            sourceBarcode || existing?.barcode,
+            sku,
+            i + 2,
+            provisionalOwnerKey,
+          );
+          const itemData = {
+            name,
+            sku,
+            barcode: barcodeAssignment.barcode,
+            description: getValue("description") || null,
+            categoryId,
+            itemType: getValue("itemType") || "general",
+            unitType: getValue("unitType") || "pc",
+            packSize: parseInt(getValue("packSize")) || 1,
+            shelfLabelUomEnabled: ["1", "true", "yes", "y"].includes(getValue("shelfLabelUomEnabled").toLowerCase()),
+            shelfLabelQuantity: getValue("shelfLabelQuantity") || null,
+            shelfLabelUnit: getValue("shelfLabelUnit") || null,
+            price1: getValue("price1") || "0",
+            price2: getValue("price2") || "0",
+            price3: getValue("price3") || "0",
+            price4: getValue("price4") || "0",
+            price5: getValue("price5") || "0",
+            costPrice: getValue("costPrice") || "0",
+            stockQuantity: parseInt(getValue("stockQuantity")) || 0,
+            reorderLevel: parseInt(getValue("reorderLevel")) || 10,
+            volume: getValue("volume") || null,
+            alcoholPercentage: getValue("alcoholPercentage") || null,
+            brand: getValue("brand") || null,
+            origin: getValue("origin") || null,
+            vintage: getValue("vintage") || null,
+            garmentGender: getValue("garmentGender") || null,
+            garmentMaterial: getValue("garmentMaterial") || null,
+            garmentStyle: getValue("garmentStyle") || null,
+            garmentCare: getValue("garmentCare") || null,
+            active: true,
+          };
+
+          if (existing) {
+            const updateData: Record<string, any> = { name };
+            updateData.barcode = itemData.barcode;
+            if (getValue("description")) updateData.description = itemData.description;
+            if (categoryId) updateData.categoryId = categoryId;
+            if (getValue("unitType")) updateData.unitType = itemData.unitType;
+            if (getValue("packSize")) updateData.packSize = itemData.packSize;
+            for (const f of ["itemType", "shelfLabelUomEnabled", "shelfLabelQuantity", "shelfLabelUnit", "garmentGender", "garmentMaterial", "garmentStyle", "garmentCare"] as const) {
+              if (getValue(f)) updateData[f] = (itemData as any)[f];
+            }
+            for (const p of ["price1", "price2", "price3", "price4", "price5", "costPrice"] as const) {
+              if (getValue(p)) updateData[p] = (itemData as any)[p];
+            }
+            if (getValue("stockQuantity")) updateData.stockQuantity = itemData.stockQuantity;
+            if (getValue("reorderLevel")) updateData.reorderLevel = itemData.reorderLevel;
+            for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
+              if (getValue(f)) updateData[f] = (itemData as any)[f];
+            }
+            normalizeAndValidateItemDetails(updateData, existing);
+            await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
+              storage.updateItem(existing.id, updateData)
+            );
+            results.updated++;
+          } else {
+            normalizeAndValidateItemDetails(itemData);
+            const created = await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, (barcode) =>
+              storage.createItem({ ...itemData, barcode })
+            );
+            barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
+            if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
+            results.success++;
+          }
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    } finally {
+      await releaseImportLock?.();
+    }
+  });
+
+  app.post("/api/items/import/json", async (req, res) => {
+    let releaseImportLock: (() => Promise<void>) | undefined;
+    try {
+      const { rows } = req.body;
+      if (!rows || !Array.isArray(rows) || rows.length === 0) {
+        return res.status(400).json({ message: "No data rows provided" });
+      }
+      if (rows.length > 10000) {
+        return res.status(400).json({ message: "Too many rows (max 10000)" });
+      }
+
+      const upsert = req.body.mode === "upsert";
+      releaseImportLock = await acquireCatalogImportLock();
+      const categories = await storage.getCategories();
+      const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
+      const allExistingItems = await storage.getItems();
+      const existingBySku = new Map<string, any[]>();
+      if (upsert) {
+        for (const item of allExistingItems) {
+          const key = item.sku.toLowerCase();
+          existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
+        }
+      }
+      const [existingVariants, existingAliases] = await Promise.all([
+        storage.getAllItemVariantsIncludingInactive(),
+        storage.getAllItemBarcodes(),
+      ]);
+      const barcodeAllocator = new CatalogImportBarcodeAllocator([
+        ...allExistingItems.map((it) => ({ barcode: it.barcode, ownerKey: `item:${it.id}` })),
+        ...existingVariants.map((variant) => ({ barcode: variant.barcode, ownerKey: `variant:${variant.id}` })),
+        ...existingAliases.map((alias) => ({
+          barcode: alias.barcode,
+          ownerKey: `item:${alias.itemId}`,
+        })),
+      ]);
+      const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: BarcodeIssue[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
+
+      const clean = (v: any): string => {
+        const s = v === null || v === undefined ? "" : String(v).trim();
+        return /^null$/i.test(s) ? "" : s;
+      };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          if (typeof row !== "object" || row === null) {
+            results.errors.push({ row: i + 1, message: "Invalid row data" });
+            continue;
+          }
+          const name = clean(row.name);
+          const sku = clean(row.sku);
+          if (!name || !sku) {
+            results.errors.push({ row: i + 1, message: "Name and SKU are required" });
+            continue;
+          }
+
+          const categoryName = clean(row.category);
+          let categoryId: string | null = null;
+          if (categoryName) {
+            categoryId = catMap.get(categoryName.toLowerCase()) || null;
+            if (!categoryId) {
+              const newCat = await storage.createCategory({ name: categoryName, description: null, parentId: null, active: true });
+              categoryId = newCat.id;
+              catMap.set(categoryName.toLowerCase(), newCat.id);
+            }
+          }
+
+          const existingMatches = upsert ? existingBySku.get(sku.toLowerCase()) || [] : [];
+          if (existingMatches.length > 1) {
+            results.errors.push({ row: i + 1, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
+            continue;
+          }
+          const existing = existingMatches[0];
+          const sourceBarcode = clean(row.barcode);
+          const provisionalOwnerKey = existing ? `item:${existing.id}` : `import-row:${i}`;
+          const barcodeAssignment = barcodeAllocator.assign(
+            sourceBarcode || existing?.barcode,
+            sku,
+            i + 1,
+            provisionalOwnerKey,
+          );
+          const itemData = {
+            name,
+            sku,
+            barcode: barcodeAssignment.barcode,
+            description: clean(row.description) || null,
+            categoryId,
+            itemType: clean(row.itemType) || "general",
+            unitType: clean(row.unitType) || "pc",
+            packSize: parseInt(clean(row.packSize)) || 1,
+            shelfLabelUomEnabled: ["1", "true", "yes", "y"].includes(clean(row.shelfLabelUomEnabled).toLowerCase()),
+            shelfLabelQuantity: clean(row.shelfLabelQuantity) || null,
+            shelfLabelUnit: clean(row.shelfLabelUnit) || null,
+            price1: clean(row.price1) || "0",
+            price2: clean(row.price2) || "0",
+            price3: clean(row.price3) || "0",
+            price4: clean(row.price4) || "0",
+            price5: clean(row.price5) || "0",
+            costPrice: clean(row.costPrice) || "0",
+            stockQuantity: parseInt(clean(row.stockQuantity)) || 0,
+            reorderLevel: parseInt(clean(row.reorderLevel)) || 10,
+            volume: clean(row.volume) || null,
+            alcoholPercentage: clean(row.alcoholPercentage) || null,
+            brand: clean(row.brand) || null,
+            origin: clean(row.origin) || null,
+            vintage: clean(row.vintage) || null,
+            garmentGender: clean(row.garmentGender) || null,
+            garmentMaterial: clean(row.garmentMaterial) || null,
+            garmentStyle: clean(row.garmentStyle) || null,
+            garmentCare: clean(row.garmentCare) || null,
+            active: true,
+          };
+
+          if (existing) {
+            const updateData: Record<string, any> = { name };
+            updateData.barcode = itemData.barcode;
+            if (clean(row.description)) updateData.description = itemData.description;
+            if (categoryId) updateData.categoryId = categoryId;
+            if (clean(row.unitType)) updateData.unitType = itemData.unitType;
+            if (clean(row.packSize)) updateData.packSize = itemData.packSize;
+            for (const f of ["itemType", "shelfLabelUomEnabled", "shelfLabelQuantity", "shelfLabelUnit", "garmentGender", "garmentMaterial", "garmentStyle", "garmentCare"] as const) {
+              if (clean((row as any)[f])) updateData[f] = (itemData as any)[f];
+            }
+            for (const p of ["price1", "price2", "price3", "price4", "price5", "costPrice"] as const) {
+              if (clean((row as any)[p])) updateData[p] = (itemData as any)[p];
+            }
+            if (clean(row.stockQuantity)) updateData.stockQuantity = itemData.stockQuantity;
+            if (clean(row.reorderLevel)) updateData.reorderLevel = itemData.reorderLevel;
+            for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
+              if (clean((row as any)[f])) updateData[f] = (itemData as any)[f];
+            }
+            normalizeAndValidateItemDetails(updateData, existing);
+            await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
+              storage.updateItem(existing.id, updateData)
+            );
+            results.updated++;
+          } else {
+            normalizeAndValidateItemDetails(itemData);
+            const created = await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, (barcode) =>
+              storage.createItem({ ...itemData, barcode })
+            );
+            barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
+            if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
+            results.success++;
+          }
+        } catch (e: any) {
+          results.errors.push({ row: i + 1, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    } finally {
+      await releaseImportLock?.();
+    }
+  });
+
+  // Customers
+  app.get("/api/customers", async (_req, res) => {
+    const custs = await storage.getCustomers();
+    res.json(custs);
+  });
+
+  app.get("/api/customers/next-code", async (_req, res) => {
+    try {
+      const code = await storage.getNextCustomerCode();
+      res.json({ code });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/customers/whatsapp-order-ids", async (_req, res) => {
+    try {
+      const customerIds = await storage.getCustomerIdsWithWhatsappOrders();
+      res.json({ customerIds });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/customers/:id", async (req, res) => {
+    const cust = await storage.getCustomer((req.params.id as string));
+    if (!cust) return res.status(404).json({ message: "Customer not found" });
+    res.json(cust);
+  });
+
+  app.get("/api/customers/:id/has-whatsapp-orders", async (req, res) => {
+    try {
+      const orders = await storage.getPortalOrders((req.params.id as string));
+      const hasWhatsappOrder = orders.some((o) => o.source === "whatsapp");
+      res.json({ hasWhatsappOrder });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/customers/:id/analytics", async (req, res) => {
+    try {
+      const customerId = (req.params.id as string);
+      const cust = await storage.getCustomer(customerId);
+      if (!cust) return res.status(404).json({ message: "Customer not found" });
+
+      const custInvoices = await db
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.customerId, customerId), eq(invoices.type, "invoice"), sql`${invoices.status} != 'cancelled'`));
+
+      let totalRevenue = 0;
+      let totalCost = 0;
+      let overdueCount = 0;
+      for (const inv of custInvoices) {
+        const rev = parseFloat(inv.subtotal) - parseFloat(inv.discountAmount || "0");
+        totalRevenue += rev;
+        if (inv.status === "overdue") overdueCount++;
+        const lineItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
+        for (const li of lineItems) {
+          if (li.itemId) {
+            const itm = await db.select({ costPrice: items.costPrice, packSize: items.packSize }).from(items).where(eq(items.id, li.itemId)).limit(1);
+            if (itm.length > 0) {
+              const liQtyU = parseFloat(String((li as any).quantity || "0"));
+              const units = li.saleUnit === "pack" ? liQtyU * (itm[0].packSize || 1) : liQtyU;
+              totalCost += (parseFloat(itm[0].costPrice) / (itm[0].packSize || 1)) * units;
+            }
+          }
+        }
+      }
+
+      const invoiceCount = custInvoices.length;
+      const totalProfit = totalRevenue - totalCost;
+      const marginPct = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+      const avgInvoiceValue = invoiceCount > 0 ? totalRevenue / invoiceCount : 0;
+      const creditLimit = parseFloat(cust.creditLimit || "0");
+      const currentBalance = parseFloat(cust.currentBalance || "0");
+      const creditUtilization = creditLimit > 0 ? Math.min(currentBalance / creditLimit, 1) : 0;
+
+      const termsScore: Record<string, number> = { cash: 100, credit_7: 85, credit_14: 75, credit_30: 60, credit_60: 45, credit_90: 30 };
+      const basePayment = termsScore[cust.paymentTerms] ?? 50;
+      const paymentScore = Math.max(0, Math.min(100, basePayment - overdueCount * 15));
+
+      const revenueScore = Math.min(100, Math.round(Math.log1p(totalRevenue) / Math.log1p(25000) * 100));
+      const marginScore = Math.min(100, Math.max(0, Math.round(marginPct / 40 * 100)));
+      const activityScore = Math.min(100, Math.round(invoiceCount / 50 * 100));
+      const creditHealthScore = Math.round((1 - creditUtilization) * 100);
+
+      res.json({
+        revenue: Math.round(totalRevenue * 100) / 100,
+        profit: Math.round(totalProfit * 100) / 100,
+        invoiceCount,
+        overdueCount,
+        avgInvoiceValue: Math.round(avgInvoiceValue * 100) / 100,
+        marginPct: Math.round(marginPct * 10) / 10,
+        creditUtilization: Math.round(creditUtilization * 1000) / 10,
+        scores: {
+          revenue: revenueScore,
+          margin: marginScore,
+          activity: activityScore,
+          payment: paymentScore,
+          creditHealth: creditHealthScore,
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/customers", async (req, res) => {
+    try {
+      const data = insertCustomerSchema.parse(req.body);
+
+      if (!data.code || data.code.trim() === "") {
+        data.code = await storage.getNextCustomerCode();
+      }
+
+      const duplicates = await storage.findDuplicateCustomer(data.name, data.email, data.taxId);
+      if (duplicates.length > 0) {
+        const matchReasons: string[] = [];
+        for (const dup of duplicates) {
+          if (dup.name.toLowerCase().trim() === data.name.toLowerCase().trim()) matchReasons.push(`name "${dup.name}" (${dup.code})`);
+          if (data.email && dup.email && dup.email.toLowerCase().trim() === data.email.toLowerCase().trim()) matchReasons.push(`email "${dup.email}" (${dup.code})`);
+          if (data.taxId && dup.taxId && dup.taxId.toLowerCase().trim() === data.taxId.toLowerCase().trim()) matchReasons.push(`tax ID "${dup.taxId}" (${dup.code})`);
+        }
+        return res.status(409).json({
+          message: `Duplicate customer found: ${matchReasons.join(", ")}`,
+          duplicates: duplicates.map(d => ({ id: d.id, name: d.name, code: d.code, email: d.email, taxId: d.taxId })),
+        });
+      }
+
+      const cust = await storage.createCustomer(data);
+      res.json(cust);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/customers/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    try {
+      const cust = await storage.updateCustomer((req.params.id as string), req.body);
+      if (!cust) return res.status(404).json({ message: "Customer not found" });
+      res.json(cust);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/customers/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    try {
+      const cust = await db.select({ id: customers.id, name: customers.name }).from(customers).where(eq(customers.id, (req.params.id as string))).limit(1);
+      if (!cust.length) return res.status(404).json({ message: "Customer not found" });
+      const linked = await db.select({ id: invoices.id }).from(invoices).where(eq(invoices.customerId, (req.params.id as string))).limit(1);
+      if (linked.length > 0) {
+        return res.status(400).json({ message: "Cannot delete: customer has invoices. Remove them first or mark the customer inactive." });
+      }
+      await storage.deleteCustomer((req.params.id as string));
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/customers/:id/delivery-locations", async (req, res) => {
+    try {
+      const locs = await storage.getCustomerDeliveryLocations((req.params.id as string));
+      res.json(locs);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/customers/:id/delivery-locations", async (req, res) => {
+    try {
+      const loc = await storage.createCustomerDeliveryLocation({ ...req.body, customerId: (req.params.id as string) });
+      res.json(loc);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/customers/:customerId/delivery-locations/:locId", async (req, res) => {
+    try {
+      const loc = await storage.updateCustomerDeliveryLocation((req.params.locId as string), { ...req.body, customerId: (req.params.customerId as string) });
+      if (!loc) return res.status(404).json({ message: "Location not found" });
+      res.json(loc);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/customers/:customerId/delivery-locations/:locId", async (req, res) => {
+    try {
+      await storage.deleteCustomerDeliveryLocation((req.params.locId as string));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/customers/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = worksheetToJson(sheet, "");
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const upsert = req.body.mode === "upsert";
+      const existingByCode = upsert
+        ? new Map((await storage.getCustomers()).map((c) => [c.code.toLowerCase(), c]))
+        : new Map<string, any>();
+
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
+          };
+
+          const name = getValue("name");
+          const code = getValue("code");
+          if (!name || !code) {
+            results.errors.push({ row: i + 2, message: "Name and Code are required" });
+            continue;
+          }
+
+          const paymentTerms = getValue("paymentTerms") || "cash";
+          const validTerms = ["cash", "credit_7", "credit_14", "credit_30", "credit_60", "credit_90"];
+          
+          const custData = {
+            name,
+            code: code.toUpperCase(),
+            email: getValue("email") || null,
+            phone: getValue("phone") || null,
+            address: getValue("address") || null,
+            city: getValue("city") || null,
+            taxId: getValue("taxId") || null,
+            paymentTerms: validTerms.includes(paymentTerms) ? paymentTerms : "cash",
+            creditLimit: getValue("creditLimit") || "0",
+            currentBalance: "0",
+            priceLevel: parseInt(getValue("priceLevel")) || 1,
+            notes: getValue("notes") || null,
+            portalAccessCode: getValue("portalAccessCode") || null,
+            active: true,
+          };
+
+          const existing = upsert ? existingByCode.get(code.toLowerCase()) : undefined;
+          if (existing) {
+            const updateData: Record<string, any> = { name };
+            for (const f of ["email", "phone", "address", "city", "taxId", "notes", "portalAccessCode"] as const) {
+              if (getValue(f)) updateData[f] = (custData as any)[f];
+            }
+            if (getValue("paymentTerms")) updateData.paymentTerms = custData.paymentTerms;
+            if (getValue("creditLimit")) updateData.creditLimit = custData.creditLimit;
+            if (getValue("priceLevel")) updateData.priceLevel = custData.priceLevel;
+            await storage.updateCustomer(existing.id, updateData);
+            results.updated++;
+          } else {
+            const created = await storage.createCustomer(custData);
+            if (upsert) existingByCode.set(code.toLowerCase(), created);
+            results.success++;
+          }
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Price Contracts
+  app.get("/api/price-contracts", async (_req, res) => {
+    const contracts = await storage.getPriceContracts();
+    const contractsWithAll = await Promise.all(
+      contracts.map(async (c) => {
+        const rules = await storage.getContractRules(c.id);
+        const contractItems = await storage.getContractItems(c.id);
+        return { ...c, rules, contractItems };
+      })
+    );
+    res.json(contractsWithAll);
+  });
+
+  app.post("/api/price-contracts/quick-save", async (req, res) => {
+    try {
+      const { customerId, itemId, fixedPrice } = req.body;
+      if (!customerId || !itemId || fixedPrice == null) {
+        return res.status(400).json({ message: "customerId, itemId, and fixedPrice are required" });
+      }
+      const result = await storage.quickSaveContractPrice(customerId, itemId, parseFloat(fixedPrice));
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/price-contracts", async (req, res) => {
+    try {
+      const { rules, ...contractData } = req.body;
+      const data = insertPriceContractSchema.parse(contractData);
+      const contract = await storage.createPriceContract(data);
+      if (rules && Array.isArray(rules) && rules.length > 0) {
+        await storage.setContractRules(contract.id, rules);
+      }
+      res.json(contract);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/price-contracts/:id", async (req, res) => {
+    try {
+      const { rules, ...contractData } = req.body;
+      const contract = await storage.updatePriceContract((req.params.id as string), contractData);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (rules && Array.isArray(rules)) {
+        await storage.setContractRules((req.params.id as string), rules);
+      }
+      res.json(contract);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/price-contracts/:id/rules", async (req, res) => {
+    const rules = await storage.getContractRules((req.params.id as string));
+    res.json(rules);
+  });
+
+  app.put("/api/price-contracts/:id/rules", async (req, res) => {
+    try {
+      const rules = await storage.setContractRules((req.params.id as string), req.body.rules || []);
+      res.json(rules);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/price-contracts/:id", async (req, res) => {
+    try {
+      const contract = await storage.getPriceContract((req.params.id as string));
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (contract.source !== "invoice-discount") {
+        return res.status(403).json({ message: "Only auto-saved contracts can be deleted via this endpoint" });
+      }
+      await storage.deleteContract((req.params.id as string));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/price-contract-items/:itemId", async (req, res) => {
+    try {
+      const { specialPrice } = req.body;
+      const parsedPrice = parseFloat(specialPrice);
+      if (specialPrice === undefined || isNaN(parsedPrice) || parsedPrice <= 0) {
+        return res.status(400).json({ message: "specialPrice is required and must be a positive number" });
+      }
+      const rows = await db.select({ id: priceContractItems.id, contractId: priceContractItems.contractId })
+        .from(priceContractItems)
+        .where(eq(priceContractItems.id, (req.params.itemId as string)));
+      if (rows.length === 0) return res.status(404).json({ message: "Contract item not found" });
+      const contract = await storage.getPriceContract(rows[0].contractId);
+      if (!contract || contract.source !== "invoice-discount") {
+        return res.status(403).json({ message: "Only items in auto-saved contracts can be edited via this endpoint" });
+      }
+      const updated = await storage.updateContractItem((req.params.itemId as string), parsedPrice);
+      if (!updated) return res.status(404).json({ message: "Contract item not found or could not be updated" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/price-contract-items/:itemId", async (req, res) => {
+    try {
+      const items = await db.select({ id: priceContractItems.id, contractId: priceContractItems.contractId })
+        .from(priceContractItems)
+        .where(eq(priceContractItems.id, (req.params.itemId as string)));
+      if (items.length === 0) return res.status(404).json({ message: "Contract item not found" });
+      const contract = await storage.getPriceContract(items[0].contractId);
+      if (!contract || contract.source !== "invoice-discount") {
+        return res.status(403).json({ message: "Only items in auto-saved contracts can be deleted via this endpoint" });
+      }
+      await storage.deleteContractItem((req.params.itemId as string));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Seasonal Offers
+  app.get("/api/seasonal-offers", async (_req, res) => {
+    const offers = await storage.getSeasonalOffers();
+    res.json(offers);
+  });
+
+  app.post("/api/seasonal-offers", async (req, res) => {
+    try {
+      const data = insertSeasonalOfferSchema.parse(req.body);
+      const offer = await storage.createSeasonalOffer(data);
+      res.json(offer);
+      // Push notification to subscribed active customers about new seasonal offer
+      // Joins with customers so we can filter by active status and price level
+      setImmediate(async () => {
+        try {
+          const subsWithCustomers = await db
+            .selectDistinct({ customerId: customerPushSubscriptions.customerId, priceLevel: customers.priceLevel })
+            .from(customerPushSubscriptions)
+            .innerJoin(customers, and(eq(customers.id, customerPushSubscriptions.customerId), eq(customers.active, true)));
+          for (const { customerId, priceLevel } of subsWithCustomers) {
+            await sendPushToCustomer(customerId, {
+              title: "New Special Offer!",
+              body: `${data.name || "A new special offer"} is now available — ${data.discountPercentage}% off. Check it out in the shop.`,
+              url: "/shop",
+            });
+          }
+        } catch { /* non-fatal */ }
+      });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Invoices
+  app.get("/api/invoices", async (req, res) => {
+    const type = req.query.type as string | undefined;
+    // Handle TanStack query key format: /api/invoices/invoice
+    const invs = await storage.getInvoices(type);
+    res.json(invs);
+  });
+
+  // Specific invoice type route for TanStack query key format
+  app.get("/api/invoices/type/:type", async (req, res) => {
+    const invs = await storage.getInvoices((req.params.type as string));
+    res.json(invs);
+  });
+
+  app.get("/api/invoices/next-number", async (req, res) => {
+    const type = (req.query.type as string) || "invoice";
+    const number = await storage.getNextInvoiceNumber(type);
+    res.json({ number });
+  });
+
+  app.get("/api/invoices/:id", async (req, res) => {
+    // Skip non-UUID ids
+    if ((req.params.id as string) === "new" || (req.params.id as string) === "type" || (req.params.id as string) === "next-number") return res.status(404).json({ message: "Not found" });
+    const inv = await storage.getInvoice((req.params.id as string));
+    if (!inv) return res.status(404).json({ message: "Invoice not found" });
+    res.json(inv);
+  });
+
+  app.delete("/api/invoices/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    try {
+      const inv = await storage.getInvoice((req.params.id as string));
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+
+      // Reverse stock for non-draft sales invoices
+      if (inv.type === "invoice" && inv.status !== "draft") {
+        for (const li of inv.items || []) {
+          if (li.itemId) await adjustSaleLineStock(li as any, 1);
+        }
+      }
+
+      // Delete linked payments and their journal entries
+      const linkedPayments = await db.select().from(payments).where(eq(payments.invoiceId, (req.params.id as string)));
+      for (const pmt of linkedPayments) {
+        const pmtJEs = await db.select({ id: journalEntries.id }).from(journalEntries)
+          .where(and(eq(journalEntries.sourceType, "payment"), eq(journalEntries.sourceId, pmt.id)));
+        for (const je of pmtJEs) {
+          await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, je.id));
+          await db.delete(journalEntries).where(eq(journalEntries.id, je.id));
+        }
+      }
+      await db.delete(payments).where(eq(payments.invoiceId, (req.params.id as string)));
+
+      // Delete invoice journal entries
+      const relatedJEs = await db.select({ id: journalEntries.id }).from(journalEntries)
+        .where(and(eq(journalEntries.sourceType, "invoice"), eq(journalEntries.sourceId, (req.params.id as string))));
+      for (const je of relatedJEs) {
+        await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, je.id));
+        await db.delete(journalEntries).where(eq(journalEntries.id, je.id));
+      }
+
+      await storage.deleteInvoice((req.params.id as string));
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Bulk recalculate stored taxAmount + total for all invoices using per-line item VAT rates
+  app.post("/api/invoices/recalculate-vat-totals", async (_req, res) => {
+    try {
+      const allInvoices = await storage.getInvoices();
+      const allItems = await storage.getItems();
+      const allCategories = await storage.getCategories();
+      const itemMap = new Map(allItems.map((i: any) => [i.id, i]));
+      const catMap = new Map(allCategories.map((c: any) => [c.id, c]));
+
+      let updated = 0;
+      for (const inv of allInvoices) {
+        if (inv.status === "cancelled") continue;
+        const invItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
+        if (!invItems.length) continue;
+
+        const linesSubtotal = invItems.reduce((s: number, li: any) => s + parseFloat(li.total || "0"), 0);
+        const storedSubtotal = parseFloat(inv.subtotal);
+        const vatLineFactor = linesSubtotal > 0 ? storedSubtotal / linesSubtotal : 1;
+        const fallbackRate = parseFloat(inv.taxRate || "19");
+
+        const recalcVat = invItems.reduce((s: number, li: any) => {
+          const item = li.itemId ? itemMap.get(li.itemId) as any : null;
+          const catVat = item?.categoryId ? (catMap.get(item.categoryId) as any)?.vatRate : null;
+          const rateStr = item?.vatRate ?? catVat ?? inv.taxRate ?? "19";
+          const rate = parseFloat(String(rateStr)) || fallbackRate;
+          return s + parseFloat(li.total || "0") * vatLineFactor * rate / 100;
+        }, 0);
+
+        const newTaxAmount = parseFloat(recalcVat.toFixed(2));
+        const newTotal = parseFloat((storedSubtotal + recalcVat).toFixed(2));
+        const oldTaxAmount = parseFloat(inv.taxAmount);
+        const oldTotal = parseFloat(inv.total);
+
+        if (Math.abs(newTaxAmount - oldTaxAmount) > 0.001 || Math.abs(newTotal - oldTotal) > 0.001) {
+          await storage.updateInvoice(inv.id, { taxAmount: newTaxAmount.toFixed(2), total: newTotal.toFixed(2) } as any);
+
+          // Regenerate journal entry for this invoice so accounting stays in sync
+          if (inv.status !== "draft") {
+            await db.execute(sql`
+              DELETE FROM journal_entry_lines
+              WHERE journal_entry_id IN (
+                SELECT id FROM journal_entries
+                WHERE source_type IN ('invoice','credit_note') AND source_id = ${inv.id}
+              )
+            `);
+            await db.execute(sql`
+              DELETE FROM journal_entries
+              WHERE source_type IN ('invoice','credit_note') AND source_id = ${inv.id}
+            `);
+
+            const invNet = newTotal - newTaxAmount;
+            const invDate = typeof inv.date === "string" ? inv.date : new Date(inv.date).toISOString().split("T")[0];
+
+            // Recalculate COGS from current item cost prices
+            let totalCost = 0;
+            for (const li of invItems) {
+              if (li.itemId) {
+                const item = itemMap.get(li.itemId) as any;
+                if (item) {
+                  const liQtyC = parseFloat(String((li as any).quantity || "0"));
+                  const qty = (li.saleUnit === "pack" && item.packSize > 1) ? liQtyC * item.packSize : liQtyC;
+                  totalCost += (parseFloat(item.costPrice) / (item.packSize || 1)) * qty;
+                }
+              }
+            }
+
+            if (inv.type === "invoice") {
+              const jlines: { accountCode: string; debit: number; credit: number; description: string }[] = [
+                { accountCode: "1100", debit: newTotal, credit: 0, description: "Accounts Receivable" },
+                { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+                { accountCode: "2100", debit: 0, credit: newTaxAmount, description: "VAT Payable" },
+              ];
+              if (totalCost > 0) {
+                jlines.push({ accountCode: "5000", debit: totalCost, credit: 0, description: "Cost of Goods Sold" });
+                jlines.push({ accountCode: "1200", debit: 0, credit: totalCost, description: "Inventory" });
+              }
+              await autoCreateJournalEntry({
+                sourceType: "invoice", sourceId: inv.id, date: invDate,
+                description: `Sales Invoice ${inv.invoiceNumber}`, reference: inv.invoiceNumber, lines: jlines,
+              });
+            } else if (inv.type === "credit_note") {
+              const jlines: { accountCode: string; debit: number; credit: number; description: string }[] = [
+                { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+                { accountCode: "2100", debit: newTaxAmount, credit: 0, description: "VAT Payable reversal" },
+                { accountCode: "1100", debit: 0, credit: newTotal, description: "Accounts Receivable reversal" },
+              ];
+              if (totalCost > 0) {
+                jlines.push({ accountCode: "1200", debit: totalCost, credit: 0, description: "Inventory restored" });
+                jlines.push({ accountCode: "5000", debit: 0, credit: totalCost, description: "COGS reversal" });
+              }
+              await autoCreateJournalEntry({
+                sourceType: "credit_note", sourceId: inv.id, date: invDate,
+                description: `Credit Note ${inv.invoiceNumber}`, reference: inv.invoiceNumber, lines: jlines,
+              });
+            }
+          }
+
+          updated++;
+        }
+      }
+      res.json({ updated, total: allInvoices.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/invoices", async (req, res) => {
+    try {
+      const { items: lineItems, invoiceNumber: customNumber, ...invoiceData } = req.body;
+      const data = insertInvoiceSchema.parse({ ...invoiceData, invoiceNumber: "TEMP" });
+      const parsedItems = (lineItems || []).map((li: any) => insertInvoiceItemSchema.parse({ ...li, invoiceId: "TEMP" }));
+
+      if (!data.dueDate && data.customerId) {
+        const customer = await storage.getCustomer(data.customerId);
+        if (customer) {
+          const invDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+          const daysMatch = customer.paymentTerms.match(/credit_(\d+)/);
+          const days = daysMatch ? parseInt(daysMatch[1]) : 0;
+          const due = new Date(invDate);
+          due.setDate(due.getDate() + days);
+          (data as any).dueDate = due.toISOString().split("T")[0];
+        }
+      }
+
+      if (data.type === "invoice" && data.status !== "draft") {
+        for (const li of parsedItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const bottlesToSubtract = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              const variant = (li as any).variantId ? await storage.getItemVariant((li as any).variantId) : null;
+              const available = variant ? variant.stockQuantity : item.stockQuantity;
+              if (available < bottlesToSubtract) {
+                return res.status(400).json({ message: `Not enough stock for ${item.name || 'item'}. Available: ${available} bottles, needed: ${bottlesToSubtract}` });
+              }
+            }
+          }
+        }
+      }
+
+      const inv = await storage.createInvoice(data, parsedItems, customNumber || undefined);
+
+      if (data.type === "invoice" && data.status !== "draft") {
+        for (const li of parsedItems) {
+          if (li.itemId) await adjustSaleLineStock(li as any, -1);
+        }
+      } else if (data.type === "credit_note") {
+        for (const li of parsedItems) {
+          if (li.itemId) await adjustSaleLineStock(li as any, 1);
+        }
+      }
+
+      const invTotal = parseFloat(String(data.total || 0));
+      const invVat = parseFloat(String(data.taxAmount || 0));
+      const invNet = invTotal - invVat;
+      const invDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+
+      if (data.type === "invoice" && data.status !== "draft" && invTotal > 0) {
+        let totalCost = 0;
+        for (const li of parsedItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const costPerUnit = parseFloat(item.costPrice) / (item.packSize || 1);
+              const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              totalCost += costPerUnit * qty;
+            }
+          }
+        }
+        const journalLines = [
+          { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
+          { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+          { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
+        ];
+        if (totalCost > 0) {
+          journalLines.push(
+            { accountCode: "5000", debit: totalCost, credit: 0, description: "Cost of Goods Sold" },
+            { accountCode: "1200", debit: 0, credit: totalCost, description: "Inventory" },
+          );
+        }
+        await autoCreateJournalEntry({
+          sourceType: "invoice",
+          sourceId: inv.id,
+          date: invDate,
+          description: `Sales Invoice ${inv.invoiceNumber}`,
+          reference: inv.invoiceNumber,
+          lines: journalLines,
+        });
+      } else if (data.type === "credit_note" && invTotal > 0) {
+        let totalCost = 0;
+        for (const li of parsedItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const costPerUnit = parseFloat(item.costPrice) / (item.packSize || 1);
+              const qty = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
+              totalCost += costPerUnit * qty;
+            }
+          }
+        }
+        const journalLines = [
+          { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+          { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
+          { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
+        ];
+        if (totalCost > 0) {
+          journalLines.push(
+            { accountCode: "1200", debit: totalCost, credit: 0, description: "Inventory restored" },
+            { accountCode: "5000", debit: 0, credit: totalCost, description: "COGS reversal" },
+          );
+        }
+        await autoCreateJournalEntry({
+          sourceType: "credit_note",
+          sourceId: inv.id,
+          date: invDate,
+          description: `Credit Note ${inv.invoiceNumber}`,
+          reference: inv.invoiceNumber,
+          lines: journalLines,
+        });
+      }
+
+      // Fire push notification to customer if they have push subscriptions
+      if (data.type === "invoice" && data.status !== "draft" && data.customerId) {
+        setImmediate(() => {
+          sendPushToCustomer(data.customerId as string, {
+            title: "New Invoice",
+            body: `Invoice ${inv.invoiceNumber} for €${parseFloat(String(data.total || 0)).toFixed(2)} is ready.`,
+            url: `/portal`,
+          });
+        });
+      }
+
+      res.json(inv);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/invoices/:id", async (req, res) => {
+    try {
+      const { items: lineItems, ...invoiceData } = req.body;
+      const parsedItems = lineItems ? (lineItems as any[]).map((li: any) => insertInvoiceItemSchema.parse({ ...li, invoiceId: (req.params.id as string) })) : undefined;
+      const inv = await storage.updateInvoice((req.params.id as string), invoiceData, parsedItems);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      res.json(inv);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Document view/print/download
+  app.get("/api/invoices/:id/pdf", async (req, res) => {
+    try {
+      const inv = await storage.getInvoice((req.params.id as string));
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+
+      const customer = await storage.getCustomer(inv.customerId);
+      const typeLabel = inv.type === "credit_note" ? "CREDIT NOTE" : inv.type === "proforma" ? "PROFORMA INVOICE" : inv.type === "quotation" ? "QUOTATION" : "INVOICE";
+      const autoPrint = req.query.print === "1";
+
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const allCategories = await storage.getCategories();
+      const catMap: Record<string, any> = {};
+      allCategories.forEach((c: any) => { catMap[c.id] = c; });
+
+      const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
+        if (li.itemId) {
+          const item = await storage.getItem(li.itemId);
+          const catVat = item?.categoryId ? catMap[item.categoryId]?.vatRate : null;
+          const lineVatRate = item?.vatRate != null ? parseFloat(String(item.vatRate))
+                            : catVat != null ? parseFloat(String(catVat))
+                            : parseFloat(inv.taxRate || "19");
+          return { ...li, barcode: item?.barcode || null, lineVatRate };
+        }
+        return { ...li, barcode: null, lineVatRate: parseFloat(inv.taxRate || "19") };
+      }));
+
+      let deliveryAddress: string | null = null;
+      if (inv.deliveryLocation && inv.customerId) {
+        const deliveryLocs = await storage.getCustomerDeliveryLocations(inv.customerId);
+        const matchedLoc = deliveryLocs.find((l: any) => l.name === inv.deliveryLocation);
+        if (matchedLoc?.address) deliveryAddress = matchedLoc.address;
+      }
+
+      const enrichedInv = { ...inv, items: enrichedItems, deliveryAddress };
+
+      const html = generateInvoiceHtml(enrichedInv, customer, typeLabel, autoPrint, settingsMap);
+
+      res.setHeader("Content-Type", "text/html");
+      if (req.query.download === "1") {
+        res.setHeader("Content-Disposition", `attachment; filename="${inv.invoiceNumber}.html"`);
+      }
+      res.send(html);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Customer-authenticated invoice PDF — verifies ownership via customer JWT
+  app.get("/api/customer/invoices/:id/pdf", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const inv = await storage.getInvoice((req.params.id as string));
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      if (inv.customerId !== auth.customerId) return res.status(403).json({ message: "Forbidden" });
+
+      const customer = await storage.getCustomer(inv.customerId);
+      const typeLabel = inv.type === "credit_note" ? "CREDIT NOTE" : inv.type === "proforma" ? "PROFORMA INVOICE" : inv.type === "quotation" ? "QUOTATION" : "INVOICE";
+
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
+        const item = li.itemId ? await storage.getItem(li.itemId) : null;
+        return { ...li, barcode: item?.barcode || null, lineVatRate: parseFloat(inv.taxRate || "19") };
+      }));
+
+      const html = generateInvoiceHtml({ ...inv, items: enrichedItems }, customer, typeLabel, false, settingsMap);
+      res.setHeader("Content-Type", "text/html");
+      res.send(html);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Send invoice by email
+  const sendEmailBodySchema = z.object({ email: z.string().email().optional() }).optional();
+  app.post("/api/invoices/:id/send-email", async (req, res) => {
+    try {
+      const body = sendEmailBodySchema.parse(req.body);
+      const inv = await storage.getInvoice((req.params.id as string));
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+
+      const customer = await storage.getCustomer(inv.customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const toEmail = body?.email || customer.email;
+      if (!toEmail) return res.status(400).json({ message: "Customer has no email address" });
+
+      const typeLabel = inv.type === "credit_note" ? "CREDIT NOTE" : inv.type === "proforma" ? "PROFORMA INVOICE" : inv.type === "quotation" ? "QUOTATION" : "INVOICE";
+
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const companyName = settingsMap.company_name || "Company";
+      const subject = `${typeLabel} ${inv.invoiceNumber} from ${companyName}`;
+
+      const allCategories2 = await storage.getCategories();
+      const catMap2: Record<string, any> = {};
+      allCategories2.forEach((c: any) => { catMap2[c.id] = c; });
+
+      const enrichedItems = await Promise.all((inv.items || []).map(async (li: any) => {
+        if (li.itemId) {
+          const item = await storage.getItem(li.itemId);
+          const catVat = item?.categoryId ? catMap2[item.categoryId]?.vatRate : null;
+          const lineVatRate = item?.vatRate != null ? parseFloat(String(item.vatRate))
+                            : catVat != null ? parseFloat(String(catVat))
+                            : parseFloat(inv.taxRate || "19");
+          return { ...li, barcode: item?.barcode || null, lineVatRate };
+        }
+        return { ...li, barcode: null, lineVatRate: parseFloat(inv.taxRate || "19") };
+      }));
+
+      let deliveryAddress: string | null = null;
+      if (inv.deliveryLocation && inv.customerId) {
+        const deliveryLocs = await storage.getCustomerDeliveryLocations(inv.customerId);
+        const matchedLoc = deliveryLocs.find((l: any) => l.name === inv.deliveryLocation);
+        if (matchedLoc?.address) deliveryAddress = matchedLoc.address;
+      }
+
+      const enrichedInv = { ...inv, items: enrichedItems, deliveryAddress };
+
+      const html = generateInvoiceHtml(enrichedInv, customer, typeLabel, false, settingsMap);
+
+      const result = await sendInvoiceEmail(toEmail, subject, html);
+
+      await storage.createEmailLog({
+        invoiceId: inv.id,
+        customerId: customer.id,
+        customerName: customer.name,
+        toEmail: toEmail,
+        fromEmail: result.fromEmail || null,
+        replyTo: result.replyTo || null,
+        subject: subject,
+        status: result.success ? "sent" : "failed",
+        errorMessage: result.error || null,
+      });
+
+      if (result.success) {
+        // Auto-advance status to "sent" if currently draft
+        if (inv.status === "draft") {
+          await storage.updateInvoice(inv.id, { status: "sent" });
+        }
+        res.json({ message: `Email sent successfully to ${toEmail}` });
+      } else {
+        res.status(500).json({ message: `Failed to send email: ${result.error}` });
+      }
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Explicit status transition — only allowed moves enforced server-side
+  app.patch("/api/invoices/:id/status", async (req, res) => {
+    try {
+      const { status: newStatus } = req.body;
+      const allowed = ["draft", "sent", "paid", "overdue", "cancelled"];
+      if (!allowed.includes(newStatus)) {
+        return res.status(400).json({ message: "Invalid status value" });
+      }
+      const inv = await storage.getInvoice((req.params.id as string));
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+
+      // Enforce valid transitions
+      // Cancel is only available from draft; posted invoices use Credit Notes instead
+      const transitions: Record<string, string[]> = {
+        draft:     ["sent", "paid", "cancelled"],
+        sent:      ["paid", "overdue"],
+        overdue:   ["paid", "sent"],
+        paid:      ["draft"],
+        cancelled: ["draft"],
+      };
+      if (!(transitions[inv.status] || []).includes(newStatus)) {
+        return res.status(400).json({ message: `Cannot move from "${inv.status}" to "${newStatus}"` });
+      }
+
+      const updated = await storage.updateInvoice(inv.id, { status: newStatus });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Email logs
+  app.get("/api/email-logs", async (_req, res) => {
+    try {
+      const logs = await storage.getEmailLogs();
+      res.json(logs);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/email-logs/customer/:customerId", async (req, res) => {
+    try {
+      const logs = await storage.getEmailLogsByCustomer((req.params.customerId as string));
+      res.json(logs);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // User Manual PDF
+  app.get("/api/manual", async (_req, res) => {
+    const allSettings = await storage.getSettings();
+    const settingsMap: Record<string, string> = {};
+    for (const s of allSettings) settingsMap[s.key] = s.value;
+    const manualCompanyName = settingsMap["company_name"] || "GlobiPOS";
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${manualCompanyName} – Instructions for Use</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f4f4; color: #1a1a1a; font-size: 13px; line-height: 1.6; }
+  .page { max-width: 900px; margin: 24px auto; background: #fff; padding: 48px 56px; box-shadow: 0 2px 24px rgba(0,0,0,0.08); border-radius: 4px; }
+  .no-print { text-align: center; margin-bottom: 20px; padding: 10px; }
+  .no-print button { padding: 10px 28px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; margin: 0 6px; }
+  .btn-print { background: #6b1f2a; color: #fff; }
+  .btn-print:hover { background: #4a1520; }
+  .btn-close { background: #e5e5e5; color: #333; }
+
+  /* Cover */
+  .cover { text-align: center; padding: 32px 0 40px; border-bottom: 3px solid #6b1f2a; margin-bottom: 40px; }
+  .cover-logo { font-size: 36px; font-weight: 900; color: #6b1f2a; letter-spacing: -1px; }
+  .cover-subtitle { font-size: 14px; color: #888; margin-top: 6px; text-transform: uppercase; letter-spacing: 2px; }
+  .cover-title { font-size: 22px; font-weight: 700; color: #1a1a1a; margin-top: 20px; }
+  .cover-meta { font-size: 12px; color: #aaa; margin-top: 8px; }
+
+  /* TOC */
+  .toc { background: #fafafa; border: 1px solid #e5e5e5; border-radius: 6px; padding: 24px 28px; margin-bottom: 40px; }
+  .toc-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; font-weight: 700; margin-bottom: 14px; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin-bottom: 6px; }
+  .toc a { color: #6b1f2a; text-decoration: none; font-weight: 500; }
+  .toc a:hover { text-decoration: underline; }
+  .toc .sub { padding-left: 18px; font-size: 12px; color: #555; list-style: lower-alpha; }
+
+  /* Sections */
+  .section { margin-bottom: 48px; }
+  h2.section-title { font-size: 18px; font-weight: 800; color: #6b1f2a; border-bottom: 2px solid #6b1f2a; padding-bottom: 8px; margin-bottom: 20px; }
+  h3.sub-title { font-size: 14px; font-weight: 700; color: #1a1a1a; margin: 24px 0 10px; }
+  h4.sub-sub { font-size: 13px; font-weight: 700; color: #444; margin: 16px 0 8px; }
+  p { margin-bottom: 10px; color: #333; }
+
+  /* Steps */
+  .steps { counter-reset: step-counter; margin: 12px 0 16px 0; }
+  .step { display: flex; gap: 14px; margin-bottom: 10px; align-items: flex-start; }
+  .step-num { background: #6b1f2a; color: #fff; font-size: 11px; font-weight: 700; border-radius: 50%; min-width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; margin-top: 2px; flex-shrink: 0; }
+  .step-text { color: #333; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 12px; }
+  thead th { background: #6b1f2a; color: #fff; padding: 9px 12px; text-align: left; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  tbody td { padding: 9px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+  tbody tr:nth-child(even) { background: #fdfcfb; }
+
+  /* Tips / callouts */
+  .tip { background: #f0f7ed; border-left: 4px solid #4a8a3a; border-radius: 4px; padding: 12px 16px; margin: 14px 0; font-size: 12px; color: #2d5a20; }
+  .tip strong { font-weight: 700; }
+  .note { background: #fdf5e6; border-left: 4px solid #b5860a; border-radius: 4px; padding: 12px 16px; margin: 14px 0; font-size: 12px; color: #7a5800; }
+  .note strong { font-weight: 700; }
+  .warning { background: #fef2f2; border-left: 4px solid #c0392b; border-radius: 4px; padding: 12px 16px; margin: 14px 0; font-size: 12px; color: #7a2020; }
+
+  /* Badge */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+  .badge-red { background: #fde8e8; color: #c0392b; }
+  .badge-green { background: #e8f5e9; color: #2e7d32; }
+  .badge-blue { background: #e3f2fd; color: #1565c0; }
+  .badge-grey { background: #f5f5f5; color: #555; }
+  .badge-amber { background: #fff8e1; color: #b5860a; }
+
+  /* Path crumbs */
+  .path { background: #f5f5f5; border-radius: 4px; padding: 4px 10px; font-size: 12px; color: #444; font-family: 'Courier New', monospace; display: inline-block; margin: 4px 0; }
+
+  /* Field list */
+  .field-list { list-style: none; padding: 0; margin: 10px 0 16px; }
+  .field-list li { padding: 7px 0; border-bottom: 1px dashed #eee; display: flex; gap: 12px; }
+  .field-list li:last-child { border-bottom: none; }
+  .field-name { font-weight: 600; min-width: 170px; color: #1a1a1a; }
+  .field-desc { color: #555; }
+
+  /* Footer */
+  .footer { text-align: center; padding-top: 32px; border-top: 1px solid #eee; margin-top: 40px; font-size: 11px; color: #bbb; }
+
+  @page { margin: 15mm 18mm; size: A4; }
+  @media print {
+    body { background: #fff; }
+    .page { padding: 0; box-shadow: none; max-width: 100%; margin: 0; }
+    .no-print { display: none !important; }
+    h2.section-title { break-before: page; }
+    h2.section-title:first-of-type { break-before: avoid; }
+    thead th { background: #6b1f2a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .step-num { background: #6b1f2a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .tip { background: #f0f7ed !important; border-left-color: #4a8a3a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .note { background: #fdf5e6 !important; border-left-color: #b5860a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="no-print">
+  <button class="btn-print" onclick="window.print()">Print / Save as PDF</button>
+  <button class="btn-close" onclick="window.close()">Close</button>
+</div>
+<div class="page">
+
+  <!-- COVER -->
+  <div class="cover">
+    <div class="cover-logo">${manualCompanyName}</div>
+    <div class="cover-subtitle">Retail &amp; Hospitality POS + ERP</div>
+    <div class="cover-title">Instructions for Use — Complete System Guide</div>
+    <div class="cover-meta">For internal use &nbsp;·&nbsp; June 2026</div>
+  </div>
+
+  <!-- TOC -->
+  <div class="toc">
+    <div class="toc-title">Contents</div>
+    <ol>
+      <li><a href="#start">Getting Started</a>
+        <ol class="sub">
+          <li><a href="#start-login">Logging In &amp; Two-Factor Authentication</a></li>
+          <li><a href="#start-nav">Navigating the System</a></li>
+          <li><a href="#start-roles">User Roles &amp; Permissions</a></li>
+        </ol>
+      </li>
+      <li><a href="#dashboard">Dashboard</a></li>
+      <li><a href="#catalogue">Items &amp; Catalogue</a>
+        <ol class="sub">
+          <li><a href="#cat-create">Creating &amp; Editing Items</a></li>
+          <li><a href="#cat-pricing">Price Levels</a></li>
+          <li><a href="#cat-vat">VAT on Items</a></li>
+          <li><a href="#cat-stock">Stock Tracking</a></li>
+        </ol>
+      </li>
+      <li><a href="#categories">Product Categories</a>
+        <ol class="sub">
+          <li><a href="#cat-manage">Creating &amp; Managing Categories</a></li>
+          <li><a href="#cat-hierarchy">Parent–Child Hierarchy</a></li>
+          <li><a href="#cat-vat2">Assigning VAT Rates</a></li>
+        </ol>
+      </li>
+      <li><a href="#customers">Customers</a>
+        <ol class="sub">
+          <li><a href="#cust-create">Creating a Customer</a></li>
+          <li><a href="#cust-delivery">Delivery Locations</a></li>
+          <li><a href="#cust-statements">Statements &amp; Balances</a></li>
+        </ol>
+      </li>
+      <li><a href="#invoices">Sales Documents</a>
+        <ol class="sub">
+          <li><a href="#inv-types">Document Types</a></li>
+          <li><a href="#inv-create">Creating an Invoice</a></li>
+          <li><a href="#inv-lineitems">Line Items &amp; VAT</a></li>
+          <li><a href="#inv-delivery">Delivery Location on Invoice</a></li>
+          <li><a href="#inv-status">Status Workflow</a></li>
+          <li><a href="#inv-email">Sending by Email</a></li>
+          <li><a href="#inv-print">Printing &amp; Downloading</a></li>
+          <li><a href="#inv-convert">Converting to Invoice</a></li>
+        </ol>
+      </li>
+      <li><a href="#payments">Customer Payments</a></li>
+      <li><a href="#suppliers">Suppliers &amp; Purchasing</a>
+        <ol class="sub">
+          <li><a href="#sup-records">Supplier Records</a></li>
+          <li><a href="#sup-invoices">Purchase Invoices</a></li>
+          <li><a href="#sup-payments">Supplier Payments</a></li>
+        </ol>
+      </li>
+      <li><a href="#pricing">Pricing Contracts &amp; Offers</a>
+        <ol class="sub">
+          <li><a href="#pricing-contracts">Price Contracts</a></li>
+          <li><a href="#pricing-offers">Seasonal Offers</a></li>
+        </ol>
+      </li>
+      <li><a href="#reports">Reports &amp; Statements</a></li>
+      <li><a href="#accounting">Accounting</a>
+        <ol class="sub">
+          <li><a href="#acc-coa">Chart of Accounts</a></li>
+          <li><a href="#acc-journal">Journal Entries</a></li>
+          <li><a href="#acc-expenses">Expenses</a></li>
+          <li><a href="#acc-reports">Financial Reports</a></li>
+          <li><a href="#acc-vat">Cyprus VAT 4 Return</a></li>
+        </ol>
+      </li>
+      <li><a href="#vat">VAT Configuration</a>
+        <ol class="sub">
+          <li><a href="#vat-rates">Cyprus VAT Rate Reference</a></li>
+          <li><a href="#vat-setup">Setting Up VAT</a></li>
+        </ol>
+      </li>
+      <li><a href="#settings">Settings &amp; Administration</a>
+        <ol class="sub">
+          <li><a href="#set-company">Company Details</a></li>
+          <li><a href="#set-email">Email Configuration</a></li>
+          <li><a href="#set-users">User Management</a></li>
+          <li><a href="#set-backup">Backups</a></li>
+        </ol>
+      </li>
+      <li><a href="#offline">Offline Mode &amp; Mobile App</a></li>
+    </ol>
+  </div>
+
+  <!-- ═══ SECTION 1: GETTING STARTED ═══ -->
+  <div class="section" id="start">
+    <h2 class="section-title">1 · Getting Started</h2>
+
+    <h3 class="sub-title" id="start-login">1.1 Logging In &amp; Two-Factor Authentication</h3>
+    <p>GlobiPOS uses username/password login protected by mandatory two-factor authentication (2FA).</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the GlobiPOS URL in your browser. You will see the Sign In screen.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Enter your <strong>Username</strong> and <strong>Password</strong>, then click <strong>Sign In</strong>.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text"><strong>First login only — 2FA setup:</strong> You will be taken to a setup screen. Open your authenticator app (Google Authenticator, Authy, etc.), scan the QR code, enter the 6-digit code to confirm, and click <strong>Enable 2FA</strong>.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text"><strong>Subsequent logins:</strong> After entering your password, enter the current 6-digit code from your authenticator app.</div></div>
+    </div>
+    <div class="tip"><strong>Tip:</strong> If you lose access to your authenticator app, ask an Administrator or Superuser to reset your 2FA from <strong>Settings → Users</strong>. You will be prompted to re-enrol on your next login.</div>
+
+    <h3 class="sub-title" id="start-nav">1.2 Navigating the System</h3>
+    <p>The left-hand sidebar organises all modules into groups:</p>
+    <table>
+      <thead><tr><th>Group</th><th>Modules</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Overview</strong></td><td>Dashboard, Items, Categories, Customers, Customer Statements, Email Log</td></tr>
+        <tr><td><strong>Sales</strong></td><td>Invoices, Credit Notes, Proforma, Quotations, Customer Payments</td></tr>
+        <tr><td><strong>Purchasing</strong></td><td>Suppliers, Purchase Invoices, Supplier Payments</td></tr>
+        <tr><td><strong>Pricing</strong></td><td>Price Contracts, Seasonal Offers</td></tr>
+        <tr><td><strong>Accounting</strong></td><td>Chart of Accounts, Journal Entries, Expenses, Financial Reports, Audit Grid</td></tr>
+        <tr><td><strong>Analytics</strong></td><td>Reports</td></tr>
+        <tr><td><strong>System</strong></td><td>Import Data, Settings</td></tr>
+        <tr><td><strong>Admin</strong></td><td>Activity Log (Admins/Superusers only)</td></tr>
+      </tbody>
+    </table>
+    <p>Click any sidebar item to navigate. On mobile, tap the menu icon (top-left) to open the GlobiPOS sidebar.</p>
+
+    <h3 class="sub-title" id="start-roles">1.3 User Roles &amp; Permissions</h3>
+    <table>
+      <thead><tr><th>Role</th><th>Access</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-red">Superuser</span></td><td>Full access to everything, including Settings, user management, and all admin functions. Cannot be restricted.</td></tr>
+        <tr><td><span class="badge badge-amber">Admin</span></td><td>Full access to all modules. Can manage Staff users, reset 2FA, and access Settings.</td></tr>
+        <tr><td><span class="badge badge-grey">Staff</span></td><td>Access limited to modules permitted by an Admin. Can be restricted to any combination of the 12 available modules.</td></tr>
+      </tbody>
+    </table>
+    <div class="note"><strong>Note:</strong> Settings page access (for non-Superusers) requires a separate password entered each time you navigate to Settings.</div>
+  </div>
+
+  <!-- ═══ SECTION 2: DASHBOARD ═══ -->
+  <div class="section" id="dashboard">
+    <h2 class="section-title">2 · Dashboard</h2>
+    <p>The Dashboard (home screen) shows a real-time summary of business activity. The key stat cards display:</p>
+    <ul class="field-list">
+      <li><span class="field-name">Total Revenue</span><span class="field-desc">Sum of all paid and sent invoices in the current period.</span></li>
+      <li><span class="field-name">Outstanding</span><span class="field-desc">Total value of unpaid (sent/overdue) invoices.</span></li>
+      <li><span class="field-name">Overdue</span><span class="field-desc">Value of invoices past their due date with no payment recorded.</span></li>
+      <li><span class="field-name">Customers</span><span class="field-desc">Total active customer accounts.</span></li>
+    </ul>
+    <p>Below the stat cards, the dashboard shows recent invoices and top customers by revenue. Click any invoice row to open it directly.</p>
+  </div>
+
+  <!-- ═══ SECTION 3: ITEMS & CATALOGUE ═══ -->
+  <div class="section" id="catalogue">
+    <h2 class="section-title">3 · Items &amp; Catalogue</h2>
+    <p>The Items module is the product catalogue — every item you sell or purchase must be set up here first.</p>
+
+    <h3 class="sub-title" id="cat-create">3.1 Creating &amp; Editing Items</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Items</strong> in the GlobiPOS sidebar.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Item</strong>.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Fill in the required fields (Name, Unit of Measure) and any optional fields.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Assign the item to a <strong>Category</strong> — this determines its default VAT rate and organises it in reports.</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Enter prices for each <strong>Price Level</strong> (1–5). Customers are assigned a price level which determines which price they see on invoices.</div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text">Set the <strong>VAT Rate</strong> — choose "Inherit from category" (recommended) or an explicit rate.</div></div>
+      <div class="step"><div class="step-num">7</div><div class="step-text">Optionally add a <strong>Barcode</strong> for mobile scanning during order entry.</div></div>
+      <div class="step"><div class="step-num">8</div><div class="step-text">Click <strong>Save Item</strong>.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="cat-pricing">3.2 Price Levels</h3>
+    <p>GlobiPOS supports 5 price levels per item (Level 1 = standard retail, higher levels for trade/wholesale tiers). Each customer is assigned one price level. When creating an invoice, the correct price is loaded automatically.</p>
+    <div class="tip"><strong>Tip:</strong> Price Contracts (Section 9) can further override prices for specific customers or categories on top of the price level.</div>
+
+    <h3 class="sub-title" id="cat-vat">3.3 VAT on Items</h3>
+    <p>Each item has an optional <strong>VAT Rate</strong> field. When you select or change a category on an item, the VAT rate is automatically filled in from the category — so in most cases you never need to set it manually.</p>
+    <p>The system resolves VAT on every invoice line in this order: <strong>item rate → category rate → 19% fallback</strong>. Explicit per-item overrides are available for exceptions (e.g. an item taxed differently from its category).</p>
+    <div class="tip"><strong>Tip — Bulk Sync:</strong> Click the <strong>Sync VAT</strong> button in the Item Catalog toolbar to push each category's VAT rate onto all its items at once. A confirmation toast tells you how many items were updated. Use this after changing a category's VAT rate to keep all items in sync.</div>
+
+    <h3 class="sub-title" id="cat-stock">3.4 Stock Tracking</h3>
+    <p>Stock is tracked in <strong>individual bottles/units</strong>. The Items list shows both the bottle count and the pack equivalent (e.g. "48 btl / 4 cs" for a 12-bottle case item). Stock adjusts automatically when:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Invoices</strong> are saved — stock decreases by quantity sold</li>
+      <li style="margin-bottom:5px;"><strong>Credit Notes</strong> are saved — stock returns</li>
+      <li style="margin-bottom:5px;"><strong>Purchase Invoices</strong> are saved — stock increases</li>
+    </ul>
+    <div class="note"><strong>Note:</strong> Proforma and Quotation documents do NOT affect stock levels.</div>
+  </div>
+
+  <!-- ═══ SECTION 4: CATEGORIES ═══ -->
+  <div class="section" id="categories">
+    <h2 class="section-title">4 · Product Categories</h2>
+    <p>Categories organise your item catalogue and carry the default VAT rate for all items in them.</p>
+
+    <h3 class="sub-title" id="cat-manage">4.1 Creating &amp; Managing Categories</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Categories</strong> in the GlobiPOS sidebar.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ New Category</strong>. Enter a Name, optional Code, Description, Parent Category, and VAT Rate.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Click <strong>Create Category</strong>.</div></div>
+    </div>
+    <p>To edit, click <strong>Edit</strong> on any row. To delete, click the delete icon — ensure no active items use the category first.</p>
+
+    <h3 class="sub-title" id="cat-hierarchy">4.2 Parent–Child Hierarchy</h3>
+    <p>Categories support one level of nesting. A parent can have many children; children cannot have sub-children. Example: Parent "Wines" → Children "Wines – Red", "Wines – White", "Wines – Rosé".</p>
+
+    <h3 class="sub-title" id="cat-vat2">4.3 Assigning VAT Rates</h3>
+    <p>Set the <strong>VAT Rate</strong> field on each category. When a new item is created or edited and a category is selected, the item's VAT rate is automatically populated from the category rate.</p>
+    <p>If you update a category's VAT rate and want to push it to all existing items in that category, click <strong>Sync VAT</strong> in the Item Catalog toolbar — this updates every item whose rate no longer matches its category. See Section 12 for the full Cyprus VAT rate table.</p>
+  </div>
+
+  <!-- ═══ SECTION 5: CUSTOMERS ═══ -->
+  <div class="section" id="customers">
+    <h2 class="section-title">5 · Customers</h2>
+
+    <h3 class="sub-title" id="cust-create">5.1 Creating a Customer</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Customers</strong> in the GlobiPOS sidebar, then <strong>+ New Customer</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Enter the customer's <strong>Name</strong> and <strong>Code</strong> (short identifier used in lists).</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Fill in contact details: email, phone, address, city, Tax ID (for VAT invoices).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Set <strong>Payment Terms</strong>: Cash, Net 7, Net 14, Net 30, Net 60, or Net 90 days.</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Set <strong>Price Level</strong> (1–5) — determines which item price the customer sees on invoices.</div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text">Optionally set a <strong>Credit Limit</strong>. The system warns when invoicing would exceed this.</div></div>
+      <div class="step"><div class="step-num">7</div><div class="step-text">Click <strong>Save Customer</strong>.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="cust-delivery">5.2 Delivery Locations</h3>
+    <p>Each customer can have multiple saved delivery addresses (e.g. different branches or venues).</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the customer record and switch to the <strong>Delivery Locations</strong> tab.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>+ Add Location</strong>. Enter the location name, full address, and optionally GPS co-ordinates.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Check <strong>Set as Default</strong> to have this location pre-selected on new invoices.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Saved locations appear as a dropdown on the invoice form. The address is printed as a "Deliver To" block on the invoice document.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="cust-statements">5.3 Statements &amp; Balances</h3>
+    <p>The <strong>Customer Statements</strong> page (Overview → Customer Statements) generates printable account statements showing all invoices, payments, and the outstanding balance. Statements can be emailed directly to the customer.</p>
+    <p>The customer's <strong>Current Balance</strong> field on the customer record updates automatically as invoices and payments are posted.</p>
+  </div>
+
+  <!-- ═══ SECTION 6: SALES DOCUMENTS ═══ -->
+  <div class="section" id="invoices">
+    <h2 class="section-title">6 · Sales Documents</h2>
+
+    <h3 class="sub-title" id="inv-types">6.1 Document Types</h3>
+    <table>
+      <thead><tr><th>Type</th><th>Purpose</th><th>Affects Stock</th><th>Affects Accounting</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-blue">Invoice</span></td><td>Standard sales document — creates a payment obligation.</td><td>Yes — reduces stock</td><td>Yes — posts journal entries</td></tr>
+        <tr><td><span class="badge badge-red">Credit Note</span></td><td>Reversal or refund against a prior invoice.</td><td>Yes — restores stock</td><td>Yes — reverses entries</td></tr>
+        <tr><td><span class="badge badge-amber">Proforma</span></td><td>Preliminary invoice for approval or advance payment.</td><td>No</td><td>No</td></tr>
+        <tr><td><span class="badge badge-grey">Quotation</span></td><td>Price offer with no legal obligation until accepted.</td><td>No</td><td>No</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title" id="inv-create">6.2 Creating an Invoice</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Invoices</strong> → <strong>+ New Invoice</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Select the <strong>Customer</strong>. Payment terms, price level, and default delivery location auto-populate.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Confirm <strong>Invoice Date</strong> and <strong>Due Date</strong> (auto-calculated from payment terms).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Set the <strong>Delivery Location</strong> if required (see §6.4).</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Click <strong>+ Add Item</strong> for each product. Type to search or scan a barcode.</div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text">Adjust <strong>Quantity</strong>, <strong>Unit Price</strong>, and <strong>Discount %</strong> on each line as needed.</div></div>
+      <div class="step"><div class="step-num">7</div><div class="step-text">Add a <strong>Note</strong> if required (prints at the bottom of the document).</div></div>
+      <div class="step"><div class="step-num">8</div><div class="step-text">Click <strong>Save Invoice</strong>. The invoice is created in <em>Draft</em> status.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="inv-lineitems">6.3 Line Items &amp; VAT</h3>
+    <p>Each line item has: Item, Description, Quantity, Unit Price, Discount %, VAT Rate, Line Total. VAT is resolved per-line automatically in this order: <strong>item's own rate → category rate → 19% fallback</strong>. The invoice totals always show: <strong>Subtotal + VAT = Grand Total</strong> using the per-line rates — the displayed totals and the PDF are always consistent.</p>
+    <p>When an invoice is saved (non-draft), the system posts double-entry journal entries automatically — the Revenue and VAT Payable amounts in those entries reflect the correct per-line VAT.</p>
+    <div class="tip"><strong>Tip:</strong> Active Price Contracts apply discounts automatically when you select an item for a customer with a matching contract.</div>
+    <div class="tip"><strong>Tip — Recalc VAT (existing invoices):</strong> If you changed category or item VAT rates after invoices were already saved, click <strong>Recalc VAT</strong> (calculator icon) in the Invoices toolbar. This recalculates and stores the correct <em>taxAmount</em> and <em>total</em> on every invoice, <strong>and regenerates the corresponding journal entries</strong> so that financial reports (P&amp;L, Balance Sheet, Trial Balance) and customer statements are all updated in one step.</div>
+
+    <h3 class="sub-title" id="inv-delivery">6.4 Delivery Location on Invoice</h3>
+    <p>The <strong>Delivery Location</strong> field prints a "Deliver To" block on the invoice, separate from the "Bill To" billing address. If the customer has saved delivery locations, they appear as a dropdown — otherwise type a free-text location name. The saved location's address (if stored) prints automatically beneath the location name.</p>
+
+    <h3 class="sub-title" id="inv-status">6.5 Status Workflow</h3>
+    <table>
+      <thead><tr><th>Status</th><th>Meaning</th><th>How to Advance</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-grey">Draft</span></td><td>Saved, not yet sent.</td><td>Click <strong>Mark Sent</strong> or use the <strong>Send</strong> email button (auto-advances).</td></tr>
+        <tr><td><span class="badge badge-blue">Sent</span></td><td>Issued to the customer.</td><td>Record a payment (auto-marks Paid) or click <strong>Mark Overdue</strong>.</td></tr>
+        <tr><td><span class="badge badge-amber">Overdue</span></td><td>Due date passed, unpaid.</td><td>Record a payment or click <strong>Reopen</strong> to revert to Draft.</td></tr>
+        <tr><td><span class="badge badge-green">Paid</span></td><td>Payment received in full.</td><td>Final state. Use <strong>Reopen</strong> only if needed to correct.</td></tr>
+        <tr><td><span class="badge badge-red">Cancelled</span></td><td>Voided — excluded from all reports.</td><td>Use <strong>Reopen</strong> to restore if cancelled in error.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title" id="inv-email">6.6 Sending by Email</h3>
+    <p>Click the <strong>Send</strong> (paper-plane icon) button in the invoice toolbar.</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:6px;">If the customer has an email on file, the document is sent immediately and status advances to <em>Sent</em>.</li>
+      <li style="margin-bottom:6px;">If no email is stored, a popover appears — type the recipient address and click <strong>Send Now</strong>.</li>
+    </ul>
+    <p>All sent emails are logged in <strong>Email Log</strong> (Overview section).</p>
+    <div class="note"><strong>Requirement:</strong> Email sending requires a Resend API key configured in <strong>Settings → Email</strong>.</div>
+
+    <h3 class="sub-title" id="inv-print">6.7 Printing &amp; Downloading</h3>
+    <table>
+      <thead><tr><th>Button</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>Printer icon</td><td>Opens the document in a new tab with a Print button. Use browser <strong>Print → Save as PDF</strong> to create a PDF.</td></tr>
+        <tr><td>Download icon</td><td>Downloads as an HTML file. Open in any browser and print to PDF.</td></tr>
+        <tr><td>Send icon</td><td>Emails the document (see §6.6).</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title" id="inv-convert">6.8 Converting Proforma / Quotation to Invoice</h3>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open the Proforma or Quotation.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Click <strong>Create Invoice</strong> in the toolbar (only shown on Proforma / Quotation documents).</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Review the pre-filled invoice, adjust if needed, and click <strong>Save Invoice</strong>.</div></div>
+    </div>
+    <p>The original Proforma or Quotation is preserved unchanged. Both documents are independently accessible in their respective lists.</p>
+  </div>
+
+  <!-- ═══ SECTION 7: CUSTOMER PAYMENTS ═══ -->
+  <div class="section" id="payments">
+    <h2 class="section-title">7 · Customer Payments</h2>
+    <p>Record payments received from customers against their invoices.</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Customer Payments</strong> (Sales section) or open the invoice and click <strong>+ Record Payment</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Select the <strong>Customer</strong> and the <strong>Invoice</strong> being paid.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Enter the <strong>Amount</strong>, <strong>Date</strong>, and <strong>Payment Method</strong> (Cash, Bank Transfer, Cheque, Card).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save Payment</strong>. If the payment covers the full invoice amount, the invoice status changes to <em>Paid</em> automatically.</div></div>
+    </div>
+    <p>Partial payments are supported — the invoice remains <em>Sent</em> with a reduced outstanding balance until fully paid. Customer balances update in real time.</p>
+    <div class="tip"><strong>Tip:</strong> The Accounting module automatically generates double-entry journal entries (Debit: Bank/Cash; Credit: Accounts Receivable) when a payment is recorded.</div>
+  </div>
+
+  <!-- ═══ SECTION 8: SUPPLIERS & PURCHASING ═══ -->
+  <div class="section" id="suppliers">
+    <h2 class="section-title">8 · Suppliers &amp; Purchasing</h2>
+
+    <h3 class="sub-title" id="sup-records">8.1 Supplier Records</h3>
+    <p>Go to <strong>Suppliers</strong> (Purchasing section) to manage your supplier list. Each record stores: Name, Code, contact details, Tax ID, IBAN / bank details, payment terms, and notes. The <strong>Current Balance</strong> shows the total outstanding owed to this supplier.</p>
+
+    <h3 class="sub-title" id="sup-invoices">8.2 Purchase Invoices</h3>
+    <p>Record goods received from suppliers via <strong>Purchase Invoices</strong>.</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Purchase Invoices</strong> → <strong>+ New Purchase Invoice</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Select the <strong>Supplier</strong> and enter the <strong>Invoice Number</strong> from the supplier's document.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Set the <strong>Invoice Date</strong> and <strong>Due Date</strong>.</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Add line items — select the stock items received and enter quantities and unit costs.</div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Click <strong>Save</strong>. Stock levels increase by the purchased quantities automatically.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="sup-payments">8.3 Supplier Payments</h3>
+    <p>Record outgoing payments to suppliers via <strong>Supplier Payments</strong> (Purchasing section). Select the supplier, the purchase invoice, amount, date, and payment method. The supplier balance updates accordingly.</p>
+  </div>
+
+  <!-- ═══ SECTION 9: PRICING ═══ -->
+  <div class="section" id="pricing">
+    <h2 class="section-title">9 · Pricing Contracts &amp; Offers</h2>
+
+    <h3 class="sub-title" id="pricing-contracts">9.1 Price Contracts</h3>
+    <p>Price Contracts allow custom pricing rules for specific customers, overriding standard price levels.</p>
+    <p>A contract can include:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Percentage or fixed discount</strong> applied to all items, a specific category, or a specific brand.</li>
+      <li style="margin-bottom:5px;"><strong>Minimum quantity rules</strong> — discount only applies above a certain quantity per line.</li>
+      <li style="margin-bottom:5px;"><strong>Special item prices</strong> — override the unit price for specific items regardless of price level.</li>
+      <li style="margin-bottom:5px;"><strong>Purchase goal / voucher</strong> — a spend threshold that unlocks a reward (% or fixed discount voucher) when reached.</li>
+    </ul>
+    <p>To create a contract: go to <strong>Price Contracts</strong> (Pricing section) → <strong>+ New Contract</strong>, select the customer, set the date range, and add rules.</p>
+    <div class="tip"><strong>Tip:</strong> When an invoice is created for a customer with an active contract, matching discounts are applied to line items automatically.</div>
+
+    <h3 class="sub-title" id="pricing-offers">9.2 Seasonal Offers</h3>
+    <p><strong>Seasonal Offers</strong> (Pricing section) work like price contracts but apply to all customers (or a selected group) during a set time window. Use them for promotions, clearance, or seasonal pricing.</p>
+  </div>
+
+  <!-- ═══ SECTION 10: REPORTS ═══ -->
+  <div class="section" id="reports">
+    <h2 class="section-title">10 · Reports &amp; Statements</h2>
+    <p>Go to <strong>Reports</strong> (Analytics section) for sales analytics and <strong>Customer Statements</strong> (Overview section) for account statements.</p>
+    <table>
+      <thead><tr><th>Report</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Sales Summary</strong></td><td>Total revenue, volume, and invoice count by date range, customer, or item.</td></tr>
+        <tr><td><strong>Profit Margin Analysis</strong></td><td>Compares selling price to cost price; shows gross margin % per item or category.</td></tr>
+        <tr><td><strong>Customer Statements</strong></td><td>Per-customer account statement with all invoices, payments, and aging analysis (current / 30 / 60 / 90+ days). Printable and emailable.</td></tr>
+      </tbody>
+    </table>
+    <div class="tip"><strong>Tip:</strong> Use the date range filters on the Reports page to compare performance across periods (e.g. this month vs. last month).</div>
+  </div>
+
+  <!-- ═══ SECTION 11: ACCOUNTING ═══ -->
+  <div class="section" id="accounting">
+    <h2 class="section-title">11 · Accounting</h2>
+    <p>GlobiPOS includes a full double-entry bookkeeping module. Journal entries are generated automatically when invoices, payments, and expenses are posted — you do not need to create them manually in normal operation.</p>
+
+    <h3 class="sub-title" id="acc-coa">11.1 Chart of Accounts</h3>
+    <p>Go to <strong>Chart of Accounts</strong> (Accounting section) to view the account structure. Accounts are pre-configured for Cyprus business reporting standards. Each account has a type (Asset, Liability, Equity, Revenue, Expense) and a normal balance (Debit or Credit).</p>
+
+    <h3 class="sub-title" id="acc-journal">11.2 Journal Entries</h3>
+    <p>The <strong>Journal Entries</strong> list shows all double-entry postings in the system. Automated entries are created for:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Sales Invoices</strong> — Dr Accounts Receivable / Cr Revenue &amp; VAT Payable (amounts use per-line VAT rates)</li>
+      <li style="margin-bottom:5px;"><strong>Credit Notes</strong> — reverses the original invoice journal entry</li>
+      <li style="margin-bottom:5px;"><strong>Customer Payments</strong> — Dr Bank/Cash / Cr Accounts Receivable</li>
+      <li style="margin-bottom:5px;"><strong>Purchase Invoices</strong> — Dr Inventory / Cr Accounts Payable</li>
+      <li style="margin-bottom:5px;"><strong>Supplier Payments</strong> — Dr Accounts Payable / Cr Bank/Cash</li>
+      <li style="margin-bottom:5px;"><strong>Expenses</strong> — Dr Expense Account / Cr Bank/Cash</li>
+    </ul>
+    <p>Manual journal entries can be added for adjustments. Each entry requires balanced debits and credits.</p>
+    <div class="note"><strong>Keeping journals in sync:</strong> Automated invoice journal entries are generated at the time of saving. If you later use <strong>Recalc VAT</strong> (Invoices toolbar) to correct per-line VAT on existing invoices, journal entries for affected invoices are automatically deleted and recreated with the corrected amounts — no manual repost is needed. Use <strong>Accounting → Repost Journals</strong> only for a full global repost of all transactions.</div>
+
+    <h3 class="sub-title" id="acc-expenses">11.3 Expenses</h3>
+    <p>Record business expenses in <strong>Expenses</strong> (Accounting section). Enter the date, description, amount, expense category, and payment method. A journal entry is posted automatically.</p>
+
+    <h3 class="sub-title" id="acc-reports">11.4 Financial Reports</h3>
+    <p>Go to <strong>Financial Reports</strong> (Accounting section) for:</p>
+    <table>
+      <thead><tr><th>Report</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Trial Balance</strong></td><td>All account balances at a given date — confirms debits equal credits.</td></tr>
+        <tr><td><strong>Profit &amp; Loss</strong></td><td>Revenue minus expenses for a period — shows net profit or loss.</td></tr>
+        <tr><td><strong>Balance Sheet</strong></td><td>Assets, Liabilities, and Equity at a point in time.</td></tr>
+        <tr><td><strong>General Ledger</strong></td><td>All transactions per account in detail — useful for audit and reconciliation.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title" id="acc-vat">11.5 Cyprus VAT 4 Return</h3>
+    <p>The <strong>Cyprus VAT 4 Return</strong> report (Financial Reports tab) pre-populates the official VAT 4 boxes from posted journal entries for the selected tax period:</p>
+    <table>
+      <thead><tr><th>Box</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Box 1</strong></td><td>Output VAT — VAT charged on sales</td></tr>
+        <tr><td><strong>Box 2</strong></td><td>Input VAT — VAT on purchases (reclaimable)</td></tr>
+        <tr><td><strong>Box 3</strong></td><td>Net VAT payable (Box 1 minus Box 2)</td></tr>
+        <tr><td><strong>Box 4</strong></td><td>Zero-rated supplies</td></tr>
+        <tr><td><strong>Box 5</strong></td><td>Exempt supplies</td></tr>
+        <tr><td><strong>Box 6</strong></td><td>Total taxable turnover</td></tr>
+      </tbody>
+    </table>
+    <div class="note"><strong>Important:</strong> The VAT return reads directly from stored invoice and purchase invoice records (not journal entries). Ensure all transactions for the period are saved and no invoices are left in <em>Draft</em> status before running the return. If you have recently run <strong>Recalc VAT</strong>, the corrected <em>taxAmount</em> values are picked up automatically — no further action is needed before generating the return.</div>
+  </div>
+
+  <!-- ═══ SECTION 12: VAT CONFIGURATION ═══ -->
+  <div class="section" id="vat">
+    <h2 class="section-title">12 · VAT Configuration</h2>
+
+    <h3 class="sub-title" id="vat-rates">12.1 Cyprus VAT Rate Reference</h3>
+    <table>
+      <thead><tr><th>Rate</th><th>Type</th><th>Applies To</th></tr></thead>
+      <tbody>
+        <tr><td><strong>19%</strong></td><td>Standard</td><td>Most goods and services (default fallback in GlobiPOS)</td></tr>
+        <tr><td><strong>9%</strong></td><td>Reduced</td><td>Hotels, restaurants, catering, passenger transport</td></tr>
+        <tr><td><strong>5%</strong></td><td>Reduced</td><td>Food (non-alcoholic), books, pharmaceuticals, certain agricultural goods</td></tr>
+        <tr><td><strong>0%</strong></td><td>Zero-rated</td><td>Exports, intra-EU B2B supplies</td></tr>
+      </tbody>
+    </table>
+    <div class="warning"><strong>Important:</strong> Alcoholic beverages are standard-rated at <strong>19%</strong> in Cyprus — they do not qualify for the 5% food rate. Verify rates with your tax advisor before processing.</div>
+
+    <h3 class="sub-title" id="vat-setup">12.2 Setting Up VAT</h3>
+    <p>The recommended workflow for a new or migrated installation:</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Categories</strong> and set the correct VAT Rate on each category (e.g. 19% on Wines, 5% on Olive Oils).</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">On each item, leave <strong>VAT Rate</strong> set to "Inherit from category". For exceptions only (e.g. an item taxed differently from its category), set an explicit rate on that specific item.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">In the <strong>Item Catalog</strong> toolbar, click <strong>Sync VAT</strong> to push each category's rate onto all its items at once (useful after changing a category's rate).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Go to <strong>Invoices</strong> and click <strong>Recalc VAT</strong> (calculator icon) in the toolbar. This updates stored VAT totals on all existing invoices using per-line item rates, <strong>and regenerates their journal entries</strong>. Customer statements, financial reports (P&amp;L, Balance Sheet, Trial Balance), and the VAT Return will all reflect the corrected figures immediately after.</div></div>
+    </div>
+    <p>The VAT rate resolves on each invoice line in this order: item's own rate → category's rate → 19% system default. New invoices saved after completing these steps will always use the correct rates from creation.</p>
+  </div>
+
+  <!-- ═══ SECTION 13: SETTINGS ═══ -->
+  <div class="section" id="settings">
+    <h2 class="section-title">13 · Settings &amp; Administration</h2>
+    <p>Go to <strong>Settings</strong> (System section in sidebar). Non-Superusers must enter a settings password each time.</p>
+
+    <h3 class="sub-title" id="set-company">13.1 Company Details</h3>
+    <p>Set your company name, address, phone, email, Tax ID, registration number, IBAN, and bank details. These appear on all printed/emailed documents (invoices, statements).</p>
+
+    <h3 class="sub-title" id="set-email">13.2 Email Configuration</h3>
+    <p>GlobiPOS uses <strong>Resend</strong> to send invoice emails and <strong>Resend</strong> for daily backup emails. To configure:</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Go to <strong>Settings → Email</strong>.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Enter your Resend API key (starts with <code>re_</code>) in the <strong>Resend API Key</strong> field.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Enter the <strong>From Email</strong> address (must be a verified domain in your Resend account).</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Click <strong>Save</strong> then use <strong>Send Test Email</strong> to verify the configuration.</div></div>
+    </div>
+
+    <h3 class="sub-title" id="set-users">13.3 User Management</h3>
+    <p>Accessible from <strong>Settings → Users</strong> (Admins and Superusers only).</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Create users</strong> — set username, password, role (admin/staff), and module permissions.</li>
+      <li style="margin-bottom:5px;"><strong>Module permissions</strong> (Staff only) — select which of the 12 modules the user can access. Leave blank for full access.</li>
+      <li style="margin-bottom:5px;"><strong>Reset 2FA</strong> — forces the user to re-enrol their authenticator on next login.</li>
+      <li style="margin-bottom:5px;"><strong>Deactivate</strong> — prevents a user from logging in without deleting their history.</li>
+    </ul>
+
+    <h3 class="sub-title" id="set-backup">13.4 Backups &amp; Recovery</h3>
+    <p>Go to <strong>Settings → Backup &amp; Recovery</strong>. The system provides four types of export and a full restore capability.</p>
+
+    <h4 style="margin:14px 0 6px; font-size:13px; color:#1a1a1a;">Data Backups (daily / on-demand)</h4>
+    <table>
+      <thead><tr><th>Type</th><th>What it exports</th><th>When to use</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Full Backup</strong></td><td>Every record in the database — customers, items, invoices, payments, accounting, settings, etc.</td><td>First backup, monthly snapshot, or before a major data change.</td></tr>
+        <tr><td><strong>Differential</strong></td><td>Only transaction records created <em>since the last backup date</em> (invoices, payments, journal entries, expenses, purchase invoices), plus all config tables in full.</td><td>Day-to-day backups — much smaller file. The button is disabled until a full backup has been run first.</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:8px;">All backup filenames include the company name and date automatically, e.g. <code>fc-globi-pos-ltd-backup-2026-06-25-full.json</code>.</p>
+
+    <h4 style="margin:14px 0 6px; font-size:13px; color:#1a1a1a;">Full System Export (server migration)</h4>
+    <p>Available to <span class="badge badge-red">Superuser</span> only via the <strong>Download System Export</strong> button. This produces a single file containing <em>everything</em> in a Full Backup <strong>plus all user accounts</strong> (usernames, roles, permissions, 2FA configuration, and hashed passwords). Use this when migrating the application to a new server — restoring it brings up the new instance with all data and all users intact, with no need to recreate accounts manually.</p>
+    <div class="warning"><strong>Security:</strong> The system export file contains hashed passwords. Treat it like a sensitive credential — store it securely and do not share it.</div>
+
+    <h4 style="margin:14px 0 6px; font-size:13px; color:#1a1a1a;">Automatic Daily Backup</h4>
+    <p>Enable under <strong>Settings → Backup &amp; Recovery → Automatic Daily Backup</strong>. Enter a backup email address and toggle the switch on. Every 24 hours the system automatically sends a differential backup (or a full backup if more than 8 days have passed since the last one) to that address.</p>
+
+    <h4 style="margin:14px 0 6px; font-size:13px; color:#1a1a1a;">Restoring from a Backup</h4>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Click <strong>Load Backup File…</strong> and select a <code>.json</code> backup or system export file.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">The system inspects the file and shows its type (Full / Differential / System), date, and a record count per table. Verify this is the correct file before proceeding.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Click <strong>Restore (Replace All)</strong> for a full or system restore, or <strong>Merge (Differential)</strong> for a differential restore.</div></div>
+    </div>
+    <table style="margin-top:8px;">
+      <thead><tr><th>Restore mode</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Full restore</strong></td><td>Wipes all current data and replaces it with the backup. User accounts and passwords on the current server are <em>preserved</em> (not overwritten).</td></tr>
+        <tr><td><strong>Differential merge</strong></td><td>Inserts new records from the backup without removing any existing data. Safe to run on a live system.</td></tr>
+        <tr><td><strong>System restore</strong></td><td>Same as full restore, but also upserts user accounts from the export. Your own active session is preserved.</td></tr>
+      </tbody>
+    </table>
+    <div class="warning" style="margin-top:10px;"><strong>Warning:</strong> A full or system restore permanently overwrites all current data. Always download a fresh backup immediately before performing one.</div>
+  </div>
+
+  <!-- ═══ SECTION 14: OFFLINE & PWA ═══ -->
+  <div class="section" id="offline">
+    <h2 class="section-title">14 · Offline Mode &amp; Mobile App</h2>
+
+    <h3 class="sub-title">14.1 Installing as a Mobile / Desktop App (PWA)</h3>
+    <p>GlobiPOS can be installed as a Progressive Web App on your phone or computer for an app-like experience:</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-text">Open GlobiPOS in your browser (Chrome on Android, or Safari on iPhone).</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Look for the <strong>Install App</strong> button in the GlobiPOS sidebar (bottom), or use your browser's "Add to Home Screen" / "Install" option.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Confirm the installation. The app icon appears on your home screen / taskbar.</div></div>
+    </div>
+
+    <h3 class="sub-title">14.2 Offline Invoicing</h3>
+    <p>When your device loses internet connection, GlobiPOS automatically switches to <strong>Offline Mode</strong> (shown by an amber "Offline Mode" banner in the GlobiPOS sidebar).</p>
+    <p>In offline mode you can:</p>
+    <ul style="padding-left:20px; margin-bottom:12px; color:#333;">
+      <li style="margin-bottom:5px;"><strong>Create new invoices</strong> — items and customers are available from the local cache.</li>
+      <li style="margin-bottom:5px;"><strong>View cached data</strong> — previously loaded items, customers, and settings.</li>
+    </ul>
+    <p>Invoices created offline are queued locally. A counter in the GlobiPOS sidebar shows pending items (e.g. "2 pending sync"). When your connection is restored, queued invoices sync to the server automatically.</p>
+    <div class="note"><strong>Note:</strong> Offline mode uses data cached from your last online session. If items or customers were added since your last sync, they will not be available offline until you go back online.</div>
+  </div>
+
+  <div class="footer">
+    <p>${manualCompanyName} &nbsp;·&nbsp; Confidential &amp; for Internal Use Only</p>
+    <p style="margin-top:4px;">Generated ${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" })}</p>
+  </div>
+
+</div>
+</body>
+</html>`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  });
+
+  app.get("/api/email-status", async (_req, res) => {
+    try {
+      const status = await getEmailStatus();
+      res.json(status);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/email/send-test", async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) return res.status(400).json({ message: "Email address required" });
+      const result = await sendTestEmail(email);
+      if (!result.success) return res.status(500).json({ message: result.error || "Failed to send test email" });
+      res.json({ success: true, fromEmail: result.fromEmail, sentTo: email });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/email/save-config", requireAdmin, async (req, res) => {
+    try {
+      const { apiKey, fromEmail, replyTo } = req.body;
+      if (apiKey !== undefined) {
+        if (apiKey && !apiKey.startsWith('re_')) {
+          return res.status(400).json({ message: "Invalid Resend API key — it must start with 're_'" });
+        }
+        await storage.upsertSetting('resend_api_key', apiKey || '', 'Resend API Key', 'email');
+      }
+      if (fromEmail !== undefined) {
+        await storage.upsertSetting('resend_from_email', fromEmail || '', 'Resend From Email', 'email');
+      }
+      if (replyTo !== undefined) {
+        await storage.upsertSetting('resend_reply_to', replyTo || '', 'Resend Reply-To Email', 'email');
+      }
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Payments
+  app.get("/api/payments", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const invoiceId = req.query.invoiceId as string | undefined;
+      if (invoiceId) {
+        const pmts = await storage.getPayments(invoiceId);
+        return res.json(pmts);
+      }
+      const pmts = await storage.getAllPayments();
+      res.json(pmts);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/payments/:id", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const { id } = req.params;
+      const data = insertPaymentSchema.partial().parse(req.body);
+      const updated = await storage.updatePayment(id, data);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/payments/:id", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      await storage.deletePayment((req.params.id as string));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/payments", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const data = insertPaymentSchema.parse(req.body);
+      const payment = await storage.createPayment(data);
+
+      const pmtAmount = parseFloat(String(data.amount || 0));
+      const pmtDate = typeof data.paymentDate === "string" ? data.paymentDate : new Date().toISOString().split("T")[0];
+      const pmtAcctCode = data.paymentMethod === "cash" ? "1000" : "1010";
+
+      // Resolve customer name for journal description
+      let customerName = "";
+      if (data.customerId) {
+        const cust = await storage.getCustomer(data.customerId);
+        customerName = cust ? ` — ${cust.name}` : "";
+      } else if (data.invoiceId) {
+        const inv = await db.select().from(invoices).where(eq(invoices.id, data.invoiceId)).limit(1);
+        if (inv[0]) {
+          const cust = await storage.getCustomer(inv[0].customerId);
+          customerName = cust ? ` — ${cust.name}` : "";
+        }
+      }
+
+      if (pmtAmount > 0) {
+        await autoCreateJournalEntry({
+          sourceType: "payment",
+          sourceId: payment.id,
+          date: pmtDate,
+          description: `Customer Payment received${customerName}`,
+          reference: data.reference || payment.id,
+          lines: [
+            { accountCode: pmtAcctCode, debit: pmtAmount, credit: 0, description: data.paymentMethod === "cash" ? "Cash" : "Bank" },
+            { accountCode: "1100", debit: 0, credit: pmtAmount, description: "Accounts Receivable" },
+          ],
+        });
+      }
+
+      res.json(payment);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Reports
+  app.get("/api/reports/sales", async (req, res) => {
+    try {
+      const from = (req.query.from as string) || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+      const to = (req.query.to as string) || new Date().toISOString().split("T")[0];
+      const customerId = req.query.customerId as string | undefined;
+      const report = await storage.getSalesReport(from, to, customerId);
+      res.json(report);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Handle TanStack query key format for sales report
+  app.get("/api/reports/sales/:from/:to/:customerId", async (req, res) => {
+    try {
+      const report = await storage.getSalesReport((req.params.from as string), (req.params.to as string), (req.params.customerId as string));
+      res.json(report);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/reports/items/:from/:to/:customerId/:categoryId", async (req, res) => {
+    try {
+      const report = await storage.getItemSalesReport(
+        (req.params.from as string), (req.params.to as string),
+        (req.params.customerId as string), (req.params.categoryId as string)
+      );
+      res.json(report);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/invoices/last-prices/:customerId", async (req, res) => {
+    try {
+      const excludeId = typeof req.query.exclude === "string" ? req.query.exclude : undefined;
+      const prices = await storage.getCustomerLastPrices((req.params.customerId as string), excludeId);
+      res.json(prices);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/reports/savings/:customerId/:from/:to", async (req, res) => {
+    try {
+      const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
+      res.json(report);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/reports/savings/:customerId/:from/:to/html", async (req, res) => {
+    try {
+      const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
+      const allSettings = await storage.getSettings();
+      const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
+      const companyName = settingsMap["company_name"] || "Company";
+
+      const fromLabel = new Date((req.params.from as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const toLabel = new Date((req.params.to as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+
+      type SavingsLine = { itemName: string; qty: number; unitPrice: number; discountPercent: number; savings: number };
+      type SavingsInv = { invoiceNumber: string; invoiceDate: string; invoiceTotal: number; totalSavings: number; lines: SavingsLine[] };
+      const invoiceRows = (report.invoices as SavingsInv[]).map((inv) => {
+        const lineRows = inv.lines.map((l) => `
+          <tr>
+            <td style="padding:4px 8px">${l.itemName}</td>
+            <td style="padding:4px 8px;text-align:right">${l.qty}</td>
+            <td style="padding:4px 8px;text-align:right">€${Number(l.unitPrice).toFixed(2)}</td>
+            <td style="padding:4px 8px;text-align:right">${Number(l.discountPercent).toFixed(1)}%</td>
+            <td style="padding:4px 8px;text-align:right;color:#059669">€${Number(l.savings).toFixed(2)}</td>
+          </tr>`).join("");
+        return `
+          <tr style="background:#f9fafb">
+            <td colspan="5" style="padding:6px 8px;font-weight:600">${inv.invoiceNumber} — ${new Date(inv.invoiceDate + "T00:00:00").toLocaleDateString("en-GB")} — Total: €${Number(inv.invoiceTotal).toFixed(2)} — Saved: €${Number(inv.totalSavings).toFixed(2)}</td>
+          </tr>
+          ${lineRows}`;
+      }).join("");
+
+      type SavingsMonthly = { month: string; savings: number; invoiceCount: number };
+      let cumulative = 0;
+      const monthlyRows = (report.monthly as SavingsMonthly[]).map(m => {
+        cumulative += m.savings;
+        return `<tr>
+          <td style="padding:4px 8px">${m.month}</td>
+          <td style="padding:4px 8px;text-align:right;color:#059669">€${Number(m.savings).toFixed(2)}</td>
+          <td style="padding:4px 8px;text-align:right">${m.invoiceCount}</td>
+          <td style="padding:4px 8px;text-align:right;color:#7c3aed">€${cumulative.toFixed(2)}</td>
+        </tr>`;
+      }).join("");
+
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Customer Savings Report – ${escHtml(report.customerName)}</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; color: #111; margin: 0; padding: 20px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin: 0 0 16px; color: #555; }
+    h3 { font-size: 13px; margin: 0 0 8px; color: #374151; }
+    .company { font-size: 12px; color: #555; margin-bottom: 20px; }
+    .stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+    .stat { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 16px; min-width: 120px; }
+    .stat-label { font-size: 11px; color: #6b7280; }
+    .stat-value { font-size: 20px; font-weight: 700; color: #059669; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    th { background: #059669; color: #fff; padding: 6px 8px; text-align: left; font-size: 12px; }
+    td { border-bottom: 1px solid #f3f4f6; font-size: 12px; }
+    .section { margin-bottom: 24px; }
+    @media print { body { padding: 10px; } }
+  </style>
+</head>
+<body>
+  <div class="company">${escHtml(companyName)}</div>
+  <h1>Customer Savings Report</h1>
+  <h2>${escHtml(report.customerName)} — ${fromLabel} to ${toLabel}</h2>
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Total Savings</div><div class="stat-value">€${report.totalSavings.toFixed(2)}</div></div>
+    <div class="stat"><div class="stat-label">Avg Discount</div><div class="stat-value">${report.avgDiscountPercent.toFixed(1)}%</div></div>
+    <div class="stat"><div class="stat-label">Invoices with Discount</div><div class="stat-value">${report.invoiceCount}</div></div>
+    <div class="stat"><div class="stat-label">Best Single Invoice Saving</div><div class="stat-value">€${report.bestDeal.toFixed(2)}</div></div>
+    <div class="stat"><div class="stat-label">Saved vs Catalogue</div><div class="stat-value">€${report.savedVsCatalogue.toFixed(2)}</div></div>
+  </div>
+  ${report.monthly.length > 0 ? `
+  <div class="section">
+    <h3>Monthly Savings Timeline</h3>
+    <table>
+      <thead><tr>
+        <th>Month</th>
+        <th style="text-align:right">Monthly Savings</th>
+        <th style="text-align:right">Invoices</th>
+        <th style="text-align:right">Cumulative</th>
+      </tr></thead>
+      <tbody>${monthlyRows}</tbody>
+    </table>
+  </div>` : ""}
+  ${report.invoices.length === 0 ? '<p>No discounted invoices found in this period.</p>' : `
+  <div class="section">
+    <h3>Invoice Breakdown</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th style="text-align:right">Qty</th>
+          <th style="text-align:right">Unit Price</th>
+          <th style="text-align:right">Disc %</th>
+          <th style="text-align:right">Saving</th>
+        </tr>
+      </thead>
+      <tbody>${invoiceRows}</tbody>
+    </table>
+  </div>`}
+  ${req.query.print === "1" ? `<script>window.onload = function() { window.print(); }</script>` : ""}
+</body>
+</html>`;
+      res.setHeader("Content-Type", "text/html");
+      res.send(html);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/reports/savings/:customerId/:from/:to/email", async (req, res) => {
+    try {
+      const customer = await storage.getCustomer((req.params.customerId as string));
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+      const rawEmail = (req.body && req.body.email) ? String(req.body.email).trim() : customer.email;
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!rawEmail) return res.status(400).json({ message: "Customer has no email address on file" });
+      if (!emailRegex.test(rawEmail)) return res.status(400).json({ message: "Invalid email address" });
+      const toEmail = rawEmail;
+
+      const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
+      const allSettings = await storage.getSettings();
+      const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
+      const companyName = settingsMap["company_name"] || "Company";
+
+      const fromLabel = new Date((req.params.from as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const toLabel = new Date((req.params.to as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+
+      type SavingsLine = { itemName: string; qty: number; unitPrice: number; discountPercent: number; savings: number };
+      type SavingsInv = { invoiceNumber: string; invoiceDate: string; invoiceTotal: number; totalSavings: number; lines: SavingsLine[] };
+      const invoiceRows = (report.invoices as SavingsInv[]).map((inv) => {
+        const lineRows = inv.lines.map((l) => `
+          <tr>
+            <td style="padding:4px 8px">${l.itemName}</td>
+            <td style="padding:4px 8px;text-align:right">${l.qty}</td>
+            <td style="padding:4px 8px;text-align:right">€${Number(l.unitPrice).toFixed(2)}</td>
+            <td style="padding:4px 8px;text-align:right">${Number(l.discountPercent).toFixed(1)}%</td>
+            <td style="padding:4px 8px;text-align:right;color:#059669">€${Number(l.savings).toFixed(2)}</td>
+          </tr>`).join("");
+        return `
+          <tr style="background:#f9fafb">
+            <td colspan="5" style="padding:6px 8px;font-weight:600">${inv.invoiceNumber} — ${new Date(inv.invoiceDate + "T00:00:00").toLocaleDateString("en-GB")} — Total: €${Number(inv.invoiceTotal).toFixed(2)} — Saved: €${Number(inv.totalSavings).toFixed(2)}</td>
+          </tr>
+          ${lineRows}`;
+      }).join("");
+
+      type SavingsMonthly = { month: string; savings: number; invoiceCount: number };
+      let cumulative = 0;
+      const monthlyRows = (report.monthly as SavingsMonthly[]).map(m => {
+        cumulative += m.savings;
+        return `<tr>
+          <td style="padding:4px 8px">${m.month}</td>
+          <td style="padding:4px 8px;text-align:right;color:#059669">€${Number(m.savings).toFixed(2)}</td>
+          <td style="padding:4px 8px;text-align:right">${m.invoiceCount}</td>
+          <td style="padding:4px 8px;text-align:right;color:#7c3aed">€${cumulative.toFixed(2)}</td>
+        </tr>`;
+      }).join("");
+
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Customer Savings Report – ${escHtml(report.customerName)}</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; color: #111; margin: 0; padding: 20px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin: 0 0 16px; color: #555; }
+    h3 { font-size: 13px; margin: 0 0 8px; color: #374151; }
+    .company { font-size: 12px; color: #555; margin-bottom: 20px; }
+    .stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+    .stat { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 16px; min-width: 120px; }
+    .stat-label { font-size: 11px; color: #6b7280; }
+    .stat-value { font-size: 20px; font-weight: 700; color: #059669; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    th { background: #059669; color: #fff; padding: 6px 8px; text-align: left; font-size: 12px; }
+    td { border-bottom: 1px solid #f3f4f6; font-size: 12px; }
+    .section { margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+  <div class="company">${escHtml(companyName)}</div>
+  <h1>Customer Savings Report</h1>
+  <h2>${escHtml(report.customerName)} — ${fromLabel} to ${toLabel}</h2>
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Total Savings</div><div class="stat-value">€${report.totalSavings.toFixed(2)}</div></div>
+    <div class="stat"><div class="stat-label">Avg Discount</div><div class="stat-value">${report.avgDiscountPercent.toFixed(1)}%</div></div>
+    <div class="stat"><div class="stat-label">Invoices with Discount</div><div class="stat-value">${report.invoiceCount}</div></div>
+    <div class="stat"><div class="stat-label">Best Single Invoice Saving</div><div class="stat-value">€${report.bestDeal.toFixed(2)}</div></div>
+    <div class="stat"><div class="stat-label">Saved vs Catalogue</div><div class="stat-value">€${report.savedVsCatalogue.toFixed(2)}</div></div>
+  </div>
+  ${report.monthly.length > 0 ? `
+  <div class="section">
+    <h3>Monthly Savings Timeline</h3>
+    <table>
+      <thead><tr>
+        <th>Month</th>
+        <th style="text-align:right">Monthly Savings</th>
+        <th style="text-align:right">Invoices</th>
+        <th style="text-align:right">Cumulative</th>
+      </tr></thead>
+      <tbody>${monthlyRows}</tbody>
+    </table>
+  </div>` : ""}
+  ${report.invoices.length === 0 ? '<p>No discounted invoices found in this period.</p>' : `
+  <div class="section">
+    <h3>Invoice Breakdown</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th style="text-align:right">Qty</th>
+          <th style="text-align:right">Unit Price</th>
+          <th style="text-align:right">Disc %</th>
+          <th style="text-align:right">Saving</th>
+        </tr>
+      </thead>
+      <tbody>${invoiceRows}</tbody>
+    </table>
+  </div>`}
+</body>
+</html>`;
+
+      const { sendSavingsReportEmail } = await import("./email");
+      const subject = `Your Savings Report — ${report.customerName} (${fromLabel} to ${toLabel})`;
+      const result = await sendSavingsReportEmail(toEmail, subject, html, report.customerName);
+      if (!result.success) {
+        await storage.createEmailLog({
+          customerId: (req.params.customerId as string),
+          customerName: report.customerName,
+          toEmail,
+          subject,
+          status: "failed",
+          errorMessage: result.error || "Failed to send email",
+        });
+        return res.status(500).json({ message: result.error || "Failed to send email" });
+      }
+      await storage.createEmailLog({
+        customerId: (req.params.customerId as string),
+        customerName: report.customerName,
+        toEmail,
+        subject,
+        status: "sent",
+      });
+      res.json({ success: true, sentTo: toEmail });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/reports/savings/:customerId/:from/:to/excel", async (req, res) => {
+    try {
+      const report = await storage.getCustomerSavingsReport((req.params.customerId as string), (req.params.from as string), (req.params.to as string));
+      const allSettings = await storage.getSettings();
+      const settingsMap = Object.fromEntries(allSettings.map(s => [s.key, s.value]));
+      const companyName = settingsMap["company_name"] || "GlobiPOS";
+
+      const fromLabel = new Date((req.params.from as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+      const toLabel = new Date((req.params.to as string) + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = companyName;
+      workbook.created = new Date();
+
+      // ── Summary sheet ──────────────────────────────────────────────────────
+      const summary = workbook.addWorksheet("Summary");
+
+      summary.mergeCells("A1:E1");
+      const titleCell = summary.getCell("A1");
+      titleCell.value = companyName;
+      titleCell.font = { bold: true, size: 14, color: { argb: "FF059669" } };
+      titleCell.alignment = { horizontal: "left" };
+
+      summary.mergeCells("A2:E2");
+      const subtitleCell = summary.getCell("A2");
+      subtitleCell.value = `Customer Savings Report — ${report.customerName} — ${fromLabel} to ${toLabel}`;
+      subtitleCell.font = { size: 11, italic: true, color: { argb: "FF555555" } };
+
+      summary.addRow([]);
+
+      // Stat cards row
+      const statHeaders = summary.addRow(["Total Savings", "Avg Discount", "Invoices with Disc.", "Best Single Saving", "Saved vs Catalogue"]);
+      statHeaders.eachCell(cell => {
+        cell.font = { bold: true, color: { argb: "FF374151" }, size: 10 };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+        cell.alignment = { horizontal: "center" };
+        cell.border = { bottom: { style: "thin", color: { argb: "FFE5E7EB" } } };
+      });
+      const statValues = summary.addRow([
+        report.totalSavings,
+        report.avgDiscountPercent / 100,
+        report.invoiceCount,
+        report.bestDeal,
+        report.savedVsCatalogue,
+      ]);
+      statValues.getCell(1).numFmt = '"€"#,##0.00';
+      statValues.getCell(2).numFmt = '0.0%';
+      statValues.getCell(4).numFmt = '"€"#,##0.00';
+      statValues.getCell(5).numFmt = '"€"#,##0.00';
+      statValues.eachCell(cell => {
+        cell.font = { bold: true, size: 13, color: { argb: "FF059669" } };
+        cell.alignment = { horizontal: "center" };
+      });
+
+      summary.addRow([]);
+
+      // Monthly breakdown
+      if (report.monthly.length > 0) {
+        const mHead = summary.addRow(["Month", "Monthly Savings (€)", "Invoice Count", "Cumulative (€)"]);
+        mHead.eachCell(cell => {
+          cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF059669" } };
+          cell.alignment = { horizontal: "center" };
+        });
+        let cumulative = 0;
+        for (const m of report.monthly) {
+          cumulative += m.savings;
+          const row = summary.addRow([m.month, m.savings, m.invoiceCount, cumulative]);
+          row.getCell(2).numFmt = '"€"#,##0.00';
+          row.getCell(3).alignment = { horizontal: "center" };
+          row.getCell(4).numFmt = '"€"#,##0.00';
+          row.getCell(4).font = { color: { argb: "FF7C3AED" } };
+        }
+        const totalRow = summary.addRow(["TOTAL", report.totalSavings]);
+        totalRow.getCell(1).font = { bold: true };
+        totalRow.getCell(2).numFmt = '"€"#,##0.00';
+        totalRow.getCell(2).font = { bold: true, color: { argb: "FF059669" } };
+      }
+
+      summary.columns = [
+        { width: 22 },
+        { width: 22 },
+        { width: 22 },
+        { width: 22 },
+        { width: 22 },
+      ];
+
+      // ── Invoice detail sheet ───────────────────────────────────────────────
+      const detail = workbook.addWorksheet("Invoice Detail");
+
+      detail.mergeCells("A1:I1");
+      const detailTitle = detail.getCell("A1");
+      detailTitle.value = `Invoice Breakdown — ${report.customerName}`;
+      detailTitle.font = { bold: true, size: 12 };
+
+      detail.addRow([]);
+
+      const invHead = detail.addRow(["Invoice #", "Date", "Invoice Total (€)", "Saved (€)", "Item", "Qty", "Unit Price (€)", "Disc %", "Line Saving (€)"]);
+      invHead.eachCell(cell => {
+        cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF059669" } };
+        cell.alignment = { horizontal: "center" };
+      });
+
+      type SavingsLine = { itemName: string; qty: number; unitPrice: number; discountPercent: number; discountAmount: number; savings: number };
+      type SavingsInv = { invoiceNumber: string; invoiceDate: string; invoiceTotal: number; totalSavings: number; lines: SavingsLine[] };
+
+      for (const inv of report.invoices as SavingsInv[]) {
+        const dateStr = new Date(inv.invoiceDate + "T00:00:00").toLocaleDateString("en-GB");
+        if (inv.lines.length === 0) {
+          const r = detail.addRow([inv.invoiceNumber, dateStr, inv.invoiceTotal, inv.totalSavings, "", "", "", "", ""]);
+          r.getCell(1).font = { bold: true };
+          r.getCell(3).numFmt = '"€"#,##0.00';
+          r.getCell(4).numFmt = '"€"#,##0.00';
+          r.getCell(4).font = { color: { argb: "FF059669" } };
+          r.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+        } else {
+          for (let i = 0; i < inv.lines.length; i++) {
+            const l = inv.lines[i];
+            const r = detail.addRow([
+              i === 0 ? inv.invoiceNumber : "",
+              i === 0 ? dateStr : "",
+              i === 0 ? inv.invoiceTotal : "",
+              i === 0 ? inv.totalSavings : "",
+              l.itemName,
+              l.qty,
+              l.unitPrice,
+              l.discountPercent / 100,
+              l.savings,
+            ]);
+            if (i === 0) {
+              r.getCell(1).font = { bold: true };
+              r.getCell(3).numFmt = '"€"#,##0.00';
+              r.getCell(4).numFmt = '"€"#,##0.00';
+              r.getCell(4).font = { color: { argb: "FF059669" } };
+              r.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+            }
+            r.getCell(7).numFmt = '"€"#,##0.00';
+            r.getCell(8).numFmt = '0.0%';
+            r.getCell(9).numFmt = '"€"#,##0.00';
+            r.getCell(9).font = { color: { argb: "FF059669" } };
+          }
+        }
+      }
+
+      detail.columns = [
+        { width: 14 },
+        { width: 13 },
+        { width: 18 },
+        { width: 14 },
+        { width: 32 },
+        { width: 7 },
+        { width: 16 },
+        { width: 9 },
+        { width: 16 },
+      ];
+
+      const safeCustomer = report.customerName.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
+      const filename = `savings_${safeCustomer}_${(req.params.from as string)}_${(req.params.to as string)}.xlsx`;
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      const buf = await workbook.xlsx.writeBuffer();
+      res.send(buf);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/reports/statements", async (_req, res) => {
+    try {
+      const statements = await storage.getCustomerStatements();
+      res.json(statements);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/reports/statement/:customerId/pdf", async (req, res) => {
+    try {
+      const customer = await storage.getCustomer((req.params.customerId as string));
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+      const statements = await storage.getCustomerStatements();
+      const st = statements.find(s => s.customerId === (req.params.customerId as string));
+      const autoPrint = req.query.print === "1";
+
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const html = generateStatementHtml(customer, st, autoPrint, settingsMap);
+      res.setHeader("Content-Type", "text/html");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      if (req.query.download === "1") {
+        res.setHeader("Content-Disposition", `attachment; filename="statement-${customer.code}.html"`);
+      }
+      res.send(html);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/reports/statement/:customerId/send-email", async (req, res) => {
+    try {
+      const customer = await storage.getCustomer((req.params.customerId as string));
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const toEmail = req.body?.email || customer.email;
+      if (!toEmail) return res.status(400).json({ message: "Customer has no email address" });
+
+      const statements = await storage.getCustomerStatements();
+      const st = statements.find(s => s.customerId === (req.params.customerId as string));
+      if (!st) return res.status(404).json({ message: "No statement data found for this customer" });
+
+      const allSettings = await storage.getSettings();
+      const settingsMap: Record<string, string> = {};
+      allSettings.forEach(s => { settingsMap[s.key] = s.value; });
+
+      const companyName = settingsMap.company_name || "Company";
+      const subject = `Account Statement from ${companyName}`;
+      const html = generateStatementHtml(customer, st, false, settingsMap);
+
+      const result = await sendInvoiceEmail(toEmail, subject, html);
+
+      await storage.createEmailLog({
+        invoiceId: null,
+        customerId: customer.id,
+        customerName: customer.name,
+        toEmail,
+        fromEmail: result.fromEmail || null,
+        replyTo: result.replyTo || null,
+        subject,
+        status: result.success ? "sent" : "failed",
+        errorMessage: result.error || null,
+      });
+
+      if (result.success) {
+        res.json({ message: `Statement sent to ${toEmail}` });
+      } else {
+        res.status(500).json({ message: `Failed to send: ${result.error}` });
+      }
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // System Settings
+  app.get("/api/settings", async (_req, res) => {
+    try {
+      const settings = await storage.getSettings();
+      res.json(settings);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Generic settings bulk-upsert can change any key (including
+  // card_terminal_provider), so it must be admin-only — otherwise staff could
+  // bypass the dedicated /api/settings/card_terminal_provider guard below.
+  app.put("/api/settings", requireAdmin, async (req, res) => {
+    try {
+      const { settings } = req.body;
+      if (!Array.isArray(settings)) return res.status(400).json({ message: "Settings array required" });
+      const loyaltyNumericLimits: Record<string, [number, number]> = {
+        loyalty_points_per_euro: [0, 1000],
+        loyalty_redeem_points_per_euro: [1, 1000000],
+        loyalty_redeem_min_points: [1, 100000000],
+        loyalty_silver_threshold: [0, 100000000],
+        loyalty_gold_threshold: [0, 100000000],
+        loyalty_cashback_bronze_percent: [0, 100],
+        loyalty_cashback_silver_percent: [0, 100],
+        loyalty_cashback_gold_percent: [0, 100],
+        loyalty_max_cashback_order_percent: [0, 100],
+      };
+      for (const setting of settings) {
+        if (setting.key === "loyalty_enabled" || setting.key === "cashback_enabled" ||
+          setting.key === "customer_ai_enabled" || setting.key === "customer_ai_recommendations_enabled" || setting.key === "customer_ai_sentiment_enabled") {
+          if (!["true", "false"].includes(String(setting.value))) {
+            return res.status(400).json({ message: `${setting.label || setting.key} must be enabled or disabled` });
+          }
+        }
+        if (setting.key === "customer_ai_provider" && !["auto", "replit", "xai", "deterministic"].includes(String(setting.value))) {
+          return res.status(400).json({ message: "Customer AI provider must be auto, replit, xai, or deterministic" });
+        }
+        if (setting.key === "customer_ai_model" && (typeof setting.value !== "string" || !setting.value.trim() || setting.value.trim().length > 120)) {
+          return res.status(400).json({ message: "Customer AI model must be between 1 and 120 characters" });
+        }
+        const limits = loyaltyNumericLimits[setting.key];
+        if (limits) {
+          const value = Number(setting.value);
+          if (!Number.isFinite(value) || value < limits[0] || value > limits[1]) {
+            return res.status(400).json({ message: `${setting.label || setting.key} must be between ${limits[0]} and ${limits[1]}` });
+          }
+        }
+      }
+      const results = [];
+      for (const s of settings) {
+        const result = await storage.upsertSetting(s.key, s.value, s.label, s.group);
+        results.push(result);
+      }
+      res.json(results);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/customer-ai/status", requireAdmin, async (_req, res) => {
+    try {
+      const settings = await storage.getSettings();
+      res.json(await getCustomerAiStatus(resolveCustomerAiConfig(settings)));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // The quiet-hours schedule remains device-local, but an urgent-order override
+  // is shared store-wide so every staff device can sound its chime. Persist the
+  // window end rather than a boolean so a closed originating device cannot leave
+  // the override active indefinitely.
+  app.get("/api/staff/whatsapp/quiet-hours-override", requireStaff, async (_req, res) => {
+    try {
+      const [setting] = await db.select({ value: systemSettings.value })
+        .from(systemSettings)
+        .where(eq(systemSettings.key, "whatsapp_quiet_hours_override_until"));
+      const expiresAt = setting?.value || null;
+      const expiresAtMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+      const active = Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ active, expiresAt: active ? expiresAt : null });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.put("/api/staff/whatsapp/quiet-hours-override", requireStaff, async (req, res) => {
+    try {
+      const parsed = z.object({
+        active: z.boolean(),
+        expiresAt: z.string().datetime().nullable().optional(),
+      }).safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "A valid override state is required" });
+      }
+
+      let value = "";
+      if (parsed.data.active) {
+        if (!parsed.data.expiresAt) {
+          return res.status(400).json({ message: "Override expiry is required" });
+        }
+        const expiresAtMs = Date.parse(parsed.data.expiresAt);
+        if (expiresAtMs <= Date.now() || expiresAtMs > Date.now() + 24 * 60 * 60 * 1000) {
+          return res.status(400).json({ message: "Override expiry must be within the next 24 hours" });
+        }
+        value = new Date(expiresAtMs).toISOString();
+      }
+
+      await db.insert(systemSettings).values({
+        key: "whatsapp_quiet_hours_override_until",
+        value,
+        label: "WhatsApp Quiet Hours Override Until",
+        group: "whatsapp",
+      }).onConflictDoUpdate({
+        target: systemSettings.key,
+        set: { value },
+      });
+
+      res.json({ active: parsed.data.active, expiresAt: value || null });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/settings/seed-defaults", async (_req, res) => {
+    try {
+      const defaults = [
+        { key: "company_name", value: "", label: "Company Name", group: "company" },
+        { key: "company_address", value: "", label: "Company Address", group: "company" },
+        { key: "company_phone", value: "", label: "Company Phone", group: "company" },
+        { key: "company_email", value: "", label: "Company Email", group: "company" },
+        { key: "company_tax_id", value: "", label: "Company Tax ID (TIN)", group: "company" },
+        { key: "company_reg_no", value: "", label: "Company Registration No.", group: "company" },
+        { key: "company_iban", value: "", label: "Bank IBAN", group: "company" },
+        { key: "company_swift", value: "", label: "Bank SWIFT/BIC", group: "company" },
+        { key: "company_bank_name", value: "", label: "Bank Name", group: "company" },
+        { key: "vat_rate", value: "19", label: "Default VAT Rate (%)", group: "tax" },
+        { key: "currency", value: "EUR", label: "Currency", group: "tax" },
+        { key: "currency_symbol", value: "€", label: "Currency Symbol", group: "tax" },
+        { key: "invoice_prefix", value: "INV", label: "Invoice Number Prefix", group: "invoicing" },
+        { key: "credit_note_prefix", value: "CN", label: "Credit Note Number Prefix", group: "invoicing" },
+        { key: "proforma_prefix", value: "PF", label: "Proforma Number Prefix", group: "invoicing" },
+        { key: "invoice_footer", value: "Thank you for your business", label: "Invoice Footer Message", group: "invoicing" },
+        { key: "payment_terms_default", value: "cash", label: "Default Payment Terms", group: "invoicing" },
+        { key: "price_level_1", value: "Price Level 1", label: "Price Level 1 Name", group: "pricing" },
+        { key: "price_level_2", value: "Price Level 2", label: "Price Level 2 Name", group: "pricing" },
+        { key: "price_level_3", value: "Price Level 3", label: "Price Level 3 Name", group: "pricing" },
+        { key: "price_level_4", value: "Price Level 4", label: "Price Level 4 Name", group: "pricing" },
+        { key: "price_level_5", value: "Price Level 5", label: "Price Level 5 Name", group: "pricing" },
+        { key: "low_stock_threshold", value: "10", label: "Low Stock Alert Threshold", group: "inventory" },
+        { key: "reorder_weeks_cover", value: "8", label: "Reorder Weeks of Cover", group: "inventory" },
+        { key: "portal_enabled", value: "true", label: "Customer Portal Enabled", group: "portal" },
+        { key: "portal_allow_ordering", value: "true", label: "Allow Portal Ordering", group: "portal" },
+        { key: "customer_storefront_template", value: "fresh-market", label: "Customer Storefront Template", group: "portal" },
+        { key: "loyalty_enabled", value: "true", label: "Loyalty Points Enabled", group: "loyalty" },
+        { key: "cashback_enabled", value: "true", label: "Cashback Enabled", group: "loyalty" },
+        { key: "loyalty_points_per_euro", value: "1", label: "Loyalty Points per €1 Spent", group: "loyalty" },
+        { key: "loyalty_redeem_points_per_euro", value: "100", label: "Points Required per €1 Redemption", group: "loyalty" },
+        { key: "loyalty_redeem_min_points", value: "100", label: "Minimum Redemption Points", group: "loyalty" },
+        { key: "loyalty_silver_threshold", value: "1000", label: "Silver Tier Threshold (Points)", group: "loyalty" },
+        { key: "loyalty_gold_threshold", value: "5000", label: "Gold Tier Threshold (Points)", group: "loyalty" },
+        { key: "loyalty_cashback_bronze_percent", value: "1", label: "Bronze Cashback (%)", group: "loyalty" },
+        { key: "loyalty_cashback_silver_percent", value: "1.5", label: "Silver Cashback (%)", group: "loyalty" },
+        { key: "loyalty_cashback_gold_percent", value: "2", label: "Gold Cashback (%)", group: "loyalty" },
+        { key: "loyalty_max_cashback_order_percent", value: "100", label: "Maximum Cashback per Order (%)", group: "loyalty" },
+        { key: "customer_ai_enabled", value: "true", label: "Customer AI Enabled", group: "customer_ai" },
+        { key: "customer_ai_provider", value: "auto", label: "Customer AI Provider", group: "customer_ai" },
+        { key: "customer_ai_model", value: "gpt-5-mini", label: "Customer AI Model", group: "customer_ai" },
+        { key: "customer_ai_recommendations_enabled", value: "true", label: "AI Recommendation Enhancement", group: "customer_ai" },
+        { key: "customer_ai_sentiment_enabled", value: "true", label: "AI Feedback Sentiment", group: "customer_ai" },
+      ];
+      const results = [];
+      for (const d of defaults) {
+        const existing = await storage.getSetting(d.key);
+        if (!existing) {
+          const created = await storage.upsertSetting(d.key, d.value, d.label, d.group);
+          results.push(created);
+        } else {
+          results.push(existing);
+        }
+      }
+      res.json(results);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Settings password
+  app.post("/api/settings/verify-password", async (req, res) => {
+    try {
+      const { password } = req.body;
+      const stored = await storage.getSetting("settings_password");
+      if (!stored || !stored.value) return res.json({ valid: true, hasPassword: false });
+      const storedVal = stored.value;
+      let valid = false;
+      if (storedVal.startsWith("$2b$") || storedVal.startsWith("$2a$")) {
+        valid = verifyPassword(password || "", storedVal);
+      } else {
+        valid = storedVal === hashSettingsPassword(password || "");
+      }
+      res.json({ valid, hasPassword: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/settings/change-password", async (req, res) => {
+    try {
+      const { currentPassword, newPassword } = req.body;
+      const stored = await storage.getSetting("settings_password");
+      if (stored && stored.value) {
+        const storedVal = stored.value;
+        let valid = false;
+        if (storedVal.startsWith("$2b$") || storedVal.startsWith("$2a$")) {
+          valid = verifyPassword(currentPassword || "", storedVal);
+        } else {
+          valid = storedVal === hashSettingsPassword(currentPassword || "");
+        }
+        if (!valid) {
+          return res.status(403).json({ message: "Current password is incorrect" });
+        }
+      }
+      const hash = newPassword ? hashPassword(newPassword) : "";
+      await storage.upsertSetting("settings_password", hash, "Settings Password Hash", "security");
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/settings/admin-reset-password", async (req, res) => {
+    try {
+      if (!req.user || req.user.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      const { newPassword } = req.body;
+      if (!newPassword) return res.status(400).json({ message: "newPassword required" });
+      const hash = hashPassword(newPassword);
+      await storage.upsertSetting("settings_password", hash, "Settings Password Hash", "security");
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Backup
+  app.get("/api/backup/suppliers-for-production", async (_req, res) => {
+    try {
+      const { readFileSync } = await import("fs");
+      const { join } = await import("path");
+      const filePath = join(process.cwd(), "client/public/suppliers-for-production.json");
+      const json = readFileSync(filePath, "utf-8");
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", 'attachment; filename="suppliers-for-production.json"');
+      res.send(json);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  const fileSlug = (name: string) =>
+    (name || "backup").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "backup";
+
+  app.get("/api/backup/export", async (req, res) => {
+    try {
+      const since = req.query.since as string | undefined;
+      const json = await generateBackupJson(since);
+      const parsed = JSON.parse(json);
+      const date = new Date().toISOString().split("T")[0];
+      const tag = parsed.backupType === "differential" ? `diff-since-${since?.slice(0,10) || "unknown"}` : "full";
+      const companySetting = await storage.getSetting("company_name");
+      const slug = fileSlug(companySetting?.value || "globi-pos");
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-backup-${date}-${tag}.json"`);
+      res.send(json);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ─── SYSTEM EXPORT (superuser only) — full data + users, ready for new server ─
+  app.get("/api/backup/system-export", requireSuperuser, async (_req, res) => {
+    try {
+      const json = await generateBackupJson(); // full, no since
+      const parsed = JSON.parse(json);
+      const usersRows = await db.select().from(users);
+      parsed.backupType = "system";
+      parsed.data.users = usersRows;
+      parsed.tableCounts.users = usersRows.length;
+      const date = new Date().toISOString().split("T")[0];
+      const companySetting = await storage.getSetting("company_name");
+      const slug = fileSlug(companySetting?.value || "globi-pos");
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-system-${date}.json"`);
+      res.send(JSON.stringify(parsed));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/backup/send-email", async (req, res) => {
+    try {
+      const emailSetting = await storage.getSetting("backup_email");
+      const companySetting = await storage.getSetting("company_name");
+      const toEmail = req.body?.email || emailSetting?.value || "";
+      if (!toEmail) return res.status(400).json({ message: "No backup email address configured" });
+      const companyName = companySetting?.value || "Company";
+      const date = new Date().toISOString().split("T")[0];
+      // Use differential if last backup date is known and within 8 days
+      const lastSetting = await storage.getSetting("backup_last_date");
+      const lastDate = lastSetting?.value ? new Date(lastSetting.value) : null;
+      const hoursSinceLast = lastDate ? (Date.now() - lastDate.getTime()) / 3600000 : Infinity;
+      const since = (lastDate && hoursSinceLast < 192) ? lastDate.toISOString() : undefined;
+      const json = await generateBackupJson(since);
+      const parsed = JSON.parse(json);
+      const result = await sendBackupEmail(toEmail, companyName, json, date, parsed.backupType, parsed.sinceDate);
+      if (!result.success) return res.status(500).json({ message: result.error || "Failed to send backup email" });
+      await storage.upsertSetting("backup_last_date", new Date().toISOString(), "Last Backup Date", "backup");
+      res.json({ success: true, sentTo: toEmail, backupType: parsed.backupType, tableCounts: parsed.tableCounts });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Restore from backup file (v2 format from /api/backup/export)
+  app.post("/api/backup/restore", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const payload = req.body;
+      if (!payload || !payload.version || !payload.data) {
+        return res.status(400).json({ message: "Invalid backup file: missing version or data" });
+      }
+
+      const d = payload.data;
+      const isFull = payload.backupType !== "differential";
+      const restoreSystemSettings = shouldRestoreBackupSettings(payload);
+
+      const upsert = async (table: any, rows: any[], conflictCol: string = "id") => {
+        if (!rows?.length) return;
+        for (const row of rows) {
+          await db.insert(table).values(row).onConflictDoUpdate({ target: table[conflictCol], set: row }).catch(() => {});
+        }
+      };
+
+      const insertNew = async (table: any, rows: any[]) => {
+        if (!rows?.length) return;
+        for (const row of rows) {
+          await db.insert(table).values(row).onConflictDoNothing().catch(() => {});
+        }
+      };
+
+      if (isFull) {
+        // Full restore: wipe affected tables and reimport
+        await db.delete(journalEntryLines);
+        await db.delete(journalEntries);
+        await db.delete(expenses);
+        await db.delete(supplierPayments);
+        await db.delete(purchaseInvoiceItems);
+        await db.delete(purchaseInvoices);
+        await db.delete(payments);
+        await db.delete(invoiceItems);
+        await db.delete(invoices);
+        await db.delete(priceContractRules);
+        await db.delete(priceContractItems);
+        await db.delete(priceContracts);
+        await db.delete(seasonalOfferItems);
+        await db.delete(seasonalOffers);
+        await db.delete(customers);
+        await db.delete(suppliers);
+        await db.delete(items);
+        await db.delete(categories);
+        await db.delete(accounts);
+
+        const ins = async (table: any, rows: any[]) => { if (rows?.length) await db.insert(table).values(rows); };
+        await ins(categories, d.categories);
+        await ins(items, d.items);
+        await ins(customers, d.customers);
+        await ins(suppliers, d.suppliers);
+        await ins(accounts, d.accounts);
+        await ins(priceContracts, d.priceContracts);
+        await ins(priceContractRules, d.priceContractRules);
+        await ins(priceContractItems, d.priceContractItems);
+        await ins(seasonalOffers, d.seasonalOffers);
+        await ins(seasonalOfferItems, d.seasonalOfferItems);
+        await ins(invoices, d.invoices);
+        await ins(invoiceItems, d.invoiceItems);
+        await ins(payments, d.payments);
+        await ins(purchaseInvoices, d.purchaseInvoices);
+        await ins(purchaseInvoiceItems, d.purchaseInvoiceItems);
+        await ins(supplierPayments, d.supplierPayments);
+        await ins(journalEntries, d.journalEntries);
+        await ins(journalEntryLines, d.journalEntryLines);
+        await ins(expenses, d.expenses);
+
+        // Deployment-specific settings are preserved unless explicitly selected.
+        if (restoreSystemSettings) {
+          for (const s of (d.settings || [])) {
+            if (s.key === "settings_password") continue;
+            await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+          }
+        }
+      } else {
+        // Differential restore: upsert config, insert-ignore transactions
+        await upsert(categories, d.categories || []);
+        await upsert(items, d.items || []);
+        await upsert(customers, d.customers || []);
+        await upsert(suppliers, d.suppliers || []);
+        await upsert(accounts, d.accounts || []);
+        await upsert(priceContracts, d.priceContracts || []);
+        await upsert(priceContractRules, d.priceContractRules || []);
+        await upsert(priceContractItems, d.priceContractItems || []);
+        await upsert(seasonalOffers, d.seasonalOffers || []);
+        await upsert(seasonalOfferItems, d.seasonalOfferItems || []);
+        if (restoreSystemSettings) {
+          for (const s of (d.settings || [])) {
+            if (s.key === "settings_password") continue;
+            await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+          }
+        }
+        // Transaction tables: insert new only
+        await insertNew(invoices, d.invoices || []);
+        await insertNew(invoiceItems, d.invoiceItems || []);
+        await insertNew(payments, d.payments || []);
+        await insertNew(purchaseInvoices, d.purchaseInvoices || []);
+        await insertNew(purchaseInvoiceItems, d.purchaseInvoiceItems || []);
+        await insertNew(supplierPayments, d.supplierPayments || []);
+        await insertNew(journalEntries, d.journalEntries || []);
+        await insertNew(journalEntryLines, d.journalEntryLines || []);
+        await insertNew(expenses, d.expenses || []);
+      }
+
+      // System export: restore users (upsert by id, never overwrite the calling user's own record)
+      if (d.users?.length) {
+        for (const u of d.users) {
+          await db.insert(users).values(u).onConflictDoUpdate({
+            target: users.id,
+            set: { username: u.username, email: u.email, role: u.role, active: u.active, permissions: u.permissions, totpSecret: u.totpSecret, totpEnabled: u.totpEnabled },
+          }).catch(() => {});
+        }
+      }
+
+      const totalRecords = Object.values(payload.tableCounts || {}).reduce((s: number, v: any) => s + (Number(v) || 0), 0);
+      res.json({
+        success: true,
+        backupType: payload.backupType,
+        exportedAt: payload.exportedAt,
+        tableCounts: payload.tableCounts,
+        totalRecords,
+        restored: isFull ? "full" : "differential-merge",
+        systemSettingsRestored: restoreSystemSettings,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Inspect backup file without restoring (returns metadata)
+  app.post("/api/backup/inspect", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const payload = req.body;
+      if (!payload || !payload.data) {
+        return res.status(400).json({ message: "Invalid backup file" });
+      }
+      const totalRecords = Object.values(payload.tableCounts || {}).reduce((s: number, v: any) => s + (Number(v) || 0), 0);
+      res.json({
+        version: payload.version,
+        backupType: payload.backupType || "full",
+        exportedAt: payload.exportedAt,
+        sinceDate: payload.sinceDate || null,
+        tableCounts: payload.tableCounts || {},
+        totalRecords,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ─── Version Control ────────────────────────────────────────────────────────
+  app.get("/api/version-control", requireAdmin, async (_req, res) => {
+    try {
+      const snapshots = await storage.listVersionSnapshots();
+      res.json(snapshots);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/version-control", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { name, description = "", type = "manual" } = req.body;
+      if (!name?.trim()) return res.status(400).json({ message: "Name is required" });
+      const user = (req as any).user;
+      const createdBy = user?.username || "system";
+      const appVersionSetting = await storage.getSetting("app_version");
+      const appVersion = appVersionSetting?.value || "1.0";
+      const json = await generateBackupJson();
+      const parsed = JSON.parse(json);
+      const tableCounts = JSON.stringify(parsed.tableCounts || {});
+      const snap = await storage.createVersionSnapshot(name.trim(), description, type, createdBy, json, appVersion, tableCounts);
+      res.json({ ...snap, dataSnapshot: undefined });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/version-control/:id/download", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const snap = await storage.getVersionSnapshot((req.params.id as string));
+      if (!snap) return res.status(404).json({ message: "Snapshot not found" });
+      const safeName = snap.name.replace(/[^a-z0-9_\-]/gi, "_").toLowerCase();
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="snapshot_${safeName}_${snap.id.slice(0, 8)}.json"`);
+      res.send(snap.dataSnapshot);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/version-control/:id/rollback", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const snap = await storage.getVersionSnapshot((req.params.id as string));
+      if (!snap || !snap.dataSnapshot) return res.status(404).json({ message: "Snapshot not found or has no data" });
+      const payload = JSON.parse(snap.dataSnapshot);
+      if (!payload?.data) return res.status(400).json({ message: "Snapshot data is invalid" });
+      const d = payload.data;
+
+      // Full restore: wipe and reimport (same as /api/backup/restore full restore)
+      await db.delete(journalEntryLines);
+      await db.delete(journalEntries);
+      await db.delete(expenses);
+      await db.delete(supplierPayments);
+      await db.delete(purchaseInvoiceItems);
+      await db.delete(purchaseInvoices);
+      await db.delete(payments);
+      await db.delete(invoiceItems);
+      await db.delete(invoices);
+      await db.delete(priceContractRules);
+      await db.delete(priceContractItems);
+      await db.delete(priceContracts);
+      await db.delete(seasonalOfferItems);
+      await db.delete(seasonalOffers);
+      await db.delete(customers);
+      await db.delete(suppliers);
+      await db.delete(items);
+      await db.delete(categories);
+      await db.delete(accounts);
+
+      const ins = async (table: any, rows: any[]) => { if (rows?.length) await db.insert(table).values(rows); };
+      await ins(categories, d.categories);
+      await ins(items, d.items);
+      await ins(customers, d.customers);
+      await ins(suppliers, d.suppliers);
+      await ins(accounts, d.accounts);
+      await ins(priceContracts, d.priceContracts);
+      await ins(priceContractRules, d.priceContractRules);
+      await ins(priceContractItems, d.priceContractItems);
+      await ins(seasonalOffers, d.seasonalOffers);
+      await ins(seasonalOfferItems, d.seasonalOfferItems);
+      await ins(invoices, d.invoices);
+      await ins(invoiceItems, d.invoiceItems);
+      await ins(purchaseInvoices, d.purchaseInvoices);
+      await ins(purchaseInvoiceItems, d.purchaseInvoiceItems);
+      await ins(payments, d.payments);
+      await ins(supplierPayments, d.supplierPayments);
+      await ins(journalEntries, d.journalEntries);
+      await ins(journalEntryLines, d.journalEntryLines);
+      await ins(expenses, d.expenses);
+
+      if (d.settings?.length) {
+        for (const s of d.settings) {
+          if (s.key === "settings_password") continue;
+          await db.insert(systemSettings).values(s).onConflictDoUpdate({ target: systemSettings.key, set: { value: s.value, label: s.label, group: s.group } }).catch(() => {});
+        }
+      }
+
+      res.json({ message: "Rollback complete", snapshotName: snap.name, snapshotId: snap.id });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/version-control/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const snap = await storage.getVersionSnapshot((req.params.id as string));
+      if (!snap) return res.status(404).json({ message: "Snapshot not found" });
+      await storage.deleteVersionSnapshot((req.params.id as string));
+      res.json({ message: "Snapshot deleted" });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Suppliers
+  app.get("/api/suppliers", async (_req, res) => {
+    const sups = await storage.getSuppliers();
+    res.json(sups);
+  });
+
+  app.get("/api/suppliers/:id", async (req, res) => {
+    const sup = await storage.getSupplier((req.params.id as string));
+    if (!sup) return res.status(404).json({ message: "Supplier not found" });
+    res.json(sup);
+  });
+
+  app.post("/api/suppliers", async (req, res) => {
+    try {
+      const data = insertSupplierSchema.parse(req.body);
+      const sup = await storage.createSupplier(data);
+      res.json(sup);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/suppliers/:id", async (req, res) => {
+    try {
+      const sup = await storage.updateSupplier((req.params.id as string), req.body);
+      if (!sup) return res.status(404).json({ message: "Supplier not found" });
+      res.json(sup);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/suppliers/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    try {
+      const sup = await storage.getSupplier((req.params.id as string));
+      if (!sup) return res.status(404).json({ message: "Supplier not found" });
+      const linked = await db.select({ id: purchaseInvoices.id }).from(purchaseInvoices).where(eq(purchaseInvoices.supplierId, (req.params.id as string))).limit(1);
+      if (linked.length > 0) {
+        return res.status(400).json({ message: "Cannot delete: supplier has purchase invoices. Remove them first or mark the supplier inactive." });
+      }
+      await storage.deleteSupplier((req.params.id as string));
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/suppliers/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = worksheetToJson(sheet, "");
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const upsert = req.body.mode === "upsert";
+      const existingByCode = upsert
+        ? new Map((await storage.getSuppliers()).map((s) => [s.code.toLowerCase(), s]))
+        : new Map<string, any>();
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
+          };
+
+          const name = getValue("name");
+          const code = getValue("code");
+          if (!name || !code) {
+            results.errors.push({ row: i + 2, message: "Name and Code are required" });
+            continue;
+          }
+
+          const paymentTerms = getValue("paymentTerms") || "cash";
+          const validTerms = ["cash", "credit_7", "credit_14", "credit_30", "credit_60", "credit_90"];
+
+          const supData = {
+            name,
+            code: code.toUpperCase(),
+            contactPerson: getValue("contactPerson") || null,
+            email: getValue("email") || null,
+            phone: getValue("phone") || null,
+            address: getValue("address") || null,
+            city: getValue("city") || null,
+            country: getValue("country") || "Cyprus",
+            taxId: getValue("taxId") || null,
+            paymentTerms: validTerms.includes(paymentTerms) ? paymentTerms : "cash",
+            currentBalance: "0",
+            notes: getValue("notes") || null,
+            active: true,
+          };
+
+          const existing = upsert ? existingByCode.get(code.toLowerCase()) : undefined;
+          if (existing) {
+            const updateData: Record<string, any> = { name };
+            for (const f of ["contactPerson", "email", "phone", "address", "city", "country", "taxId", "notes"] as const) {
+              if (getValue(f)) updateData[f] = (supData as any)[f];
+            }
+            if (getValue("paymentTerms")) updateData.paymentTerms = supData.paymentTerms;
+            await storage.updateSupplier(existing.id, updateData);
+            results.updated++;
+          } else {
+            const created = await storage.createSupplier(supData);
+            if (upsert) existingByCode.set(code.toLowerCase(), created);
+            results.success++;
+          }
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/colors/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = worksheetToJson(sheet, "");
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const existingColors = new Set((await storage.getColors()).map((c) => c.name.toLowerCase()));
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
+          };
+
+          const name = getValue("name");
+          if (!name) {
+            results.errors.push({ row: i + 2, message: "Name is required" });
+            continue;
+          }
+
+          if (existingColors.has(name.toLowerCase())) {
+            results.updated++;
+          } else {
+            await storage.createColor({
+              name,
+              hexCode: getValue("hexCode") || null,
+              active: true,
+            });
+            existingColors.add(name.toLowerCase());
+            results.success++;
+          }
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/sizes/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = worksheetToJson(sheet, "");
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const existingSizes = new Set((await storage.getSizes()).map((s) => s.name.toLowerCase()));
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
+          };
+
+          const name = getValue("name");
+          if (!name) {
+            results.errors.push({ row: i + 2, message: "Name is required" });
+            continue;
+          }
+          const sortOrderRaw = getValue("sortOrder");
+
+          if (existingSizes.has(name.toLowerCase())) {
+            results.updated++;
+          } else {
+            await storage.createSize({
+              name,
+              sortOrder: sortOrderRaw ? parseInt(sortOrderRaw) || 0 : 0,
+              active: true,
+            });
+            existingSizes.add(name.toLowerCase());
+            results.success++;
+          }
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/categories/import", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const workbook = await readExcelWorkbook(req.file.buffer, req.file.originalname);
+      const sheetName = req.body.sheetName || workbook.worksheets[0]?.name;
+      const sheet = workbook.getWorksheet(sheetName);
+      if (!sheet) return res.status(400).json({ message: `Sheet "${sheetName}" not found` });
+      const rows: any[] = worksheetToJson(sheet, "");
+      if (!rows.length) return res.status(400).json({ message: "File is empty" });
+
+      const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const existingCats = new Set((await storage.getCategories()).map((c) => c.name.toLowerCase()));
+      const results: { success: number; updated: number; errors: { row: number; message: string }[] } = { success: 0, updated: 0, errors: [] };
+
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const row = rows[i];
+          const getValue = (field: string) => {
+            const col = columnMap[field] || field;
+            const raw = row[col] !== undefined ? String(row[col]).trim() : "";
+            return /^null$/i.test(raw) ? "" : raw;
+          };
+
+          const name = getValue("name");
+          if (!name) {
+            results.errors.push({ row: i + 2, message: "Name is required" });
+            continue;
+          }
+
+          if (existingCats.has(name.toLowerCase())) {
+            results.updated++;
+          } else {
+            await storage.createCategory({
+              name,
+              description: getValue("description") || null,
+              parentId: null,
+              active: true,
+            });
+            existingCats.add(name.toLowerCase());
+            results.success++;
+          }
+        } catch (e: any) {
+          results.errors.push({ row: i + 2, message: e.message });
+        }
+      }
+
+      res.json(results);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Adjusts stock for a sales invoice / credit note line, crediting or debiting the variant's own
+  // stock pool when the line is tied to a specific item variant, otherwise the parent item's stock.
+  async function adjustSaleLineStock(li: { itemId: string; variantId?: string | null; saleUnit?: string | null; quantity: number | string }, sign: 1 | -1) {
+    const item = await storage.getItem(li.itemId);
+    if (!item) return;
+    const qty = typeof li.quantity === "string" ? parseFloat(li.quantity) || 0 : li.quantity;
+    const bottles = (li.saleUnit === "pack" && item.packSize > 1) ? qty * item.packSize : qty;
+    const delta = sign * bottles;
+    if (li.variantId) {
+      const variant = await storage.getItemVariant(li.variantId);
+      if (variant) {
+        await storage.updateItemVariant(variant.id, { stockQuantity: Math.max(0, variant.stockQuantity + delta) });
+        return;
+      }
+    }
+    await storage.updateItem(item.id, { stockQuantity: Math.max(0, item.stockQuantity + delta) });
+  }
+
+  // Adjusts stock for a purchase-invoice line, crediting the variant's own stock pool when the
+  // line is tied to a specific item variant, otherwise falling back to the parent item's stock.
+  async function adjustPurchaseLineStock(li: { itemId: string; variantId?: string | null; purchaseUnit: string; quantity: number }, sign: 1 | -1) {
+    const item = await storage.getItem(li.itemId);
+    if (!item) return;
+    const bottles = li.purchaseUnit === "pack" ? li.quantity * item.packSize : li.quantity;
+    const delta = sign * bottles;
+    if (li.variantId) {
+      const variant = await storage.getItemVariant(li.variantId);
+      if (variant) {
+        await storage.updateItemVariant(variant.id, { stockQuantity: Math.max(0, variant.stockQuantity + delta) });
+        return;
+      }
+    }
+    await storage.updateItem(item.id, { stockQuantity: Math.max(0, item.stockQuantity + delta) });
+  }
+
+  // Shared purchase-invoice posting logic — used by both the manual /api/purchase-invoices route
+  // and the PDA GRV finalize route, so due-date derivation, stock updates (with pack-size
+  // conversion), supplier-balance updates, and journal-entry creation are never duplicated.
+  async function postPurchaseInvoice(
+    data: import("@shared/schema").InsertPurchaseInvoice,
+    parsedItems: import("@shared/schema").InsertPurchaseInvoiceItem[],
+  ) {
+    if (!data.dueDate && data.supplierId) {
+      const supplier = await storage.getSupplier(data.supplierId);
+      if (supplier) {
+        const piDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+        const daysMatch = supplier.paymentTerms.match(/credit_(\d+)/);
+        const days = daysMatch ? parseInt(daysMatch[1]) : 0;
+        const due = new Date(piDate);
+        due.setDate(due.getDate() + days);
+        (data as any).dueDate = due.toISOString().split("T")[0];
+      }
+    }
+
+    const inv = await storage.createPurchaseInvoice(data, parsedItems);
+
+    for (const li of parsedItems) {
+      await adjustPurchaseLineStock(li as any, 1);
+    }
+
+    const supplier = await storage.getSupplier(data.supplierId);
+    if (supplier) {
+      const newBalance = parseFloat(supplier.currentBalance) + parseFloat(String(data.total));
+      await storage.updateSupplier(data.supplierId, { currentBalance: newBalance.toFixed(2) });
+    }
+
+    const piTotal = parseFloat(String(data.total || 0));
+    const piVat = parseFloat(String(data.vatAmount || 0));
+    const piNet = piTotal - piVat;
+    const piDate = typeof data.date === "string" ? data.date : new Date().toISOString().split("T")[0];
+
+    if (piTotal > 0) {
+      await autoCreateJournalEntry({
+        sourceType: "purchase",
+        sourceId: inv.id,
+        date: piDate,
+        description: `Purchase Invoice ${inv.invoiceNumber}`,
+        reference: inv.invoiceNumber,
+        lines: [
+          { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
+          { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
+          { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
+        ],
+      });
+    }
+
+    return inv;
+  }
+
+  // Purchase Invoices
+  app.get("/api/purchase-invoices", async (_req, res) => {
+    const invs = await storage.getPurchaseInvoices();
+    res.json(invs);
+  });
+
+  app.get("/api/purchase-invoices/last-costs", async (_req, res) => {
+    const costs = await storage.getLastPurchaseCosts();
+    res.json(costs);
+  });
+
+  app.get("/api/purchase-invoices/summary", async (_req, res) => {
+    const summary = await storage.getPurchaseInvoiceSummary();
+    res.json(summary);
+  });
+
+  app.get("/api/purchase-invoices/:id", async (req, res) => {
+    const inv = await storage.getPurchaseInvoice((req.params.id as string));
+    if (!inv) return res.status(404).json({ message: "Purchase invoice not found" });
+    res.json(inv);
+  });
+
+  app.post("/api/purchase-invoices", async (req, res) => {
+    try {
+      const { items: lineItems, ...invoiceData } = req.body;
+      sanitizeNumericFields(invoiceData, ["subtotal", "vatAmount", "total"]);
+      if (lineItems?.length) {
+        for (const li of lineItems) {
+          sanitizeNumericFields(li, ["unitCost", "discountPercent", "discount", "vatRate", "total"]);
+          if (li.vatRate === "0" || li.vatRate === "") li.vatRate = "19";
+        }
+      }
+      const data = insertPurchaseInvoiceSchema.parse(invoiceData);
+
+      if (!lineItems?.length) {
+        return res.status(400).json({ message: "At least one line item is required" });
+      }
+
+      const parsedItems = lineItems.map((li: any) => insertPurchaseInvoiceItemSchema.parse(li));
+      const inv = await postPurchaseInvoice(data, parsedItems);
+
+      res.json(inv);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.put("/api/purchase-invoices/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const existing = await storage.getPurchaseInvoice(id);
+      if (!existing) return res.status(404).json({ message: "Purchase invoice not found" });
+
+      const { items: lineItems, ...invoiceData } = req.body;
+      sanitizeNumericFields(invoiceData, ["subtotal", "vatAmount", "total"]);
+      if (lineItems?.length) {
+        for (const li of lineItems) {
+          sanitizeNumericFields(li, ["unitCost", "discountPercent", "discount", "vatRate", "total"]);
+          if (li.vatRate === "0" || li.vatRate === "") li.vatRate = "19";
+        }
+      }
+
+      // Reverse old stock impact
+      for (const oldItem of existing.items) {
+        await adjustPurchaseLineStock(oldItem as any, -1);
+      }
+
+      // Reverse old supplier balance impact
+      const oldSupplier = await storage.getSupplier(existing.supplierId);
+      if (oldSupplier) {
+        const oldBalance = parseFloat(oldSupplier.currentBalance) - parseFloat(existing.total);
+        await storage.updateSupplier(existing.supplierId, { currentBalance: Math.max(0, oldBalance).toFixed(2) });
+      }
+
+      // Update invoice header
+      const { invoiceNumber, ...updateData } = invoiceData;
+      await storage.updatePurchaseInvoice(id, updateData);
+
+      // Replace line items
+      await storage.deletePurchaseInvoiceItems(id);
+      if (lineItems?.length) {
+        const parsedItems = lineItems.map((li: any) => insertPurchaseInvoiceItemSchema.parse(li));
+        await storage.createPurchaseInvoiceItems(parsedItems.map((li: any) => ({ ...li, purchaseInvoiceId: id })));
+
+        // Apply new stock impact
+        for (const li of parsedItems) {
+          await adjustPurchaseLineStock(li as any, 1);
+        }
+      }
+
+      // Apply new supplier balance impact
+      const newSupplier = await storage.getSupplier(invoiceData.supplierId);
+      if (newSupplier) {
+        const newBalance = parseFloat(newSupplier.currentBalance) + parseFloat(String(invoiceData.total));
+        await storage.updateSupplier(invoiceData.supplierId, { currentBalance: newBalance.toFixed(2) });
+      }
+
+      const updated = await storage.getPurchaseInvoice(id);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/purchase-invoices/:id", async (req, res) => {
+    if (!req.user || (req.user.role !== "admin" && req.user.role !== "superuser")) {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    try {
+      const existing = await storage.getPurchaseInvoice((req.params.id as string));
+      if (!existing) return res.status(404).json({ message: "Purchase invoice not found" });
+
+      // Reverse stock impact
+      for (const item of existing.items) {
+        await adjustPurchaseLineStock(item as any, -1);
+      }
+
+      // Reverse supplier balance
+      const supplier = await storage.getSupplier(existing.supplierId);
+      if (supplier) {
+        const newBalance = parseFloat(supplier.currentBalance) - parseFloat(existing.total);
+        await storage.updateSupplier(existing.supplierId, { currentBalance: Math.max(0, newBalance).toFixed(2) });
+      }
+
+      // Delete journal entries for this purchase
+      const relatedJEs = await db.select({ id: journalEntries.id }).from(journalEntries)
+        .where(and(eq(journalEntries.sourceType, "purchase"), eq(journalEntries.sourceId, (req.params.id as string))));
+      for (const je of relatedJEs) {
+        await db.delete(journalEntryLines).where(eq(journalEntryLines.journalEntryId, je.id));
+        await db.delete(journalEntries).where(eq(journalEntries.id, je.id));
+      }
+
+      await storage.deletePurchaseInvoice((req.params.id as string));
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Supplier Payments
+  app.get("/api/supplier-payments", async (req, res) => {
+    const supplierId = req.query.supplierId as string | undefined;
+    const payments = await storage.getSupplierPayments(supplierId);
+    res.json(payments);
+  });
+
+  app.post("/api/supplier-payments", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const data = insertSupplierPaymentSchema.parse(req.body);
+      const supplier = await storage.getSupplier(data.supplierId);
+      if (!supplier) return res.status(404).json({ message: "Supplier not found" });
+      // createSupplierPayment already handles balance deduction — do not call updateSupplier again
+      const payment = await storage.createSupplierPayment(data);
+
+      const spAmount = parseFloat(String(data.amount || 0));
+      const spDate = typeof data.paymentDate === "string" ? data.paymentDate : new Date().toISOString().split("T")[0];
+      const paymentAcctCode = data.paymentMethod === "cash" ? "1000" : "1010";
+
+      if (spAmount > 0) {
+        await autoCreateJournalEntry({
+          sourceType: "supplier_payment",
+          sourceId: payment.id,
+          date: spDate,
+          description: `Supplier Payment — ${supplier.name}`,
+          reference: data.reference || payment.id,
+          lines: [
+            { accountCode: "2000", debit: spAmount, credit: 0, description: `Accounts Payable — ${supplier.name}` },
+            { accountCode: paymentAcctCode, debit: 0, credit: spAmount, description: data.paymentMethod === "cash" ? "Cash" : "Bank" },
+          ],
+        });
+      }
+
+      res.json(payment);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/supplier-payments/:id", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const { id } = req.params;
+      const data = insertSupplierPaymentSchema.partial().parse(req.body);
+      const updated = await storage.updateSupplierPayment(id, data);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Portal API Routes
+  app.post("/api/portal/login", async (req, res) => {
+    try {
+      const { code, accessCode } = req.body;
+      if (!code || !accessCode) return res.status(400).json({ message: "Customer code and access code required" });
+      const customer = await storage.getCustomerByCode(code.toUpperCase());
+      if (!customer) return res.status(401).json({ message: "Invalid credentials" });
+      if (!customer.portalAccessCode || customer.portalAccessCode !== accessCode) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+      if (!customer.active) return res.status(403).json({ message: "Account is inactive" });
+      const portalToken = signPortalToken(customer.id);
+      res.json({ customer, portalToken });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/portal/customer/:id", async (req, res) => {
+    const customer = await storage.getCustomer((req.params.id as string));
+    if (!customer) return res.status(404).json({ message: "Not found" });
+    res.json(customer);
+  });
+
+  app.get("/api/portal/customer/:id/invoices", async (req, res) => {
+    try {
+      const invoices = await storage.getCustomerInvoices((req.params.id as string));
+      res.json(invoices);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/portal/customer/:id/orders", async (req, res) => {
+    try {
+      const orders = await storage.getPortalOrders((req.params.id as string));
+      res.json(orders);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/portal/customer/:id/statement", async (req, res) => {
+    try {
+      const statements = await storage.getCustomerStatements();
+      const st = statements.find(s => s.customerId === (req.params.id as string));
+      res.json(st || { customerId: (req.params.id as string), customerName: "", totalInvoiced: "0.00", totalPaid: "0.00", balance: "0.00", invoiceCount: 0 });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/portal/catalog", async (_req, res) => {
+    try {
+      const items = await storage.getAvailableItems();
+      const cats = await storage.getCategories();
+      res.json({ items, categories: cats });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/portal/orders", async (req, res) => {
+    try {
+      const { customerId, items: orderItems, notes } = req.body;
+      if (!customerId || !orderItems?.length) {
+        return res.status(400).json({ message: "Customer and items required" });
+      }
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const VAT_RATE = 0.19;
+      let subtotal = 0;
+      const processedItems: any[] = [];
+
+      for (const oi of orderItems) {
+        const item = await storage.getItem(oi.itemId);
+        if (!item) continue;
+        const bottlesNeeded = (oi.saleUnit === "pack" && item.packSize > 1) ? oi.quantity * item.packSize : oi.quantity;
+        if (item.stockQuantity < bottlesNeeded) {
+          return res.status(400).json({ message: `Not enough stock for ${item.name}. Available: ${item.stockQuantity} bottles` });
+        }
+        const priceKey = `price${customer.priceLevel}` as keyof typeof item;
+        const unitPrice = parseFloat(String(item[priceKey] || item.price1));
+        const lineTotal = unitPrice * oi.quantity;
+        subtotal += lineTotal;
+        processedItems.push({
+          itemId: item.id,
+          itemName: item.name,
+          quantity: oi.quantity,
+          unitPrice: unitPrice.toFixed(2),
+          total: lineTotal.toFixed(2),
+        });
+      }
+
+      const vatAmount = subtotal * VAT_RATE;
+      const total = subtotal + vatAmount;
+
+      const order = await storage.createPortalOrder(
+        { customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: notes || null, status: "pending" },
+        processedItems.map(pi => ({ ...pi, orderId: "TEMP" }))
+      );
+
+      for (const oi of orderItems) {
+        const item = await storage.getItem(oi.itemId);
+        if (item) {
+          const bottlesToSubtract = (oi.saleUnit === "pack" && item.packSize > 1) ? oi.quantity * item.packSize : oi.quantity;
+          await storage.updateItem(item.id, { stockQuantity: item.stockQuantity - bottlesToSubtract });
+        }
+      }
+
+      // Award loyalty points using this store's configured conversion rate.
+      if (subtotal > 0) {
+        const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
+        const pts = Math.floor(subtotal * loyaltyPointsPerEuro);
+        if (pts > 0) {
+          await db.insert(customerLoyaltyPoints).values({
+            customerId, points: pts, type: "earn",
+            reason: `Order #${order.id.slice(0, 8)}`, sourceType: "portal_order", sourceId: order.id,
+          }).catch(() => {/* non-fatal */});
+        }
+      }
+
+      res.json(order);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Portal JWT auth helpers — bind session to a specific customerId
+  const PORTAL_JWT_SECRET = (process.env.SESSION_SECRET || "fallback") + "_portal";
+
+  function signPortalToken(customerId: string): string {
+    return jwt.sign({ customerId, type: "portal" }, PORTAL_JWT_SECRET, { expiresIn: "7d" });
+  }
+
+  function verifyPortalToken(token: string): { customerId: string } | null {
+    try {
+      const p = jwt.verify(token, PORTAL_JWT_SECRET) as any;
+      if (p.type !== "portal") return null;
+      return { customerId: p.customerId };
+    } catch { return null; }
+  }
+
+  function requirePortalAuth(req: Request, res: Response, paramId: string): boolean {
+    const token = (req.headers["x-portal-token"] as string | undefined) || "";
+    if (!token) { res.status(401).json({ message: "Portal authentication required" }); return false; }
+    const payload = verifyPortalToken(token);
+    if (!payload) { res.status(401).json({ message: "Invalid or expired portal token" }); return false; }
+    if (payload.customerId !== paramId) { res.status(403).json({ message: "Access denied" }); return false; }
+    return true;
+  }
+
+  const customerPreferencesInput = z.object({
+    dietaryPreferences: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
+    dislikedIngredients: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
+    preferredCategories: z.array(z.string().trim().min(1).max(120)).max(30).optional(),
+    recommendationGoals: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
+    budgetPreference: z.string().trim().min(1).max(80).nullable().optional(),
+    notificationRecommendations: z.boolean().optional(),
+    notificationOrderUpdates: z.boolean().optional(),
+    notificationOffers: z.boolean().optional(),
+  }).strict();
+
+  const preferenceDefaults = {
+    dietaryPreferences: [] as string[],
+    dislikedIngredients: [] as string[],
+    preferredCategories: [] as string[],
+    recommendationGoals: [] as string[],
+    budgetPreference: null as string | null,
+    notificationRecommendations: true,
+    notificationOrderUpdates: true,
+    notificationOffers: true,
+  };
+
+  app.get("/api/customer/preferences", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const [preferences] = await db.select().from(customerPreferences)
+        .where(eq(customerPreferences.customerId, customerId)).limit(1);
+      res.json(preferences || { customerId, ...preferenceDefaults });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.put("/api/customer/preferences", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const data = customerPreferencesInput.parse(req.body);
+      const [existing] = await db.select().from(customerPreferences)
+        .where(eq(customerPreferences.customerId, customerId)).limit(1);
+      const values = { ...preferenceDefaults, ...(existing || {}), ...data, customerId, updatedAt: new Date() };
+      const [preferences] = await db.insert(customerPreferences).values(values)
+        .onConflictDoUpdate({
+          target: customerPreferences.customerId,
+          set: { ...data, updatedAt: new Date() },
+        }).returning();
+      res.json(preferences);
+    } catch (e: any) {
+      res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/customer/recommendations", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const query = z.object({
+        context: z.enum(["general", "basket", "budget", "favorites", "new", "restock"]).default("general"),
+        limit: z.coerce.number().int().min(1).max(12).default(12),
+      }).parse(req.query);
+      const [[customer], [preferences], catalog, categoryRows, priorLines, aiSettings] = await Promise.all([
+        db.select().from(customers).where(eq(customers.id, customerId)).limit(1),
+        db.select().from(customerPreferences).where(eq(customerPreferences.customerId, customerId)).limit(1),
+        db.select().from(items).where(and(eq(items.active, true), gt(items.stockQuantity, 0))),
+        db.select().from(categories).where(eq(categories.active, true)),
+        db.select({ itemId: portalOrderItems.itemId, quantity: portalOrderItems.quantity })
+          .from(portalOrderItems)
+          .innerJoin(portalOrders, eq(portalOrderItems.orderId, portalOrders.id))
+          .where(eq(portalOrders.customerId, customerId)),
+        storage.getSettings(),
+      ]);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const profile = preferences || preferenceDefaults;
+      const normalize = (value: string | null | undefined) => (value || "").toLocaleLowerCase();
+      const preferredCategories = new Set((profile.preferredCategories || []).map(normalize));
+      const disliked = (profile.dislikedIngredients || []).map(normalize).filter(Boolean);
+      const goals = (profile.recommendationGoals || []).map(normalize);
+      const categoryById = new Map(categoryRows.map(category => [category.id, category.name]));
+      const purchasedQty = new Map<string, number>();
+      for (const line of priorLines) purchasedQty.set(line.itemId, (purchasedQty.get(line.itemId) || 0) + Number(line.quantity || 0));
+      const priceKey = `price${Math.min(5, Math.max(1, customer.priceLevel || 1))}` as keyof typeof items.$inferSelect;
+      const prices = catalog.map(item => Number(item[priceKey] || item.price1 || 0)).filter(Number.isFinite);
+      const medianPrice = prices.sort((a, b) => a - b)[Math.floor(prices.length / 2)] || 0;
+      const budget = normalize(profile.budgetPreference);
+
+      const ranked = catalog
+        .filter(item => {
+          const searchable = normalize(`${item.name} ${item.description || ""} ${item.brand || ""}`);
+          // Free-text product copy is not an authoritative dietary/allergen
+          // source. Only explicit dislikes are used as a conservative exclusion.
+          return !disliked.some(term => searchable.includes(term));
+        })
+        .map(item => {
+          const categoryName = categoryById.get(item.categoryId || "") || "";
+          const price = Number(item[priceKey] || item.price1 || 0);
+          let score = 0;
+          const reasons: string[] = [];
+          if (preferredCategories.has(normalize(categoryName)) || preferredCategories.has(normalize(item.categoryId))) {
+            score += 30; reasons.push(`Matches your preferred ${categoryName || "category"} category`);
+          }
+          const priorQuantity = purchasedQty.get(item.id) || 0;
+          if (priorQuantity) { score += Math.min(25, 8 + priorQuantity); reasons.push("Based on your previous orders"); }
+          if (budget && (budget.includes("value") || budget.includes("budget") || budget.includes("low"))) {
+            if (price <= medianPrice) { score += 12; reasons.push("Fits your value preference"); }
+          } else if (budget && (budget.includes("premium") || budget.includes("high"))) {
+            if (price >= medianPrice) { score += 12; reasons.push("Fits your premium preference"); }
+          }
+          if (goals.some(goal => goal.includes("repeat")) && priorQuantity) score += 8;
+          if (goals.some(goal => goal.includes("new") || goal.includes("discover")) && !priorQuantity) {
+            score += 8;
+            reasons.push("Not present in your previous orders");
+          }
+          if (goals.some(goal => goal.includes("value") || goal.includes("save")) && price <= medianPrice) {
+            score += 6;
+          }
+          if (query.context === "basket" && priorQuantity) { score += 4; reasons.push("A reliable reorder for your basket"); }
+          if (query.context === "budget" && price <= medianPrice) {
+            score += 25;
+            reasons.push("Priced at or below the current available-catalog median");
+          }
+          if (query.context === "favorites" && (priorQuantity || preferredCategories.has(normalize(categoryName)))) {
+            score += 15;
+            reasons.push(priorQuantity ? "Previously ordered by you" : "Matches a preferred category");
+          }
+          if (query.context === "new" && !priorQuantity) {
+            score += 20;
+            reasons.push("Not present in your previous orders");
+          }
+          if (query.context === "restock" && priorQuantity) {
+            score += 25;
+            reasons.push("Previously ordered and currently in stock");
+          }
+          return {
+            ...item,
+            customerPrice: price.toFixed(2),
+            recommendationReason: reasons[0] || "Available and in stock",
+            recommendationScore: score,
+          };
+        })
+        .sort((a, b) => b.recommendationScore - a.recommendationScore || a.name.localeCompare(b.name))
+        .slice(0, query.limit);
+
+      const aiConfig = resolveCustomerAiConfig(aiSettings);
+      const enhancement = await enhanceCustomerRecommendations(
+        aiConfig,
+        ranked.map(item => ({
+          id: item.id,
+          name: item.name,
+          category: categoryById.get(item.categoryId || "") || undefined,
+          price: item.customerPrice,
+          reason: item.recommendationReason,
+        })),
+        {
+          preferredCategories: profile.preferredCategories || [],
+          recommendationGoals: profile.recommendationGoals || [],
+          budgetPreference: profile.budgetPreference,
+          context: query.context,
+          priorOrderQuantities: Object.fromEntries(purchasedQty),
+        },
+      );
+      const byId = new Map(ranked.map(item => [item.id, item]));
+      const enhancedRanked = enhancement.orderedIds
+        .map(id => byId.get(id))
+        .filter((item): item is typeof ranked[number] => Boolean(item))
+        .map(item => ({
+          ...item,
+          recommendationReason: enhancement.reasons[item.id] || item.recommendationReason,
+        }));
+      const profileComplete = Boolean(
+        (profile.preferredCategories || []).length || (profile.dietaryPreferences || []).length ||
+        (profile.dislikedIngredients || []).length || (profile.recommendationGoals || []).length || profile.budgetPreference
+      );
+      res.json({ items: enhancedRanked, profileComplete, generatedAt: new Date().toISOString(), engine: enhancement.engine });
+    } catch (e: any) {
+      res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/customer/feedback", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const input = z.object({
+        orderId: z.string().uuid().optional(),
+        context: z.enum(["general", "order", "product", "recommendation", "delivery", "support"]),
+        rating: z.number().int().min(1).max(5),
+        comment: z.string().trim().min(1).max(2000).optional(),
+      }).strict().parse(req.body);
+      if (input.orderId) {
+        const [order] = await db.select({ id: portalOrders.id }).from(portalOrders)
+          .where(and(eq(portalOrders.id, input.orderId), eq(portalOrders.customerId, customerId))).limit(1);
+        if (!order) return res.status(404).json({ message: "Order not found" });
+      }
+      const comment = (input.comment || "").toLocaleLowerCase();
+      const positives = ["great", "good", "excellent", "love", "perfect", "helpful", "fast", "happy"];
+      const negatives = ["bad", "poor", "terrible", "hate", "wrong", "late", "damaged", "awful"];
+      const wordDelta = positives.filter(word => comment.includes(word)).length - negatives.filter(word => comment.includes(word)).length;
+      const score = Math.max(-1, Math.min(1, (input.rating - 3) / 2 + wordDelta * 0.15));
+      let sentiment = score > 0.2 ? "positive" : score < -0.2 ? "negative" : "neutral";
+      let sentimentScore = score;
+      const aiConfig = resolveCustomerAiConfig(await storage.getSettings());
+      const aiClassification = await classifyCustomerFeedback(aiConfig, {
+        context: input.context,
+        rating: input.rating,
+        comment: input.comment || "",
+      });
+      if (aiClassification) {
+        sentiment = aiClassification.sentiment;
+        sentimentScore = aiClassification.score;
+      }
+      const [feedback] = await db.insert(customerFeedback).values({
+        ...input, customerId, sentiment, sentimentScore: sentimentScore.toFixed(2),
+      }).returning();
+      res.status(201).json({ ...feedback, sentimentExplanation: "Score combines the 1–5 rating with matching positive or negative comment words." });
+    } catch (e: any) { res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/notifications", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const unreadOnly = z.enum(["true", "false"]).optional().parse(req.query.unreadOnly) === "true";
+      const notifications = await db.select().from(customerNotifications)
+        .where(and(eq(customerNotifications.customerId, customerId), ...(unreadOnly ? [isNull(customerNotifications.readAt)] : [])))
+        .orderBy(desc(customerNotifications.createdAt));
+      res.json(notifications);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/notifications/:id/read", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const [notification] = await db.update(customerNotifications).set({ readAt: new Date() })
+        .where(and(eq(customerNotifications.id, req.params.id as string), eq(customerNotifications.customerId, customerId))).returning();
+      if (!notification) return res.status(404).json({ message: "Notification not found" });
+      res.json(notification);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/notifications/read-all", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    const customerId = auth.customerId;
+    try {
+      const readAt = new Date();
+      const updated = await db.update(customerNotifications).set({ readAt })
+        .where(and(eq(customerNotifications.customerId, customerId), isNull(customerNotifications.readAt))).returning({ id: customerNotifications.id });
+      res.json({ updated: updated.length, readAt });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer-feedback", requireAdmin, async (_req, res) => {
+    try {
+      const [summary, recent] = await Promise.all([
+        db.select({
+          total: sql<number>`count(*)`,
+          averageRating: sql<number>`coalesce(avg(${customerFeedback.rating}), 0)`,
+          positive: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'positive')`,
+          neutral: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'neutral')`,
+          negative: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'negative')`,
+        }).from(customerFeedback),
+        db.select().from(customerFeedback).orderBy(desc(customerFeedback.createdAt)).limit(50),
+      ]);
+      res.json({ summary, recent });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Portal push subscription — requires portal JWT
+  app.post("/api/portal/customer/:id/push/subscribe", async (req, res) => {
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
+    try {
+      const { endpoint, keys } = req.body;
+      if (!endpoint) return res.status(400).json({ message: "endpoint required" });
+      const userAgent = (req.headers["user-agent"] as string | undefined) || null;
+      await db.insert(customerPushSubscriptions)
+        .values({ customerId: (req.params.id as string), endpoint, p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent })
+        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: (req.params.id as string), p256dh: keys?.p256dh || "", auth: keys?.auth || "", userAgent } });
+      // Prune older subscriptions for this customer on the same device (same userAgent, different
+      // endpoint) — happens when a browser reinstall / re-subscribe issues a new push endpoint.
+      if (userAgent) {
+        await db.delete(customerPushSubscriptions).where(
+          and(
+            eq(customerPushSubscriptions.customerId, (req.params.id as string)),
+            eq(customerPushSubscriptions.userAgent, userAgent),
+            sql`${customerPushSubscriptions.endpoint} != ${endpoint}`
+          )
+        );
+      }
+      res.json({ message: "Subscribed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/portal/customer/:id/push/subscribe", async (req, res) => {
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
+    try {
+      const { endpoint } = req.body;
+      if (endpoint) await db.delete(customerPushSubscriptions).where(
+        and(eq(customerPushSubscriptions.endpoint, endpoint), eq(customerPushSubscriptions.customerId, (req.params.id as string)))
+      );
+      res.json({ message: "Unsubscribed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Portal loyalty endpoint — requires portal JWT
+  app.get("/api/portal/customer/:id/loyalty", async (req, res) => {
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
+    try {
+      const history = await db.select().from(customerLoyaltyPoints)
+        .where(eq(customerLoyaltyPoints.customerId, (req.params.id as string)))
+        .orderBy(desc(customerLoyaltyPoints.createdAt)).limit(50);
+      const [totals] = await db.select({
+        earned: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='earn' then ${customerLoyaltyPoints.points} else 0 end),0)`,
+        redeemed: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='redeem' then ${customerLoyaltyPoints.points} else 0 end),0)`,
+        balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, (req.params.id as string)));
+      const balance = totals?.balance || 0;
+      const tier = balance >= 5000 ? "Gold" : balance >= 1000 ? "Silver" : "Bronze";
+      const nextTier = tier === "Bronze" ? { name: "Silver", threshold: 1000 } : tier === "Silver" ? { name: "Gold", threshold: 5000 } : null;
+      const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
+      res.json({ balance, earned: totals?.earned || 0, redeemed: Math.abs(totals?.redeemed || 0), tier, nextTier, loyaltyPointsPerEuro, history });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Portal reorder endpoint — requires portal JWT matching the customerId in request body
+  app.post("/api/portal/orders/:id/reorder", async (req, res) => {
+    const { customerId } = req.body;
+    if (!customerId) return res.status(400).json({ message: "customerId required" });
+    if (!requirePortalAuth(req, res, customerId)) return;
+    try {
+      const orders = await storage.getPortalOrders(customerId);
+      const original = orders.find((o: any) => o.id === (req.params.id as string));
+      if (!original) return res.status(404).json({ message: "Order not found" });
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const VAT_RATE = 0.19;
+      let subtotal = 0;
+      const processedItems: any[] = [];
+      for (const oi of (original.items || [])) {
+        const item = await storage.getItem(oi.itemId);
+        if (!item) continue;
+        const priceKey = `price${customer.priceLevel}` as keyof typeof item;
+        const unitPrice = parseFloat(String(item[priceKey] || item.price1));
+        const lineTotal = unitPrice * oi.quantity;
+        subtotal += lineTotal;
+        processedItems.push({ itemId: item.id, itemName: item.name, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+      }
+      if (!processedItems.length) return res.status(400).json({ message: "No valid items to reorder" });
+      const vatAmount = subtotal * VAT_RATE;
+      const total = subtotal + vatAmount;
+      const newOrder = await storage.createPortalOrder(
+        { customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: `Reorder of ${(req.params.id as string).slice(0, 8)}`, status: "pending" },
+        processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
+      );
+      res.json(newOrder);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Admin: Portal / WhatsApp Order Queue ───────────────────────────────────
+
+  // GET all portal orders (all sources) — requireAdmin
+  app.get("/api/admin/portal-orders", requireAdmin, async (req, res) => {
+    try {
+      const { source, status } = req.query as { source?: string; status?: string };
+      const orders = await storage.getAllPortalOrders({
+        source: source || undefined,
+        status: status || undefined,
+      });
+      res.json(orders);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // PATCH status (confirmed | rejected | pending)
+  app.patch("/api/admin/portal-orders/:id/status", requireAdmin, async (req, res) => {
+    try {
+      const { status } = req.body;
+      if (!["pending", "confirmed", "rejected", "completed"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status" });
+      }
+      const updated = await storage.updatePortalOrderStatus((req.params.id as string), status);
+      if (!updated) return res.status(404).json({ message: "Order not found" });
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POST convert portal order → draft invoice
+  app.post("/api/admin/portal-orders/:id/convert-to-invoice", requireAdmin, async (req, res) => {
+    try {
+      const allOrders = await storage.getAllPortalOrders();
+      const order = allOrders.find((o: any) => o.id === (req.params.id as string));
+      if (!order) return res.status(404).json({ message: "Order not found" });
+      if (order.invoiceId) return res.status(409).json({ message: "Order has already been converted to an invoice" });
+      const customer = await storage.getCustomer(order.customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const settings = await storage.getSettings();
+      const vatRateSetting = settings.find((s: any) => s.key === "default_vat_rate");
+      const vatRate = parseFloat(vatRateSetting?.value || "19") / 100;
+
+      const today = new Date().toISOString().split("T")[0];
+      const daysMap: Record<string, number> = { "net7": 7, "net14": 14, "net30": 30, "net60": 60 };
+      const dueDays = daysMap[customer.paymentTerms || "net30"] ?? 30;
+      const dueDate = new Date(Date.now() + dueDays * 86400000).toISOString().split("T")[0];
+
+      const lineItems = (order.items || []).map((oi: any) => ({
+        itemId: oi.itemId || null,
+        description: oi.itemName,
+        quantity: String(oi.quantity),
+        saleUnit: "pc",
+        unitPrice: String(oi.unitPrice),
+        discountPercent: "0",
+        discount: "0",
+        total: String(oi.total),
+        invoiceId: "TEMP",
+      }));
+
+      const invoice = await storage.createInvoice(
+        {
+          customerId: order.customerId,
+          type: "invoice",
+          date: today,
+          dueDate,
+          subtotal: String(order.subtotal),
+          taxRate: String(vatRate * 100),
+          taxAmount: String(order.vatAmount),
+          total: String(order.total),
+          notes: order.notes || `Converted from ${order.source === "whatsapp" ? "WhatsApp" : "portal"} order`,
+          status: "draft",
+          invoiceNumber: "TEMP",
+          portalOrderId: order.id,
+        },
+        lineItems
+      );
+
+      await storage.updatePortalOrderStatus((req.params.id as string), "confirmed");
+      await storage.setPortalOrderInvoiceId((req.params.id as string), invoice.id);
+
+      res.json({ invoice, message: "Invoice created successfully" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POST subscribe staff browser to push notifications for new WhatsApp orders
+  app.post("/api/admin/push/subscribe", requireAdmin, async (req, res) => {
+    try {
+      const { endpoint, keys } = req.body;
+      if (!endpoint || !keys?.p256dh || !keys?.auth) {
+        return res.status(400).json({ message: "endpoint and keys required" });
+      }
+      const userId = (req as any).user?.id;
+      if (!userId) return res.status(401).json({ message: "Not authenticated" });
+      await db.insert(staffPushSubscriptions).values({
+        userId, endpoint, p256dh: keys.p256dh, auth: keys.auth,
+        userAgent: req.headers["user-agent"] || null,
+      }).onConflictDoUpdate({ target: staffPushSubscriptions.endpoint, set: { userId, p256dh: keys.p256dh, auth: keys.auth } });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // DELETE unsubscribe staff browser
+  app.delete("/api/admin/push/unsubscribe", requireAdmin, async (req, res) => {
+    try {
+      const { endpoint } = req.body;
+      if (endpoint) {
+        await db.delete(staffPushSubscriptions).where(eq(staffPushSubscriptions.endpoint, endpoint));
+      }
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Customer PWA API (/api/customer/*) ─────────────────────────────────────
+  // Separate JWT secret scope for customer tokens (uses SESSION_SECRET + suffix)
+  const CUSTOMER_JWT_SECRET = (process.env.SESSION_SECRET || "fallback") + "_customer";
+  const CUSTOMER_TOKEN_EXPIRY = "7d";
+
+  // VAPID setup for Web Push
+  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    webpush.setVapidDetails(
+      `mailto:${process.env.VAPID_CONTACT_EMAIL || "noreply@example.com"}`,
+      process.env.VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY
+    );
+  }
+
+  async function sendPushToCustomer(customerId: string, payload: { title: string; body: string; url?: string }) {
+    if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return;
+    try {
+      const subs = await db.select().from(customerPushSubscriptions).where(eq(customerPushSubscriptions.customerId, customerId));
+      for (const sub of subs) {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            JSON.stringify(payload)
+          );
+        } catch (err: any) {
+          // 404/410 means the push service considers the endpoint gone — prune it so we
+          // stop wasting attempts on dead devices (e.g. customer uninstalled/reinstalled the PWA).
+          const statusCode = err?.statusCode;
+          if (statusCode === 404 || statusCode === 410) {
+            try { await db.delete(customerPushSubscriptions).where(eq(customerPushSubscriptions.id, sub.id)); } catch { /* ignore */ }
+          }
+        }
+      }
+    } catch { /* push send is always non-fatal */ }
+  }
+
+  async function sendPushToAllStaff(payload: { title: string; body: string; url?: string }) {
+    if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return;
+    try {
+      const subs = await db.select().from(staffPushSubscriptions);
+      for (const sub of subs) {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            JSON.stringify(payload)
+          );
+        } catch { /* individual delivery failure is non-fatal */ }
+      }
+    } catch { /* push send is always non-fatal */ }
+  }
+
+  // OTP rate limiting — keyed by IP; max 5 requests per 15 minutes
+  const otpRateLimitMap = new Map<string, number[]>();
+  const OTP_MAX_ATTEMPTS = 5;
+  const OTP_WINDOW_MS = 15 * 60 * 1000;
+  function checkOtpRateLimit(ip: string): boolean {
+    const now = Date.now();
+    const hits = (otpRateLimitMap.get(ip) || []).filter(t => now - t < OTP_WINDOW_MS);
+    hits.push(now);
+    otpRateLimitMap.set(ip, hits);
+    return hits.length <= OTP_MAX_ATTEMPTS;
+  }
+
+  function signCustomerToken(customerId: string, customerCode: string): string {
+    return jwt.sign({ customerId, customerCode, type: "customer" }, CUSTOMER_JWT_SECRET, { expiresIn: CUSTOMER_TOKEN_EXPIRY });
+  }
+
+  function verifyCustomerToken(token: string): { customerId: string; customerCode: string } | null {
+    try {
+      const payload = jwt.verify(token, CUSTOMER_JWT_SECRET) as any;
+      if (payload.type !== "customer") return null;
+      return { customerId: payload.customerId, customerCode: payload.customerCode };
+    } catch { return null; }
+  }
+
+  async function requireCustomerAuth(req: Request, res: Response): Promise<{ customerId: string; customerCode: string } | null> {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith("Bearer ")) { res.status(401).json({ message: "Authentication required" }); return null; }
+    const payload = verifyCustomerToken(auth.slice(7));
+    if (!payload) { res.status(401).json({ message: "Invalid or expired token" }); return null; }
+    return payload;
+  }
+
+  // Public VAPID key — no auth, used by portal and customer-app to subscribe to push
+  app.get("/api/public/vapid-key", (_req, res) => {
+    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY || "" });
+  });
+
+  // Public branding endpoint — no auth, used by customer-app on first load
+  app.get("/api/public/branding", async (_req, res) => {
+    try {
+      const settings = await storage.getSettings();
+      const get = (k: string) => settings.find((s: any) => s.key === k)?.value || "";
+      res.json({
+        companyName: get("company_name") || "GlobiPOS",
+        primaryColor: get("brand_primary_color") || "#722F37",
+        currencySymbol: get("currency_symbol") || "€",
+        vatRate: parseFloat(get("default_vat_rate") || "19"),
+        logoUrl: "/api/public/logo",
+        portalEnabled: get("portal_enabled") !== "false",
+        storefrontTemplate: ["classic", "fresh-market"].includes(get("customer_storefront_template"))
+          ? get("customer_storefront_template")
+          : "fresh-market",
+        storefrontTemplates: [
+          { id: "fresh-market", name: "Fresh Market", description: "Produce-led grocery storefront with prominent search, categories, and offers." },
+          { id: "classic", name: "Classic", description: "Compact mobile-first catalog and customer portal." },
+        ],
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // OTP-based customer authentication
+  app.post("/api/customer/auth/request-otp", async (req, res) => {
+    const ip = String(req.ip || req.headers["x-forwarded-for"] || "unknown");
+    if (!checkOtpRateLimit(ip)) {
+      return res.status(429).json({ message: "Too many requests. Please wait before trying again." });
+    }
+    try {
+      const { email } = req.body;
+      if (!email) return res.status(400).json({ message: "Email required" });
+      // Generic response regardless of whether email exists — prevents user enumeration
+      const [customer] = await db.select().from(customers).where(
+        and(eq(customers.email, email.toLowerCase().trim()), eq(customers.active, true))
+      );
+      if (customer) {
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+        await db.insert(customerOtpTokens).values({
+          customerId: customer.id, email: email.toLowerCase().trim(),
+          code, expiresAt, used: false,
+        });
+        const settings = await storage.getSettings();
+        const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
+        try {
+          await sendEmailWithContent(email, `Your ${companyName} login code`, `<p>Your one-time login code is: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>This code expires in 10 minutes.</p>`);
+        } catch { /* email failure non-fatal */ }
+      }
+      // Always return 200 with the same message — do not reveal whether email exists
+      res.json({ message: "If this email is registered, you will receive a login code shortly." });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/auth/verify-otp", async (req, res) => {
+    try {
+      const { email, code } = req.body;
+      if (!email || !code) return res.status(400).json({ message: "Email and code required" });
+
+      const [otpRecord] = await db.select().from(customerOtpTokens).where(
+        and(
+          eq(customerOtpTokens.email, email.toLowerCase().trim()),
+          eq(customerOtpTokens.code, code.trim()),
+          eq(customerOtpTokens.used, false),
+          gte(customerOtpTokens.expiresAt, new Date())
+        )
+      ).orderBy(desc(customerOtpTokens.createdAt)).limit(1);
+
+      if (!otpRecord) return res.status(401).json({ message: "Invalid or expired code" });
+
+      await db.update(customerOtpTokens).set({ used: true }).where(eq(customerOtpTokens.id, otpRecord.id));
+
+      const [customer] = await db.select().from(customers).where(eq(customers.id, otpRecord.customerId));
+      if (!customer || !customer.active) return res.status(403).json({ message: "Account inactive" });
+
+      const token = signCustomerToken(customer.id, customer.code);
+      res.json({ token, customer: { id: customer.id, name: customer.name, code: customer.code, email: customer.email, priceLevel: customer.priceLevel } });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Also support portal-code login (existing portal auth via /api/customer/auth/login)
+  app.post("/api/customer/auth/login", async (req, res) => {
+    try {
+      const { code, accessCode } = req.body;
+      if (!code || !accessCode) return res.status(400).json({ message: "Customer code and access code required" });
+      const customer = await storage.getCustomerByCode(code.toUpperCase());
+      if (!customer || !customer.active) return res.status(401).json({ message: "Invalid credentials" });
+      if (!customer.portalAccessCode || customer.portalAccessCode !== accessCode) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+      const token = signCustomerToken(customer.id, customer.code);
+      res.json({ token, customer: { id: customer.id, name: customer.name, code: customer.code, email: customer.email, priceLevel: customer.priceLevel } });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/me", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Not found" });
+      res.json({ id: customer.id, name: customer.name, code: customer.code, email: customer.email,
+        phone: customer.phone, address: customer.address, city: customer.city,
+        priceLevel: customer.priceLevel, creditLimit: customer.creditLimit,
+        currentBalance: customer.currentBalance, paymentTerms: customer.paymentTerms });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/catalog", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const { search, categoryId, page = "1", limit = "48" } = req.query as Record<string, string>;
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Not found" });
+
+      let allItems = await storage.getAvailableItems();
+      if (search) allItems = allItems.filter((i: any) =>
+        i.name.toLowerCase().includes(search.toLowerCase()) ||
+        i.sku?.toLowerCase().includes(search.toLowerCase()) ||
+        i.brand?.toLowerCase().includes(search.toLowerCase())
+      );
+      if (categoryId) allItems = allItems.filter((i: any) => i.categoryId === categoryId);
+
+      const pl = customer.priceLevel || 1;
+      const paged = allItems.slice((+page - 1) * +limit, +page * +limit).map((i: any) => ({
+        ...i,
+        customerPrice: parseFloat(String(i[`price${pl}`] || i.price1)),
+      }));
+
+      const cats = await storage.getCategories();
+      res.json({ items: paged, total: allItems.length, page: +page, categories: cats });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/catalog/:id", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const customer = await storage.getCustomer(auth.customerId);
+      const item = await storage.getItem((req.params.id as string));
+      if (!item) return res.status(404).json({ message: "Not found" });
+      const pl = customer?.priceLevel || 1;
+      res.json({ ...item, customerPrice: parseFloat(String((item as any)[`price${pl}`] || item.price1)) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/barcode/:barcode", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const customer = await storage.getCustomer(auth.customerId);
+      const allItems = await storage.getAvailableItems();
+      const barcode = req.params.barcode as string;
+      const exactVariant = await storage.getItemVariantByBarcode(barcode);
+      if (exactVariant) {
+        const parent = await storage.getItem(exactVariant.itemId);
+        if (!parent || !parent.active || exactVariant.stockQuantity <= 0) {
+          return res.status(404).json({ message: "Item not found for this barcode" });
+        }
+        const merged = mergeVariantIntoItem(parent, exactVariant);
+        const pl = customer?.priceLevel || 1;
+        return res.json({
+          ...merged,
+          customerPrice: parseFloat(String((merged as any)[`price${pl}`] || merged.price1)),
+          scaleBarcode: null,
+        });
+      }
+      const scaleBarcode = parseScaleBarcode(barcode);
+      const pluVariant = scaleBarcode ? await storage.getItemVariantByBarcode(scaleBarcode.plu) : undefined;
+      const variantParent = pluVariant ? await storage.getItem(pluVariant.itemId) : undefined;
+      const item = (variantParent && variantParent.active && pluVariant!.stockQuantity > 0
+        ? mergeVariantIntoItem(variantParent, pluVariant)
+        : allItems.find((i: any) => i.barcode === scaleBarcode?.plu))
+        || allItems.find((i: any) => i.barcode === barcode);
+      if (!item) return res.status(404).json({ message: "Item not found for this barcode" });
+      if (scaleBarcode?.type === "price") {
+        const registeredItem = await storage.getItemByAnyBarcode(barcode);
+        if (!isEmbeddedPriceLabelAuthorized(scaleBarcode, item.id, registeredItem?.id)) {
+          return res.status(404).json({ message: "Price label is not registered for this item" });
+        }
+      }
+      const pl = customer?.priceLevel || 1;
+      const normalPrice = parseFloat(String((item as any)[`price${pl}`] || (item as any).price1));
+      res.json({
+        ...(item as any),
+        customerPrice: scaleBarcode?.type === "price" && scaleBarcode.value > 0 ? scaleBarcode.value : normalPrice,
+        scaleBarcode,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/invoices", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const invList = await storage.getCustomerInvoices(auth.customerId);
+      res.json(invList);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/statement", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const statements = await storage.getCustomerStatements();
+      const st = statements.find((s: any) => s.customerId === auth.customerId);
+      res.json(st || { customerId: auth.customerId, balance: "0.00", totalInvoiced: "0.00", totalPaid: "0.00", invoiceCount: 0 });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/account-summary", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Not found" });
+      const invList = await storage.getCustomerInvoices(auth.customerId);
+      const overdueCount = invList.filter((i: any) => i.status === "overdue").length;
+      const overdueAmount = invList
+        .filter((i: any) => i.status === "overdue")
+        .reduce((s: number, i: any) => s + parseFloat(i.total), 0);
+      const [loyaltyRows] = await db.select({
+        total: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
+      res.json({
+        balance: customer.currentBalance,
+        creditLimit: customer.creditLimit,
+        availableCredit: (parseFloat(String(customer.creditLimit)) - parseFloat(String(customer.currentBalance))).toFixed(2),
+        overdueCount,
+        overdueAmount: overdueAmount.toFixed(2),
+        loyaltyPoints: loyaltyRows?.total || 0,
+        paymentTerms: customer.paymentTerms,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/orders", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const orders = await storage.getPortalOrders(auth.customerId);
+      res.json(orders);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/orders", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const { items: orderItems, notes, deliveryType = "collection", deliveryAddress, useCashback = false, checkoutKey } = req.body;
+      if (typeof checkoutKey !== "string" || !/^[0-9a-f-]{36}$/i.test(checkoutKey)) {
+        return res.status(428).json({
+          code: "CUSTOMER_APP_UPDATE_REQUIRED",
+          message: "Please refresh or update the customer app before placing this order.",
+        });
+      }
+      const replay = await storage.getCustomerPortalOrderByCheckoutKey(auth.customerId, checkoutKey);
+      if (replay) return res.json({ ...replay, proformaId: null, proformaNumber: null });
+      if (!orderItems?.length) return res.status(400).json({ message: "Items required" });
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+      const loyaltyPolicy = await getLoyaltyPolicy();
+
+      const VAT_RATE = 0.19;
+      let subtotal = 0;
+      const processedItems: any[] = [];
+      for (const oi of orderItems) {
+        const item = await storage.getItem(oi.itemId);
+        if (!item) continue;
+        const pl = customer.priceLevel || 1;
+        let quantity = oi.quantity;
+        let resolvedVariant: any | undefined;
+        let scaleBarcode = null;
+        if (oi.barcode) {
+          const barcode = String(oi.barcode);
+          const exactVariant = await storage.getItemVariantByBarcode(barcode);
+          if (exactVariant) {
+            if (exactVariant.itemId !== item.id) {
+              return res.status(400).json({ message: "Scanned barcode does not match the ordered item" });
+            }
+            // Exact synthesized variants (including 29-prefix EANs) are ordinary
+            // unit lines and must never inherit scale semantics.
+            resolvedVariant = exactVariant;
+          }
+          const scale = parseScaleBarcodeAfterVariantLookup(barcode, !!exactVariant);
+          if (scale) {
+            const pluVariant = await storage.getItemVariantByBarcode(scale.plu);
+            const pluItem = pluVariant ? await storage.getItem(pluVariant.itemId) : await storage.getItemByAnyBarcode(scale.plu);
+            const fullItem = pluItem ? undefined : await storage.getItemByAnyBarcode(barcode);
+            const resolvedItemId = pluVariant?.itemId || pluItem?.id || fullItem?.id;
+            if (resolvedItemId !== item.id) {
+              return res.status(400).json({ message: "Scanned barcode does not match the ordered item" });
+            }
+            if (scale.type === "price") {
+              const registeredItem = await storage.getItemByAnyBarcode(barcode);
+              if (!isEmbeddedPriceLabelAuthorized(scale, item.id, registeredItem?.id)) {
+                return res.status(400).json({ message: "Price label is not registered for this item" });
+              }
+            }
+            resolvedVariant = pluVariant;
+            scaleBarcode = scale;
+          }
+        }
+        const priceSource = resolvedVariant ? mergeVariantIntoItem(item, resolvedVariant) : item;
+        const normalPrice = parseFloat(String((priceSource as any)[`price${pl}`] || priceSource.price1));
+        let unitPrice = normalPrice;
+        ({ quantity, unitPrice } = applyScaleBarcodeSaleValues(scaleBarcode, quantity, unitPrice));
+        const lineTotal = unitPrice * quantity;
+        subtotal += lineTotal;
+        const itemName = item.name.trim() || item.sku?.trim() || `Item ${item.id}`;
+        processedItems.push({ itemId: item.id, itemName, quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+      }
+
+      const vatAmount = subtotal * VAT_RATE;
+      const checkout = await storage.createCustomerPortalOrderAtomic(
+        {
+          customerId: auth.customerId,
+          checkoutKey,
+          subtotal: subtotal.toFixed(2),
+          vatAmount: vatAmount.toFixed(2),
+          notes: notes || null,
+          status: "pending",
+        },
+        processedItems.map((pi) => ({ ...pi, orderId: "TEMP" })),
+        { ...loyaltyPolicy, useCashback },
+      );
+      const { order } = checkout;
+      const total = Number(order.total);
+
+      // Create a Proforma invoice for the order
+      let proforma: any = null;
+      if (!checkout.replayed) try {
+        const proformaItems = processedItems.map((pi) => ({
+          itemId: pi.itemId, description: pi.itemName, quantity: String(pi.quantity),
+          unitPrice: pi.unitPrice, vatRate: "19.00", discount: "0.00",
+          total: pi.total, invoiceId: "TEMP", saleUnit: "bottle",
+        }));
+        proforma = await storage.createInvoice(
+          {
+            customerId: auth.customerId, type: "proforma", status: "sent",
+            date: new Date().toISOString().split("T")[0],
+            dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+            subtotal: subtotal.toFixed(2), taxRate: "19.00",
+            taxAmount: (subtotal * 0.19).toFixed(2), discountAmount: "0.00",
+            total: total.toFixed(2), notes: notes || `Portal order #${order.id.slice(0, 8)}`,
+            invoiceNumber: "TEMP",
+          },
+          proformaItems
+        );
+        // Send confirmation email (non-fatal)
+        try {
+          if (customer.email) {
+            const settings = await storage.getSettings();
+            const companyName = settings.find((s: any) => s.key === "company_name")?.value || "GlobiPOS";
+            const subject = `Order Confirmation — ${proforma.invoiceNumber}`;
+            const html = `<p>Dear ${customer.name},</p><p>Thank you for your order. Your proforma reference is <strong>${proforma.invoiceNumber}</strong> for <strong>€${total.toFixed(2)}</strong>.</p><p>We will process your order shortly.</p><p>${companyName}</p>`;
+            await sendEmailWithContent(customer.email, subject, html);
+          }
+        } catch { /* email non-fatal */ }
+      } catch { /* proforma creation non-fatal */ }
+
+      const [preference] = await db.select({ notificationOrderUpdates: customerPreferences.notificationOrderUpdates })
+        .from(customerPreferences).where(eq(customerPreferences.customerId, auth.customerId)).limit(1);
+      if (preference?.notificationOrderUpdates !== false) {
+        await db.insert(customerNotifications).values({
+          customerId: auth.customerId,
+          title: "Order received",
+          body: `Your order #${order.id.slice(0, 8)} has been received.`,
+          type: "order",
+          actionUrl: "/orders",
+        }).catch(() => {/* inbox delivery is non-fatal */});
+      }
+
+      res.json({ ...order, proformaId: proforma?.id || null, proformaNumber: proforma?.invoiceNumber || null });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/customer/orders/:id/reorder", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const orders = await storage.getPortalOrders(auth.customerId);
+      const original = orders.find((o: any) => o.id === (req.params.id as string));
+      if (!original) return res.status(404).json({ message: "Order not found" });
+
+      const orderItems = (original.items || []).map((i: any) => ({ itemId: i.itemId, quantity: i.quantity }));
+      if (!orderItems.length) return res.status(400).json({ message: "Original order has no items" });
+
+      const customer = await storage.getCustomer(auth.customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+
+      const VAT_RATE = 0.19;
+      let subtotal = 0;
+      const processedItems: any[] = [];
+      for (const oi of orderItems) {
+        const item = await storage.getItem(oi.itemId);
+        if (!item) continue;
+        const pl = customer.priceLevel || 1;
+        const unitPrice = parseFloat(String((item as any)[`price${pl}`] || item.price1));
+        const lineTotal = unitPrice * oi.quantity;
+        subtotal += lineTotal;
+        processedItems.push({ itemId: item.id, itemName: item.name, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+      }
+      const vatAmount = subtotal * VAT_RATE;
+      const total = subtotal + vatAmount;
+      const newOrder = await storage.createPortalOrder(
+        { customerId: auth.customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: `Reorder of ${(req.params.id as string).slice(0, 8)}`, status: "pending" },
+        processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
+      );
+      res.json(newOrder);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/customer/loyalty", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const history = await db.select().from(customerLoyaltyPoints)
+        .where(eq(customerLoyaltyPoints.customerId, auth.customerId))
+        .orderBy(desc(customerLoyaltyPoints.createdAt)).limit(50);
+      const [totals] = await db.select({
+        earned: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='earn' then ${customerLoyaltyPoints.points} else 0 end),0)`,
+        redeemed: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='redeem' then ${customerLoyaltyPoints.points} else 0 end),0)`,
+        balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
+      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
+
+      const balance = totals?.balance || 0;
+      const policy = await getLoyaltyPolicy();
+      const tier = loyaltyTier(balance, policy);
+      const nextTier = tier === "Bronze"
+        ? { name: "Silver", threshold: policy.silverThreshold }
+        : tier === "Silver"
+          ? { name: "Gold", threshold: policy.goldThreshold }
+          : null;
+      const cashbackRate = policy.cashbackEnabled ? cashbackRateForTier(tier, policy) : 0;
+
+      const customer = await storage.getCustomer(auth.customerId);
+      const cashbackBalance = parseFloat(String(customer?.cashbackBalance || "0"));
+
+      res.json({
+        balance,
+        earned: totals?.earned || 0,
+        redeemed: Math.abs(totals?.redeemed || 0),
+        tier,
+        nextTier,
+        cashbackBalance,
+        cashbackRate,
+        loyaltyPointsPerEuro: policy.loyaltyEnabled ? policy.pointsPerEuro : 0,
+        loyaltyEnabled: policy.loyaltyEnabled,
+        cashbackEnabled: policy.cashbackEnabled,
+        redeemPointsPerEuro: policy.redeemPointsPerEuro,
+        minimumRedemptionPoints: policy.minimumRedemptionPoints,
+        tierThresholds: { silver: policy.silverThreshold, gold: policy.goldThreshold },
+        cashbackRates: {
+          bronze: policy.bronzeCashbackPercent / 100,
+          silver: policy.silverCashbackPercent / 100,
+          gold: policy.goldCashbackPercent / 100,
+        },
+        maxCashbackOrderPercent: policy.maxCashbackOrderPercent,
+        history: history.map((h) => ({
+          id: h.id, points: h.points, type: h.type, reason: h.reason,
+          sourceType: h.sourceType, createdAt: h.createdAt,
+        })),
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Push notification subscription management
+  app.post("/api/customer/push/subscribe", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const { endpoint, keys } = req.body;
+      if (!endpoint || !keys?.p256dh || !keys?.auth) return res.status(400).json({ message: "Invalid subscription" });
+
+      const userAgent = (req.headers["user-agent"] as string | undefined) || null;
+      await db.insert(customerPushSubscriptions)
+        .values({ customerId: auth.customerId, endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent })
+        .onConflictDoUpdate({ target: customerPushSubscriptions.endpoint, set: { customerId: auth.customerId, p256dh: keys.p256dh, auth: keys.auth, userAgent } });
+
+      // Prune older subscriptions for this customer on the same device (same userAgent, different
+      // endpoint) — happens when a browser reinstall / re-subscribe issues a new push endpoint,
+      // so the old dead endpoint doesn't keep piling up and drawing 410 Gone responses.
+      if (userAgent) {
+        await db.delete(customerPushSubscriptions).where(
+          and(
+            eq(customerPushSubscriptions.customerId, auth.customerId),
+            eq(customerPushSubscriptions.userAgent, userAgent),
+            sql`${customerPushSubscriptions.endpoint} != ${endpoint}`
+          )
+        );
+      }
+
+      res.json({ message: "Subscribed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/customer/push/subscribe", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const { endpoint } = req.body;
+      if (endpoint) {
+        await db.delete(customerPushSubscriptions).where(
+          and(eq(customerPushSubscriptions.endpoint, endpoint), eq(customerPushSubscriptions.customerId, auth.customerId))
+        );
+      }
+      res.json({ message: "Unsubscribed" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // VAPID public key endpoint (used by customer-app to subscribe to push)
+  app.get("/api/customer/push/vapid-public-key", (_req, res) => {
+    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY || "" });
+  });
+
+  // ─── Loyalty: redeem points ─────────────────────────────────────────────────
+  app.post("/api/customer/loyalty/redeem", async (req, res) => {
+    const auth = await requireCustomerAuth(req, res);
+    if (!auth) return;
+    try {
+      const policy = await getLoyaltyPolicy();
+      if (!policy.loyaltyEnabled) return res.status(400).json({ message: "Loyalty redemptions are disabled" });
+      if (!policy.cashbackEnabled) return res.status(400).json({ message: "Cashback wallet is disabled" });
+      const { points } = req.body;
+      const pts = parseInt(points, 10);
+      if (!pts || pts < policy.minimumRedemptionPoints) {
+        return res.status(400).json({ message: `Minimum redemption is ${policy.minimumRedemptionPoints} points` });
+      }
+      if (pts % policy.redeemPointsPerEuro !== 0) {
+        return res.status(400).json({ message: `Points must be redeemed in multiples of ${policy.redeemPointsPerEuro}` });
+      }
+
+      const result = await db.transaction(async (tx) => {
+        await tx.execute(sql`select id from ${customers} where ${customers.id} = ${auth.customerId} for update`);
+        const [totals] = await tx.select({
+          balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
+        }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
+        const balance = Number(totals?.balance || 0);
+        if (pts > balance) throw new Error("INSUFFICIENT_POINTS");
+        const discountEuros = pts / policy.redeemPointsPerEuro;
+        await tx.insert(customerLoyaltyPoints).values({
+          customerId: auth.customerId,
+          points: -pts,
+          type: "redeem",
+          reason: `Converted ${pts} pts to €${discountEuros.toFixed(2)} cashback`,
+          sourceType: "redemption",
+          sourceId: null,
+        });
+        await tx.update(customers)
+          .set({ cashbackBalance: sql`coalesce(${customers.cashbackBalance}, 0) + ${discountEuros.toFixed(2)}` })
+          .where(eq(customers.id, auth.customerId));
+        return { newBalance: balance - pts, discountEuros };
+      });
+      res.json({ pointsRedeemed: pts, newBalance: result.newBalance, discountEuros: result.discountEuros.toFixed(2) });
+    } catch (e: any) {
+      if (e?.message === "INSUFFICIENT_POINTS") return res.status(400).json({ message: "Insufficient points balance" });
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ─── Admin: push notification management ────────────────────────────────────
+
+  // Stats: how many customers are subscribed
+  app.get("/api/admin/push/stats", requireAdmin, async (_req, res) => {
+    try {
+      const [{ subscribed }] = await db.select({
+        subscribed: sql<number>`count(distinct ${customerPushSubscriptions.customerId})`,
+      }).from(customerPushSubscriptions);
+      const [{ total }] = await db.select({
+        total: sql<number>`count(*)`,
+      }).from(customers).where(eq(customers.active, true));
+      res.json({ subscribed: Number(subscribed), total: Number(total) });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Broadcast push to all subscribed customers
+  app.post("/api/admin/push/broadcast", requireAdmin, async (req, res) => {
+    try {
+      const { title, body, url } = req.body;
+      if (!title?.trim() || !body?.trim()) return res.status(400).json({ message: "Title and body required" });
+
+      const subsWithCustomers = await db
+        .selectDistinct({ customerId: customerPushSubscriptions.customerId })
+        .from(customerPushSubscriptions)
+        .innerJoin(customers, and(eq(customers.id, customerPushSubscriptions.customerId), eq(customers.active, true)));
+
+      let sent = 0;
+      for (const { customerId } of subsWithCustomers) {
+        await sendPushToCustomer(customerId, { title: title.trim(), body: body.trim(), url: url || "/" });
+        sent++;
+      }
+      res.json({ sent, message: `Push sent to ${sent} subscriber(s)` });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Send push to individual customer
+  app.post("/api/admin/push/customer/:id", requireAdmin, async (req, res) => {
+    try {
+      const { title, body, url } = req.body;
+      if (!title?.trim() || !body?.trim()) return res.status(400).json({ message: "Title and body required" });
+
+      const subs = await db.select().from(customerPushSubscriptions)
+        .where(eq(customerPushSubscriptions.customerId, (req.params.id as string)));
+      if (!subs.length) return res.status(404).json({ message: "No push subscriptions found for this customer" });
+
+      await sendPushToCustomer((req.params.id as string), { title: title.trim(), body: body.trim(), url: url || "/" });
+      res.json({ message: "Push notification sent" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // List all customers with their push subscription status
+  app.get("/api/admin/push/subscribers", requireAdmin, async (_req, res) => {
+    try {
+      const subs = await db.select({ customerId: customerPushSubscriptions.customerId })
+        .from(customerPushSubscriptions);
+      const subscribedIds = new Set(subs.map((s) => s.customerId));
+      const allCustomers = await db.select().from(customers).where(eq(customers.active, true)).orderBy(customers.name);
+      res.json(allCustomers.map((c) => ({
+        id: c.id, name: c.name, code: c.code, email: c.email,
+        subscribed: subscribedIds.has(c.id),
+      })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Card terminal status & test
+  // Status is view-only (no secrets returned) so staff can see connection state
+  // without being able to change any configuration — see requireAdmin below on
+  // the test/activate/config-mutating endpoints.
+  app.get("/api/pos/card-terminal/status", requireStaff, async (_req, res) => {
+    const [providerRow] = await db.select().from(systemSettings).where(eq(systemSettings.key, "card_terminal_provider"));
+    res.json({
+      activeProvider: providerRow?.value || null,
+      jccConfigured: !!(process.env.JCC_MERCHANT_ID && process.env.JCC_API_KEY && process.env.JCC_TERMINAL_ID),
+      vivaConfigured: !!(process.env.VIVA_CLIENT_ID && process.env.VIVA_CLIENT_SECRET && process.env.VIVA_MERCHANT_ID),
+      worldpayConfigured: !!(process.env.WORLDPAY_ENTITY_ID && process.env.WORLDPAY_API_KEY),
+    });
+  });
+
+  app.post("/api/pos/card-terminal/test", requireAdmin, async (req, res) => {
+    const { provider } = req.body;
+    if (!["jcc", "viva", "worldpay"].includes(provider)) {
+      return res.status(400).json({ success: false, message: "Unknown provider" });
+    }
+    if (provider === "jcc") {
+      if (!process.env.JCC_MERCHANT_ID || !process.env.JCC_API_KEY) {
+        return res.json({ success: false, message: "JCC credentials not configured. Set JCC_MERCHANT_ID, JCC_API_KEY, and JCC_TERMINAL_ID." });
+      }
+      return res.json({ success: true, message: `JCC credentials present (Merchant: ${process.env.JCC_MERCHANT_ID}). Connect a physical JCC terminal to test live transactions.` });
+    }
+    if (provider === "viva") {
+      if (!process.env.VIVA_CLIENT_ID || !process.env.VIVA_CLIENT_SECRET) {
+        return res.json({ success: false, message: "Viva credentials not configured. Set VIVA_CLIENT_ID, VIVA_CLIENT_SECRET, VIVA_MERCHANT_ID, and VIVA_SOURCE_CODE." });
+      }
+      try {
+        const tokenRes = await fetch("https://accounts.vivapayments.com/connect/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ grant_type: "client_credentials", client_id: process.env.VIVA_CLIENT_ID, client_secret: process.env.VIVA_CLIENT_SECRET }),
+        });
+        if (tokenRes.ok) {
+          return res.json({ success: true, message: "Viva Wallet OAuth token obtained successfully. Integration is ready." });
+        }
+        return res.json({ success: false, message: `Viva auth failed (${tokenRes.status}). Check credentials.` });
+      } catch (e: any) {
+        return res.json({ success: false, message: `Viva connection error: ${e.message}` });
+      }
+    }
+    if (provider === "worldpay") {
+      if (!process.env.WORLDPAY_ENTITY_ID || !process.env.WORLDPAY_API_KEY) {
+        return res.json({ success: false, message: "Worldpay credentials not configured. Set WORLDPAY_ENTITY_ID, WORLDPAY_API_KEY, and WORLDPAY_TERMINAL_GROUP." });
+      }
+      return res.json({ success: true, message: `Worldpay credentials present (Entity: ${process.env.WORLDPAY_ENTITY_ID}). Connect a registered terminal to test transactions.` });
+    }
+  });
+
+  // Card terminal charge — initiates a payment on the physical terminal and polls for result
+  app.post("/api/pos/card-terminal/charge", requireStaff, async (req, res) => {
+    const { orderId, idempotencyKey } = req.body;
+    const currency = "EUR";
+
+    // ── Idempotency guard (synchronous, before any await) ──────────────────────
+    // Node.js is single-threaded: this check+add runs atomically before any I/O yield.
+    // A second request with the same key arriving while the first is awaiting will
+    // always see the key in the Set and receive a 409 — preventing duplicate charges.
+    if (idempotencyKey) {
+      if (chargeInflightKeys.has(idempotencyKey)) {
+        return res.status(409).json({
+          success: false,
+          reason: "in_progress",
+          message: "A charge with this idempotency key is already in progress. Duplicate charge prevented.",
+        });
+      }
+      chargeInflightKeys.add(idempotencyKey);
+    }
+
+    try {
+      if (!orderId || !idempotencyKey) {
+        return res.status(400).json({ success: false, message: "Order and idempotency key are required" });
+      }
+      const preCheckOrder = await storage.getPosOrder(orderId);
+      if (!preCheckOrder) return res.status(404).json({ success: false, message: "Order not found" });
+      if (
+        preCheckOrder.cashierId !== req.user!.id ||
+        !preCheckOrder.paymentMethod.startsWith("card")
+      ) {
+        return res.status(403).json({ success: false, message: "This card order does not belong to the current cashier" });
+      }
+      const authoritativeAmount = Number(preCheckOrder.total);
+      if (!Number.isFinite(authoritativeAmount) || authoritativeAmount <= 0) {
+        return res.status(400).json({ success: false, message: "Stored order total is invalid" });
+      }
+      const amountCents = Math.round(authoritativeAmount * 100);
+
+      // ── Pre-charge order status guard ─────────────────────────────────────────
+      // Check the order BEFORE calling the payment provider. If the order is already
+      // in a non-'held' state it means a previous charge succeeded — reject immediately
+      // without wasting an API call to the terminal provider.
+      if (orderId) {
+        if (preCheckOrder.status !== "held") {
+          return res.status(409).json({
+            success: false,
+            // "already_paid" means the order is genuinely done (completed/voided) —
+            // distinct from "in_progress", where the outcome is still unknown and a
+            // retry might be safe once the in-flight window elapses.
+            reason: "already_paid",
+            message: `Order is already '${preCheckOrder.status}' — duplicate charge prevented.`,
+            // The stored terminal reference (if any) lets the cashier verify the
+            // charge with the customer instead of just seeing a generic message.
+            existingRef: (preCheckOrder as any).cardTerminalRef || null,
+          });
+        }
+
+        // ── Persisted in-flight guard ─────────────────────────────────────────
+        // The chargeInflightKeys Set above only protects against duplicates within
+        // the same server process. If the server restarts (deploy/crash) mid-charge,
+        // that Set is wiped and a retry with the same key would sail through it. This
+        // DB-backed claim survives a restart: it fails if the order already has a
+        // *different*, still-recent idempotency key recorded, and succeeds (idempotently)
+        // if it's the same key retrying, OR if the prior attempt is older than
+        // CHARGE_IN_PROGRESS_WINDOW_MS (treated as abandoned so the order isn't locked
+        // out of card payment forever after a single ambiguous timeout).
+        if (idempotencyKey) {
+          const claimed = await storage.beginCardCharge(orderId, idempotencyKey, CHARGE_IN_PROGRESS_WINDOW_MS);
+          if (!claimed) {
+            return res.status(409).json({
+              success: false,
+              reason: "in_progress",
+              message: "A charge for this order is already recorded as in-progress — do not retry. Check the order list to confirm the payment before trying again.",
+            });
+          }
+        }
+      }
+
+      // Look up active provider from system settings
+      const [providerRow] = await db.select().from(systemSettings).where(eq(systemSettings.key, "card_terminal_provider"));
+      const provider = providerRow?.value;
+      if (!provider) {
+        if (orderId) await storage.clearCardChargeAttempt(orderId);
+        return res.status(400).json({ success: false, message: "No card terminal provider configured. Go to POS → Card Terminal to set one up." });
+      }
+
+      let transactionRef: string | null = null;
+
+      // ─── JCC ─────────────────────────────────────────────────────────────
+      if (provider === "jcc") {
+        if (!process.env.JCC_MERCHANT_ID || !process.env.JCC_API_KEY || !process.env.JCC_TERMINAL_ID) {
+          return res.status(400).json({ success: false, message: "JCC credentials not fully configured." });
+        }
+        const jccEndpoint = process.env.JCC_ENDPOINT || "https://jccpayments.com/api/v1";
+        const jccHeaders: Record<string, string> = {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.JCC_API_KEY}`,
+        };
+        if (idempotencyKey) jccHeaders["Idempotency-Key"] = idempotencyKey;
+        // Initiate sale
+        const initiateRes = await fetch(`${jccEndpoint}/transactions`, {
+          method: "POST",
+          headers: jccHeaders,
+          body: JSON.stringify({
+            merchantId: process.env.JCC_MERCHANT_ID,
+            terminalId: process.env.JCC_TERMINAL_ID,
+            amount: amountCents,
+            currency,
+            transactionType: "SALE",
+          }),
+        });
+        if (!initiateRes.ok) {
+          const errText = await initiateRes.text().catch(() => "");
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
+          return res.json({ success: false, message: `JCC initiation failed (${initiateRes.status}): ${errText}` });
+        }
+        const initiateData = await initiateRes.json();
+        const txId: string = initiateData.transactionId || initiateData.id;
+        if (!txId) {
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
+          return res.json({ success: false, message: "JCC did not return a transaction ID." });
+        }
+
+        // Poll up to 60s for terminal response
+        const deadline = Date.now() + 60_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 3000));
+          const pollRes = await fetch(`${jccEndpoint}/transactions/${txId}`, {
+            headers: { "Authorization": `Bearer ${process.env.JCC_API_KEY}` },
+          });
+          if (pollRes.ok) {
+            const pollData = await pollRes.json();
+            const txStatus: string = (pollData.status || "").toUpperCase();
+            if (txStatus === "APPROVED") {
+              transactionRef = txId;
+              break;
+            }
+            if (txStatus === "DECLINED" || txStatus === "FAILED" || txStatus === "CANCELLED") {
+              // Definitive answer from the provider — safe to release the persisted
+              // in-flight claim so a retry with a fresh key isn't blocked.
+              if (orderId) await storage.clearCardChargeAttempt(orderId);
+              return res.json({ success: false, message: `Payment ${txStatus.toLowerCase()} by JCC terminal.` });
+            }
+          }
+        }
+        if (!transactionRef) {
+          return res.json({ success: false, message: "JCC terminal did not respond within 60 seconds. Please retry." });
+        }
+      }
+
+      // ─── Viva Wallet ──────────────────────────────────────────────────────
+      else if (provider === "viva") {
+        if (!process.env.VIVA_CLIENT_ID || !process.env.VIVA_CLIENT_SECRET || !process.env.VIVA_SOURCE_CODE) {
+          return res.status(400).json({ success: false, message: "Viva credentials not fully configured." });
+        }
+        // Obtain OAuth token
+        const tokenRes = await fetch("https://accounts.vivapayments.com/connect/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "client_credentials",
+            client_id: process.env.VIVA_CLIENT_ID,
+            client_secret: process.env.VIVA_CLIENT_SECRET,
+          }),
+        });
+        if (!tokenRes.ok) {
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
+          return res.json({ success: false, message: `Viva authentication failed (${tokenRes.status}). Check credentials.` });
+        }
+        const { access_token } = await tokenRes.json();
+
+        // Create payment order
+        // merchantTrns doubles as an idempotency/dedup reference for Viva
+        const vivaMerchantTrns = idempotencyKey || orderId || "pos-sale";
+        const orderRes = await fetch("https://api.vivapayments.com/checkout/v2/orders", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${access_token}`,
+          },
+          body: JSON.stringify({
+            amount: amountCents,
+            customerTrns: `POS Sale${orderId ? " #" + orderId : ""}`,
+            customer: { email: "pos@internal", phone: "", fullName: "POS Customer", countryCode: "CY", requestLang: "en-CY" },
+            paymentTimeout: 60,
+            preauth: false,
+            sourceCode: process.env.VIVA_SOURCE_CODE,
+            merchantTrns: vivaMerchantTrns,
+          }),
+        });
+        if (!orderRes.ok) {
+          const errText = await orderRes.text().catch(() => "");
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
+          return res.json({ success: false, message: `Viva order creation failed (${orderRes.status}): ${errText}` });
+        }
+        const { orderCode } = await orderRes.json();
+
+        // Poll for transaction completion (up to 60s)
+        const deadline = Date.now() + 60_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 3000));
+          const statusRes = await fetch(`https://api.vivapayments.com/checkout/v2/transactions?ordercode=${orderCode}`, {
+            headers: { "Authorization": `Bearer ${access_token}` },
+          });
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            const txList = statusData.transactions || statusData.Transactions || [];
+            const completed = txList.find((t: any) => t.statusId === "F" || t.StatusId === "F");
+            if (completed) {
+              transactionRef = completed.transactionId || completed.TransactionId || String(orderCode);
+              break;
+            }
+            const declined = txList.find((t: any) => ["E", "X", "R"].includes(t.statusId || t.StatusId || ""));
+            if (declined) {
+              if (orderId) await storage.clearCardChargeAttempt(orderId);
+              return res.json({ success: false, message: "Payment declined by Viva terminal." });
+            }
+          }
+        }
+        if (!transactionRef) {
+          return res.json({ success: false, message: "Viva terminal did not respond within 60 seconds. Please retry." });
+        }
+      }
+
+      // ─── Worldpay ─────────────────────────────────────────────────────────
+      else if (provider === "worldpay") {
+        if (!process.env.WORLDPAY_ENTITY_ID || !process.env.WORLDPAY_API_KEY) {
+          return res.status(400).json({ success: false, message: "Worldpay credentials not fully configured." });
+        }
+        const wpEndpoint = process.env.WORLDPAY_ENDPOINT || "https://access.worldpay.com/api";
+        const wpHeaders: Record<string, string> = {
+          "Content-Type": "application/json",
+          "Authorization": `Basic ${Buffer.from(`${process.env.WORLDPAY_ENTITY_ID}:${process.env.WORLDPAY_API_KEY}`).toString("base64")}`,
+        };
+        if (idempotencyKey) wpHeaders["Idempotency-Key"] = idempotencyKey;
+        // Initiate terminal transaction
+        const initiateRes = await fetch(`${wpEndpoint}/terminal/transactions`, {
+          method: "POST",
+          headers: wpHeaders,
+          body: JSON.stringify({
+            entityId: process.env.WORLDPAY_ENTITY_ID,
+            terminalGroup: process.env.WORLDPAY_TERMINAL_GROUP || "",
+            transactionType: "SALE",
+            amount: { value: amountCents, currency },
+            reference: orderId || `pos-${Date.now()}`,
+          }),
+        });
+        if (!initiateRes.ok) {
+          const errText = await initiateRes.text().catch(() => "");
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
+          return res.json({ success: false, message: `Worldpay initiation failed (${initiateRes.status}): ${errText}` });
+        }
+        const initiateData = await initiateRes.json();
+        const txId: string = initiateData.transactionId || initiateData.id || initiateData.reference;
+        if (!txId) {
+          if (orderId) await storage.clearCardChargeAttempt(orderId);
+          return res.json({ success: false, message: "Worldpay did not return a transaction ID." });
+        }
+
+        // Poll for result (up to 60s)
+        const deadline = Date.now() + 60_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 3000));
+          const pollRes = await fetch(`${wpEndpoint}/terminal/transactions/${txId}`, {
+            headers: {
+              "Authorization": `Basic ${Buffer.from(`${process.env.WORLDPAY_ENTITY_ID}:${process.env.WORLDPAY_API_KEY}`).toString("base64")}`,
+            },
+          });
+          if (pollRes.ok) {
+            const pollData = await pollRes.json();
+            const txStatus: string = (pollData.status || pollData.outcome || "").toUpperCase();
+            if (txStatus === "AUTHORIZED" || txStatus === "APPROVED" || txStatus === "SUCCESS") {
+              transactionRef = txId;
+              break;
+            }
+            if (txStatus === "DECLINED" || txStatus === "FAILED" || txStatus === "REFUSED" || txStatus === "CANCELLED") {
+              if (orderId) await storage.clearCardChargeAttempt(orderId);
+              return res.json({ success: false, message: `Payment ${txStatus.toLowerCase()} by Worldpay terminal.` });
+            }
+          }
+        }
+        if (!transactionRef) {
+          return res.json({ success: false, message: "Worldpay terminal did not respond within 60 seconds. Please retry." });
+        }
+      } else {
+        if (orderId) await storage.clearCardChargeAttempt(orderId);
+        return res.status(400).json({ success: false, message: `Unknown provider: ${provider}` });
+      }
+
+      // Mark the held order as completed with the terminal reference
+      if (orderId && transactionRef) {
+        const existing = await storage.getPosOrder(orderId);
+        if (!existing) {
+          return res.status(404).json({ success: false, message: "Order not found — cannot record payment." });
+        }
+        if (existing.status !== "held") {
+          return res.status(409).json({
+            success: false,
+            reason: "already_paid",
+            message: `Order is already '${existing.status}' — duplicate charge prevented.`,
+            existingRef: (existing as any).cardTerminalRef || null,
+          });
+        }
+        await storage.completeCardPosOrder(orderId, transactionRef, authoritativeAmount.toFixed(2));
+      }
+
+      return res.json({ success: true, transactionRef, provider, message: `Payment approved. Reference: ${transactionRef}` });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    } finally {
+      // Always release the inflight key so the Set doesn't grow without bound.
+      // A genuine retry by the cashier will arrive with a new key (the frontend rotates
+      // the UUID on every decline/reset), so releasing here is safe.
+      if (idempotencyKey) chargeInflightKeys.delete(idempotencyKey);
+    }
+  });
+
+  // Charge status — lets the POS UI check whether a held order's card charge is
+  // still considered "in progress" (e.g. right after a server restart wiped the
+  // in-memory guard) so it can tell the cashier not to retry instead of silently
+  // allowing a duplicate charge or spinning forever.
+  app.get("/api/pos/card-terminal/charge-status/:orderId", requireStaff, async (req, res) => {
+    try {
+      const order = await storage.getPosOrder((req.params.orderId as string));
+      if (!order) {
+        return res.status(404).json({ success: false, message: "Order not found" });
+      }
+      if (order.cashierId !== req.user!.id) {
+        return res.status(403).json({ success: false, message: "This order does not belong to the current cashier" });
+      }
+      const attemptedAt = (order as any).chargeAttemptedAt ? new Date((order as any).chargeAttemptedAt) : null;
+      const ageMs = attemptedAt ? Date.now() - attemptedAt.getTime() : null;
+      const inProgress = order.status === "held" && !!(order as any).idempotencyKey && ageMs !== null && ageMs < CHARGE_IN_PROGRESS_WINDOW_MS;
+      if (order.status === "completed" && order.paymentMethod.startsWith("card") && !order.cardTerminalRef?.trim()) {
+        console.error(`[card-terminal] Data integrity violation: completed card order ${order.id} has no terminal reference`);
+        return res.status(409).json({
+          success: false,
+          orderId: order.id,
+          status: order.status,
+          cardTerminalRef: null,
+          inProgress: false,
+          ageSeconds: ageMs !== null ? Math.round(ageMs / 1000) : null,
+          message: "Completed card order has no recorded terminal reference. Verify the payment before continuing.",
+        });
+      }
+      return res.json({
+        success: true,
+        orderId: order.id,
+        status: order.status,
+        cardTerminalRef: order.cardTerminalRef || null,
+        inProgress,
+        ageSeconds: ageMs !== null ? Math.round(ageMs / 1000) : null,
+      });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post("/api/settings/card_terminal_provider", requireAdmin, async (req, res) => {
+    try {
+      const { value } = req.body;
+      if (!["jcc", "viva", "worldpay", ""].includes(value)) {
+        return res.status(400).json({ message: "Invalid provider" });
+      }
+      await db.insert(systemSettings).values({ key: "card_terminal_provider", value, label: "Card Terminal Provider", group: "pos" })
+        .onConflictDoUpdate({ target: systemSettings.key, set: { value } });
+      res.json({ key: "card_terminal_provider", value });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // WhatsApp connection status
+  app.get("/api/admin/whatsapp/status", requireAdmin, (_req, res) => {
+    const configured = !!(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
+    res.json({
+      configured,
+      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || null,
+      verifyToken: process.env.WHATSAPP_VERIFY_TOKEN ? "set" : "default",
+      webhookUrl: `${process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : ""}/api/webhooks/whatsapp`,
+    });
+  });
+
+  app.post("/api/demo/seed", async (_req, res) => {
+    try {
+      const [existingCats] = await db.select({ count: sql<number>`count(*)` }).from(categories);
+      const [existingItems] = await db.select({ count: sql<number>`count(*)` }).from(items);
+      const [existingCustomers] = await db.select({ count: sql<number>`count(*)` }).from(customers);
+      if ((existingCats?.count || 0) > 0 || (existingItems?.count || 0) > 0 || (existingCustomers?.count || 0) > 0) {
+        return res.status(400).json({ message: "Database already contains data. Clear demo data first before seeding." });
+      }
+
+      const [redWine] = await db.insert(categories).values({ name: "Red Wine", description: "Premium red wines from top vineyards" }).returning();
+      const [whiteWine] = await db.insert(categories).values({ name: "White Wine", description: "Crisp and refreshing white wines" }).returning();
+      const [sparkling] = await db.insert(categories).values({ name: "Sparkling", description: "Champagnes and sparkling wines" }).returning();
+      const [spirits] = await db.insert(categories).values({ name: "Spirits", description: "Premium spirits and liquors" }).returning();
+      const [rose] = await db.insert(categories).values({ name: "Rosé", description: "Light and fruity rosé wines" }).returning();
+      const [beer] = await db.insert(categories).values({ name: "Beer & Cider", description: "Craft beers and artisan ciders" }).returning();
+      const [fortified] = await db.insert(categories).values({ name: "Fortified Wine", description: "Port, sherry and dessert wines" }).returning();
+
+      const seedItems = [
+        { name: "Château Margaux 2018", sku: "RW-001", barcode: "3401234567890", categoryId: redWine.id, unitType: "bottle", packSize: 1, price1: "189.99", price2: "179.99", price3: "169.99", price4: "159.99", price5: "149.99", costPrice: "120.00", stockQuantity: 48, reorderLevel: 12, volume: "750ml", alcoholPercentage: "13.5", brand: "Château Margaux", origin: "Bordeaux, France", vintage: "2018" },
+        { name: "Opus One 2019", sku: "RW-002", barcode: "3401234567891", categoryId: redWine.id, unitType: "bottle", packSize: 1, price1: "399.99", price2: "379.99", price3: "359.99", price4: "339.99", price5: "319.99", costPrice: "250.00", stockQuantity: 24, reorderLevel: 6, volume: "750ml", alcoholPercentage: "14.5", brand: "Opus One", origin: "Napa Valley, USA", vintage: "2019" },
+        { name: "Penfolds Grange 2017", sku: "RW-003", barcode: "3401234567892", categoryId: redWine.id, unitType: "pack", packSize: 6, price1: "2100.00", price2: "1999.00", price3: "1899.00", price4: "1799.00", price5: "1699.00", costPrice: "1400.00", stockQuantity: 48, reorderLevel: 24, volume: "750ml", alcoholPercentage: "14.1", brand: "Penfolds", origin: "South Australia", vintage: "2017" },
+        { name: "Barolo Riserva 2016", sku: "RW-004", barcode: "3401234567910", categoryId: redWine.id, unitType: "bottle", packSize: 1, price1: "85.00", price2: "79.00", price3: "74.00", price4: "69.00", price5: "65.00", costPrice: "48.00", stockQuantity: 36, reorderLevel: 10, volume: "750ml", alcoholPercentage: "14.0", brand: "Marchesi di Barolo", origin: "Piedmont, Italy", vintage: "2016" },
+        { name: "Rioja Gran Reserva 2015", sku: "RW-005", barcode: "3401234567911", categoryId: redWine.id, unitType: "pack", packSize: 12, price1: "540.00", price2: "504.00", price3: "468.00", price4: "432.00", price5: "396.00", costPrice: "300.00", stockQuantity: 120, reorderLevel: 24, volume: "750ml", alcoholPercentage: "13.5", brand: "Marqués de Riscal", origin: "Rioja, Spain", vintage: "2015" },
+        { name: "Cloudy Bay Sauvignon Blanc", sku: "WW-001", barcode: "3401234567893", categoryId: whiteWine.id, unitType: "pack", packSize: 12, price1: "288.00", price2: "276.00", price3: "264.00", price4: "252.00", price5: "240.00", costPrice: "180.00", stockQuantity: 120, reorderLevel: 24, volume: "750ml", alcoholPercentage: "13.0", brand: "Cloudy Bay", origin: "Marlborough, NZ", vintage: "2023" },
+        { name: "Chablis Premier Cru 2021", sku: "WW-002", barcode: "3401234567894", categoryId: whiteWine.id, unitType: "bottle", packSize: 1, price1: "45.99", price2: "42.99", price3: "39.99", price4: "37.99", price5: "35.99", costPrice: "28.00", stockQuantity: 72, reorderLevel: 18, volume: "750ml", alcoholPercentage: "12.5", brand: "William Fèvre", origin: "Burgundy, France", vintage: "2021" },
+        { name: "Pinot Grigio delle Venezie", sku: "WW-003", barcode: "3401234567912", categoryId: whiteWine.id, unitType: "pack", packSize: 6, price1: "72.00", price2: "66.00", price3: "60.00", price4: "54.00", price5: "48.00", costPrice: "36.00", stockQuantity: 96, reorderLevel: 24, volume: "750ml", alcoholPercentage: "12.0", brand: "Santa Margherita", origin: "Veneto, Italy", vintage: "2023" },
+        { name: "Riesling Spätlese 2022", sku: "WW-004", barcode: "3401234567913", categoryId: whiteWine.id, unitType: "bottle", packSize: 1, price1: "28.50", price2: "26.00", price3: "24.00", price4: "22.00", price5: "20.00", costPrice: "14.00", stockQuantity: 60, reorderLevel: 15, volume: "750ml", alcoholPercentage: "9.5", brand: "Dr. Loosen", origin: "Mosel, Germany", vintage: "2022" },
+        { name: "Dom Pérignon 2013", sku: "SP-001", barcode: "3401234567895", categoryId: sparkling.id, unitType: "bottle", packSize: 1, price1: "249.99", price2: "239.99", price3: "229.99", price4: "219.99", price5: "209.99", costPrice: "170.00", stockQuantity: 18, reorderLevel: 6, volume: "750ml", alcoholPercentage: "12.5", brand: "Dom Pérignon", origin: "Champagne, France", vintage: "2013" },
+        { name: "Veuve Clicquot Yellow Label", sku: "SP-002", barcode: "3401234567896", categoryId: sparkling.id, unitType: "pack", packSize: 6, price1: "360.00", price2: "342.00", price3: "324.00", price4: "306.00", price5: "288.00", costPrice: "240.00", stockQuantity: 36, reorderLevel: 12, volume: "750ml", alcoholPercentage: "12.0", brand: "Veuve Clicquot", origin: "Champagne, France", vintage: "NV" },
+        { name: "Prosecco Superiore DOCG", sku: "SP-003", barcode: "3401234567914", categoryId: sparkling.id, unitType: "pack", packSize: 12, price1: "180.00", price2: "168.00", price3: "156.00", price4: "144.00", price5: "132.00", costPrice: "96.00", stockQuantity: 144, reorderLevel: 36, volume: "750ml", alcoholPercentage: "11.0", brand: "Bisol", origin: "Veneto, Italy", vintage: "NV" },
+        { name: "Macallan 18 Year", sku: "ST-001", barcode: "3401234567897", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "329.99", price2: "319.99", price3: "309.99", price4: "299.99", price5: "289.99", costPrice: "220.00", stockQuantity: 15, reorderLevel: 5, volume: "700ml", alcoholPercentage: "43.0", brand: "Macallan", origin: "Scotland", vintage: "" },
+        { name: "Hennessy XO Cognac", sku: "ST-002", barcode: "3401234567898", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "199.99", price2: "189.99", price3: "179.99", price4: "169.99", price5: "159.99", costPrice: "130.00", stockQuantity: 5, reorderLevel: 8, volume: "700ml", alcoholPercentage: "40.0", brand: "Hennessy", origin: "Cognac, France", vintage: "" },
+        { name: "Grey Goose Vodka", sku: "ST-003", barcode: "3401234567915", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "42.00", price2: "39.00", price3: "36.00", price4: "33.00", price5: "30.00", costPrice: "22.00", stockQuantity: 60, reorderLevel: 15, volume: "700ml", alcoholPercentage: "40.0", brand: "Grey Goose", origin: "France", vintage: "" },
+        { name: "Hendrick's Gin", sku: "ST-004", barcode: "3401234567916", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "38.00", price2: "35.00", price3: "32.00", price4: "29.00", price5: "27.00", costPrice: "20.00", stockQuantity: 45, reorderLevel: 12, volume: "700ml", alcoholPercentage: "41.4", brand: "Hendrick's", origin: "Scotland", vintage: "" },
+        { name: "Patrón Silver Tequila", sku: "ST-005", barcode: "3401234567917", categoryId: spirits.id, unitType: "bottle", packSize: 1, price1: "55.00", price2: "50.00", price3: "46.00", price4: "42.00", price5: "38.00", costPrice: "28.00", stockQuantity: 30, reorderLevel: 8, volume: "700ml", alcoholPercentage: "40.0", brand: "Patrón", origin: "Mexico", vintage: "" },
+        { name: "Whispering Angel Rosé 2023", sku: "RS-001", barcode: "3401234567899", categoryId: rose.id, unitType: "pack", packSize: 12, price1: "240.00", price2: "228.00", price3: "216.00", price4: "204.00", price5: "192.00", costPrice: "150.00", stockQuantity: 96, reorderLevel: 24, volume: "750ml", alcoholPercentage: "13.0", brand: "Château d'Esclans", origin: "Provence, France", vintage: "2023" },
+        { name: "Miraval Rosé 2023", sku: "RS-002", barcode: "3401234567918", categoryId: rose.id, unitType: "pack", packSize: 6, price1: "144.00", price2: "132.00", price3: "120.00", price4: "108.00", price5: "96.00", costPrice: "72.00", stockQuantity: 60, reorderLevel: 12, volume: "750ml", alcoholPercentage: "13.0", brand: "Miraval", origin: "Provence, France", vintage: "2023" },
+        { name: "Peroni Nastro Azzurro", sku: "BR-001", barcode: "3401234567919", categoryId: beer.id, unitType: "pack", packSize: 24, price1: "36.00", price2: "33.60", price3: "31.20", price4: "28.80", price5: "26.40", costPrice: "18.00", stockQuantity: 240, reorderLevel: 48, volume: "330ml", alcoholPercentage: "5.1", brand: "Peroni", origin: "Italy", vintage: "" },
+        { name: "KEO Beer", sku: "BR-002", barcode: "3401234567920", categoryId: beer.id, unitType: "pack", packSize: 24, price1: "28.80", price2: "26.40", price3: "24.00", price4: "21.60", price5: "19.20", costPrice: "14.00", stockQuantity: 480, reorderLevel: 96, volume: "330ml", alcoholPercentage: "4.5", brand: "KEO", origin: "Cyprus", vintage: "" },
+        { name: "Taylor's 20 Year Tawny Port", sku: "FW-001", barcode: "3401234567921", categoryId: fortified.id, unitType: "bottle", packSize: 1, price1: "65.00", price2: "60.00", price3: "55.00", price4: "50.00", price5: "46.00", costPrice: "35.00", stockQuantity: 24, reorderLevel: 6, volume: "750ml", alcoholPercentage: "20.0", brand: "Taylor's", origin: "Douro, Portugal", vintage: "" },
+        { name: "Commandaria St. John", sku: "FW-002", barcode: "3401234567922", categoryId: fortified.id, unitType: "bottle", packSize: 1, price1: "18.00", price2: "16.50", price3: "15.00", price4: "13.50", price5: "12.00", costPrice: "8.00", stockQuantity: 100, reorderLevel: 20, volume: "750ml", alcoholPercentage: "15.0", brand: "KEO", origin: "Cyprus", vintage: "" },
+      ];
+
+      const createdItems = await db.insert(items).values(seedItems).returning();
+
+      const seedCustomers = [
+        { name: "Limassol Wine House", code: "CUST001", email: "orders@limassolwinehouse.com.cy", phone: "+357-25-123456", address: "15 Makarios Avenue", city: "Limassol", taxId: "CY-12345678A", paymentTerms: "credit_30", creditLimit: "50000", currentBalance: "0", priceLevel: 1, portalAccessCode: "WINE2026" },
+        { name: "Nicosia Grand Hotel", code: "CUST002", email: "purchasing@nicosiagrand.com.cy", phone: "+357-22-234567", address: "28 Ledra Street", city: "Nicosia", taxId: "CY-23456789B", paymentTerms: "credit_14", creditLimit: "25000", currentBalance: "0", priceLevel: 2, portalAccessCode: "HOTEL2026" },
+        { name: "Paphos Beach Resort", code: "CUST003", email: "procurement@paphosbeach.com.cy", phone: "+357-26-345678", address: "42 Poseidonos Avenue", city: "Paphos", taxId: "CY-34567890C", paymentTerms: "cash", creditLimit: "0", currentBalance: "0", priceLevel: 3, portalAccessCode: "RESORT26" },
+        { name: "Larnaca Spirits Trading", code: "CUST004", email: "wine@larnacaspirits.com.cy", phone: "+357-24-456789", address: "7 Athinon Avenue", city: "Larnaca", taxId: "CY-45678901D", paymentTerms: "credit_60", creditLimit: "100000", currentBalance: "0", priceLevel: 1, portalAccessCode: "TRADE2026" },
+        { name: "Troodos Mountain Lodge", code: "CUST005", email: "orders@troodoslodge.com.cy", phone: "+357-25-567890", address: "3 Platres Hill Road", city: "Platres", taxId: "CY-56789012E", paymentTerms: "credit_30", creditLimit: "35000", currentBalance: "0", priceLevel: 2, portalAccessCode: "LODGE2026" },
+        { name: "Ayia Napa Beach Bar", code: "CUST006", email: "bar@ayianapabay.com.cy", phone: "+357-23-678901", address: "12 Nissi Avenue", city: "Ayia Napa", taxId: "CY-67890123F", paymentTerms: "credit_7", creditLimit: "15000", currentBalance: "0", priceLevel: 3, portalAccessCode: "BEACH26" },
+        { name: "Metro Wine Bar", code: "CUST007", email: "wines@metrobar.com.cy", phone: "+357-22-789012", address: "5 Stasikratous Street", city: "Nicosia", taxId: "CY-78901234G", paymentTerms: "credit_30", creditLimit: "40000", currentBalance: "0", priceLevel: 2, portalAccessCode: "METRO2026" },
+        { name: "Elite Dining Group", code: "CUST008", email: "procurement@elitedining.com.cy", phone: "+357-25-890123", address: "88 Amathountos Avenue", city: "Limassol", taxId: "CY-89012345H", paymentTerms: "credit_60", creditLimit: "80000", currentBalance: "0", priceLevel: 1, portalAccessCode: "ELITE2026" },
+        { name: "Protaras Sunset Lounge", code: "CUST009", email: "drinks@sunsetlounge.com.cy", phone: "+357-23-901234", address: "9 Protaras Avenue", city: "Protaras", taxId: "CY-90123456I", paymentTerms: "credit_14", creditLimit: "20000", currentBalance: "0", priceLevel: 3, portalAccessCode: "SUNSET26" },
+        { name: "Cyprus Wine Academy", code: "CUST010", email: "orders@cypruswineacademy.com", phone: "+357-22-012345", address: "22 Diagorou Street", city: "Nicosia", taxId: "CY-01234567J", paymentTerms: "credit_30", creditLimit: "30000", currentBalance: "0", priceLevel: 2, portalAccessCode: "ACADEMY26" },
+      ];
+
+      const createdCustomers = await db.insert(customers).values(seedCustomers).returning();
+
+      const seedSuppliers = [
+        { name: "Bordeaux Direct Imports", code: "SUP001", email: "export@bordeauxdirect.fr", phone: "+33-5-5678-1234", address: "10 Quai des Chartrons", city: "Bordeaux", country: "France", taxId: "FR-12345678901" },
+        { name: "Italian Wine Merchants", code: "SUP002", email: "vendite@italianwine.it", phone: "+39-011-5678-900", address: "Via Roma 45", city: "Torino", country: "Italy", taxId: "IT-98765432109" },
+        { name: "Spirits Global Ltd", code: "SUP003", email: "trade@spiritsglobal.co.uk", phone: "+44-20-7123-4567", address: "15 Regent Street", city: "London", country: "United Kingdom", taxId: "GB-123456789" },
+        { name: "KEO Plc", code: "SUP004", email: "wholesale@keo.com.cy", phone: "+357-25-888000", address: "1 Franklin Roosevelt Avenue", city: "Limassol", country: "Cyprus", taxId: "CY-11223344K" },
+        { name: "Champagne House Paris", code: "SUP005", email: "orders@champagnehouse.fr", phone: "+33-3-2634-5678", address: "8 Avenue de Champagne", city: "Épernay", country: "France", taxId: "FR-55667788901" },
+      ];
+
+      await db.insert(suppliers).values(seedSuppliers).returning();
+
+      const today = new Date();
+      const fmt = (d: Date) => d.toISOString().split("T")[0];
+      const addDays = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+
+      const inv1Items = [
+        { description: "Château Margaux 2018", quantity: "6", unitPrice: "189.99", discount: "0", discountPercent: "0", total: "1139.94", itemId: createdItems[0].id },
+        { description: "Cloudy Bay Sauvignon Blanc 12-pack", quantity: "2", unitPrice: "288.00", discount: "0", discountPercent: "0", total: "576.00", itemId: createdItems[5].id },
+      ];
+      const inv1Sub = 1715.94;
+      const inv1Tax = +(inv1Sub * 0.19).toFixed(2);
+      const [inv1] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00001", type: "invoice", customerId: createdCustomers[0].id,
+        date: fmt(addDays(today, -18)), dueDate: fmt(addDays(today, 12)),
+        subtotal: inv1Sub.toFixed(2), taxRate: "19", taxAmount: inv1Tax.toFixed(2),
+        discountAmount: "0", total: (inv1Sub + inv1Tax).toFixed(2), status: "sent",
+      }).returning();
+      await db.insert(invoiceItems).values(inv1Items.map(li => ({ ...li, invoiceId: inv1.id })));
+
+      const inv2Items = [
+        { description: "Dom Pérignon 2013", quantity: "12", unitPrice: "239.99", discount: "50.00", discountPercent: "0", total: "2829.88", itemId: createdItems[9].id },
+        { description: "Macallan 18 Year", quantity: "6", unitPrice: "319.99", discount: "0", discountPercent: "0", total: "1919.94", itemId: createdItems[12].id },
+      ];
+      const inv2Sub = 4749.82;
+      const inv2Tax = +(inv2Sub * 0.19).toFixed(2);
+      const [inv2] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00002", type: "invoice", customerId: createdCustomers[7].id,
+        date: fmt(addDays(today, -13)), dueDate: fmt(addDays(today, 47)),
+        subtotal: inv2Sub.toFixed(2), taxRate: "19", taxAmount: inv2Tax.toFixed(2),
+        discountAmount: "50.00", total: (inv2Sub + inv2Tax).toFixed(2), status: "paid",
+      }).returning();
+      await db.insert(invoiceItems).values(inv2Items.map(li => ({ ...li, invoiceId: inv2.id })));
+
+      await db.insert(payments).values({
+        invoiceId: inv2.id, amount: (inv2Sub + inv2Tax).toFixed(2),
+        paymentDate: fmt(addDays(today, -5)), paymentMethod: "bank_transfer", reference: "TRF-20260220-001",
+      });
+
+      const inv3Items = [
+        { description: "Veuve Clicquot Yellow Label 6-pack", quantity: "4", unitPrice: "342.00", discount: "0", discountPercent: "0", total: "1368.00", itemId: createdItems[10].id },
+      ];
+      const [inv3] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00003", type: "invoice", customerId: createdCustomers[1].id,
+        date: fmt(addDays(today, -39)), dueDate: fmt(addDays(today, -25)),
+        subtotal: "1368.00", taxRate: "19", taxAmount: "259.92",
+        discountAmount: "0", total: "1627.92", status: "overdue",
+      }).returning();
+      await db.insert(invoiceItems).values(inv3Items.map(li => ({ ...li, invoiceId: inv3.id })));
+
+      const inv4Items = [
+        { description: "Grey Goose Vodka", quantity: "24", unitPrice: "39.00", discount: "0", discountPercent: "5", total: "889.20", itemId: createdItems[14].id },
+        { description: "Hendrick's Gin", quantity: "12", unitPrice: "35.00", discount: "0", discountPercent: "0", total: "420.00", itemId: createdItems[15].id },
+        { description: "Prosecco Superiore DOCG 12-pack", quantity: "3", unitPrice: "168.00", discount: "0", discountPercent: "0", total: "504.00", itemId: createdItems[11].id },
+      ];
+      const inv4Sub = 1813.20;
+      const inv4Tax = +(inv4Sub * 0.19).toFixed(2);
+      const [inv4] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00004", type: "invoice", customerId: createdCustomers[5].id,
+        date: fmt(addDays(today, -7)), dueDate: fmt(addDays(today, 0)),
+        subtotal: inv4Sub.toFixed(2), taxRate: "19", taxAmount: inv4Tax.toFixed(2),
+        discountAmount: "0", total: (inv4Sub + inv4Tax).toFixed(2), status: "sent",
+      }).returning();
+      await db.insert(invoiceItems).values(inv4Items.map(li => ({ ...li, invoiceId: inv4.id })));
+
+      const inv5Items = [
+        { description: "Barolo Riserva 2016", quantity: "12", unitPrice: "79.00", discount: "0", discountPercent: "0", total: "948.00", itemId: createdItems[3].id },
+        { description: "Whispering Angel Rosé 2023 12-pack", quantity: "2", unitPrice: "228.00", discount: "0", discountPercent: "0", total: "456.00", itemId: createdItems[17].id },
+      ];
+      const inv5Sub = 1404.00;
+      const inv5Tax = +(inv5Sub * 0.19).toFixed(2);
+      const [inv5] = await db.insert(invoices).values({
+        invoiceNumber: "INV-00005", type: "invoice", customerId: createdCustomers[6].id,
+        date: fmt(addDays(today, -3)), dueDate: fmt(addDays(today, 27)),
+        subtotal: inv5Sub.toFixed(2), taxRate: "19", taxAmount: inv5Tax.toFixed(2),
+        discountAmount: "0", total: (inv5Sub + inv5Tax).toFixed(2), status: "draft",
+      }).returning();
+      await db.insert(invoiceItems).values(inv5Items.map(li => ({ ...li, invoiceId: inv5.id })));
+
+      const cn1Items = [
+        { description: "Château Margaux 2018 (returned damaged)", quantity: "2", unitPrice: "189.99", discount: "0", discountPercent: "0", total: "379.98", itemId: createdItems[0].id },
+      ];
+      const cn1Sub = 379.98;
+      const cn1Tax = +(cn1Sub * 0.19).toFixed(2);
+      const [cn1] = await db.insert(invoices).values({
+        invoiceNumber: "CN-00001", type: "credit_note", customerId: createdCustomers[0].id,
+        date: fmt(addDays(today, -10)), dueDate: fmt(addDays(today, -10)),
+        subtotal: cn1Sub.toFixed(2), taxRate: "19", taxAmount: cn1Tax.toFixed(2),
+        discountAmount: "0", total: (cn1Sub + cn1Tax).toFixed(2), status: "sent", linkedInvoiceId: inv1.id,
+      }).returning();
+      await db.insert(invoiceItems).values(cn1Items.map(li => ({ ...li, invoiceId: cn1.id })));
+
+      const pf1Items = [
+        { description: "Penfolds Grange 2017 6-pack", quantity: "2", unitPrice: "1999.00", discount: "0", discountPercent: "0", total: "3998.00", itemId: createdItems[2].id },
+        { description: "Riesling Spätlese 2022", quantity: "24", unitPrice: "26.00", discount: "0", discountPercent: "0", total: "624.00", itemId: createdItems[8].id },
+      ];
+      const pf1Sub = 4622.00;
+      const pf1Tax = +(pf1Sub * 0.19).toFixed(2);
+      const [pf1] = await db.insert(invoices).values({
+        invoiceNumber: "PF-00001", type: "proforma", customerId: createdCustomers[3].id,
+        date: fmt(addDays(today, -2)), dueDate: fmt(addDays(today, 28)),
+        subtotal: pf1Sub.toFixed(2), taxRate: "19", taxAmount: pf1Tax.toFixed(2),
+        discountAmount: "0", total: (pf1Sub + pf1Tax).toFixed(2), status: "draft",
+      }).returning();
+      await db.insert(invoiceItems).values(pf1Items.map(li => ({ ...li, invoiceId: pf1.id })));
+
+      const qt1Items = [
+        { description: "Rioja Gran Reserva 2015 12-pack", quantity: "5", unitPrice: "504.00", discount: "0", discountPercent: "10", total: "2268.00", itemId: createdItems[4].id },
+        { description: "Miraval Rosé 2023 6-pack", quantity: "4", unitPrice: "132.00", discount: "0", discountPercent: "0", total: "528.00", itemId: createdItems[18].id },
+      ];
+      const qt1Sub = 2796.00;
+      const qt1Tax = +(qt1Sub * 0.19).toFixed(2);
+      await db.insert(invoices).values({
+        invoiceNumber: "QT-00001", type: "quotation", customerId: createdCustomers[9].id,
+        date: fmt(today), dueDate: fmt(addDays(today, 30)),
+        subtotal: qt1Sub.toFixed(2), taxRate: "19", taxAmount: qt1Tax.toFixed(2),
+        discountAmount: "0", total: (qt1Sub + qt1Tax).toFixed(2), status: "draft",
+      }).returning().then(([qt1]) => db.insert(invoiceItems).values(qt1Items.map(li => ({ ...li, invoiceId: qt1.id }))));
+
+      const [contract1] = await db.insert(priceContracts).values({
+        customerId: createdCustomers[0].id, name: "Wine House Annual Contract",
+        startDate: "2026-01-01", endDate: "2026-12-31", discountType: "percentage",
+        discountValue: "10", minQuantity: 12, active: true,
+        purchaseGoal: "25000", voucherType: "percentage", voucherValue: "5",
+      }).returning();
+      await db.insert(priceContractRules).values([
+        { contractId: contract1.id, categoryIds: [redWine.id, whiteWine.id], brands: [], minQuantity: 6, discountType: "percentage", discountValue: "10" },
+        { contractId: contract1.id, categoryIds: [sparkling.id], brands: [], minQuantity: 12, discountType: "percentage", discountValue: "8" },
+      ]);
+
+      const [contract2] = await db.insert(priceContracts).values({
+        customerId: createdCustomers[7].id, name: "Elite Dining Premium Deal",
+        startDate: "2026-01-01", endDate: "2026-06-30", discountType: "percentage",
+        discountValue: "8", minQuantity: 6, active: true,
+        purchaseGoal: "50000", voucherType: "fixed", voucherValue: "500",
+      }).returning();
+      await db.insert(priceContractRules).values([
+        { contractId: contract2.id, categoryIds: [spirits.id], brands: ["Macallan", "Hennessy"], minQuantity: 3, discountType: "percentage", discountValue: "12" },
+        { contractId: contract2.id, categoryIds: [], brands: [], minQuantity: 24, discountType: "fixed", discountValue: "5" },
+      ]);
+
+      await db.insert(seasonalOffers).values({
+        name: "Spring Wine Festival", description: "Mix and match any 6 bottles from our red and white wine collections for a special discount",
+        startDate: "2026-03-01", endDate: "2026-05-31", discountPercentage: "15",
+        minItems: 6, mixMatch: true, active: true,
+      });
+
+      await db.insert(seasonalOffers).values({
+        name: "Summer Sparkling Special", description: "Buy any 12 sparkling wines and get 20% off",
+        startDate: "2026-06-01", endDate: "2026-08-31", discountPercentage: "20",
+        minItems: 12, mixMatch: false, active: true,
+      });
+
+      await db.insert(seasonalOffers).values({
+        name: "Cyprus Commandaria Week", description: "Special pricing on local Commandaria wines - buy 3 get 10% off",
+        startDate: "2026-04-01", endDate: "2026-04-07", discountPercentage: "10",
+        minItems: 3, mixMatch: false, active: true,
+      });
+
+      res.json({ message: "Demo data seeded successfully", counts: { categories: 7, items: seedItems.length, customers: seedCustomers.length, suppliers: seedSuppliers.length, invoices: 8, offers: 3, contracts: 2 } });
+    } catch (e: any) {
+      console.error("Demo seed error:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/demo/clear", async (_req, res) => {
+    try {
+      await db.delete(emailLogs);
+      await db.delete(portalOrderItems);
+      await db.delete(portalOrders);
+      await db.delete(supplierPayments);
+      await db.delete(purchaseInvoiceItems);
+      await db.delete(purchaseInvoices);
+      await db.delete(payments);
+      await db.delete(invoiceItems);
+      await db.delete(invoices);
+      await db.delete(priceContractItems);
+      await db.delete(priceContractRules);
+      await db.delete(priceContracts);
+      await db.delete(seasonalOfferItems);
+      await db.delete(seasonalOffers);
+      await db.delete(items);
+      await db.delete(categories);
+      await db.delete(customers);
+      await db.delete(suppliers);
+      res.json({ message: "All demo data cleared successfully" });
+    } catch (e: any) {
+      console.error("Demo clear error:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ===== ACCOUNTING MODULE =====
+
+  const DEFAULT_ACCOUNTS = [
+    { code: "1000", name: "Cash", type: "asset", subtype: "current_asset", isSystem: true },
+    { code: "1010", name: "Bank Account", type: "asset", subtype: "current_asset", isSystem: true },
+    { code: "1100", name: "Accounts Receivable", type: "asset", subtype: "current_asset", isSystem: true },
+    { code: "1200", name: "Inventory", type: "asset", subtype: "current_asset", isSystem: true },
+    { code: "1300", name: "Prepaid Expenses", type: "asset", subtype: "current_asset", isSystem: false },
+    { code: "1500", name: "Equipment", type: "asset", subtype: "fixed_asset", isSystem: false },
+    { code: "1510", name: "Vehicles", type: "asset", subtype: "fixed_asset", isSystem: false },
+    { code: "2000", name: "Accounts Payable", type: "liability", subtype: "current_liability", isSystem: true },
+    { code: "2100", name: "VAT Payable", type: "liability", subtype: "current_liability", isSystem: true },
+    { code: "2200", name: "Accrued Expenses", type: "liability", subtype: "current_liability", isSystem: false },
+    { code: "2300", name: "Short-Term Loans", type: "liability", subtype: "current_liability", isSystem: false },
+    { code: "3000", name: "Owner's Equity", type: "equity", subtype: "equity", isSystem: true },
+    { code: "3100", name: "Retained Earnings", type: "equity", subtype: "equity", isSystem: true },
+    { code: "3200", name: "Owner's Draw", type: "equity", subtype: "equity", isSystem: false },
+    { code: "4000", name: "Sales Revenue", type: "revenue", subtype: "operating", isSystem: true },
+    { code: "4100", name: "Service Revenue", type: "revenue", subtype: "operating", isSystem: false },
+    { code: "4200", name: "Other Income", type: "revenue", subtype: "other", isSystem: false },
+    { code: "4300", name: "Interest Income", type: "revenue", subtype: "other", isSystem: false },
+    { code: "5000", name: "Cost of Goods Sold", type: "expense", subtype: "cogs", isSystem: true },
+    { code: "6000", name: "Salaries & Wages", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6100", name: "Rent", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6200", name: "Utilities", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6300", name: "Insurance", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6400", name: "Marketing & Advertising", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6500", name: "Office Supplies", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6600", name: "Bank Charges", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6700", name: "Depreciation", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6800", name: "Repairs & Maintenance", type: "expense", subtype: "operating", isSystem: false },
+    { code: "6900", name: "Travel & Transport", type: "expense", subtype: "operating", isSystem: false },
+    { code: "7000", name: "Professional Fees", type: "expense", subtype: "operating", isSystem: false },
+    { code: "7100", name: "Telephone & Internet", type: "expense", subtype: "operating", isSystem: false },
+    { code: "7200", name: "Miscellaneous Expense", type: "expense", subtype: "operating", isSystem: false },
+  ];
+
+  app.get("/api/accounts", async (_req, res) => {
+    const accts = await storage.getAccounts();
+    res.json(accts);
+  });
+
+  app.post("/api/accounts", async (req, res) => {
+    try {
+      const account = await storage.createAccount(req.body);
+      res.json(account);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.put("/api/accounts/:id", async (req, res) => {
+    const account = await storage.updateAccount((req.params.id as string), req.body);
+    if (!account) return res.status(404).json({ message: "Account not found" });
+    res.json(account);
+  });
+
+  app.post("/api/accounts/seed-defaults", async (_req, res) => {
+    try {
+      const existing = await storage.getAccounts();
+      if (existing.length > 0) {
+        return res.json({ message: "Chart of accounts already exists", count: existing.length });
+      }
+      for (const acct of DEFAULT_ACCOUNTS) {
+        await storage.createAccount(acct as any);
+      }
+      res.json({ message: "Default chart of accounts created", count: DEFAULT_ACCOUNTS.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/accounts/recalculate", async (_req, res) => {
+    try {
+      const accts = await storage.getAccounts();
+      if (accts.length === 0) return res.status(400).json({ message: "No chart of accounts. Seed defaults first." });
+
+      const { journalEntryLines: jelTable, journalEntries: jeTable } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+
+      const manualEntries = await db.select().from(jeTable).where(eq(jeTable.sourceType, "manual"));
+      const manualEntryIds = manualEntries.map(e => e.id);
+      const allExistingLines = await db.select().from(jelTable);
+      const manualLines = allExistingLines.filter(l => manualEntryIds.includes(l.journalEntryId));
+
+      await db.delete(jelTable);
+      await db.delete(jeTable);
+      await db.update(accounts).set({ balance: "0.00" });
+
+      for (const me of manualEntries) {
+        await db.insert(jeTable).values(me);
+      }
+      for (const ml of manualLines) {
+        await db.insert(jelTable).values(ml);
+        const acct = accts.find(a => a.id === ml.accountId);
+        if (acct) {
+          const debit = parseFloat(ml.debit);
+          const credit = parseFloat(ml.credit);
+          const isDebitNormal = acct.type === "asset" || acct.type === "expense";
+          const balanceChange = isDebitNormal ? (debit - credit) : (credit - debit);
+          const currentBal = await db.select({ balance: accounts.balance }).from(accounts).where(eq(accounts.id, acct.id));
+          const newBal = parseFloat(currentBal[0]?.balance || "0") + balanceChange;
+          await db.update(accounts).set({ balance: newBal.toFixed(2) }).where(eq(accounts.id, acct.id));
+        }
+      }
+
+      let generated = 0;
+      let skipped = 0;
+
+      const allInvoices = await db.select().from(invoices);
+      const allInvoiceItems = await db.select().from(invoiceItems);
+      const allItems = await db.select().from(items);
+      for (const inv of allInvoices) {
+        const invTotal = parseFloat(inv.total);
+        const invVat = parseFloat(inv.taxAmount);
+        const invNet = parseFloat(inv.subtotal) - parseFloat(inv.discountAmount);
+        const invDate = typeof inv.date === "string" ? inv.date : new Date().toISOString().split("T")[0];
+        if (invTotal <= 0) continue;
+
+        let totalCost = 0;
+        const invLines = allInvoiceItems.filter(li => li.invoiceId === inv.id);
+        for (const li of invLines) {
+          if (li.itemId) {
+            const item = allItems.find(i => i.id === li.itemId);
+            if (item) {
+              const packSize = Number(item.packSize) > 1 ? Number(item.packSize) : 1;
+              const costPerBottle = parseFloat(item.costPrice) / packSize;
+              const liQty = parseFloat(String((li as any).quantity || "0"));
+              const qty = (li.saleUnit === "pack" && packSize > 1) ? liQty * packSize : liQty;
+              totalCost += costPerBottle * qty;
+            }
+          }
+        }
+
+        if (inv.type === "invoice" && inv.status !== "draft") {
+          const lines = [
+            { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
+            { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+            { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
+          ];
+          if (totalCost > 0) {
+            lines.push(
+              { accountCode: "5000", debit: totalCost, credit: 0, description: "Cost of Goods Sold" },
+              { accountCode: "1200", debit: 0, credit: totalCost, description: "Inventory" },
+            );
+          }
+          const result = await autoCreateJournalEntry({
+            sourceType: "invoice", sourceId: inv.id, date: invDate,
+            description: `Sales Invoice ${inv.invoiceNumber}`, reference: inv.invoiceNumber,
+            lines,
+          });
+          result ? generated++ : skipped++;
+        } else if (inv.type === "credit_note" && inv.status !== "draft") {
+          const lines = [
+            { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+            { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
+            { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
+          ];
+          if (totalCost > 0) {
+            lines.push(
+              { accountCode: "1200", debit: totalCost, credit: 0, description: "Inventory restored" },
+              { accountCode: "5000", debit: 0, credit: totalCost, description: "COGS reversal" },
+            );
+          }
+          const result = await autoCreateJournalEntry({
+            sourceType: "credit_note", sourceId: inv.id, date: invDate,
+            description: `Credit Note ${inv.invoiceNumber}`, reference: inv.invoiceNumber,
+            lines,
+          });
+          result ? generated++ : skipped++;
+        }
+      }
+
+      const allPayments = await db.select().from(payments);
+      for (const pmt of allPayments) {
+        const pmtAmount = parseFloat(pmt.amount);
+        if (pmtAmount <= 0) continue;
+        const pmtDate = typeof pmt.paymentDate === "string" ? pmt.paymentDate : new Date().toISOString().split("T")[0];
+        const pmtAcctCode = pmt.paymentMethod === "cash" ? "1000" : "1010";
+        const result = await autoCreateJournalEntry({
+          sourceType: "payment", sourceId: pmt.id, date: pmtDate,
+          description: "Customer Payment received", reference: pmt.reference || pmt.id,
+          lines: [
+            { accountCode: pmtAcctCode, debit: pmtAmount, credit: 0, description: pmt.paymentMethod === "cash" ? "Cash" : "Bank" },
+            { accountCode: "1100", debit: 0, credit: pmtAmount, description: "Accounts Receivable" },
+          ],
+        });
+        result ? generated++ : skipped++;
+      }
+
+      const allPI = await db.select().from(purchaseInvoices);
+      for (const pi of allPI) {
+        const piTotal = parseFloat(pi.total);
+        const piVat = parseFloat(pi.vatAmount);
+        const piNet = parseFloat(pi.subtotal);
+        const piDate = typeof pi.date === "string" ? pi.date : new Date().toISOString().split("T")[0];
+        if (piTotal <= 0) continue;
+        const result = await autoCreateJournalEntry({
+          sourceType: "purchase", sourceId: pi.id, date: piDate,
+          description: `Purchase Invoice ${pi.invoiceNumber}`, reference: pi.invoiceNumber,
+          lines: [
+            { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
+            { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
+            { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
+          ],
+        });
+        result ? generated++ : skipped++;
+      }
+
+      const allSP = await db.select().from(supplierPayments);
+      for (const sp of allSP) {
+        const spAmount = parseFloat(sp.amount);
+        if (spAmount <= 0) continue;
+        const spDate = typeof sp.paymentDate === "string" ? sp.paymentDate : new Date().toISOString().split("T")[0];
+        const paymentAcctCode = sp.paymentMethod === "cash" ? "1000" : "1010";
+        const result = await autoCreateJournalEntry({
+          sourceType: "supplier_payment", sourceId: sp.id, date: spDate,
+          description: `Supplier Payment`, reference: sp.reference || sp.id,
+          lines: [
+            { accountCode: "2000", debit: spAmount, credit: 0, description: "Accounts Payable" },
+            { accountCode: paymentAcctCode, debit: 0, credit: spAmount, description: sp.paymentMethod === "cash" ? "Cash" : "Bank" },
+          ],
+        });
+        result ? generated++ : skipped++;
+      }
+
+      const allExpenses = await db.select().from(expenses);
+      for (const exp of allExpenses) {
+        const expAmount = parseFloat(exp.amount);
+        const expVat = parseFloat(exp.vatAmount || "0");
+        const expTotal = expAmount + expVat;
+        if (expAmount <= 0) continue;
+        const expDate = typeof exp.date === "string" ? exp.date : new Date().toISOString().split("T")[0];
+        const expAcct = await storage.getAccount(exp.expenseAccountId);
+        const payAcct = await storage.getAccount(exp.paymentAccountId);
+        const result = await autoCreateJournalEntry({
+          sourceType: "expense", sourceId: exp.id, date: expDate,
+          description: `Expense: ${exp.description}`, reference: exp.reference || exp.id,
+          lines: [
+            { accountCode: expAcct?.code || "6000", debit: expAmount, credit: 0, description: exp.description },
+            ...(expVat > 0 ? [{ accountCode: "2100", debit: expVat, credit: 0, description: "Input VAT" }] : []),
+            { accountCode: payAcct?.code || "1000", debit: 0, credit: expTotal, description: "Payment" },
+          ],
+        });
+        result ? generated++ : skipped++;
+      }
+
+      // Rebuild supplier currentBalance from purchase invoices minus supplier payments
+      const allSuppliers = await storage.getSuppliers();
+      for (const sup of allSuppliers) {
+        const supPI = allPI.filter(p => p.supplierId === sup.id);
+        const totalOwed = supPI.reduce((s, p) => s + parseFloat(p.total), 0);
+        const supPayments = allSP.filter(p => p.supplierId === sup.id);
+        const totalPaid = supPayments.reduce((s, p) => s + parseFloat(p.amount), 0);
+        const newBal = Math.max(0, totalOwed - totalPaid);
+        await storage.updateSupplier(sup.id, { currentBalance: newBal.toFixed(2) });
+      }
+
+      const updatedAccts = await storage.getAccounts();
+      const nonZero = updatedAccts.filter(a => parseFloat(a.balance) !== 0);
+      res.json({ 
+        message: `Recalculated. Generated ${generated} journal entries (${skipped} skipped). ${manualEntries.length} manual entries preserved. All account balances and supplier balances rebuilt.`, 
+        nonZeroAccounts: nonZero.length,
+        generated,
+        skipped,
+        manualPreserved: manualEntries.length
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/journal-entries", async (_req, res) => {
+    const entries = await storage.getJournalEntries();
+    res.json(entries);
+  });
+
+  // Audit endpoint — all entries with lines + account info in one payload
+  app.get("/api/accounting/audit", async (_req, res) => {
+    try {
+      const allEntries = await db.select().from(journalEntries).orderBy(desc(journalEntries.date), desc(journalEntries.createdAt));
+      const allLines = await db
+        .select({
+          id: journalEntryLines.id,
+          journalEntryId: journalEntryLines.journalEntryId,
+          accountId: journalEntryLines.accountId,
+          debit: journalEntryLines.debit,
+          credit: journalEntryLines.credit,
+          description: journalEntryLines.description,
+          accountCode: accounts.code,
+          accountName: accounts.name,
+          accountType: accounts.type,
+        })
+        .from(journalEntryLines)
+        .leftJoin(accounts, eq(journalEntryLines.accountId, accounts.id));
+
+      const linesMap: Record<string, typeof allLines> = {};
+      for (const line of allLines) {
+        if (!linesMap[line.journalEntryId]) linesMap[line.journalEntryId] = [];
+        linesMap[line.journalEntryId].push(line);
+      }
+
+      const enriched = allEntries.map(entry => {
+        const lines = linesMap[entry.id] || [];
+        const totalDebit = lines.reduce((s, l) => s + parseFloat(String(l.debit || "0")), 0);
+        const totalCredit = lines.reduce((s, l) => s + parseFloat(String(l.credit || "0")), 0);
+        const balanced = Math.abs(totalDebit - totalCredit) < 0.01;
+        return { ...entry, lines, totalDebit: totalDebit.toFixed(2), totalCredit: totalCredit.toFixed(2), balanced };
+      });
+
+      res.json(enriched);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ── Accounting Snapshots (Version Control) ──────────────────────────────────
+  app.get("/api/accounting/snapshots", async (_req, res) => {
+    try {
+      const snaps = await db.select().from(accountingSnapshots).orderBy(desc(accountingSnapshots.createdAt));
+      res.json(snaps);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/accounting/snapshots", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const { name, description, notes } = req.body;
+      if (!name?.trim()) return res.status(400).json({ message: "Snapshot name is required" });
+
+      const allAccounts = await db.select().from(accounts);
+      const allJEs = await db.select().from(journalEntries).orderBy(desc(journalEntries.entryNumber));
+
+      const totalDebitVolume = allJEs.reduce((s, je) => s + parseFloat(String(je.totalAmount || "0")), 0);
+      const lastEntry = allJEs[0];
+
+      const snap = await db.insert(accountingSnapshots).values({
+        name: name.trim(),
+        description: description?.trim() || null,
+        notes: notes?.trim() || null,
+        createdByUsername: req.user.username,
+        accountBalances: JSON.stringify(allAccounts.map(a => ({
+          id: a.id, code: a.code, name: a.name, type: a.type, subtype: a.subtype, balance: a.balance,
+        }))),
+        journalEntryCount: allJEs.length,
+        lastEntryNumber: lastEntry?.entryNumber ?? null,
+        totalDebitVolume: totalDebitVolume.toFixed(2),
+      }).returning();
+
+      await logActivity(req.user.id, req.user.username, "create", "accounting_snapshot", snap[0].id, `Created snapshot "${name.trim()}" — ${allJEs.length} JEs, ${allAccounts.length} accounts`, null, null);
+      res.json(snap[0]);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/accounting/snapshots/:id", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const [snap] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, (req.params.id as string)));
+      const snapName = snap?.name ?? (req.params.id as string);
+      await db.delete(accountingSnapshots).where(eq(accountingSnapshots.id, (req.params.id as string)));
+      await logActivity(req.user.id, req.user.username, "delete", "accounting_snapshot", (req.params.id as string), `Deleted snapshot "${snapName}"`, null, null);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/accounting/snapshots/diff", async (req, res) => {
+    try {
+      const { from: fromId, to: toId } = req.query as { from: string; to: string };
+      if (!fromId || !toId) return res.status(400).json({ message: "from and to snapshot IDs required" });
+
+      const [snapFrom] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, fromId));
+      const [snapTo]   = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, toId));
+      if (!snapFrom || !snapTo) return res.status(404).json({ message: "Snapshot not found" });
+
+      const fromAccounts: any[] = JSON.parse(snapFrom.accountBalances);
+      const toAccounts:   any[] = JSON.parse(snapTo.accountBalances);
+
+      const fromMap = Object.fromEntries(fromAccounts.map(a => [a.id, a]));
+      const toMap   = Object.fromEntries(toAccounts.map(a => [a.id, a]));
+
+      const allIds = [...new Set([...fromAccounts.map(a => a.id), ...toAccounts.map(a => a.id)])];
+      const changes = allIds.map(id => {
+        const before = fromMap[id];
+        const after  = toMap[id];
+        const balBefore = parseFloat(before?.balance ?? "0");
+        const balAfter  = parseFloat(after?.balance ?? "0");
+        const delta = balAfter - balBefore;
+        return {
+          id,
+          code:    (after ?? before).code,
+          name:    (after ?? before).name,
+          type:    (after ?? before).type,
+          before:  balBefore.toFixed(2),
+          after:   balAfter.toFixed(2),
+          delta:   delta.toFixed(2),
+          added:   !before && !!after,
+          removed: !!before && !after,
+          changed: Math.abs(delta) >= 0.01,
+        };
+      }).filter(r => r.changed || r.added || r.removed);
+
+      res.json({
+        from: { id: snapFrom.id, name: snapFrom.name, createdAt: snapFrom.createdAt, journalEntryCount: snapFrom.journalEntryCount, lastEntryNumber: snapFrom.lastEntryNumber, totalDebitVolume: snapFrom.totalDebitVolume },
+        to:   { id: snapTo.id,   name: snapTo.name,   createdAt: snapTo.createdAt,   journalEntryCount: snapTo.journalEntryCount,   lastEntryNumber: snapTo.lastEntryNumber,   totalDebitVolume: snapTo.totalDebitVolume },
+        changes,
+        summary: {
+          totalChanges: changes.length,
+          accountsAdded: changes.filter(c => c.added).length,
+          accountsRemoved: changes.filter(c => c.removed).length,
+          entriesAdded: (snapTo.journalEntryCount ?? 0) - (snapFrom.journalEntryCount ?? 0),
+          volumeChange: (parseFloat(String(snapTo.totalDebitVolume)) - parseFloat(String(snapFrom.totalDebitVolume))).toFixed(2),
+        },
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/accounting/snapshots/:id/rollback", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      const [snap] = await db.select().from(accountingSnapshots).where(eq(accountingSnapshots.id, (req.params.id as string)));
+      if (!snap) return res.status(404).json({ message: "Snapshot not found" });
+
+      const savedBalances: any[] = JSON.parse(snap.accountBalances);
+
+      // Reset all accounts to 0, then restore from snapshot
+      await db.update(accounts).set({ balance: "0.00" });
+      for (const saved of savedBalances) {
+        await db.update(accounts).set({ balance: saved.balance }).where(eq(accounts.id, saved.id));
+      }
+
+      const msg = `Rolled back ${savedBalances.length} account balances to snapshot "${snap.name}" (${new Date(snap.createdAt).toLocaleDateString()}).`;
+      await logActivity(req.user.id, req.user.username, "rollback", "accounting_snapshot", snap.id, msg, null, null);
+
+      res.json({
+        success: true,
+        message: msg,
+        accountsRestored: savedBalances.length,
+        snapshotName: snap.name,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/accounting/full-reset", async (req, res) => {
+    if (!req.user || req.user.role !== "superuser") {
+      return res.status(403).json({ message: "Superuser access required" });
+    }
+    try {
+      // 1. Delete all journal entry lines and entries
+      await db.delete(journalEntryLines);
+      await db.delete(journalEntries);
+
+      // 2. Delete all customer payments
+      await db.delete(payments);
+
+      // 3. Delete all supplier payments
+      await db.delete(supplierPayments);
+
+      // 4. Reset customer balances to zero
+      await db.update(customers).set({ currentBalance: "0.00" });
+
+      // 5. Reset supplier balances to zero
+      await db.update(suppliers).set({ currentBalance: "0.00" });
+
+      // 6. Reset invoice statuses: paid/partial → sent (since payments are gone)
+      await db.update(invoices)
+        .set({ status: "sent" })
+        .where(sql`${invoices.status} IN ('paid', 'partial') AND ${invoices.type} = 'invoice'`);
+
+      // 7. Reset account balances to zero
+      await db.update(accounts).set({ balance: "0.00" });
+
+      // 8. Delete all accounting snapshots (now stale)
+      await db.delete(accountingSnapshots);
+
+      await logActivity(req.user.id, req.user.username, "full_reset", "accounting", "all",
+        "Full accounting reset: cleared all journal entries, payments, customer/supplier balances, and account balances.", null, null);
+
+      res.json({ ok: true, message: "Full accounting reset complete." });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/accounting/snapshots/logs", async (_req, res) => {
+    try {
+      const logs = await db.select().from(activityLogs)
+        .where(eq(activityLogs.entity, "accounting_snapshot"))
+        .orderBy(desc(activityLogs.createdAt))
+        .limit(200);
+      res.json(logs);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── Transaction Trace (Simulation) ──────────────────────────────────────────
+  app.get("/api/accounting/trace", async (req, res) => {
+    const { type, id } = req.query as { type: string; id: string };
+    if (!type || !id) return res.status(400).json({ message: "type and id are required" });
+
+    try {
+      // 1. Find journal entry for this source
+      const [je] = await db.select().from(journalEntries)
+        .where(and(eq(journalEntries.sourceType, type), eq(journalEntries.sourceId, id)));
+
+      let journalEntry: any = null;
+      if (je) {
+        const lines = await db.select({
+          id: journalEntryLines.id,
+          journalEntryId: journalEntryLines.journalEntryId,
+          accountId: journalEntryLines.accountId,
+          accountCode: accounts.code,
+          accountName: accounts.name,
+          accountType: accounts.type,
+          accountSubtype: accounts.subtype,
+          debit: journalEntryLines.debit,
+          credit: journalEntryLines.credit,
+          description: journalEntryLines.description,
+        }).from(journalEntryLines)
+          .leftJoin(accounts, eq(journalEntryLines.accountId, accounts.id))
+          .where(eq(journalEntryLines.journalEntryId, je.id));
+
+        const totalDebit = lines.reduce((s, l) => s + parseFloat(String(l.debit || "0")), 0);
+        const totalCredit = lines.reduce((s, l) => s + parseFloat(String(l.credit || "0")), 0);
+        journalEntry = {
+          ...je,
+          lines,
+          totalDebit: totalDebit.toFixed(2),
+          totalCredit: totalCredit.toFixed(2),
+          balanced: Math.abs(totalDebit - totalCredit) < 0.01,
+        };
+      }
+
+      // 2. Load source transaction
+      let source: any = null;
+      let sourceLabel = type;
+
+      if (type === "invoice" || type === "credit_note" || type === "proforma" || type === "quotation") {
+        const rows = await db.execute(sql`
+          SELECT i.*, c.name as customer_name, c.code as customer_code, c.tax_id as customer_tax_id,
+                 c.payment_terms, c.current_balance
+          FROM invoices i
+          LEFT JOIN customers c ON i.customer_id = c.id
+          WHERE i.id = ${id}
+        `);
+        const inv = (rows.rows as any[])[0];
+        if (inv) {
+          const itemRows = await db.execute(sql`
+            SELECT ii.*, it.sku, it.name as item_name
+            FROM invoice_items ii
+            LEFT JOIN items it ON ii.item_id = it.id
+            WHERE ii.invoice_id = ${id}
+            ORDER BY ii.id
+          `);
+          source = { ...inv, lines: itemRows.rows };
+          sourceLabel = inv.type || type;
+        }
+      } else if (type === "payment") {
+        const rows = await db.execute(sql`
+          SELECT p.*, c.name as customer_name, c.code as customer_code,
+                 i.invoice_number, i.total as invoice_total, i.status as invoice_status
+          FROM payments p
+          LEFT JOIN customers c ON p.customer_id = c.id
+          LEFT JOIN invoices i ON p.invoice_id = i.id
+          WHERE p.id = ${id}
+        `);
+        source = (rows.rows as any[])[0] ?? null;
+      } else if (type === "purchase") {
+        const rows = await db.execute(sql`
+          SELECT pi.*, s.name as supplier_name, s.code as supplier_code
+          FROM purchase_invoices pi
+          LEFT JOIN suppliers s ON pi.supplier_id = s.id
+          WHERE pi.id = ${id}
+        `);
+        const pur = (rows.rows as any[])[0];
+        if (pur) {
+          const itemRows = await db.execute(sql`
+            SELECT pii.*, it.sku, it.name as item_name
+            FROM purchase_invoice_items pii
+            LEFT JOIN items it ON pii.item_id = it.id
+            WHERE pii.purchase_invoice_id = ${id}
+            ORDER BY pii.id
+          `);
+          source = { ...pur, lines: itemRows.rows };
+        }
+      } else if (type === "supplier_payment") {
+        const rows = await db.execute(sql`
+          SELECT sp.*, s.name as supplier_name, s.code as supplier_code,
+                 pi.invoice_number as purchase_invoice_number, pi.total as purchase_invoice_total
+          FROM supplier_payments sp
+          LEFT JOIN suppliers s ON sp.supplier_id = s.id
+          LEFT JOIN purchase_invoices pi ON sp.purchase_invoice_id = pi.id
+          WHERE sp.id = ${id}
+        `);
+        source = (rows.rows as any[])[0] ?? null;
+      } else if (type === "expense") {
+        const rows = await db.execute(sql`
+          SELECT e.*, 
+                 ea.code as expense_acct_code, ea.name as expense_acct_name,
+                 pa.code as payment_acct_code, pa.name as payment_acct_name
+          FROM expenses e
+          LEFT JOIN accounts ea ON e.expense_account_id = ea.id
+          LEFT JOIN accounts pa ON e.payment_account_id = pa.id
+          WHERE e.id = ${id}
+        `);
+        source = (rows.rows as any[])[0] ?? null;
+      }
+
+      // 3. Integrity checks
+      const checks: Array<{ name: string; pass: boolean; severity: string; detail: string; expected?: string; actual?: string }> = [];
+
+      // Check: journal entry exists
+      checks.push({
+        name: "Journal entry generated",
+        pass: !!journalEntry,
+        severity: "error",
+        detail: journalEntry
+          ? `Entry ${journalEntry.entryNumber} found (${journalEntry.status})`
+          : "No journal entry linked to this transaction. If status is draft/cancelled, this is expected.",
+      });
+
+      if (journalEntry) {
+        // Check: balanced
+        checks.push({
+          name: "Entry is balanced (DR = CR)",
+          pass: journalEntry.balanced,
+          severity: "error",
+          detail: journalEntry.balanced
+            ? `DR €${journalEntry.totalDebit} = CR €${journalEntry.totalCredit} ✓`
+            : `Imbalance detected`,
+          expected: journalEntry.balanced ? undefined : journalEntry.totalDebit,
+          actual: journalEntry.balanced ? undefined : journalEntry.totalCredit,
+        });
+
+        // Check: entry is posted
+        checks.push({
+          name: "Entry status is posted",
+          pass: journalEntry.status === "posted",
+          severity: "warning",
+          detail: journalEntry.status === "posted" ? "Status: posted ✓" : `Status: ${journalEntry.status}`,
+        });
+
+        // Source-specific checks
+        if (source && (type === "invoice" || type === "credit_note")) {
+          const total = parseFloat(source.total || "0");
+          const jeTotal = parseFloat(journalEntry.totalDebit);
+          const diff = Math.abs(total - jeTotal);
+          checks.push({
+            name: "Journal total matches transaction total",
+            pass: diff < 0.02,
+            severity: "error",
+            detail: diff < 0.02
+              ? `Both = €${total.toFixed(2)} ✓`
+              : `Mismatch detected`,
+            expected: total.toFixed(2),
+            actual: jeTotal.toFixed(2),
+          });
+
+          // VAT check
+          const vatRate = parseFloat(source.tax_rate || "0");
+          const subtotal = parseFloat(source.subtotal || "0");
+          const expectedVat = parseFloat((subtotal * vatRate / 100).toFixed(2));
+          const actualVat = parseFloat(source.tax_amount || "0");
+          checks.push({
+            name: "VAT calculation correct",
+            pass: Math.abs(expectedVat - actualVat) < 0.02,
+            severity: "warning",
+            detail: Math.abs(expectedVat - actualVat) < 0.02
+              ? `€${subtotal.toFixed(2)} × ${vatRate}% = €${actualVat.toFixed(2)} ✓`
+              : `VAT mismatch`,
+            expected: expectedVat.toFixed(2),
+            actual: actualVat.toFixed(2),
+          });
+
+          // Check AR line exists
+          const arLine = journalEntry.lines.find((l: any) => l.accountCode === "1100" || (l.accountName || "").toLowerCase().includes("receivable"));
+          checks.push({
+            name: "Accounts Receivable line exists",
+            pass: !!arLine,
+            severity: "error",
+            detail: arLine
+              ? `${arLine.accountCode} – ${arLine.accountName}: DR €${arLine.debit} ✓`
+              : "No AR (1100) line found in journal entry.",
+          });
+
+          // Check revenue line exists
+          const revLine = journalEntry.lines.find((l: any) => l.accountType === "revenue" || (l.accountName || "").toLowerCase().includes("revenue") || l.accountCode === "4000");
+          checks.push({
+            name: "Revenue account line exists",
+            pass: !!revLine,
+            severity: "error",
+            detail: revLine
+              ? `${revLine.accountCode} – ${revLine.accountName}: CR €${revLine.credit} ✓`
+              : "No revenue account line found.",
+          });
+        }
+
+        if (source && type === "payment") {
+          const total = parseFloat(source.amount || "0");
+          const jeTotal = parseFloat(journalEntry.totalDebit);
+          checks.push({
+            name: "Journal total matches payment amount",
+            pass: Math.abs(total - jeTotal) < 0.02,
+            severity: "error",
+            detail: Math.abs(total - jeTotal) < 0.02
+              ? `Both = €${total.toFixed(2)} ✓`
+              : `Mismatch`,
+            expected: total.toFixed(2),
+            actual: jeTotal.toFixed(2),
+          });
+          const bankLine = journalEntry.lines.find((l: any) => l.accountType === "asset" && parseFloat(l.debit) > 0 && l.accountCode !== "1100");
+          checks.push({
+            name: "Bank/Cash account debited",
+            pass: !!bankLine,
+            severity: "error",
+            detail: bankLine ? `${bankLine.accountCode} – ${bankLine.accountName}: DR €${bankLine.debit} ✓` : "No cash/bank debit line found.",
+          });
+        }
+
+        if (source && type === "purchase") {
+          const total = parseFloat(source.total || "0");
+          const jeTotal = parseFloat(journalEntry.totalCredit);
+          checks.push({
+            name: "Journal total matches purchase total",
+            pass: Math.abs(total - jeTotal) < 0.02,
+            severity: "error",
+            detail: Math.abs(total - jeTotal) < 0.02
+              ? `Both = €${total.toFixed(2)} ✓`
+              : `Mismatch`,
+            expected: total.toFixed(2),
+            actual: jeTotal.toFixed(2),
+          });
+          const apLine = journalEntry.lines.find((l: any) => l.accountCode === "2000" || (l.accountName || "").toLowerCase().includes("payable"));
+          checks.push({
+            name: "Accounts Payable line exists",
+            pass: !!apLine,
+            severity: "error",
+            detail: apLine ? `${apLine.accountCode} – ${apLine.accountName}: CR €${apLine.credit} ✓` : "No AP line found.",
+          });
+        }
+
+        if (source && type === "expense") {
+          const total = parseFloat(source.amount || "0");
+          const jeTotal = parseFloat(journalEntry.totalDebit);
+          checks.push({
+            name: "Journal total matches expense amount",
+            pass: Math.abs(total - jeTotal) < 0.02,
+            severity: "error",
+            detail: Math.abs(total - jeTotal) < 0.02
+              ? `Both = €${total.toFixed(2)} ✓`
+              : `Mismatch`,
+            expected: total.toFixed(2),
+            actual: jeTotal.toFixed(2),
+          });
+        }
+
+        // Check all lines have valid accounts
+        const missingAccounts = journalEntry.lines.filter((l: any) => !l.accountCode);
+        checks.push({
+          name: "All lines linked to valid accounts",
+          pass: missingAccounts.length === 0,
+          severity: "error",
+          detail: missingAccounts.length === 0
+            ? `All ${journalEntry.lines.length} lines have valid accounts ✓`
+            : `${missingAccounts.length} line(s) reference missing/deleted accounts`,
+        });
+
+        // Check all lines have correct normal balance direction
+        const wrongDirection = journalEntry.lines.filter((l: any) => {
+          const dr = parseFloat(l.debit || "0");
+          const cr = parseFloat(l.credit || "0");
+          if (dr > 0 && cr > 0) return true; // Line has both DR and CR
+          return false;
+        });
+        checks.push({
+          name: "No lines have both debit and credit",
+          pass: wrongDirection.length === 0,
+          severity: "error",
+          detail: wrongDirection.length === 0
+            ? "All lines are properly single-sided ✓"
+            : `${wrongDirection.length} line(s) have both DR and CR values`,
+        });
+      }
+
+      res.json({
+        sourceType: type,
+        sourceLabel,
+        source: source || null,
+        journalEntry,
+        integrityChecks: checks,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/journal-entries/:id", async (req, res) => {
+    const entry = await storage.getJournalEntry((req.params.id as string));
+    if (!entry) return res.status(404).json({ message: "Journal entry not found" });
+    res.json(entry);
+  });
+
+  app.post("/api/journal-entries", async (req, res) => {
+    try {
+      const { lines, ...data } = req.body;
+      if (!lines || !Array.isArray(lines) || lines.length < 2) {
+        return res.status(400).json({ message: "At least 2 lines required" });
+      }
+      const totalDebit = lines.reduce((s: number, l: any) => s + parseFloat(l.debit || "0"), 0);
+      const totalCredit = lines.reduce((s: number, l: any) => s + parseFloat(l.credit || "0"), 0);
+      if (Math.abs(totalDebit - totalCredit) > 0.01) {
+        return res.status(400).json({ message: `Debits (${totalDebit.toFixed(2)}) must equal Credits (${totalCredit.toFixed(2)})` });
+      }
+      const entryNumber = await storage.getNextJournalEntryNumber();
+      const entry = await storage.createJournalEntry(
+        { ...data, entryNumber, totalAmount: totalDebit.toFixed(2) },
+        lines
+      );
+      res.json(entry);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/journal-entries/:id", async (req, res) => {
+    try {
+      const { lines, ...data } = req.body;
+      if (!lines || !Array.isArray(lines) || lines.length < 2) {
+        return res.status(400).json({ message: "At least 2 lines required" });
+      }
+      const totalDebit = lines.reduce((s: number, l: any) => s + parseFloat(l.debit || "0"), 0);
+      const totalCredit = lines.reduce((s: number, l: any) => s + parseFloat(l.credit || "0"), 0);
+      if (Math.abs(totalDebit - totalCredit) > 0.01) {
+        return res.status(400).json({ message: `Debits (${totalDebit.toFixed(2)}) must equal Credits (${totalCredit.toFixed(2)})` });
+      }
+      const updated = await storage.updateJournalEntry((req.params.id as string), { ...data, totalAmount: totalDebit.toFixed(2) }, lines);
+      if (!updated) return res.status(404).json({ message: "Journal entry not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/journal-entries/:id", async (req, res) => {
+    try {
+      await storage.deleteJournalEntry((req.params.id as string));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Repost all auto-generated journal entries from source transactions
+  app.post("/api/accounting/repost-journals", async (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+    try {
+      // 1. Delete all auto-generated journal entries and their lines
+      await db.execute(sql`
+        DELETE FROM journal_entry_lines
+        WHERE journal_entry_id IN (
+          SELECT id FROM journal_entries
+          WHERE source_type IN ('invoice','credit_note','purchase','payment','supplier_payment','expense')
+        )
+      `);
+      await db.execute(sql`
+        DELETE FROM journal_entries
+        WHERE source_type IN ('invoice','credit_note','purchase','payment','supplier_payment','expense')
+      `);
+
+      let created = 0;
+
+      // 2. Repost purchase invoices
+      const allPIs = await storage.getPurchaseInvoices();
+      for (const pi of allPIs) {
+        const piTotal = parseFloat(pi.total);
+        const piVat = parseFloat(pi.vatAmount);
+        const piNet = piTotal - piVat;
+        if (piTotal <= 0) continue;
+        const r = await autoCreateJournalEntry({
+          sourceType: "purchase", sourceId: pi.id,
+          date: typeof pi.date === "string" ? pi.date : new Date(pi.date).toISOString().split("T")[0],
+          description: `Purchase Invoice ${pi.invoiceNumber}`, reference: pi.invoiceNumber,
+          lines: [
+            { accountCode: "1200", debit: piNet, credit: 0, description: "Inventory" },
+            { accountCode: "2100", debit: piVat, credit: 0, description: "Input VAT (VAT Receivable)" },
+            { accountCode: "2000", debit: 0, credit: piTotal, description: "Accounts Payable" },
+          ],
+        });
+        if (r) created++;
+      }
+
+      // 3. Repost sales invoices and credit notes
+      const allInvs = await storage.getInvoices();
+      for (const inv of allInvs) {
+        if (inv.status === "draft") continue;
+        const invTotal = parseFloat(String(inv.total));
+        const invVat = parseFloat(String(inv.taxAmount));
+        const invNet = invTotal - invVat;
+        if (invTotal <= 0) continue;
+        const invDate = typeof inv.date === "string" ? inv.date : new Date(inv.date).toISOString().split("T")[0];
+
+        // Calculate COGS from current item cost prices
+        let totalCost = 0;
+        const lineItems = await db.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id));
+        for (const li of lineItems) {
+          if (li.itemId) {
+            const item = await storage.getItem(li.itemId);
+            if (item) {
+              const packSize = Number(item.packSize) > 1 ? Number(item.packSize) : 1;
+              const costPerBottle = parseFloat(item.costPrice) / packSize;
+              const liQty2 = parseFloat(String((li as any).quantity || "0"));
+              const qty = (li.saleUnit === "pack" && packSize > 1) ? liQty2 * packSize : liQty2;
+              totalCost += costPerBottle * qty;
+            }
+          }
+        }
+
+        if (inv.type === "invoice") {
+          const jlines: { accountCode: string; debit: number; credit: number; description: string }[] = [
+            { accountCode: "1100", debit: invTotal, credit: 0, description: "Accounts Receivable" },
+            { accountCode: "4000", debit: 0, credit: invNet, description: "Sales Revenue" },
+            { accountCode: "2100", debit: 0, credit: invVat, description: "VAT Payable" },
+          ];
+          if (totalCost > 0) {
+            jlines.push({ accountCode: "5000", debit: totalCost, credit: 0, description: "Cost of Goods Sold" });
+            jlines.push({ accountCode: "1200", debit: 0, credit: totalCost, description: "Inventory" });
+          }
+          const r = await autoCreateJournalEntry({
+            sourceType: "invoice", sourceId: inv.id, date: invDate,
+            description: `Sales Invoice ${inv.invoiceNumber}`, reference: inv.invoiceNumber, lines: jlines,
+          });
+          if (r) created++;
+        } else if (inv.type === "credit_note") {
+          const jlines: { accountCode: string; debit: number; credit: number; description: string }[] = [
+            { accountCode: "4000", debit: invNet, credit: 0, description: "Sales Revenue reversal" },
+            { accountCode: "2100", debit: invVat, credit: 0, description: "VAT Payable reversal" },
+            { accountCode: "1100", debit: 0, credit: invTotal, description: "Accounts Receivable reversal" },
+          ];
+          if (totalCost > 0) {
+            jlines.push({ accountCode: "1200", debit: totalCost, credit: 0, description: "Inventory restored" });
+            jlines.push({ accountCode: "5000", debit: 0, credit: totalCost, description: "COGS reversal" });
+          }
+          const r = await autoCreateJournalEntry({
+            sourceType: "credit_note", sourceId: inv.id, date: invDate,
+            description: `Credit Note ${inv.invoiceNumber}`, reference: inv.invoiceNumber, lines: jlines,
+          });
+          if (r) created++;
+        }
+      }
+
+      // 4. Repost customer payments
+      const allPmts = await storage.getAllPayments();
+      for (const pmt of allPmts) {
+        const pmtAmount = parseFloat(String(pmt.amount));
+        if (pmtAmount <= 0) continue;
+        const paymentAcctCode = (pmt as any).paymentMethod === "cash" ? "1000" : "1010";
+        const customerName = (pmt as any).customerName ? ` — ${(pmt as any).customerName}` : "";
+        const pmtDate = typeof pmt.paymentDate === "string" ? pmt.paymentDate : new Date(pmt.paymentDate).toISOString().split("T")[0];
+        const r = await autoCreateJournalEntry({
+          sourceType: "payment", sourceId: pmt.id, date: pmtDate,
+          description: `Customer Payment received${customerName}`,
+          reference: (pmt as any).reference || pmt.id,
+          lines: [
+            { accountCode: paymentAcctCode, debit: pmtAmount, credit: 0, description: (pmt as any).paymentMethod === "cash" ? "Cash" : "Bank" },
+            { accountCode: "1100", debit: 0, credit: pmtAmount, description: "Accounts Receivable" },
+          ],
+        });
+        if (r) created++;
+      }
+
+      // 5. Repost supplier payments
+      const allSPs = await storage.getSupplierPayments();
+      for (const sp of allSPs) {
+        const spAmount = parseFloat(String(sp.amount));
+        if (spAmount <= 0) continue;
+        const paymentAcctCode = (sp as any).paymentMethod === "cash" ? "1000" : "1010";
+        const spDate = typeof sp.paymentDate === "string" ? sp.paymentDate : new Date(sp.paymentDate).toISOString().split("T")[0];
+        const supplier = await storage.getSupplier(sp.supplierId);
+        const r = await autoCreateJournalEntry({
+          sourceType: "supplier_payment", sourceId: sp.id, date: spDate,
+          description: `Supplier Payment — ${supplier?.name || sp.supplierId}`,
+          reference: (sp as any).reference || sp.id,
+          lines: [
+            { accountCode: "2000", debit: spAmount, credit: 0, description: `Accounts Payable — ${supplier?.name || ""}` },
+            { accountCode: paymentAcctCode, debit: 0, credit: spAmount, description: (sp as any).paymentMethod === "cash" ? "Cash" : "Bank" },
+          ],
+        });
+        if (r) created++;
+      }
+
+      // 6. Repost expenses
+      const allExps = await storage.getExpenses();
+      const allAccounts = await storage.getAccounts();
+      const vatAccount = allAccounts.find(a => a.code === "2100");
+      for (const exp of allExps) {
+        const expAmount = parseFloat(String(exp.amount));
+        const vatAmt = parseFloat(String((exp as any).vatAmount || "0"));
+        const totalWithVat = expAmount + vatAmt;
+        const expDate = typeof exp.date === "string" ? exp.date : new Date(exp.date).toISOString().split("T")[0];
+        const lines: any[] = [
+          { accountId: (exp as any).expenseAccountId, debit: exp.amount, credit: "0", description: exp.description },
+        ];
+        if (vatAmt > 0 && vatAccount) {
+          lines.push({ accountId: vatAccount.id, debit: String(vatAmt), credit: "0", description: "VAT on expense" });
+        }
+        lines.push({ accountId: (exp as any).paymentAccountId, debit: "0", credit: totalWithVat.toFixed(2), description: exp.description });
+        const entryNumber = await storage.getNextJournalEntryNumber();
+        const je = await storage.createJournalEntry(
+          { entryNumber, date: expDate, description: `Expense: ${exp.description}`, sourceType: "expense", sourceId: exp.id, status: "posted", totalAmount: totalWithVat.toFixed(2) },
+          lines
+        );
+        if (je) {
+          created++;
+          await db.update(expenses).set({ journalEntryId: je.id }).where(sql`id = ${exp.id}`);
+        }
+      }
+
+      res.json({ success: true, created, message: `Successfully reposted ${created} journal entries` });
+    } catch (e: any) {
+      console.error("Repost journals error:", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/expenses", async (_req, res) => {
+    const exp = await storage.getExpenses();
+    res.json(exp);
+  });
+
+  async function buildExpenseJournalLines(body: any) {
+    const totalWithVat = parseFloat(String(body.amount)) + parseFloat(String(body.vatAmount || "0"));
+    const lines: any[] = [
+      { accountId: body.expenseAccountId, debit: String(body.amount), credit: "0", description: body.description },
+    ];
+    if (parseFloat(String(body.vatAmount || "0")) > 0) {
+      const vatAccounts = await storage.getAccounts();
+      const vatAccount = vatAccounts.find((a: any) => a.code === "2100");
+      if (vatAccount) {
+        lines.push({ accountId: vatAccount.id, debit: String(body.vatAmount), credit: "0", description: "VAT on expense" });
+      }
+    }
+    lines.push({ accountId: body.paymentAccountId, debit: "0", credit: totalWithVat.toFixed(2), description: body.description });
+    return { lines, totalWithVat };
+  }
+
+  app.post("/api/expenses", async (req, res) => {
+    try {
+      const expense = await storage.createExpense(req.body);
+      const { lines, totalWithVat } = await buildExpenseJournalLines(req.body);
+      const entryNumber = await storage.getNextJournalEntryNumber();
+      const je = await storage.createJournalEntry(
+        { entryNumber, date: req.body.date, description: `Expense: ${req.body.description}`, sourceType: "expense", sourceId: expense.id, status: "posted", totalAmount: totalWithVat.toFixed(2) },
+        lines
+      );
+      await db.update(expenses).set({ journalEntryId: je.id }).where(sql`id = ${expense.id}`);
+      res.json(expense);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/expenses/:id", async (req, res) => {
+    try {
+      const existing = await db.select().from(expenses).where(sql`id = ${(req.params.id as string)}`);
+      if (!existing.length) return res.status(404).json({ message: "Expense not found" });
+      const expense = await storage.updateExpense((req.params.id as string), req.body);
+      if (!expense) return res.status(404).json({ message: "Expense not found" });
+
+      // Regenerate journal entry for this expense
+      const body = { ...existing[0], ...req.body };
+      const { lines, totalWithVat } = await buildExpenseJournalLines(body);
+      const existingJeId = (existing[0] as any).journalEntryId;
+      if (existingJeId) {
+        await storage.updateJournalEntry(existingJeId,
+          { date: body.date, description: `Expense: ${body.description}`, totalAmount: totalWithVat.toFixed(2) },
+          lines
+        );
+      } else {
+        const entryNumber = await storage.getNextJournalEntryNumber();
+        const je = await storage.createJournalEntry(
+          { entryNumber, date: body.date, description: `Expense: ${body.description}`, sourceType: "expense", sourceId: expense.id, status: "posted", totalAmount: totalWithVat.toFixed(2) },
+          lines
+        );
+        await db.update(expenses).set({ journalEntryId: je.id }).where(sql`id = ${expense.id}`);
+      }
+      res.json(expense);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/expenses/:id", async (req, res) => {
+    try {
+      const [exp] = await db.select().from(expenses).where(sql`id = ${(req.params.id as string)}`);
+      if (!exp) return res.status(404).json({ message: "Expense not found" });
+      if ((exp as any).journalEntryId) {
+        await storage.deleteJournalEntry((exp as any).journalEntryId);
+      }
+      await db.delete(expenses).where(sql`id = ${(req.params.id as string)}`);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/reports/trial-balance", async (_req, res) => {
+    const tb = await storage.getTrialBalance();
+    res.json(tb);
+  });
+
+  app.get("/api/reports/profit-loss/:from/:to", async (req, res) => {
+    const pl = await storage.getProfitAndLoss((req.params.from as string), (req.params.to as string));
+    res.json(pl);
+  });
+
+  app.get("/api/reports/balance-sheet/:asOf", async (req, res) => {
+    const bs = await storage.getBalanceSheet((req.params.asOf as string));
+    res.json(bs);
+  });
+
+  app.get("/api/reports/vat-return/:from/:to", async (req, res) => {
+    const { from, to } = req.params;
+    const [salesInvs, creditNotesList, purchaseInvs, expensesList, allCustomers, allSuppliers] = await Promise.all([
+      db.select().from(invoices).where(and(gte(invoices.date, from), lte(invoices.date, to), eq(invoices.type, "invoice"), sql`${invoices.status} != 'draft'`)),
+      db.select().from(invoices).where(and(gte(invoices.date, from), lte(invoices.date, to), eq(invoices.type, "credit_note"), sql`${invoices.status} != 'draft'`)),
+      db.select().from(purchaseInvoices).where(and(gte(purchaseInvoices.date, from), lte(purchaseInvoices.date, to), sql`${purchaseInvoices.status} != 'draft'`)),
+      db.select().from(expenses).where(and(gte(expenses.date, from), lte(expenses.date, to))),
+      db.select({ id: customers.id, name: customers.name }).from(customers),
+      db.select({ id: suppliers.id, name: suppliers.name }).from(suppliers),
+    ]);
+
+    const custMap: Record<string, string> = {};
+    allCustomers.forEach(c => { custMap[c.id] = c.name; });
+    const suppMap: Record<string, string> = {};
+    allSuppliers.forEach(s => { suppMap[s.id] = s.name; });
+
+    const salesVat = salesInvs.reduce((s, i) => s + parseFloat(i.taxAmount || "0"), 0);
+    const salesNet = salesInvs.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
+    const salesGross = salesInvs.reduce((s, i) => s + parseFloat(i.total || "0"), 0);
+
+    const cnVat = creditNotesList.reduce((s, i) => s + parseFloat(i.taxAmount || "0"), 0);
+    const cnNet = creditNotesList.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
+
+    const purchaseVat = purchaseInvs.reduce((s, i) => s + parseFloat(i.vatAmount || "0"), 0);
+    const purchaseNet = purchaseInvs.reduce((s, i) => s + parseFloat(i.subtotal || "0"), 0);
+
+    const expenseVat = expensesList.reduce((s, i) => s + parseFloat(i.vatAmount || "0"), 0);
+    const expenseNet = expensesList.reduce((s, i) => s + parseFloat(i.amount || "0"), 0);
+
+    const outputVat = salesVat - cnVat;
+    const outputNet = salesNet - cnNet;
+    const inputVat = purchaseVat + expenseVat;
+    const inputNet = purchaseNet + expenseNet;
+    const netVatPayable = outputVat - inputVat;
+
+    res.json({
+      period: { from, to },
+      sales: {
+        count: salesInvs.length,
+        netAmount: salesNet.toFixed(2),
+        vatAmount: salesVat.toFixed(2),
+        grossAmount: salesGross.toFixed(2),
+        items: salesInvs.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          id: i.id,
+          invoiceNumber: i.invoiceNumber,
+          customerName: custMap[i.customerId || ""] || "—",
+          date: i.date,
+          netAmount: parseFloat(i.subtotal || "0").toFixed(2),
+          vatAmount: parseFloat(i.taxAmount || "0").toFixed(2),
+          grossAmount: parseFloat(i.total || "0").toFixed(2),
+        })),
+      },
+      creditNotes: {
+        count: creditNotesList.length,
+        netAmount: cnNet.toFixed(2),
+        vatAmount: cnVat.toFixed(2),
+        items: creditNotesList.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          id: i.id,
+          invoiceNumber: i.invoiceNumber,
+          customerName: custMap[i.customerId || ""] || "—",
+          date: i.date,
+          netAmount: parseFloat(i.subtotal || "0").toFixed(2),
+          vatAmount: parseFloat(i.taxAmount || "0").toFixed(2),
+          grossAmount: parseFloat(i.total || "0").toFixed(2),
+        })),
+      },
+      purchases: {
+        count: purchaseInvs.length,
+        netAmount: purchaseNet.toFixed(2),
+        vatAmount: purchaseVat.toFixed(2),
+        items: purchaseInvs.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          id: i.id,
+          invoiceNumber: i.invoiceNumber,
+          supplierRef: i.supplierInvoiceRef || "—",
+          supplierName: suppMap[i.supplierId || ""] || "—",
+          date: i.date,
+          netAmount: parseFloat(i.subtotal || "0").toFixed(2),
+          vatAmount: parseFloat(i.vatAmount || "0").toFixed(2),
+          grossAmount: parseFloat(i.total || "0").toFixed(2),
+        })),
+      },
+      expenses: {
+        count: expensesList.length,
+        netAmount: expenseNet.toFixed(2),
+        vatAmount: expenseVat.toFixed(2),
+        items: expensesList.sort((a, b) => a.date.localeCompare(b.date)).map(i => ({
+          id: i.id,
+          description: i.description,
+          date: i.date,
+          netAmount: parseFloat(i.amount || "0").toFixed(2),
+          vatAmount: parseFloat(i.vatAmount || "0").toFixed(2),
+          grossAmount: (parseFloat(i.amount || "0") + parseFloat(i.vatAmount || "0")).toFixed(2),
+        })),
+      },
+      outputVat: outputVat.toFixed(2),
+      outputNet: outputNet.toFixed(2),
+      inputVat: inputVat.toFixed(2),
+      inputNet: inputNet.toFixed(2),
+      netVatPayable: netVatPayable.toFixed(2),
+    });
+  });
+
+  app.get("/api/reports/general-ledger/:accountId/:from/:to", async (req, res) => {
+    const gl = await storage.getGeneralLedger((req.params.accountId as string), (req.params.from as string), (req.params.to as string));
+    res.json(gl);
+  });
+
+  // ─── GlobiPOS Routes ────────────────────────────────────────────────────────
+
+  // POS Locations
+  // POS build downloads — live list of release assets from GitHub
+  const resolvePosBuilds = createPosBuildsResolver({
+    getSettings: () => storage.getSettings(),
+    getGithubToken: () => process.env.GLOBISYNC,
+    getDefaultRepo: () => process.env.POS_GITHUB_REPO,
+    getPersistedCache: async (repoUrl) => {
+      const [persisted] = await db.select().from(posReleaseCaches)
+        .where(eq(posReleaseCaches.repoUrl, repoUrl))
+        .limit(1);
+      if (!persisted) return undefined;
+      return {
+        releases: (Array.isArray(persisted.releases) ? persisted.releases : []) as any,
+        verifiedAt: persisted.verifiedAt,
+      };
+    },
+    savePersistedCache: async (repoUrl, releases, verifiedAt) => {
+      await db.insert(posReleaseCaches)
+        .values({ repoUrl, releases, verifiedAt })
+        .onConflictDoUpdate({
+          target: posReleaseCaches.repoUrl,
+          set: { releases, verifiedAt },
+        });
+    },
+  });
+  app.get("/api/pos/builds", requireStaff, async (_req, res) => {
+    const result = await resolvePosBuilds();
+    res.status(result.status).json(result.body);
+  });
+
+  app.get("/api/pos/locations", requireStaff, async (req, res) => {
+    try { res.json(await storage.getPosLocations()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/locations/:id/set-default-receiving", requireAdmin, async (req, res) => {
+    try {
+      await storage.setDefaultReceivingLocation(req.params.id as string);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/locations/:id", requireAdmin, async (req, res) => {
+    try {
+      const loc = await storage.getPosLocation((req.params.id as string));
+      if (!loc) return res.status(404).json({ message: "Not found" });
+      res.json(loc);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/locations", requireAdmin, async (req, res) => {
+    try {
+      const data = insertPosLocationSchema.parse(req.body);
+      res.json(await storage.createPosLocation(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.put("/api/pos/locations/:id", requireAdmin, async (req, res) => {
+    try {
+      const loc = await storage.updatePosLocation((req.params.id as string), req.body);
+      res.json(loc);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/pos/locations/:id", requireAdmin, async (req, res) => {
+    try { await storage.deletePosLocation((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POS Terminals
+  app.get("/api/pos/terminals", requireAdmin, async (req, res) => {
+    try { res.json(await storage.getPosTerminals(req.query.locationId as string | undefined)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
+    try {
+      const t = await storage.getPosTerminal((req.params.id as string));
+      if (!t) return res.status(404).json({ message: "Not found" });
+      res.json(t);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/terminals", requireAdmin, async (req, res) => {
+    try {
+      const data = insertPosTerminalSchema.parse(req.body);
+      res.json(await storage.createPosTerminal(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.put("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
+    try {
+      const t = await storage.updatePosTerminal((req.params.id as string), req.body);
+      res.json(t);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
+    try { await storage.deletePosTerminal((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POS Layout Sets
+  app.get("/api/pos/layouts", requireAdmin, async (req, res) => {
+    try { res.json(await storage.getPosLayoutSets()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/layouts", requireAdmin, async (req, res) => {
+    try {
+      const data = insertPosLayoutSetSchema.parse(req.body);
+      res.json(await storage.createPosLayoutSet(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.get("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
+    try {
+      const layout = await storage.getPosLayoutSet((req.params.id as string));
+      if (!layout) return res.status(404).json({ message: "Layout not found" });
+      res.json(layout);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.put("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
+    try { res.json(await storage.updatePosLayoutSet((req.params.id as string), req.body)); } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/pos/layouts/:id", requireAdmin, async (req, res) => {
+    try { await storage.deletePosLayoutSet((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/layouts/:id/clone", requireAdmin, async (req, res) => {
+    try {
+      const cloned = await storage.clonePosLayoutSet((req.params.id as string), req.body?.name);
+      res.json(cloned);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.get("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
+    try { res.json(await storage.getPosLayoutButtons((req.params.id as string))); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/layouts/:id/simulation-items", requireAdmin, async (req, res) => {
+    try {
+      const itemIds = new Set<string>();
+      const pending = [req.params.id as string];
+      const visited = new Set<string>();
+      while (pending.length && visited.size < 20) {
+        const layoutId = pending.shift()!;
+        if (visited.has(layoutId)) continue;
+        visited.add(layoutId);
+        const layout = await storage.getPosLayoutSet(layoutId);
+        if (!layout?.active) continue;
+        const layoutButtons = await storage.getPosLayoutButtons(layoutId);
+        for (const button of layoutButtons) {
+          if (button.buttonType === "item" && button.itemId) itemIds.add(button.itemId);
+          if (button.buttonType === "sublayout" && button.sublayoutId && !visited.has(button.sublayoutId)) {
+            pending.push(button.sublayoutId);
+          }
+        }
+      }
+      const rows = itemIds.size
+        ? await db.select().from(items).where(inArray(items.id, [...itemIds]))
+        : [];
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/pos/register/layout", requireStaff, async (req, res) => {
+    try {
+      const terminalId = String(req.query.terminalId || "");
+      if (!terminalId) return res.status(400).json({ message: "terminalId is required" });
+      const terminal = await storage.getPosTerminal(terminalId);
+      if (!terminal) return res.status(404).json({ message: "Terminal not found" });
+      if (!terminal.layoutSetId) return res.json({ terminalId, rootLayoutId: null, layouts: [], buttons: [], items: [] });
+
+      const layouts: any[] = [];
+      const buttons: any[] = [];
+      const itemIds = new Set<string>();
+      const pending = [terminal.layoutSetId];
+      const visited = new Set<string>();
+      while (pending.length && visited.size < 20) {
+        const layoutId = pending.shift()!;
+        if (visited.has(layoutId)) continue;
+        visited.add(layoutId);
+        const layout = await storage.getPosLayoutSet(layoutId);
+        if (!layout?.active) continue;
+        layouts.push(layout);
+        const rows = await storage.getPosLayoutButtons(layoutId);
+        buttons.push(...rows);
+        for (const button of rows) {
+          if (button.itemId) itemIds.add(button.itemId);
+          if (button.buttonType === "sublayout" && button.sublayoutId && !visited.has(button.sublayoutId)) pending.push(button.sublayoutId);
+        }
+      }
+      const layoutItems = itemIds.size
+        ? await db.select().from(items).where(inArray(items.id, [...itemIds]))
+        : [];
+      res.json({ terminalId, rootLayoutId: terminal.layoutSetId, layouts, buttons, items: layoutItems });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/register/terminals", requireStaff, async (req, res) => {
+    try {
+      const rows = await storage.getPosTerminals(req.query.locationId as string | undefined);
+      res.json(rows.map(({ id, locationId, name, hardwareType, layoutSetId, active }) => ({
+        id, locationId, name, hardwareType, layoutSetId, active,
+      })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/register/locations", requireStaff, async (_req, res) => {
+    try {
+      const rows = await storage.getPosLocations();
+      res.json(rows.map(({ id, name, code, active }) => ({ id, name, code, active })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/register/sales", requireStaff, async (req, res) => {
+    try {
+      const terminalId = String(req.body?.terminalId || "");
+      const locationId = String(req.body?.locationId || "");
+      const paymentMethod = String(req.body?.paymentMethod || "");
+      const expectedTotal = Number(req.body?.expectedTotal);
+      const requestedLines = Array.isArray(req.body?.lines) ? req.body.lines : [];
+      if (!["cash", "card"].includes(paymentMethod)) return res.status(400).json({ message: "Payment method must be cash or card" });
+      if (!terminalId || !locationId || requestedLines.length === 0 || requestedLines.length > 200) {
+        return res.status(400).json({ message: "A terminal, location, and 1–200 sale lines are required" });
+      }
+      const [terminal, location] = await Promise.all([
+        storage.getPosTerminal(terminalId),
+        storage.getPosLocation(locationId),
+      ]);
+      if (!terminal?.active || terminal.locationId !== locationId) return res.status(400).json({ message: "Invalid active terminal for this location" });
+      if (!location?.active) return res.status(400).json({ message: "Location is inactive" });
+
+      const saleLines: any[] = [];
+      let subtotal = 0;
+      let vatAmount = 0;
+      for (const requested of requestedLines) {
+        const itemId = String(requested?.itemId || "");
+        const variantId = requested?.variantId ? String(requested.variantId) : null;
+        const quantity = Number(requested?.quantity);
+        if (!itemId || !Number.isInteger(quantity) || quantity < 1 || quantity > 1000) {
+          return res.status(400).json({ message: "Each line requires a valid item and quantity from 1 to 1000" });
+        }
+        const item = await storage.getItem(itemId);
+        if (!item?.active) return res.status(400).json({ message: "A selected item is inactive or missing" });
+        const variant = variantId ? await storage.getItemVariant(variantId) : undefined;
+        if (variantId && (!variant?.active || variant.itemId !== itemId)) {
+          return res.status(400).json({ message: "A selected variant is inactive or does not belong to its item" });
+        }
+        if (item.hasVariants && !variant) return res.status(400).json({ message: `${item.name} requires a variant` });
+        const unitPrice = Number(variant?.price1 ?? item.price1 ?? 0);
+        const vatRate = Number((item as any).vatRate ?? 0);
+        if (!Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isFinite(vatRate) || vatRate < 0) {
+          return res.status(400).json({ message: "Item pricing is invalid" });
+        }
+        subtotal += unitPrice * quantity;
+        vatAmount += unitPrice * quantity * (vatRate / 100);
+        saleLines.push({
+          itemId,
+          variantId,
+          description: variant
+            ? `${item.name} (${[variant.option1Value, variant.option2Value, variant.option3Value].filter(Boolean).join(" / ")})`
+            : item.name,
+          sku: variant?.sku || item.sku || "",
+          quantity: String(quantity),
+          unitPrice: unitPrice.toFixed(2),
+          vatRate: vatRate.toFixed(2),
+          discountPercent: "0",
+          total: (unitPrice * quantity).toFixed(2),
+        });
+      }
+      const total = subtotal + vatAmount;
+      if (!Number.isFinite(expectedTotal) || Math.round(expectedTotal * 100) !== Math.round(total * 100)) {
+        return res.status(409).json({
+          message: "Prices changed after items were added. Review the refreshed prices before taking payment.",
+          authoritativeTotal: total.toFixed(2),
+        });
+      }
+      const order = await storage.createPosOrder({
+        orderNumber: `WEB-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`,
+        terminalId,
+        locationId,
+        cashierId: req.user!.id,
+        cashierName: req.user!.username,
+        paymentMethod,
+        subtotal: subtotal.toFixed(2),
+        vatAmount: vatAmount.toFixed(2),
+        discountAmount: "0",
+        total: total.toFixed(2),
+        amountTendered: paymentMethod === "cash" ? total.toFixed(2) : "0",
+        changeDue: "0",
+        status: paymentMethod === "cash" ? "completed" : "held",
+        receiptPrinted: false,
+        syncedAt: new Date(),
+      } as any, saleLines);
+      res.status(201).json(order);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/register/orders/:id/cancel-held", requireStaff, async (req, res) => {
+    try {
+      const cutoff = new Date(Date.now() - CHARGE_IN_PROGRESS_WINDOW_MS);
+      const [cancelled] = await db.update(posOrders)
+        .set({ status: "voided", idempotencyKey: null, chargeAttemptedAt: null })
+        .where(and(
+          eq(posOrders.id, req.params.id as string),
+          eq(posOrders.status, "held"),
+          ilike(posOrders.paymentMethod, "card%"),
+          eq(posOrders.cashierId, req.user!.id),
+          eq(posOrders.terminalId, String(req.body?.terminalId || "")),
+          isNull(posOrders.cardTerminalRef),
+          or(
+            isNull(posOrders.idempotencyKey),
+            lt(posOrders.chargeAttemptedAt, cutoff),
+          ),
+        ))
+        .returning({ id: posOrders.id });
+      if (!cancelled) return res.status(409).json({ message: "This held order cannot be cancelled while a card charge may be in progress" });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.put("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
+    try {
+      const { buttons } = req.body;
+      if (!Array.isArray(buttons)) return res.status(400).json({ message: "buttons array required" });
+      const rows = await storage.setPosLayoutButtons((req.params.id as string), buttons.map((b: any) => ({ ...b, layoutSetId: (req.params.id as string) })));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POS Orders
+  app.get("/api/pos/orders", requireAdmin, async (req, res) => {
+    try {
+      const { locationId, terminalId } = req.query as any;
+      res.json(await storage.getPosOrders(locationId, terminalId));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  // Direct order creation from the web register (not via terminal sync)
+  app.post("/api/pos/orders", requireAdmin, async (req, res) => {
+    try {
+      const { lines = [], ...orderData } = req.body;
+      if (
+        orderData.paymentMethod?.startsWith("card") &&
+        (orderData.status ?? "completed") === "completed" &&
+        !orderData.cardTerminalRef?.trim()
+      ) {
+        return res.status(400).json({ message: "Completed card orders require a card terminal reference" });
+      }
+      // Validate that the referenced terminal exists and belongs to the stated location
+      const terminal = await storage.getPosTerminal(orderData.terminalId);
+      if (!terminal) return res.status(400).json({ message: "Terminal not found" });
+      if (terminal.locationId !== orderData.locationId) return res.status(400).json({ message: "Terminal does not belong to this location" });
+      const order = await storage.createPosOrder({ ...orderData, syncedAt: new Date() }, lines);
+      res.status(201).json(order);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.patch("/api/pos/orders/:id/void", requireAdmin, async (req, res) => {
+    try {
+      const o = await storage.getPosOrder((req.params.id as string));
+      if (!o) return res.status(404).json({ message: "Not found" });
+      await storage.voidPosOrder((req.params.id as string));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pos/orders/:id", requireAdmin, async (req, res) => {
+    try {
+      const o = await storage.getPosOrder((req.params.id as string));
+      if (!o) return res.status(404).json({ message: "Not found" });
+      res.json(o);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // POS Sync Config
+  app.get("/api/pos/sync-config", requireAdmin, async (req, res) => {
+    try { res.json(await storage.getPosSyncConfig()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.put("/api/pos/sync-config/:ruleKey", requireAdmin, async (req, res) => {
+    try {
+      const { label, offlineBehavior, description } = req.body;
+      res.json(await storage.upsertPosSyncConfig((req.params.ruleKey as string), label, offlineBehavior, description));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // POS Inbox (admin management)
+  app.get("/api/pos/inbox", requireAdmin, async (req, res) => {
+    try { res.json(await storage.getPosInbox(req.query.terminalId as string | undefined)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/inbox-item", requireAdmin, async (req, res) => {
+    try {
+      const data = insertPosInboxSchema.parse(req.body);
+      res.json(await storage.createPosInboxItem(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/pos/inbox-item/:id", requireAdmin, async (req, res) => {
+    try { await storage.deletePosInboxItem((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Digital Signage ──────────────────────────────────────────────────────
+  function generatePairingCode(): string {
+    // 6-char human-friendly code, avoids ambiguous chars (0/O, 1/I/L)
+    const chars = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    let code = "";
+    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
+
+  function isSignageItemActiveNow(it: { startDate: string | null; endDate: string | null; daysOfWeek: string | null; startTime: string | null; endTime: string | null; enabled: boolean }): boolean {
+    if (!it.enabled) return false;
+    const now = new Date();
+    if (it.startDate && now < new Date(it.startDate + "T00:00:00")) return false;
+    if (it.endDate && now > new Date(it.endDate + "T23:59:59")) return false;
+    if (it.daysOfWeek) {
+      const days = it.daysOfWeek.split(",").map(d => parseInt(d.trim(), 10));
+      if (!days.includes(now.getDay())) return false;
+    }
+    if (it.startTime || it.endTime) {
+      const hhmm = now.getHours() * 60 + now.getMinutes();
+      const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+      if (it.startTime && hhmm < toMin(it.startTime)) return false;
+      if (it.endTime && hhmm > toMin(it.endTime)) return false;
+    }
+    return true;
+  }
+
+  async function resolveSignagePlaylist(playlistId: string | null) {
+    if (!playlistId) return [];
+    const items = await storage.getSignagePlaylistItems(playlistId);
+    const active = items.filter(isSignageItemActiveNow);
+    const [mediaList, itemsList, offersList] = await Promise.all([
+      storage.getSignageMedia(),
+      storage.getItems(),
+      storage.getSeasonalOffers(),
+    ]);
+    const mediaById = new Map(mediaList.map(m => [m.id, m]));
+    const itemById = new Map(itemsList.map(i => [i.id, i]));
+    const offerById = new Map(offersList.map(o => [o.id, o]));
+    return active.map(it => {
+      let resolved: any = null;
+      if (it.contentType === "media" && it.mediaId) {
+        const m = mediaById.get(it.mediaId);
+        if (m) resolved = { kind: "media", url: m.url, mediaType: m.mediaType, name: m.name };
+      } else if (it.contentType === "item" && it.itemId) {
+        const p = itemById.get(it.itemId);
+        if (p) {
+          const price = Number(p.price1 || 0);
+          const quantity = p.shelfLabelUomEnabled ? Number(p.shelfLabelQuantity || 0) : 0;
+          const unit = p.shelfLabelUomEnabled ? p.shelfLabelUnit : null;
+          const unitPriceFor = (value: number) => {
+            if (quantity <= 0 || !unit) return null;
+            return unit === "g" || unit === "ml"
+              ? (value / quantity) * 1000
+              : value / quantity;
+          };
+          const unitLabels: Record<string, string> = {
+            g: "/ kg", kg: "/ kg", ml: "/ L", L: "/ L",
+            pc: "/ item", m: "/ m", m2: "/ m²", m3: "/ m³",
+          };
+          const previousPrice = p.shelfLabelDiscountEnabled
+            ? Number(p.shelfLabelPreviousPrice || 0)
+            : null;
+          resolved = {
+            kind: "item",
+            name: p.name,
+            imageUrl: p.imageUrl,
+            price: p.price1,
+            brand: p.brand,
+            promotional: previousPrice !== null && previousPrice > price,
+            previousPrice: previousPrice !== null ? previousPrice.toFixed(2) : null,
+            discountPercentage: previousPrice !== null
+              ? (((previousPrice - price) / previousPrice) * 100).toFixed(2)
+              : null,
+            unitPrice: unitPriceFor(price)?.toFixed(2) || null,
+            previousUnitPrice: previousPrice !== null
+              ? unitPriceFor(previousPrice)?.toFixed(2) || null
+              : null,
+            unitLabel: unit ? unitLabels[unit] || null : null,
+            discountProvenance: p.shelfLabelPreviousPriceProvenance,
+            updatedAt: p.updatedAt,
+          };
+        }
+      } else if (it.contentType === "offer" && it.offerId) {
+        const o = offerById.get(it.offerId);
+        if (o) resolved = { kind: "offer", name: o.name, description: o.description, discountPercentage: o.discountPercentage };
+      }
+      return { id: it.id, contentType: it.contentType, durationSeconds: it.durationSeconds, resolved };
+    }).filter(r => r.resolved);
+  }
+
+  const signageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+  app.get("/api/signage/media", requireAdmin, async (_req, res) => {
+    try { res.json(await storage.getSignageMedia()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/media", requireAdmin, signageUpload.single("file"), async (req, res) => {
+    try {
+      let body: any = { ...req.body };
+      if (req.file) {
+        const isVideo = req.file.mimetype.startsWith("video/");
+        body.mediaType = body.mediaType || (isVideo ? "video" : "image");
+        body.url = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
+        body.name = body.name || req.file.originalname;
+      }
+      if (body.durationSeconds) body.durationSeconds = parseInt(body.durationSeconds, 10);
+      const parsed = insertSignageMediaSchema.parse(body);
+      res.status(201).json(await storage.createSignageMedia(parsed));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/signage/media/:id", requireAdmin, async (req, res) => {
+    try { await storage.deleteSignageMedia((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/signage/playlists", requireAdmin, async (_req, res) => {
+    try {
+      const playlists = await storage.getSignagePlaylists();
+      const withItems = await Promise.all(playlists.map(async p => ({ ...p, items: await storage.getSignagePlaylistItems(p.id) })));
+      res.json(withItems);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/playlists", requireAdmin, async (req, res) => {
+    try {
+      const parsed = insertSignagePlaylistSchema.parse(req.body);
+      res.status(201).json(await storage.createSignagePlaylist(parsed));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/signage/playlists/:id", requireAdmin, async (req, res) => {
+    try {
+      const playlist = await storage.updateSignagePlaylist((req.params.id as string), req.body);
+      if (!playlist) return res.status(404).json({ message: "Playlist not found" });
+      res.json(playlist);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/signage/playlists/:id", requireAdmin, async (req, res) => {
+    try { await storage.deleteSignagePlaylist((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/signage/playlists/:id/items", requireAdmin, async (req, res) => {
+    try {
+      const existing = await storage.getSignagePlaylistItems((req.params.id as string));
+      const parsed = insertSignagePlaylistItemSchema.parse({ ...req.body, playlistId: (req.params.id as string), sortOrder: req.body.sortOrder ?? existing.length });
+      res.status(201).json(await storage.createSignagePlaylistItem(parsed));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/signage/playlists/:playlistId/items/:itemId", requireAdmin, async (req, res) => {
+    try {
+      const item = await storage.updateSignagePlaylistItem((req.params.itemId as string), req.body);
+      if (!item) return res.status(404).json({ message: "Playlist item not found" });
+      res.json(item);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/signage/playlists/:playlistId/items/:itemId", requireAdmin, async (req, res) => {
+    try { await storage.deleteSignagePlaylistItem((req.params.itemId as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/playlists/:id/reorder", requireAdmin, async (req, res) => {
+    try {
+      const { itemIds } = req.body;
+      if (!Array.isArray(itemIds)) return res.status(400).json({ message: "itemIds array required" });
+      await storage.reorderSignagePlaylistItems((req.params.id as string), itemIds);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  app.get("/api/signage/screens", requireAdmin, async (_req, res) => {
+    try { res.json(await storage.getSignageScreens()); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/screens", requireAdmin, async (req, res) => {
+    try {
+      const parsed = insertSignageScreenSchema.parse(req.body);
+      let pairingCode = generatePairingCode();
+      while (await storage.getSignageScreenByCode(pairingCode)) pairingCode = generatePairingCode();
+      res.status(201).json(await storage.createSignageScreen({ ...parsed, pairingCode }));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/signage/screens/:id", requireAdmin, async (req, res) => {
+    try {
+      const screen = await storage.updateSignageScreen((req.params.id as string), req.body);
+      if (!screen) return res.status(404).json({ message: "Screen not found" });
+      res.json(screen);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.delete("/api/signage/screens/:id", requireAdmin, async (req, res) => {
+    try { await storage.deleteSignageScreen((req.params.id as string)); res.json({ ok: true }); } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Public, unauthenticated — any browser (TV/streaming box) pointed at the pairing code plays this.
+  app.get("/api/signage/play/:code", async (req, res) => {
+    try {
+      const screen = await storage.getSignageScreenByCode((req.params.code as string).toUpperCase());
+      if (!screen) return res.status(404).json({ message: "Unknown pairing code" });
+      const items = await resolveSignagePlaylist(screen.playlistId);
+      res.set("Cache-Control", "no-store, max-age=0");
+      res.json({ screen: { id: screen.id, name: screen.name, screenType: screen.screenType }, items });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/signage/play/:code/heartbeat", async (req, res) => {
+    try {
+      const screen = await storage.getSignageScreenByCode((req.params.code as string).toUpperCase());
+      if (!screen) return res.status(404).json({ message: "Unknown pairing code" });
+      await storage.markSignageScreenSeen(screen.pairingCode);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Terminal authentication middleware ──────────────────────────────────────
+  // Terminal-facing sync endpoints require X-Terminal-Code header matching an active terminal in DB.
+  async function requireTerminal(req: Request, res: Response, next: NextFunction) {
+    const code = req.headers["x-terminal-code"] as string | undefined;
+    if (!code) return res.status(401).json({ message: "X-Terminal-Code header required" });
+    const terminal = await storage.getPosTerminalByCode(code);
+    if (!terminal || !terminal.active) return res.status(403).json({ message: "Terminal not authorised" });
+    (req as any).terminal = terminal;
+    next();
+  }
+
+  // Customer-facing display content for this terminal's auto-provisioned signage screen (idle-time rotation).
+  app.get("/api/pos/signage/playlist", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const screen = await storage.getSignageScreenByTerminalId(terminal.id);
+      if (!screen) return res.json({ items: [] });
+      const items = await resolveSignagePlaylist(screen.playlistId);
+      res.json({ items });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Sync API (called by Tauri terminal) ────────────────────────────────────
+  // Terminal registration — bootstrap call; accepts terminalCode + locationCode from body.
+  // No X-Terminal-Code header required (this IS the bootstrap before the terminal has a session).
+  app.post("/api/pos/terminals/register", async (req, res) => {
+    try {
+      // Accept both "terminalCode" (canonical) and legacy "code" field from older Tauri builds
+      const terminalCode = req.body.terminalCode || req.body.code;
+      const { locationCode } = req.body;
+      if (!terminalCode) return res.status(400).json({ message: "terminalCode required" });
+      const terminal = await storage.getPosTerminalByCode(terminalCode);
+      if (!terminal) return res.status(404).json({ message: `Terminal '${terminalCode}' not found. Create it in Admin → POS → Terminals.` });
+      if (!terminal.active) return res.status(403).json({ message: "Terminal is not active" });
+      if (req.body.catalogSyncVersion !== 1) {
+        return res.status(426).json({
+          message: "This GlobiPOS Terminal version is no longer supported for large catalogs. Install version 1.0.10 or newer and try again.",
+          minimumTerminalVersion: "1.0.10",
+        });
+      }
+      if (locationCode) {
+        const locs = await storage.getPosLocations();
+        const loc = locs.find(l => l.code === locationCode || l.id === locationCode);
+        if (!loc) return res.status(404).json({ message: `Location '${locationCode}' not found` });
+        if (terminal.locationId !== loc.id) return res.status(403).json({ message: "Terminal is not assigned to that location" });
+      }
+      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date() });
+      // Auto-provision a signage screen for this terminal's customer-facing display (idle-time rotation).
+      const existingScreen = await storage.getSignageScreenByTerminalId(terminal.id);
+      if (!existingScreen) {
+        let pairingCode = generatePairingCode();
+        while (await storage.getSignageScreenByCode(pairingCode)) pairingCode = generatePairingCode();
+        await storage.createSignageScreen({ name: `${terminal.name} — Customer Display`, screenType: "pos_customer_display", posTerminalId: terminal.id, playlistId: null, pairingCode });
+      }
+      const [location, layoutButtons, inboxItems, cats, syncCfg, cashiers] = await Promise.all([
+        storage.getPosLocation(terminal.locationId),
+        terminal.layoutSetId ? storage.getPosLayoutButtons(terminal.layoutSetId) : Promise.resolve([]),
+        storage.getPosInbox(terminal.id),
+        storage.getCategories(),
+        storage.getPosSyncConfig(),
+        storage.getPosCashiers(terminal.locationId),
+      ]);
+      // Send SHA-256 hash of PIN (never plaintext). Terminal stores hash directly.
+      const cashierPayload = cashiers.map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role }));
+      // Catalog is bootstrapped separately through the authenticated, bounded sync endpoint.
+      // Keep the catalog shape for older clients, but never put the full item table in registration.
+      res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: [], categories: cats }, syncConfig: syncCfg, cashiers: cashierPayload });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Cashier sync endpoint (called by terminal after initial registration for delta updates)
+  app.get("/api/pos/sync/cashiers", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const cashiers = await storage.getPosCashiers(terminal.locationId);
+      // Send SHA-256 hash (the `pin` column stores hashes, never plaintext)
+      res.json(cashiers.map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Direct Click & Collect fallback for orders whose inbox notification has expired.
+  // Customer receipts display the first 8 characters of the portal order UUID.
+  async function findPortalOrderByNumber(orderNumber: string) {
+    const normalized = orderNumber.trim().replace(/^#/, "").toLowerCase();
+    if (!normalized) return [];
+    return db.select().from(portalOrders)
+      .where(sql`lower(${portalOrders.id}) LIKE ${`${normalized}%`}`)
+      .limit(2);
+  }
+
+  app.get("/api/orders/:orderNumber", requireTerminal, async (req, res) => {
+    try {
+      const matches = await findPortalOrderByNumber(req.params.orderNumber as string);
+      if (matches.length === 0) return res.status(404).json({ message: "Order not found" });
+      if (matches.length > 1) return res.status(409).json({ message: "Order number is ambiguous. Enter more characters." });
+
+      const order = matches[0];
+      const [lineItems, customer] = await Promise.all([
+        db.select().from(portalOrderItems).where(eq(portalOrderItems.orderId, order.id)),
+        storage.getCustomer(order.customerId),
+      ]);
+      res.json({
+        id: order.id,
+        order_number: order.id.slice(0, 8).toUpperCase(),
+        customer_name: customer?.name ?? "Walk-in",
+        status: order.status,
+        lines: lineItems.map(line => ({
+          product_id: line.itemId,
+          description: line.itemName,
+          qty: line.quantity,
+          unit_price: Number(line.unitPrice),
+          line_total: Number(line.total),
+        })),
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/orders/:orderNumber/collect", requireTerminal, async (req, res) => {
+    try {
+      const matches = await findPortalOrderByNumber(req.params.orderNumber as string);
+      if (matches.length === 0) return res.status(404).json({ message: "Order not found" });
+      if (matches.length > 1) return res.status(409).json({ message: "Order number is ambiguous. Enter more characters." });
+
+      const [updated] = await db.update(portalOrders)
+        .set({ status: "completed" })
+        .where(and(
+          eq(portalOrders.id, matches[0].id),
+          inArray(portalOrders.status, ["pending", "confirmed"]),
+        ))
+        .returning();
+
+      if (!updated) {
+        const [current] = await db.select({ status: portalOrders.status })
+          .from(portalOrders)
+          .where(eq(portalOrders.id, matches[0].id))
+          .limit(1);
+        if (current?.status === "completed") {
+          return res.status(409).json({ message: "This order has already been collected." });
+        }
+        return res.status(409).json({ message: "This order is not eligible for collection." });
+      }
+
+      res.json({ ok: true, order: updated });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Cashier CRUD (admin-only)
+  app.get("/api/pos/cashiers", requireAdmin, async (req, res) => {
+    try {
+      const { locationId } = req.query;
+      const cashiers = await storage.getPosCashiers(locationId as string | undefined);
+      // Never expose the hash in admin listing — return masked pin indicator
+      res.json(cashiers.map(c => ({ ...c, pin: "••••" })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pos/cashiers", requireAdmin, async (req, res) => {
+    try {
+      const { name, pin, role, locationId, active } = req.body;
+      if (!name || !pin) return res.status(400).json({ message: "name and pin required" });
+      // Hash PIN with SHA-256 before storing — never store plaintext
+      const { createHash } = await import("crypto");
+      const pinHash = createHash("sha256").update(String(pin)).digest("hex");
+      const cashier = await storage.createPosCashier({ name, pin: pinHash, role: role || "cashier", locationId: locationId || null, active: active !== false });
+      res.status(201).json({ ...cashier, pin: "••••" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.put("/api/pos/cashiers/:id", requireAdmin, async (req, res) => {
+    try {
+      const updates: any = { ...req.body };
+      if (updates.pin) {
+        const { createHash } = await import("crypto");
+        updates.pin = createHash("sha256").update(String(updates.pin)).digest("hex");
+      }
+      const cashier = await storage.updatePosCashier((req.params.id as string), updates);
+      if (!cashier) return res.status(404).json({ message: "Cashier not found" });
+      res.json({ ...cashier, pin: "••••" });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.delete("/api/pos/cashiers/:id", requireAdmin, async (req, res) => {
+    try {
+      await storage.deletePosCashier((req.params.id as string));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── PDA Operations (handheld app: price look-up, stock take, agoranomia, transfers, invoice receipt) ───
+
+  // Stock Take sessions
+  app.get("/api/pda/stock-take/sessions", requireStaff, requireModule("pda_operations"), async (_req, res) => {
+    try { res.json(await storage.getStockTakeSessions()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pda/stock-take/sessions/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const session = await storage.getStockTakeSession((req.params.id as string));
+      if (!session) return res.status(404).json({ message: "Session not found" });
+      res.json(session);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pda/stock-take/sessions", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const data = insertStockTakeSessionSchema.parse({ ...req.body, createdByUsername: req.user!.username });
+      res.status(201).json(await storage.createStockTakeSession(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/stock-take/sessions/:id/lines", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const data = insertStockTakeLineSchema.parse({ ...req.body, sessionId: (req.params.id as string), scannedByUsername: req.user!.username });
+      res.status(201).json(await storage.upsertStockTakeLine(data));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/stock-take/sessions/:id/submit", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const session = await storage.submitStockTakeSession((req.params.id as string));
+      if (!session) return res.status(404).json({ message: "Session not found" });
+      res.json(session);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Back-office Stock Transfers (same storage, accessible to all staff)
+  app.get("/api/stock-transfers", requireStaff, async (_req, res) => {
+    try { res.json(await storage.getStockTransfers()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/stock-transfers", requireStaff, async (req, res) => {
+    try {
+      const { items: transferItems, ...transferBody } = req.body;
+      const transferNumber = await storage.getNextTransferNumber();
+      const data = insertStockTransferSchema.parse({ ...transferBody, transferNumber, createdByUsername: req.user!.username });
+      const parsedItems = (transferItems || []).map((i: any) => insertStockTransferItemSchema.parse(i));
+      res.status(201).json(await storage.createStockTransfer(data, parsedItems));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/stock-transfers/:id/complete", requireStaff, async (req, res) => {
+    try {
+      const transfer = await storage.completeStockTransfer(req.params.id as string);
+      if (!transfer) return res.status(404).json({ message: "Transfer not found" });
+      res.json(transfer);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Stock Transfers (movement log)
+  app.get("/api/pda/transfers", requireStaff, requireModule("pda_operations"), async (_req, res) => {
+    try { res.json(await storage.getStockTransfers()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pda/transfers/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const transfer = await storage.getStockTransfer((req.params.id as string));
+      if (!transfer) return res.status(404).json({ message: "Transfer not found" });
+      res.json(transfer);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pda/transfers", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const { items: transferItems, ...transferBody } = req.body;
+      const transferNumber = await storage.getNextTransferNumber();
+      const data = insertStockTransferSchema.parse({ ...transferBody, transferNumber, createdByUsername: req.user!.username });
+      const parsedItems = (transferItems || []).map((i: any) => insertStockTransferItemSchema.parse(i));
+      res.status(201).json(await storage.createStockTransfer(data, parsedItems));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/transfers/:id/complete", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const transfer = await storage.completeStockTransfer((req.params.id as string));
+      if (!transfer) return res.status(404).json({ message: "Transfer not found" });
+      res.json(transfer);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Agoranomia — shelf unit-price labels & price/label compliance audit
+  app.get("/api/pda/agoranomia/audit", requireStaff, requireModule("pda_operations"), async (_req, res) => {
+    try {
+      const allItems = await storage.getItems();
+      const prints = await storage.getAllAgoranomiaLabelPrints();
+      const printMap = new Map(prints.map(p => [p.itemId, p]));
+      const audit = allItems.map((item: any) => {
+        const printed = printMap.get(item.id);
+        const currentPrice = parseFloat(item.price1 || "0");
+        const previousPrice = item.shelfLabelDiscountEnabled ? parseFloat(item.shelfLabelPreviousPrice || "0") : null;
+        const quantity = item.shelfLabelUomEnabled ? parseFloat(item.shelfLabelQuantity || "0") : 0;
+        const unit = item.shelfLabelUomEnabled ? item.shelfLabelUnit : null;
+        const referencePrice = (price: number | null) => {
+          if (price === null || quantity <= 0 || !unit) return { value: null, label: null };
+          if (unit === "g") return { value: (price / quantity) * 1000, label: "/ kg" };
+          if (unit === "ml") return { value: (price / quantity) * 1000, label: "/ L" };
+          const labels: Record<string, string> = { kg: "/ kg", L: "/ L", pc: "/ item", m: "/ m", m2: "/ m²", m3: "/ m³" };
+          return { value: price / quantity, label: labels[unit] || "/ m" };
+        };
+        const currentUnit = referencePrice(currentPrice);
+        const previousUnit = referencePrice(previousPrice);
+        const needsReprint = !printed
+          || parseFloat(printed.printedPrice) !== currentPrice
+          || (printed.printedPreviousPrice == null ? null : parseFloat(printed.printedPreviousPrice)) !== previousPrice
+          || (printed.printedUnitPrice == null ? null : parseFloat(printed.printedUnitPrice)) !== (currentUnit.value === null ? null : Number(currentUnit.value.toFixed(2)))
+          || (printed.printedPreviousUnitPrice == null ? null : parseFloat(printed.printedPreviousUnitPrice)) !== (previousUnit.value === null ? null : Number(previousUnit.value.toFixed(2)))
+          || (printed.unitLabel || null) !== currentUnit.label
+          || (printed.discountProvenance || null) !== (item.shelfLabelPreviousPriceProvenance || null);
+        return {
+          itemId: item.id,
+          itemName: item.name,
+          sku: item.sku,
+          barcode: item.barcode,
+          volume: item.volume || null,
+          shelfLabelUomEnabled: item.shelfLabelUomEnabled,
+          shelfLabelQuantity: item.shelfLabelQuantity,
+          shelfLabelUnit: item.shelfLabelUnit,
+          shelfLabelDiscountEnabled: item.shelfLabelDiscountEnabled,
+          shelfLabelPreviousPrice: previousPrice,
+          shelfLabelPreviousPriceVerifiedAt: item.shelfLabelPreviousPriceVerifiedAt,
+          shelfLabelPreviousPriceProvenance: item.shelfLabelPreviousPriceProvenance,
+          currentPrice,
+          lastPrintedPrice: printed ? parseFloat(printed.printedPrice) : null,
+          lastPrintedAt: printed?.printedAt || null,
+          needsReprint,
+        };
+      });
+      res.json(audit);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pda/agoranomia/print-batch", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const { itemIds, overrides, labelProfileId, profileSnapshot } = req.body as {
+        itemIds: string[];
+        overrides?: Record<string, { expirationDate?: string }>;
+        labelProfileId?: string;
+        profileSnapshot?: Record<string, unknown>;
+      };
+      if (!Array.isArray(itemIds) || !itemIds.length) return res.status(400).json({ message: "itemIds required" });
+      if (profileSnapshot && profileSnapshot.version !== 1) return res.status(400).json({ message: "Unsupported label profile snapshot version" });
+      let selectedLabelProfile: typeof labelProfiles.$inferSelect | undefined;
+      if (labelProfileId) {
+        selectedLabelProfile = (await db.select().from(labelProfiles).where(eq(labelProfiles.id, labelProfileId)).limit(1))[0];
+        if (!selectedLabelProfile || selectedLabelProfile.kind !== "shelf") {
+          return res.status(400).json({ message: "A valid shelf label profile is required" });
+        }
+      }
+      const allItems = await storage.getItems();
+
+      // Cyprus unit prices: weight, volume, count, length, area, and volume.
+      function calcUnitPrice(price: number, unitSize: number, unitType: string): { unitPrice: number | null; unitLabel: string } {
+        if (!unitSize || unitSize <= 0) return { unitPrice: null, unitLabel: "" };
+        if (unitType === "g")  return { unitPrice: (price / unitSize) * 1000, unitLabel: "/ kg" };
+        if (unitType === "ml") return { unitPrice: (price / unitSize) * 1000, unitLabel: "/ L" };
+        if (unitType === "kg") return { unitPrice: price / unitSize, unitLabel: "/ kg" };
+        if (unitType === "L")  return { unitPrice: price / unitSize, unitLabel: "/ L" };
+        if (unitType === "pc") return { unitPrice: price / unitSize, unitLabel: "/ item" };
+        if (unitType === "m2") return { unitPrice: price / unitSize, unitLabel: "/ m²" };
+        if (unitType === "m3") return { unitPrice: price / unitSize, unitLabel: "/ m³" };
+        return { unitPrice: price / unitSize, unitLabel: "/ m" };
+      }
+
+      const records = itemIds.map((itemId: string) => {
+        const item = allItems.find((i: any) => i.id === itemId);
+        if (!item) return null;
+        const currentPrice = parseFloat(item.price1 || "0");
+        const override = overrides?.[itemId];
+        const unitSize = item.shelfLabelUomEnabled ? parseFloat(item.shelfLabelQuantity || "0") : 0;
+        const unitType = (item.shelfLabelUomEnabled ? item.shelfLabelUnit : "pc") || "pc";
+        const { unitPrice, unitLabel } = calcUnitPrice(currentPrice, unitSize, unitType);
+        const previousPrice = item.shelfLabelDiscountEnabled
+          ? parseFloat(item.shelfLabelPreviousPrice || "0")
+          : null;
+        const allowedDiscountProvenance = new Set(["recorded_30_day_low", "staff_attested_legacy_period"]);
+        if (item.shelfLabelDiscountEnabled && (previousPrice === null || previousPrice <= currentPrice || !item.shelfLabelPreviousPriceVerifiedAt)) {
+          throw new Error(`${item.name}: promotional label is missing a valid verified prior price`);
+        }
+        if (previousPrice !== null && !allowedDiscountProvenance.has(item.shelfLabelPreviousPriceProvenance || "")) {
+          throw new Error(`${item.name}: promotional label is missing valid prior-price provenance`);
+        }
+        const previousUnitPrice = previousPrice !== null
+          ? calcUnitPrice(previousPrice, unitSize, unitType).unitPrice
+          : null;
+        const discountPercentage = previousPrice !== null
+          ? ((previousPrice - currentPrice) / previousPrice) * 100
+          : null;
+        return insertAgoranomiaLabelPrintSchema.parse({
+          itemId: item.id,
+          itemName: item.name,
+          sku: item.sku,
+          printedPrice: currentPrice.toFixed(2),
+          printedUnitPrice: unitPrice !== null ? unitPrice.toFixed(2) : null,
+          printedPreviousPrice: previousPrice !== null ? previousPrice.toFixed(2) : null,
+          printedPreviousUnitPrice: previousUnitPrice !== null ? previousUnitPrice.toFixed(2) : null,
+          discountPercentage: discountPercentage !== null ? discountPercentage.toFixed(2) : null,
+          discountVerifiedAt: previousPrice !== null ? item.shelfLabelPreviousPriceVerifiedAt : null,
+          discountProvenance: previousPrice !== null ? item.shelfLabelPreviousPriceProvenance : null,
+          unitLabel,
+          printedByUsername: req.user!.username,
+          labelProfileId: selectedLabelProfile?.id ?? null,
+          profileSnapshot: profileSnapshot ?? selectedLabelProfile?.config ?? null,
+        });
+      }).filter(Boolean);
+
+      const saved = await storage.recordAgoranomiaLabelPrints(records as any);
+
+      // Enrich response with barcode + volume + expirationDate for the printed label
+      const enriched = saved.map((s: any) => {
+        const item = allItems.find((i: any) => i.id === s.itemId);
+        const ovr = overrides?.[s.itemId];
+        return {
+          ...s,
+          barcode: item?.barcode || null,
+          volume: item?.volume || null,
+          expirationDate: ovr?.expirationDate || null,
+        };
+      });
+      res.json(enriched);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // ── Goods Received Vouchers (OCR invoice import + receiving verification) ──
+  const grvImageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+
+  app.post("/api/pda/invoice-ocr", requireStaff, requireModule("pda_operations"), grvImageUpload.single("image"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "image file required" });
+    try {
+      const ocr = await extractInvoiceFromImage(req.file.buffer.toString("base64"), req.file.mimetype || "image/jpeg");
+
+      const [allItems, allSuppliers] = await Promise.all([storage.getItems(), storage.getSuppliers()]);
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      let matchedSupplierId: string | null = null;
+      if (ocr.supplierName) {
+        const target = normalize(ocr.supplierName);
+        const supplier = allSuppliers.find((s: any) => normalize(s.name) === target)
+          || allSuppliers.find((s: any) => normalize(s.name).includes(target) || target.includes(normalize(s.name)));
+        matchedSupplierId = supplier?.id || null;
+      }
+
+      const lineItems = ocr.lineItems.map(li => {
+        const targetDesc = normalize(li.description);
+        let item = allItems.find((it: any) => normalize(it.name) === targetDesc || normalize(it.sku || "") === targetDesc);
+        if (!item) {
+          item = allItems.find((it: any) => targetDesc.includes(normalize(it.name)) || normalize(it.name).includes(targetDesc));
+        }
+        return {
+          descriptionRaw: li.description,
+          itemId: item?.id || null,
+          itemName: item?.name || null,
+          sku: item?.sku || null,
+          barcode: item?.barcode || null,
+          expectedQuantity: li.quantity,
+          receivedQuantity: 0,
+          unitCost: li.unitCost.toFixed(2),
+          vatRate: (li.vatRate ?? 19).toFixed(2),
+        };
+      });
+
+      res.json({
+        supplierName: ocr.supplierName,
+        supplierId: matchedSupplierId,
+        invoiceNumber: ocr.invoiceNumber,
+        invoiceDate: ocr.invoiceDate,
+        rawText: ocr.rawText,
+        lineItems,
+      });
+    } catch (e: any) {
+      res.status(503).json({ message: e.message || "OCR extraction failed" });
+    }
+  });
+
+  app.get("/api/pda/grv", requireStaff, requireModule("pda_operations"), async (_req, res) => {
+    try { res.json(await storage.getGoodsReceivedVouchers()); }
+    catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.get("/api/pda/grv/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const grv = await storage.getGoodsReceivedVoucher((req.params.id as string));
+      if (!grv) return res.status(404).json({ message: "GRV not found" });
+      res.json(grv);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+  app.post("/api/pda/grv", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const { items: grvLineItems, ...grvBody } = req.body;
+      const grvNumber = await storage.getNextGrvNumber();
+      const data = insertGoodsReceivedVoucherSchema.parse({ ...grvBody, grvNumber, createdByUsername: req.user!.username });
+      const parsedItems = (grvLineItems || []).map((i: any) => insertGoodsReceivedVoucherItemSchema.parse(i));
+      res.status(201).json(await storage.createGoodsReceivedVoucher(data, parsedItems));
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/pda/grv/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const { supplierId, invoiceNumberRaw, invoiceDateRaw } = req.body as { supplierId?: string; invoiceNumberRaw?: string; invoiceDateRaw?: string };
+      const updated = await storage.updateGoodsReceivedVoucher((req.params.id as string), { supplierId, invoiceNumberRaw, invoiceDateRaw });
+      if (!updated) return res.status(404).json({ message: "GRV not found" });
+      res.json(updated);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.patch("/api/pda/grv/items/:id", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const updated = await storage.updateGoodsReceivedVoucherItem((req.params.id as string), req.body);
+      if (!updated) return res.status(404).json({ message: "Line not found" });
+      res.json(updated);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/grv/:id/scan", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const { code, eventKey, incrementBy } = req.body as { code: string; eventKey: string; incrementBy?: number };
+      if (!code || !eventKey) return res.status(400).json({ message: "code and eventKey required" });
+      const grvId = req.params.id as string;
+      // Exact match first protects synthesized 29-prefix codes. PLU fallback is
+      // internal to this one request and only runs after a definitive no-match,
+      // avoiding a second mutation after transport/auth/server failures.
+      const result = await resolveScaleBarcodeExactFirst(
+        code,
+        (candidate) => storage.scanGoodsReceivedVoucherLine(grvId, candidate, eventKey, incrementBy ?? 1),
+      );
+      if (!result) return res.status(404).json({ message: "No matching line item found for this code" });
+      res.json(result);
+    } catch (e: any) {
+      // Storage/transaction failures are transient server errors. Returning 5xx
+      // keeps the PDA's persisted event queued for an idempotent replay.
+      res.status(500).json({ message: e.message || "Could not record scan" });
+    }
+  });
+  // Finalizing a GRV posts a real purchase invoice through the exact same `postPurchaseInvoice`
+  // helper the manual /api/purchase-invoices route uses, so due-date derivation, stock updates,
+  // supplier-balance updates, and journal-entry creation are identical and never duplicated.
+  app.post("/api/pda/grv/:id/finalize", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const prep = await storage.prepareGrvFinalization((req.params.id as string));
+      if (!prep) return res.status(404).json({ message: "GRV not found" });
+      if (prep.alreadyCompleted) return res.json(prep.existing);
+
+      const data = insertPurchaseInvoiceSchema.parse(prep.invoiceData);
+      const parsedItems = prep.invoiceLineItems.map((li: any) => insertPurchaseInvoiceItemSchema.parse(li));
+      const inv = await postPurchaseInvoice(data, parsedItems);
+
+      const grv = await storage.completeGrvFinalization((req.params.id as string), inv.id, prep.hasDiscrepancies);
+      res.json(grv);
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Catalog delta sync — filters items/categories by updatedAt > since, active seasonal offers by date window.
+  // When `since` is omitted, a full catalog is returned (full: true).
+  app.get("/api/sync/catalog", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const since = req.query.since as string | undefined;
+      const sinceDate = since ? new Date(since) : null;
+      if (sinceDate && Number.isNaN(sinceDate.getTime())) return res.status(400).json({ message: "Invalid since timestamp" });
+      const rawLimit = Number.parseInt(String(req.query.limit || "250"), 10);
+      const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(rawLimit, 500)) : 250;
+      let cursor: { name: string; id: string } | undefined;
+      if (req.query.cursor) {
+        try {
+          const decoded = Buffer.from(String(req.query.cursor), "base64url").toString("utf8");
+          const parsed = JSON.parse(decoded);
+          if (typeof parsed.name !== "string" || typeof parsed.id !== "string") throw new Error("invalid");
+          cursor = { name: parsed.name, id: parsed.id };
+        } catch {
+          return res.status(400).json({ message: "Invalid catalog cursor" });
+        }
+      }
+      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), lastSyncAt: new Date() });
+      const [pageItems, cats, offers] = await Promise.all([
+        storage.getCatalogPage({ limit: limit + 1, cursor, since: sinceDate || undefined }),
+        storage.getCategories(),
+        storage.getSeasonalOffers(),
+      ]);
+      const done = pageItems.length <= limit;
+      const items = pageItems.slice(0, limit);
+      const categories = sinceDate
+        ? cats.filter(cat => cat.updatedAt && new Date(cat.updatedAt) > sinceDate)
+        : cats;
+      // Filter to only currently active seasonal offers
+      const today = new Date().toISOString().slice(0, 10);
+      const activeOffers = offers.filter(o => o.active && o.startDate <= today && o.endDate >= today);
+      const last = items[items.length - 1];
+      const nextCursor = !done && last
+        ? Buffer.from(JSON.stringify({ name: last.name, id: last.id })).toString("base64url")
+        : null;
+      res.json({ items, categories: cursor ? [] : categories, seasonalOffers: cursor ? [] : activeOffers,
+        syncedAt: new Date().toISOString(), full: !sinceDate, since: since || null, nextCursor, done });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Inbox delta — returns messages created after `since`
+  app.get("/api/sync/inbox", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const since = req.query.since as string | undefined;
+      const sinceDate = since ? new Date(since) : undefined;
+      res.json(await storage.getPosInbox(terminal.id, sinceDate));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Bills ingest (terminal pushes completed orders)
+  // terminalId and locationId are always overridden from the authenticated terminal context — never trusted from payload.
+  app.post("/api/sync/bills", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const { bills } = req.body;
+      if (!Array.isArray(bills)) return res.status(400).json({ message: "bills array required" });
+      const results: any[] = [];
+      for (const bill of bills) {
+        try {
+          const {
+            lines = [],
+            terminalId: _tid,
+            locationId: _lid,
+            paymentRef,
+            ...orderData
+          } = bill;
+          // Enforce server-side context — ignore any payload terminal/location IDs
+          const order = await storage.createPosOrder({
+            ...orderData,
+            cardTerminalRef: paymentRef ?? orderData.cardTerminalRef,
+            terminalId: terminal.id,
+            locationId: terminal.locationId,
+            syncedAt: new Date(),
+          }, lines);
+          results.push({ orderNumber: bill.orderNumber, status: "ok", id: order.id });
+        } catch (err: any) {
+          results.push({ orderNumber: bill.orderNumber, status: "error", message: err.message });
+        }
+      }
+      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), lastSyncAt: new Date(), outboxQueueSize: 0 });
+      res.json({ results });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Shift ingest
+  app.post("/api/sync/shifts", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const data = insertPosShiftSchema.parse({ ...req.body, terminalId: terminal.id });
+      const shift = await storage.createPosShift(data);
+      res.json({ status: "ok", id: shift.id });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Audit log ingest — terminals push their local audit_log entries
+  app.post("/api/pos/sync/audit-logs", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const { entries } = req.body;
+      if (!Array.isArray(entries)) return res.status(400).json({ message: "entries array required" });
+      const rows = entries
+        .filter((e: any) => e && Number.isFinite(Number(e.localId)) && e.action)
+        .map((e: any) => insertPosAuditLogSchema.parse({
+          terminalId: terminal.id,
+          localId: Number(e.localId),
+          cashierId: e.cashierId ?? null,
+          cashierName: e.cashierName ?? null,
+          action: String(e.action),
+          entity: e.entity ?? null,
+          entityId: e.entityId ?? null,
+          detail: e.detail ?? null,
+          deviceCreatedAt: e.createdAt ?? null,
+        }));
+      const inserted = await storage.insertPosAuditLogs(rows);
+      res.json({ status: "ok", received: entries.length, inserted });
+    } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+
+  // Admin: view synced POS audit logs
+  app.get("/api/pos/audit-logs", requireAdmin, async (req, res) => {
+    try {
+      const { terminalId, cashierId, action, limit } = req.query;
+      const logs = await storage.getPosAuditLogs({
+        terminalId: terminalId as string | undefined,
+        cashierId: cashierId as string | undefined,
+        action: action as string | undefined,
+        limit: limit ? Math.min(Number(limit) || 300, 1000) : undefined,
+      });
+      const terminals = await storage.getPosTerminals();
+      const tMap = new Map(terminals.map((t: any) => [t.id, t]));
+      res.json(logs.map(l => ({
+        ...l,
+        terminalName: tMap.get(l.terminalId)?.name ?? null,
+        terminalCode: tMap.get(l.terminalId)?.code ?? null,
+      })));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Report: POS cashier activity (sales from pos_orders + audit action counts)
+  app.get("/api/reports/pos-cashier-activity", requireStaff, requireModule("reports"), async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+      const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 86400000);
+      const end = endDate ? new Date(endDate + "T23:59:59.999Z") : new Date();
+      // SQL-side aggregation — accurate at any data volume (no row-limit truncation)
+      const { orders, audits } = await storage.getPosCashierActivity(start, end);
+      const byCashier: Record<string, any> = {};
+      const keyOf = (id: string | null, name: string | null) => id || name || "unknown";
+      for (const o of orders) {
+        const k = keyOf(o.cashierId, o.cashierName);
+        byCashier[k] ??= { cashierId: o.cashierId, cashierName: o.cashierName || "Unknown", orders: 0, sales: 0, voids: 0, auditActions: {} };
+        byCashier[k].orders += o.orders;
+        byCashier[k].sales += o.sales;
+        byCashier[k].voids += o.voids;
+      }
+      for (const a of audits) {
+        const k = keyOf(a.cashierId, a.cashierName);
+        byCashier[k] ??= { cashierId: a.cashierId, cashierName: a.cashierName || "Unknown", orders: 0, sales: 0, voids: 0, auditActions: {} };
+        byCashier[k].auditActions[a.action] = (byCashier[k].auditActions[a.action] || 0) + a.count;
+      }
+      const rows = Object.values(byCashier).map((r: any) => ({ ...r, sales: r.sales.toFixed(2) }));
+      rows.sort((a: any, b: any) => Number(b.sales) - Number(a.sales));
+      res.json({ startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10), cashiers: rows });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Customer lookup
+  app.get("/api/pos/customer-lookup", requireTerminal, async (req, res) => {
+    try {
+      const q = ((req.query.q as string) || "").toLowerCase().trim();
+      if (!q) return res.json([]);
+      const all = await storage.getCustomers();
+      const results = all.filter(c => c.active && (
+        c.name.toLowerCase().includes(q) ||
+        c.code.toLowerCase().includes(q) ||
+        (c.phone || "").toLowerCase().includes(q)
+      )).slice(0, 20).map(c => ({
+        id: c.id, name: c.name, code: c.code, phone: c.phone,
+        currentBalance: c.currentBalance, creditLimit: c.creditLimit,
+        priceLevel: c.priceLevel, loyaltyPoints: 0, cashBack: 0,
+      }));
+      res.json(results);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Outbox queue size update (heartbeat from terminal)
+  // Terminal can only update its own record — (req.params.id as string) must match authenticated terminal.
+  app.post("/api/pos/terminals/:id/heartbeat", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      if ((req.params.id as string) !== terminal.id) return res.status(403).json({ message: "Forbidden: terminal mismatch" });
+      const { outboxQueueSize = 0, peripheralStatus } = req.body;
+      const update: any = { lastSeenAt: new Date(), outboxQueueSize };
+      if (peripheralStatus && typeof peripheralStatus === "object") {
+        const nextPeripheralStatus = { ...peripheralStatus };
+        const previousPeripheralStatus = (terminal.peripheralStatus ?? {}) as Record<string, unknown>;
+        const incomingScoMode = nextPeripheralStatus.sco_mode;
+        const incomingNeedsAttendant = incomingScoMode === "attendant_needed" || incomingScoMode === "age_check";
+
+        // An attendant acknowledgement must survive heartbeats from a lane that
+        // is still showing the same local alert. Once the lane leaves its alert
+        // mode, clear the acknowledgement so a later alert is visible normally.
+        if (previousPeripheralStatus.sco_override_acknowledged === true && incomingNeedsAttendant) {
+          nextPeripheralStatus.sco_mode = "scanning";
+          nextPeripheralStatus.sco_attendant_reason = null;
+          nextPeripheralStatus.sco_override_acknowledged = true;
+        } else {
+          delete nextPeripheralStatus.sco_override_acknowledged;
+        }
+        update.peripheralStatus = nextPeripheralStatus;
+      }
+      await storage.updatePosTerminal(terminal.id, update);
+      // Return the peripheral config so the terminal can apply it
+      const updated = await storage.getPosTerminal(terminal.id);
+      res.json({ ok: true, peripheralConfig: updated?.peripheralConfig ?? null });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Peripheral config — back office writes, terminal reads via heartbeat response
+  app.put("/api/pos/terminals/:id/peripheral-config", requireAdmin, async (req, res) => {
+    try {
+      const t = await storage.getPosTerminal((req.params.id as string));
+      if (!t) return res.status(404).json({ message: "Terminal not found" });
+      const updated = await storage.updatePosTerminal((req.params.id as string), { peripheralConfig: req.body } as any);
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── SCO lane monitoring ────────────────────────────────────────────────────
+
+  // Returns all SCO-type terminals with their last known peripheral / state.
+  // Authenticated cashier terminals can call this via X-Terminal-Code header.
+  // "SCO" terminals are those with hardwareType === "sco" OR whose code starts with "SCO".
+  app.get("/api/pos/sco/lanes", requireTerminal, async (req, res) => {
+    try {
+      const terminals = await storage.getPosTerminals();
+      const scoLanes = terminals
+        .filter((t: any) =>
+          t.hardwareType === "sco" ||
+          (t.code ?? "").toLowerCase().startsWith("sco")
+        )
+        .map((t: any) => {
+          const ps = (t.peripheralStatus ?? {}) as Record<string, unknown>;
+          return {
+            id:               t.id,
+            terminal_code:    t.code ?? "",
+            terminal_name:    t.name ?? t.code ?? "",
+            // sco_state fields written by the terminal via heartbeat peripheralStatus
+            mode:             (ps.sco_mode as string)  ?? "idle",
+            items:            (ps.sco_items as number) ?? 0,
+            total:            (ps.sco_total as number) ?? 0,
+            attendant_reason: (ps.sco_attendant_reason as string) ?? undefined,
+            last_seen_at:     t.lastSeenAt ? new Date(t.lastSeenAt).toISOString() : null,
+          };
+        });
+      res.json({ lanes: scoLanes });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // SCO attendant override acknowledgement — clears the attendant-call flag on a lane.
+  app.post("/api/pos/sco/lanes/:code/override", requireTerminal, async (req, res) => {
+    try {
+      const terminals = await storage.getPosTerminals();
+      const target = terminals.find((t: any) => (t.code ?? "") === req.params.code);
+      if (!target) return res.status(404).json({ message: "Lane not found" });
+      const ps = {
+        ...(target.peripheralStatus ?? {}),
+        sco_mode: "scanning",
+        sco_attendant_reason: null,
+        sco_override_acknowledged: true,
+      };
+      await storage.updatePosTerminal(target.id, { peripheralStatus: ps } as any);
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── POS Phase 3: Promotions ────────────────────────────────────────────────
+
+  // ── Expiration / Best-Before batch tracking ────────────────────────────────
+  // The "near expiry" window (in days) controls what counts as expiring soon.
+  // Buckets: expired (<0d) / critical (<=7d) / warning (<=EXP_DEFAULT_WINDOW) / ok.
+  const EXP_DEFAULT_WINDOW = 30;
+
+  const enrichBatch = (b: any) => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const exp = new Date(b.expirationDate + "T00:00:00");
+    const daysUntil = Math.round((exp.getTime() - today.getTime()) / 86400000);
+    let bucket: string;
+    if (daysUntil < 0) bucket = "expired";
+    else if (daysUntil <= 7) bucket = "critical";
+    else if (daysUntil <= EXP_DEFAULT_WINDOW) bucket = "warning";
+    else bucket = "ok";
+    return { ...b, daysUntil, bucket };
+  };
+
+  // List all tracked batches (enriched with daysUntil + bucket), newest expiry first.
+  app.get("/api/expiration/batches", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const rows = await db.select().from(expirationBatches)
+        .orderBy(expirationBatches.expirationDate);
+      res.json(rows.map(enrichBatch));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Summary report: counts + at-risk value grouped into expired / critical / warning / ok.
+  app.get("/api/expiration/report", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const rows = (await db.select().from(expirationBatches)
+        .where(sql`${expirationBatches.status} NOT IN ('sold_out','discarded')`))
+        .map(enrichBatch);
+      const buckets: Record<string, { count: number; units: number; value: number; batches: any[] }> = {
+        expired: { count: 0, units: 0, value: 0, batches: [] },
+        critical: { count: 0, units: 0, value: 0, batches: [] },
+        warning: { count: 0, units: 0, value: 0, batches: [] },
+        ok: { count: 0, units: 0, value: 0, batches: [] },
+      };
+      for (const r of rows) {
+        const b = buckets[r.bucket];
+        b.count += 1;
+        b.units += r.quantity;
+        b.value += r.quantity * parseFloat(r.costPrice || "0");
+        b.batches.push(r);
+      }
+      res.json({
+        buckets,
+        alertCount: buckets.expired.count + buckets.critical.count + buckets.warning.count,
+        expiredCount: buckets.expired.count,
+        soonCount: buckets.critical.count + buckets.warning.count,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  const EXP_STATUSES = ["active", "sold_out", "expired", "discounted", "discarded"];
+  const isoDateRe = /^\d{4}-\d{2}-\d{2}$/;
+
+  // Create a tracked batch. itemName/sku/barcode/costPrice are ALWAYS snapshotted
+  // server-side from the authoritative item row — client-supplied values for these
+  // fields are ignored so report totals (value at risk) and offer labels stay correct.
+  app.post("/api/expiration/batches", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const parsed = insertExpirationBatchSchema.parse(req.body);
+      if (!isoDateRe.test(parsed.expirationDate)) return res.status(400).json({ message: "expirationDate must be YYYY-MM-DD" });
+      if ((parsed.quantity ?? 0) < 0) return res.status(400).json({ message: "quantity must be >= 0" });
+      const [item] = await db.select().from(items).where(eq(items.id, parsed.itemId));
+      if (!item) return res.status(400).json({ message: "Item not found" });
+      const [row] = await db.insert(expirationBatches).values({
+        itemId: parsed.itemId,
+        itemName: item.name,
+        sku: item.sku,
+        barcode: item.barcode,
+        costPrice: item.costPrice,
+        expirationDate: parsed.expirationDate,
+        quantity: parsed.quantity ?? 0,
+        batchCode: parsed.batchCode ?? null,
+        locationId: parsed.locationId ?? null,
+        notes: parsed.notes ?? null,
+        status: parsed.status ?? "active",
+        createdByUsername: (req as any).user?.username ?? null,
+      }).returning();
+      res.json(enrichBatch(row));
+    } catch (e: any) {
+      if (e instanceof z.ZodError) return res.status(400).json({ message: "Invalid data", errors: e.errors });
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Update a batch (quantity adjustments, status changes, notes, expiry corrections).
+  app.patch("/api/expiration/batches/:id", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const allowed: any = {};
+      if (req.body.quantity !== undefined) {
+        const q = Number(req.body.quantity);
+        if (!Number.isInteger(q) || q < 0) return res.status(400).json({ message: "quantity must be a non-negative integer" });
+        allowed.quantity = q;
+      }
+      if (req.body.expirationDate !== undefined) {
+        if (!isoDateRe.test(String(req.body.expirationDate))) return res.status(400).json({ message: "expirationDate must be YYYY-MM-DD" });
+        allowed.expirationDate = req.body.expirationDate;
+      }
+      if (req.body.status !== undefined) {
+        if (!EXP_STATUSES.includes(req.body.status)) return res.status(400).json({ message: `status must be one of ${EXP_STATUSES.join(", ")}` });
+        allowed.status = req.body.status;
+      }
+      if (req.body.costPrice !== undefined) {
+        const c = parseFloat(req.body.costPrice);
+        if (!(c >= 0)) return res.status(400).json({ message: "costPrice must be >= 0" });
+        allowed.costPrice = String(req.body.costPrice);
+      }
+      if (req.body.notes !== undefined) allowed.notes = req.body.notes || null;
+      if (req.body.batchCode !== undefined) allowed.batchCode = req.body.batchCode || null;
+      if (req.body.locationId !== undefined) allowed.locationId = req.body.locationId || null;
+      if (Object.keys(allowed).length === 0) return res.status(400).json({ message: "No valid fields to update" });
+      const [row] = await db.update(expirationBatches).set(allowed)
+        .where(eq(expirationBatches.id, req.params.id as string)).returning();
+      if (!row) return res.status(404).json({ message: "Not found" });
+      res.json(enrichBatch(row));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/expiration/batches/:id", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      await db.delete(expirationBatches).where(eq(expirationBatches.id, req.params.id as string));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // One-click near-expiry markdown: creates (or updates) a POS promotion applying a
+  // percentage discount to the batch's item, then marks the batch "discounted" and
+  // links the promotion so it shows in the report.
+  app.post("/api/expiration/batches/:id/markdown", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const [batch] = await db.select().from(expirationBatches).where(eq(expirationBatches.id, req.params.id as string));
+      if (!batch) return res.status(404).json({ message: "Batch not found" });
+      const discountPct = parseFloat(req.body.discountPct ?? "20");
+      if (!(discountPct > 0 && discountPct <= 95)) return res.status(400).json({ message: "discountPct must be 1-95" });
+      const validUntil = new Date(batch.expirationDate + "T23:59:59");
+
+      let promo;
+      if (batch.promotionId) {
+        [promo] = await db.update(posPromotions).set({
+          discountPct: discountPct.toFixed(2),
+          validUntil,
+          active: true,
+        }).where(eq(posPromotions.id, batch.promotionId)).returning();
+      }
+      if (!promo) {
+        [promo] = await db.insert(posPromotions).values({
+          name: `Near-expiry: ${batch.itemName} (-${discountPct}%)`,
+          type: "qty_threshold",
+          locationId: batch.locationId ?? null,
+          productIds: [batch.itemId],
+          thresholdQty: 1,
+          discountPct: discountPct.toFixed(2),
+          priority: 100,
+          stackable: false,
+          validFrom: new Date(),
+          validUntil,
+          active: true,
+        }).returning();
+      }
+      const [updated] = await db.update(expirationBatches)
+        .set({ status: "discounted", promotionId: promo.id })
+        .where(eq(expirationBatches.id, batch.id)).returning();
+      res.json({ batch: enrichBatch(updated), promotion: promo });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/promotions", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posPromotions)
+        .orderBy(desc(posPromotions.priority), desc(posPromotions.createdAt));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/promotions/:id", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posPromotions)
+        .where(eq(posPromotions.id, (req.params.id as string)));
+      if (rows.length === 0) return res.status(404).json({ message: "Not found" });
+      res.json(rows[0]);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/promotions", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body;
+      const [row] = await db.insert(posPromotions).values({
+        name: body.name,
+        type: body.type ?? "buy_n_get_m",
+        locationId: body.locationId ?? null,
+        productIds: body.productIds ?? [],
+        categoryIds: body.categoryIds ?? [],
+        thresholdQty: body.thresholdQty ?? 1,
+        getQty: body.getQty ?? 0,
+        thresholdPrice: body.thresholdPrice ?? "0",
+        bundlePrice: body.bundlePrice ?? "0",
+        discountPct: body.discountPct ?? "0",
+        discountFixed: body.discountFixed ?? "0",
+        couponCode: body.couponCode ?? null,
+        priority: body.priority ?? 0,
+        stackable: body.stackable ?? false,
+        validFrom: body.validFrom ? new Date(body.validFrom) : null,
+        validUntil: body.validUntil ? new Date(body.validUntil) : null,
+        active: body.active ?? true,
+      }).returning();
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.put("/api/pos/promotions/:id", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body;
+      const [row] = await db.update(posPromotions)
+        .set({
+          name: body.name,
+          type: body.type,
+          productIds: body.productIds,
+          categoryIds: body.categoryIds,
+          thresholdQty: body.thresholdQty,
+          getQty: body.getQty,
+          thresholdPrice: body.thresholdPrice,
+          bundlePrice: body.bundlePrice,
+          discountPct: body.discountPct,
+          discountFixed: body.discountFixed,
+          couponCode: body.couponCode,
+          priority: body.priority,
+          stackable: body.stackable,
+          validFrom: body.validFrom ? new Date(body.validFrom) : null,
+          validUntil: body.validUntil ? new Date(body.validUntil) : null,
+          active: body.active,
+          updatedAt: new Date(),
+        })
+        .where(eq(posPromotions.id, (req.params.id as string)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Not found" });
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/pos/promotions/:id", requireAdmin, async (req, res) => {
+    try {
+      await db.delete(posPromotions).where(eq(posPromotions.id, (req.params.id as string)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Terminal sync endpoint: returns active promotions for a terminal/location
+  app.get("/api/pos/sync/promotions", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const now = new Date();
+      const rows = await db.select().from(posPromotions)
+        .where(
+          and(
+            eq(posPromotions.active, true),
+            or(
+              isNull(posPromotions.locationId),
+              eq(posPromotions.locationId, terminal.locationId)
+            ),
+            or(isNull(posPromotions.validUntil), gt(posPromotions.validUntil, now)),
+          )
+        )
+        .orderBy(desc(posPromotions.priority));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // Coupon validation endpoint for terminals
+  app.post("/api/pos/validate-coupon", requireTerminal, async (req, res) => {
+    try {
+      const { code } = req.body;
+      if (!code) return res.status(400).json({ valid: false, message: "Code required" });
+      const now = new Date();
+      const rows = await db.select().from(posPromotions)
+        .where(
+          and(
+            eq(posPromotions.type, "coupon"),
+            eq(posPromotions.active, true),
+            ilike(posPromotions.couponCode, code),
+            or(isNull(posPromotions.validUntil), gt(posPromotions.validUntil, now)),
+          )
+        )
+        .limit(1);
+      if (rows.length === 0) {
+        return res.json({ valid: false, message: "Invalid or expired coupon" });
+      }
+      res.json({ valid: true, promo: rows[0], message: `Applied: ${rows[0].name}` });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── POS Phase 3: Container Deposits ────────────────────────────────────────
+
+  app.get("/api/pos/container-deposits", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posContainerDeposits)
+        .orderBy(posContainerDeposits.name);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/container-deposits", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body;
+      const [row] = await db.insert(posContainerDeposits).values({
+        name: body.name,
+        depositAmount: body.depositAmount,
+        productIds: body.productIds ?? [],
+        categoryIds: body.categoryIds ?? [],
+        depositSku: body.depositSku ?? "DEPOSIT",
+        active: body.active ?? true,
+      }).returning();
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.put("/api/pos/container-deposits/:id", requireAdmin, async (req, res) => {
+    try {
+      const body = req.body;
+      const [row] = await db.update(posContainerDeposits)
+        .set({
+          name: body.name,
+          depositAmount: body.depositAmount,
+          productIds: body.productIds,
+          categoryIds: body.categoryIds,
+          depositSku: body.depositSku,
+          active: body.active,
+        })
+        .where(eq(posContainerDeposits.id, (req.params.id as string)))
+        .returning();
+      if (!row) return res.status(404).json({ message: "Not found" });
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.delete("/api/pos/container-deposits/:id", requireAdmin, async (req, res) => {
+    try {
+      await db.delete(posContainerDeposits).where(eq(posContainerDeposits.id, (req.params.id as string)));
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/sync/container-deposits", requireTerminal, async (req, res) => {
+    try {
+      const rows = await db.select().from(posContainerDeposits)
+        .where(eq(posContainerDeposits.active, true));
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── Live layout config and buttons ─────────────────────────────────────────
+  // Terminals call this on startup so layout edits reach already-registered
+  // devices without requiring a factory reset or re-registration.
+  app.get("/api/pos/sync/layout-config", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const fallback = { columns: 4, colsTablet: 3, colsMobile: 2, colsLarge: 6, colsTV: 8, buttonRadius: "rounded", colorTheme: "standard" };
+      if (!terminal.layoutSetId) return res.json({ ...fallback, buttons: [] });
+      const ls = await storage.getPosLayoutSet(terminal.layoutSetId);
+      if (!ls) return res.json({ ...fallback, buttons: [] });
+      const buttons = await storage.getPosLayoutButtons(terminal.layoutSetId);
+      res.json({
+        columns:      ls.columns     ?? 4,
+        colsTablet:   ls.colsTablet  ?? 3,
+        colsMobile:   ls.colsMobile  ?? 2,
+        colsLarge:    (ls as any).colsLarge    ?? 6,
+        colsTV:       (ls as any).colsTV       ?? 8,
+        buttonRadius: (ls as any).buttonRadius ?? "rounded",
+        colorTheme:   (ls as any).colorTheme   ?? "standard",
+        buttons,
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/sync/customer-search", requireTerminal, async (req, res) => {
+    try {
+      const query = String(req.query.q || "").trim();
+      if (!query) return res.json([]);
+      const pattern = `%${query}%`;
+      const rows = await db.select({
+        id: customers.id,
+        name: customers.name,
+        code: customers.code,
+        phone: customers.phone,
+        currentBalance: customers.currentBalance,
+        priceLevel: customers.priceLevel,
+        loyaltyPoints: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}), 0)::int`,
+      })
+        .from(customers)
+        .leftJoin(customerLoyaltyPoints, eq(customerLoyaltyPoints.customerId, customers.id))
+        .where(and(
+          eq(customers.active, true),
+          or(
+            ilike(customers.id, pattern),
+            ilike(customers.name, pattern),
+            ilike(customers.code, pattern),
+            ilike(customers.phone, pattern),
+          ),
+        ))
+        .groupBy(customers.id)
+        .limit(20);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  const labelProfilePayloadSchema = z.object({
+    name: z.string().trim().min(1).max(100),
+    kind: z.enum(["barcode", "shelf"]),
+    config: z.record(z.unknown()).refine((value) => value.version === 1, "Unsupported profile version"),
+    isDefault: z.boolean().optional(),
+  });
+
+  app.get("/api/label-profiles", requireStaff, requireModule("items"), async (_req, res) => {
+    try {
+      res.json(await db.select().from(labelProfiles).orderBy(desc(labelProfiles.isDefault), labelProfiles.kind, labelProfiles.name));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/label-profiles", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const payload = labelProfilePayloadSchema.parse(req.body);
+      const [created] = await db.transaction(async (tx) => {
+        if (payload.isDefault) {
+          await tx.update(labelProfiles).set({ isDefault: false }).where(eq(labelProfiles.kind, payload.kind));
+        }
+        return tx.insert(labelProfiles).values({
+          ...payload,
+          isDefault: payload.isDefault ?? false,
+          isSystem: false,
+          createdBy: (req as any).user?.id ?? null,
+        }).returning();
+      });
+      res.status(201).json(created);
+    } catch (e: any) {
+      res.status(e?.name === "ZodError" ? 400 : 409).json({ message: e.message });
+    }
+  });
+
+  app.put("/api/label-profiles/:id", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const existing = (await db.select().from(labelProfiles).where(eq(labelProfiles.id, req.params.id as string)).limit(1))[0];
+      if (!existing) return res.status(404).json({ message: "Label profile not found" });
+      const payload = labelProfilePayloadSchema.partial().parse(req.body);
+      if (existing.isSystem && Object.keys(payload).some(key => key !== "isDefault")) {
+        return res.status(409).json({ message: "Built-in profiles are read-only; duplicate one to customize it" });
+      }
+      const nextKind = payload.kind ?? existing.kind;
+      const [updated] = await db.transaction(async (tx) => {
+        if (payload.isDefault) {
+          await tx.update(labelProfiles).set({ isDefault: false }).where(eq(labelProfiles.kind, nextKind));
+        }
+        return tx.update(labelProfiles).set({ ...payload, updatedAt: new Date() })
+          .where(eq(labelProfiles.id, existing.id)).returning();
+      });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(e?.name === "ZodError" ? 400 : 409).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/label-profiles/:id", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const existing = (await db.select().from(labelProfiles).where(eq(labelProfiles.id, req.params.id as string)).limit(1))[0];
+      if (!existing) return res.status(404).json({ message: "Label profile not found" });
+      if (existing.isSystem) return res.status(409).json({ message: "Built-in profiles cannot be deleted; duplicate and customize them instead" });
+      await db.delete(labelProfiles).where(eq(labelProfiles.id, existing.id));
+      res.status(204).end();
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/label-profiles/:id/duplicate", requireStaff, requireModule("items"), async (req, res) => {
+    try {
+      const existing = (await db.select().from(labelProfiles).where(eq(labelProfiles.id, req.params.id as string)).limit(1))[0];
+      if (!existing) return res.status(404).json({ message: "Label profile not found" });
+      const baseName = `${existing.name} Copy`;
+      let name = baseName;
+      for (let suffix = 2; await db.select({ id: labelProfiles.id }).from(labelProfiles).where(eq(labelProfiles.name, name)).limit(1).then(rows => rows.length > 0); suffix++) {
+        name = `${baseName} ${suffix}`;
+      }
+      const [created] = await db.insert(labelProfiles).values({
+        name,
+        kind: existing.kind,
+        config: existing.config,
+        isDefault: false,
+        isSystem: false,
+        createdBy: (req as any).user?.id ?? null,
+      }).returning();
+      res.status(201).json(created);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ── POS Phase 3: Return Orders ─────────────────────────────────────────────
+
+  app.get("/api/pos/returns", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posReturnOrders)
+        .orderBy(desc(posReturnOrders.createdAt))
+        .limit(200);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/returns/:id", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posReturnOrders)
+        .where(eq(posReturnOrders.id, (req.params.id as string)));
+      if (rows.length === 0) return res.status(404).json({ message: "Not found" });
+      const lines = await db.select().from(posReturnOrderLines)
+        .where(eq(posReturnOrderLines.returnOrderId, (req.params.id as string)));
+      res.json({ ...rows[0], lines });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/pos/returns", requireTerminal, async (req, res) => {
+    try {
+      const { returnOrder, lines } = req.body;
+      if (!returnOrder || !lines) return res.status(400).json({ message: "returnOrder and lines required" });
+      const [saved] = await db.insert(posReturnOrders).values({
+        originalOrderId: returnOrder.originalOrderId ?? null,
+        originalOrderNumber: returnOrder.originalOrderNumber ?? null,
+        terminalId: returnOrder.terminalId ?? null,
+        locationId: returnOrder.locationId ?? null,
+        cashierId: returnOrder.cashierId ?? null,
+        cashierName: returnOrder.cashierName,
+        refundMethod: returnOrder.refundMethod ?? "cash",
+        refundTotal: returnOrder.refundTotal,
+        notes: returnOrder.notes ?? null,
+        status: "completed",
+        syncedAt: new Date(),
+      }).returning();
+      if (lines.length > 0) {
+        await db.insert(posReturnOrderLines).values(
+          lines.map((l: any) => ({
+            returnOrderId: saved.id,
+            originalOrderId: l.originalOrderId ?? null,
+            originalLineId: l.originalLineId ?? null,
+            productId: l.productId ?? null,
+            description: l.description,
+            qty: l.qty,
+            unitPrice: l.unitPrice,
+            lineTotal: l.lineTotal,
+            restocked: l.restocked ?? true,
+          }))
+        );
+      }
+      res.json(saved);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ── POS Phase 3: Shifts admin view ─────────────────────────────────────────
+
+  app.get("/api/pos/shifts", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posShifts)
+        .orderBy(desc(posShifts.createdAt))
+        .limit(100);
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.get("/api/pos/shifts/:id", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db.select().from(posShifts)
+        .where(eq(posShifts.id, (req.params.id as string)));
+      if (rows.length === 0) return res.status(404).json({ message: "Not found" });
+      res.json(rows[0]);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // PLU/search stock lookup — quantities for one item across ALL POS locations,
+  // used by the POS terminal's "Check Stock" search dialog. Terminal-auth (not JWT).
+  app.get("/api/pos/sync/location-stock/:itemId", requireTerminal, async (req, res) => {
+    try {
+      const rows = await storage.getStockForItemAcrossLocations(req.params.itemId as string);
+      res.json(rows);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Locations list, for the POS terminal's stock-transfer picker. Terminal-auth (not JWT).
+  app.get("/api/pos/sync/locations", requireTerminal, async (_req, res) => {
+    try {
+      const locations = await storage.getPosLocations();
+      res.json(locations.filter((l: any) => l.active).map((l: any) => ({ id: l.id, name: l.name })));
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Cashier-initiated stock transfer from the POS terminal — creates AND completes the
+  // transfer in one call (no PDA-style draft/hold workflow). Terminal-auth (not JWT).
+  app.post("/api/pos/sync/transfers", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const { toLocationId, cashierName, items: transferItems } = req.body;
+      if (!toLocationId || !Array.isArray(transferItems) || transferItems.length === 0) {
+        return res.status(400).json({ message: "toLocationId and at least one item are required" });
+      }
+      const locations = await storage.getPosLocations();
+      const fromLoc = locations.find((l: any) => l.id === terminal.locationId);
+      const toLoc = locations.find((l: any) => l.id === toLocationId);
+      if (!fromLoc) return res.status(400).json({ message: "Terminal has no valid home location" });
+      if (!toLoc) return res.status(400).json({ message: "Destination location not found" });
+      if (toLoc.id === fromLoc.id) return res.status(400).json({ message: "Destination must differ from the terminal's location" });
+
+      const transferNumber = await storage.getNextTransferNumber();
+      const data = insertStockTransferSchema.parse({
+        transferNumber,
+        fromLocation: fromLoc.name,
+        toLocation: toLoc.name,
+        createdByUsername: cashierName || terminal.name,
+      });
+      const parsedItems = transferItems.map((i: any) => insertStockTransferItemSchema.parse({
+        itemId: i.itemId,
+        itemName: i.itemName,
+        sku: i.sku ?? null,
+        quantity: i.quantity,
+      }));
+      const created = await storage.createStockTransfer(data, parsedItems);
+      const completed = await storage.completeStockTransfer(created.id);
+      res.status(201).json(completed);
+    } catch (e: any) {
+      res.status(400).json({ message: e.message });
+    }
+  });
+
+  // Enhanced catalog sync — returns products + promotions + deposits in one call
+  app.get("/api/pos/sync/catalog-v2", requireTerminal, async (req, res) => {
+    try {
+      const terminal = (req as any).terminal;
+      const since = req.query.since as string | undefined;
+
+      // Products (same as existing catalog sync but with Phase 3 fields)
+      let productsQuery = db.select().from(items)
+        .where(eq(items.active, true));
+      if (since) {
+        productsQuery = (productsQuery as any).where(gt(items.updatedAt, new Date(since)));
+      }
+      const products = await productsQuery;
+
+      // Active promotions for this location
+      const now = new Date();
+      const promotions = await db.select().from(posPromotions)
+        .where(
+          and(
+            eq(posPromotions.active, true),
+            or(isNull(posPromotions.locationId), eq(posPromotions.locationId, terminal.locationId)),
+            or(isNull(posPromotions.validUntil), gt(posPromotions.validUntil, now)),
+          )
+        )
+        .orderBy(desc(posPromotions.priority));
+
+      // Active deposits
+      const deposits = await db.select().from(posContainerDeposits)
+        .where(eq(posContainerDeposits.active, true));
+
+      res.json({
+        products,
+        promotions,
+        deposits,
+        syncedAt: now.toISOString(),
+      });
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  // ─── Overdue payment push reminder — runs once at startup, then every 24h ───
+  async function sendOverduePushReminders() {
+    try {
+      // Only send for invoices that became overdue 7+ days ago (dueDate <= today - 7)
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const sevenDaysAgoStr = sevenDaysAgo.toISOString().split("T")[0];
+
+      const overdueInvs = await db
+        .select({ customerId: invoices.customerId, invoiceNumber: invoices.invoiceNumber, total: invoices.total, dueDate: invoices.dueDate })
+        .from(invoices)
+        .where(and(eq(invoices.status, "overdue"), lte(invoices.dueDate, sevenDaysAgoStr)));
+      const seen = new Set<string>();
+      for (const inv of overdueInvs) {
+        if (!inv.customerId || seen.has(inv.customerId)) continue;
+        seen.add(inv.customerId);
+        await sendPushToCustomer(inv.customerId, {
+          title: "Payment Reminder — Action Required",
+          body: `Invoice ${inv.invoiceNumber} is overdue. Please log in to your account to settle the outstanding balance.`,
+          url: "/portal",
+        });
+      }
+    } catch { /* non-fatal */ }
+  }
+  // Fire once on startup (after a short delay), then every 24 hours
+  if (!options.skipBackgroundJobs) {
+    setTimeout(() => {
+      sendOverduePushReminders();
+      setInterval(sendOverduePushReminders, 24 * 60 * 60 * 1000);
+    }, 30 * 1000);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 5: WhatsApp Chatbot & Voice Ordering
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ── FAQ CRUD ──────────────────────────────────────────────────────────────
+  app.get("/api/faq", async (_req, res) => {
+    const faqs = await db.select().from(faqEntries).orderBy(faqEntries.sortOrder, faqEntries.createdAt);
+    res.json(faqs);
+  });
+
+  app.post("/api/faq", requireAdmin, async (req, res) => {
+    const { question, answer, keywords, sortOrder, active } = req.body;
+    if (!question || !answer) return res.status(400).json({ error: "question and answer required" });
+    const [entry] = await db.insert(faqEntries).values({
+      question, answer,
+      keywords: Array.isArray(keywords) ? keywords : [],
+      sortOrder: sortOrder ?? 0,
+      active: active !== false,
+    }).returning();
+    res.json(entry);
+  });
+
+  app.put("/api/faq/:id", requireAdmin, async (req, res) => {
+    const { question, answer, keywords, sortOrder, active } = req.body;
+    const updates: Record<string, any> = {};
+    if (question !== undefined) updates.question = question;
+    if (answer !== undefined) updates.answer = answer;
+    if (keywords !== undefined) updates.keywords = Array.isArray(keywords) ? keywords : [];
+    if (sortOrder !== undefined) updates.sortOrder = sortOrder;
+    if (active !== undefined) updates.active = active;
+    const [entry] = await db.update(faqEntries).set(updates).where(eq(faqEntries.id, (req.params.id as string))).returning();
+    if (!entry) return res.status(404).json({ error: "Not found" });
+    res.json(entry);
+  });
+
+  app.delete("/api/faq/:id", requireAdmin, async (req, res) => {
+    await db.delete(faqEntries).where(eq(faqEntries.id, (req.params.id as string)));
+    res.json({ ok: true });
+  });
+
+  // ── Chat conversations (admin panel) ─────────────────────────────────────
+  app.get("/api/chat/conversations", requireAdmin, async (_req, res) => {
+    const convs = await db
+      .select({
+        id: chatConversations.id,
+        customerId: chatConversations.customerId,
+        customerName: customers.name,
+        channel: chatConversations.channel,
+        waPhoneNumber: chatConversations.waPhoneNumber,
+        status: chatConversations.status,
+        handoffStaffId: chatConversations.handoffStaffId,
+        lastMessageAt: chatConversations.lastMessageAt,
+        createdAt: chatConversations.createdAt,
+      })
+      .from(chatConversations)
+      .leftJoin(customers, eq(customers.id, chatConversations.customerId))
+      .orderBy(desc(chatConversations.lastMessageAt));
+    res.json(convs.map(c => ({ ...c, unreadCount: 0 })));
+  });
+
+  app.get("/api/chat/conversations/:id/messages", requireAdmin, async (req, res) => {
+    const msgs = await db
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.conversationId, (req.params.id as string)))
+      .orderBy(chatMessages.createdAt);
+    res.json(msgs);
+  });
+
+  app.post("/api/chat/conversations/:id/messages", requireAdmin, async (req, res) => {
+    const { message } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: "message required" });
+    const userId = (req as any).user?.id || null;
+    const [msg] = await db.insert(chatMessages).values({
+      conversationId: (req.params.id as string),
+      role: "staff",
+      content: message.trim(),
+      channel: "portal",
+    }).returning();
+    await db.update(chatConversations)
+      .set({ lastMessageAt: new Date(), handoffStaffId: userId })
+      .where(eq(chatConversations.id, (req.params.id as string)));
+    // If WhatsApp, relay message
+    const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, (req.params.id as string)));
+    if (conv?.channel === "whatsapp" && conv.waPhoneNumber) {
+      await sendWhatsAppMessage(conv.waPhoneNumber, message.trim());
+    }
+    res.json(msg);
+  });
+
+  // GET messages for a WhatsApp phone number (across all conversations, sorted by time)
+  app.get("/api/whatsapp/messages-by-phone/:phone", requireAdmin, async (req, res) => {
+    const phone = decodeURIComponent((req.params.phone as string));
+    const convs = await db
+      .select({ id: chatConversations.id })
+      .from(chatConversations)
+      .where(and(eq(chatConversations.waPhoneNumber, phone), eq(chatConversations.channel, "whatsapp")));
+    if (!convs.length) return res.json([]);
+    const convIds = convs.map(c => c.id);
+    const msgs = await db
+      .select()
+      .from(chatMessages)
+      .where(inArray(chatMessages.conversationId, convIds))
+      .orderBy(chatMessages.createdAt);
+    res.json(msgs);
+  });
+
+  // Direct WhatsApp send from order detail — logs message against the customer's active/latest conversation
+  app.post("/api/whatsapp/send", requireAdmin, async (req, res) => {
+    const { to, message, orderId } = req.body;
+    if (!to || !message?.trim()) return res.status(400).json({ error: "to and message are required" });
+
+    // Find or create a conversation for this phone number
+    let [conv] = await db
+      .select()
+      .from(chatConversations)
+      .where(and(eq(chatConversations.waPhoneNumber, to), eq(chatConversations.channel, "whatsapp")))
+      .orderBy(desc(chatConversations.lastMessageAt))
+      .limit(1);
+
+    if (!conv) {
+      // Look up customer by phone to associate the conversation
+      const [matchedCustomer] = await db.select().from(customers).where(eq(customers.phone, to));
+      const [newConv] = await db.insert(chatConversations).values({
+        customerId: matchedCustomer?.id || "unknown",
+        channel: "whatsapp",
+        waPhoneNumber: to,
+        status: "active",
+      }).returning();
+      conv = newConv;
+    }
+
+    // Log the outgoing staff message
+    const [msg] = await db.insert(chatMessages).values({
+      conversationId: conv.id,
+      role: "staff",
+      content: message.trim(),
+      channel: "whatsapp",
+    }).returning();
+
+    await db.update(chatConversations)
+      .set({ lastMessageAt: new Date() })
+      .where(eq(chatConversations.id, conv.id));
+
+    // Send via WhatsApp Cloud API
+    await sendWhatsAppMessage(to, message.trim());
+
+    res.json({ ok: true, messageId: msg.id });
+  });
+
+  app.post("/api/chat/conversations/:id/handoff", requireAdmin, async (req, res) => {
+    const userId = (req as any).user?.id || null;
+    const [conv] = await db.update(chatConversations)
+      .set({ status: "handoff", handoffStaffId: userId, handoffAt: new Date() })
+      .where(eq(chatConversations.id, (req.params.id as string)))
+      .returning();
+    res.json(conv);
+  });
+
+  app.post("/api/chat/conversations/:id/release", requireAdmin, async (req, res) => {
+    const [conv] = await db.update(chatConversations)
+      .set({ status: "active", handoffStaffId: null })
+      .where(eq(chatConversations.id, (req.params.id as string)))
+      .returning();
+    res.json(conv);
+  });
+
+  // ── Customer chat history (per customer ID) ───────────────────────────────
+  app.get("/api/customers/:id/chat-history", requireAdmin, async (req, res) => {
+    const convs = await db
+      .select()
+      .from(chatConversations)
+      .where(eq(chatConversations.customerId, (req.params.id as string)))
+      .orderBy(desc(chatConversations.lastMessageAt));
+    res.json(convs);
+  });
+
+  // ── Portal chatbot: create/get active conversation ────────────────────────
+  app.post("/api/portal/chat/conversation", async (req, res) => {
+    const { customerId, channel } = req.body;
+    if (!customerId) return res.status(400).json({ error: "customerId required" });
+    // Reuse existing active portal conversation if present
+    const [existing] = await db
+      .select()
+      .from(chatConversations)
+      .where(and(
+        eq(chatConversations.customerId, customerId),
+        eq(chatConversations.channel, channel || "portal"),
+        eq(chatConversations.status, "active"),
+      ))
+      .orderBy(desc(chatConversations.createdAt))
+      .limit(1);
+    if (existing) return res.json(existing);
+    const [conv] = await db.insert(chatConversations).values({
+      customerId,
+      channel: channel || "portal",
+      status: "active",
+    }).returning();
+    res.json(conv);
+  });
+
+  app.get("/api/portal/chat/conversation/:id/status", async (req, res) => {
+    const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, (req.params.id as string)));
+    if (!conv) return res.status(404).json({ error: "Not found" });
+    res.json({ status: conv.status, handoffStaffId: conv.handoffStaffId });
+  });
+
+  app.post("/api/portal/chat/conversation/:id/request-handoff", async (req, res) => {
+    const [conv] = await db.update(chatConversations)
+      .set({ status: "handoff", handoffAt: new Date() })
+      .where(eq(chatConversations.id, (req.params.id as string)))
+      .returning();
+    res.json(conv);
+  });
+
+  // ── Portal chatbot: persist message pair ─────────────────────────────────
+  app.post("/api/portal/chat/message", async (req, res) => {
+    const { conversationId, userMessage, botReply, intent } = req.body;
+    if (!conversationId || !userMessage) return res.status(400).json({ error: "conversationId and userMessage required" });
+    const inserts: any[] = [
+      { conversationId, role: "user", content: userMessage, channel: "portal", intent: intent || null },
+    ];
+    if (botReply) {
+      inserts.push({ conversationId, role: "bot", content: botReply, channel: "portal", intent: intent || null });
+    }
+    await db.insert(chatMessages).values(inserts);
+    await db.update(chatConversations).set({ lastMessageAt: new Date() }).where(eq(chatConversations.id, conversationId));
+    res.json({ ok: true });
+  });
+
+  // ── Portal audio transcription (Whisper via AI integration) ──────────────
+  const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+  app.post("/api/portal/transcribe", audioUpload.single("audio"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "audio file required" });
+    try {
+      const text = await transcribeAudio(req.file.buffer, req.file.mimetype || "audio/webm");
+      res.json({ text });
+    } catch (e: any) {
+      res.status(503).json({ error: e.message || "transcription failed" });
+    }
+  });
+
+  // ── WhatsApp webhook: verify ───────────────────────────────────────────────
+  app.get("/api/webhooks/whatsapp", (req, res) => {
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+    const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN || "globipos_whatsapp";
+    if (mode === "subscribe" && token === verifyToken) {
+      console.log("[WhatsApp] Webhook verified");
+      return res.status(200).send(challenge);
+    }
+    res.sendStatus(403);
+  });
+
+  // ── WhatsApp webhook: receive message ────────────────────────────────────
+  app.post("/api/webhooks/whatsapp", async (req, res) => {
+    const appSecret = process.env.WHATSAPP_APP_SECRET;
+    if (!appSecret && process.env.NODE_ENV === "production") {
+      // Fail closed in production: never accept unauthenticated webhook posts.
+      console.warn("[WhatsApp] Rejected webhook: WHATSAPP_APP_SECRET not configured in production");
+      return res.sendStatus(401);
+    }
+    if (appSecret) {
+      const signatureHeader = req.headers["x-hub-signature-256"];
+      const rawBody = req.rawBody as Buffer | undefined;
+      if (typeof signatureHeader !== "string" || !rawBody) {
+        return res.sendStatus(401);
+      }
+      const expected = "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody).digest("hex");
+      const sigBuf = Buffer.from(signatureHeader);
+      const expBuf = Buffer.from(expected);
+      if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+        console.warn("[WhatsApp] Rejected webhook: invalid X-Hub-Signature-256");
+        return res.sendStatus(401);
+      }
+    }
+    res.sendStatus(200); // Always respond quickly
+    try {
+      const body = req.body;
+      const entry = body?.entry?.[0];
+      const change = entry?.changes?.[0];
+      const msg = change?.value?.messages?.[0];
+      if (!msg || msg.type !== "text") return;
+
+      const from = msg.from; // e164 phone number
+      const text = msg.text?.body || "";
+      if (!text) return;
+
+      // Find or create conversation for this WA number
+      let [conv] = await db
+        .select()
+        .from(chatConversations)
+        .where(and(
+          eq(chatConversations.waPhoneNumber, from),
+          eq(chatConversations.channel, "whatsapp"),
+          eq(chatConversations.status, "active"),
+        ))
+        .limit(1);
+
+      if (!conv) {
+        // Try to match customer by phone
+        const [matchedCustomer] = await db.select().from(customers).where(eq(customers.phone, from));
+        const [newConv] = await db.insert(chatConversations).values({
+          customerId: matchedCustomer?.id || "unknown",
+          channel: "whatsapp",
+          waPhoneNumber: from,
+          status: "active",
+        }).returning();
+        conv = newConv;
+      }
+
+      // Save user message
+      await db.insert(chatMessages).values({ conversationId: conv.id, role: "user", content: text, channel: "whatsapp" });
+      await db.update(chatConversations).set({ lastMessageAt: new Date() }).where(eq(chatConversations.id, conv.id));
+
+      // If in handoff, don't auto-reply
+      if (conv.status === "handoff") return;
+
+      // ── Pending confirmation check (yes/no after add_item preview) ──────────
+      const pendingItem = await getPendingItem(conv.id);
+      const lowerText = text.toLowerCase().trim();
+      const isYes = /^(yes|yeah|yep|correct|ok|okay|confirm|sure|add it|go ahead|y)$/i.test(lowerText);
+
+      // If no pending item but one recently expired, tell the customer to browse again
+      if (!pendingItem && isYes && await consumeExpiredPendingFlag(conv.id)) {
+        const expiredReply = "⏱️ Your confirmation timed out after 10 minutes — the item wasn't added. Please browse and select the item again when you're ready!";
+        await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: expiredReply, channel: "whatsapp", intent: "unknown" });
+        await sendWhatsAppMessage(from, expiredReply);
+        return;
+      }
+
+      // No pending item at all (e.g. it was cancelled by a cart clear, or the
+      // customer just says "yes" out of the blue) — say so explicitly instead of
+      // letting a bare "yes" fall through to intent parsing and silently do nothing.
+      if (!pendingItem && isYes) {
+        const nothingReply = "There's nothing pending to confirm right now. What would you like to order?";
+        await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: nothingReply, channel: "whatsapp", intent: "unknown" });
+        await sendWhatsAppMessage(from, nothingReply);
+        return;
+      }
+
+      if (pendingItem) {
+        const isNo  = /^(no|nope|nah|cancel|wrong|incorrect|n)$/i.test(lowerText);
+        if (isYes) {
+          await clearPendingItem(conv.id);
+          await addToWaCart(conv.id, { itemId: pendingItem.itemId, name: pendingItem.name, sku: pendingItem.sku, price: pendingItem.price }, pendingItem.qty);
+          const cart = await getWaCart(conv.id);
+          const replyYes = `✅ Added *${pendingItem.qty}× ${pendingItem.name}* to your cart.\n\n${formatWaCart(cart)}`;
+          await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: replyYes, channel: "whatsapp", intent: "add_item" });
+          await sendWhatsAppMessage(from, replyYes);
+          return;
+        } else if (isNo) {
+          await clearPendingItem(conv.id);
+          const replyNo = "No problem — nothing was added. What else can I help you with?";
+          await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: replyNo, channel: "whatsapp", intent: "cancel" });
+          await sendWhatsAppMessage(from, replyNo);
+          return;
+        }
+        // If the message is neither yes nor no, fall through to normal intent handling
+        // (the pending item remains until explicitly confirmed or cancelled)
+      }
+
+      // Check FAQs
+      const activeFaqs = await db.select().from(faqEntries).where(eq(faqEntries.active, true));
+      const faqAnswer = matchFaq(text, activeFaqs);
+
+      let reply: string;
+      let intent = "unknown";
+
+      if (faqAnswer) {
+        reply = faqAnswer;
+        intent = "faq";
+      } else {
+        // Parse intent
+        const catalog = await db.select({ name: items.name }).from(items).where(eq(items.active, true)).limit(20);
+        const catalogStr = catalog.map(i => i.name).join(", ");
+        const faqStr = activeFaqs.slice(0, 5).map(f => f.question).join("; ");
+        const parsed = await parseIntentAI(text, catalogStr, faqStr);
+        intent = parsed.intent;
+
+        if (parsed.intent === "handoff") {
+          await db.update(chatConversations).set({ status: "handoff", handoffAt: new Date() }).where(eq(chatConversations.id, conv.id));
+          reply = "I've notified our team. A staff member will reply to you shortly.";
+
+        } else if (parsed.intent === "browse" || parsed.intent === "search") {
+          // Search products and show a numbered list the customer can reply to
+          const searchTerm = (parsed.query ?? "").split(" ").slice(0, 2).join(" ").trim() || "";
+          const matches = await db.select({
+            id: items.id, name: items.name, sku: items.sku,
+            price1: items.price1, brand: items.brand,
+          }).from(items)
+            .where(and(
+              eq(items.active, true),
+              searchTerm ? ilike(items.name, `%${searchTerm}%`) : sql`true`,
+            ))
+            .limit(6);
+          if (matches.length > 0) {
+            // Store browse results in the conversation's cart context for add_item
+            await setBrowseResults(conv.id, matches); // persisted — survives server restarts and long absences
+            reply = `🍷 *Products found:*\n` +
+              matches.map((i, idx) => `${idx + 1}. ${i.name}${i.brand ? ` (${i.brand})` : ""} — €${parseFloat(String(i.price1 ?? "0")).toFixed(2)}`).join("\n") +
+              `\n\nReply with the *number* to add to cart, or "cart" to view your cart.`;
+          } else {
+            reply = "I couldn't find that product. Try a different name, or reply 'cart' to review your current selections.";
+          }
+
+        } else if (parsed.intent === "add_item") {
+          // ── Resolve item index and quantity ─────────────────────────────────
+          const lastResults: any[] | null = await getBrowseResults(conv.id);
+
+          // Priority 1: AI-extracted itemIndex (0-based after conversion in parseIntentAI)
+          let idx = typeof parsed.itemIndex === "number" ? parsed.itemIndex : -1;
+
+          // Priority 2: regex fallback — look for "item N" / "number N" / "#N" patterns first,
+          // then a bare number, to avoid grabbing the quantity digit instead of the item number.
+          if (idx < 0) {
+            const itemNumMatch = text.match(/(?:item|number|#|no\.?)\s*([1-6])/i);
+            if (itemNumMatch) {
+              idx = parseInt(itemNumMatch[1]) - 1;
+            } else {
+              // Last resort: bare single digit 1-6 that isn't immediately preceded by a quantity word
+              const bareMatch = text.match(/(?<!\d)([1-6])(?!\d)/);
+              if (bareMatch) idx = parseInt(bareMatch[1]) - 1;
+            }
+          }
+
+          // Resolve quantity: AI first, then word-number scan, then digit
+          let qty = typeof parsed.qty === "number" && parsed.qty > 0 ? parsed.qty : 0;
+          if (!qty) {
+            // Scan for word numbers ("two bottles", "three cases", etc.)
+            const wordNumMatch = text.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen|a|an)\b/i);
+            if (wordNumMatch) {
+              qty = wordToNumber(wordNumMatch[1]) ?? 1;
+            } else {
+              // Digit quantity — skip any number that was already identified as the item index
+              const digits = [...text.matchAll(/\b(\d+)\b/g)].map(m => parseInt(m[1]));
+              const itemNum = idx + 1; // 1-based for comparison
+              const qtyDigit = digits.find(d => d !== itemNum && d >= 1 && d <= 999);
+              qty = qtyDigit ?? 1;
+            }
+          }
+          qty = Math.max(1, qty);
+
+          if (lastResults === null && idx >= 0) {
+            // Browse list expired (TTL) or server was restarted — proactively ask to browse again
+            reply = `Your previous product list has expired. Please browse again (e.g. "show red wines") and then reply with the item number.`;
+          } else if (lastResults !== null && idx >= 0 && idx < lastResults.length) {
+            // We know which item — ask for confirmation before adding
+            const it = lastResults[idx];
+            const pending: WaPendingItem = {
+              itemId: it.id,
+              name: it.name,
+              sku: it.sku || "",
+              price: parseFloat(String(it.price1 ?? "0")),
+              qty,
+            };
+            await setPendingItem(conv.id, pending);
+            reply = `You're about to add *${qty}× ${it.name}* (€${(pending.price * qty).toFixed(2)}) to your cart.\n\nIs that correct? Reply *yes* to confirm or *no* to cancel.`;
+          } else if (lastResults !== null && idx >= 0) {
+            reply = `That number is outside the current list. Please reply with a number from the list shown, or browse again (e.g. "show red wines").`;
+          } else {
+            // No item number found — do a quick name search as fallback
+            const searchWords = (parsed.query ?? text).toLowerCase().replace(/\d+/g, "").trim();
+            if (searchWords.length > 2) {
+              const found = await db.select({ id: items.id, name: items.name, sku: items.sku, price1: items.price1 }).from(items)
+                .where(and(eq(items.active, true), ilike(items.name, `%${searchWords.split(" ")[0]}%`))).limit(1);
+              if (found.length) {
+                const pending: WaPendingItem = {
+                  itemId: found[0].id,
+                  name: found[0].name,
+                  sku: found[0].sku || "",
+                  price: parseFloat(String(found[0].price1 ?? "0")),
+                  qty,
+                };
+                await setPendingItem(conv.id, pending);
+                reply = `You're about to add *${qty}× ${found[0].name}* (€${(pending.price * qty).toFixed(2)}) to your cart.\n\nIs that correct? Reply *yes* to confirm or *no* to cancel.`;
+              } else {
+                reply = `I couldn't find that item. Please browse first (reply "show wines") then reply with the item number.`;
+              }
+            } else {
+              reply = `Please browse first (e.g. "show red wines") then reply with the item number to add. You can also type word quantities like "two bottles of item 3".`;
+            }
+          }
+
+        } else if (parsed.intent === "view_cart") {
+          const cart = await getWaCart(conv.id);
+          reply = formatWaCart(cart);
+
+        } else if (parsed.intent === "checkout") {
+          const cart = await getWaCart(conv.id);
+          if (!cart.length) {
+            reply = "Your cart is empty. Browse our catalog first, then add items to order.";
+          } else {
+            // Find the customer and create a portal order
+            const [matchedCustomer] = await db.select().from(customers)
+              .where(eq(customers.phone, from)).limit(1);
+            if (matchedCustomer) {
+              const subtotal = cart.reduce((s, c) => s + c.price * c.qty, 0);
+              const vatAmt = subtotal * 0.19;
+              const total = subtotal + vatAmt;
+              const [newOrder] = await db.insert(portalOrders).values({
+                customerId: matchedCustomer.id,
+                status: "pending",
+                source: "whatsapp",
+                subtotal: String(subtotal.toFixed(2)),
+                vatAmount: String(vatAmt.toFixed(2)),
+                total: String(total.toFixed(2)),
+                notes: "Ordered via WhatsApp",
+              }).returning();
+              await db.insert(portalOrderItems).values(
+                cart.map(c => ({
+                  orderId: newOrder.id,
+                  itemId: c.itemId,
+                  itemName: c.name,
+                  quantity: c.qty,
+                  unitPrice: String(c.price),
+                  total: String((c.price * c.qty).toFixed(2)),
+                }))
+              );
+              await clearWaCart(conv.id); // also invalidates the browse-results cache
+              // Notify all subscribed staff of the new WhatsApp order
+              sendPushToAllStaff({
+                title: "New WhatsApp Order",
+                body: `${matchedCustomer.name} placed an order for €${total.toFixed(2)}`,
+                url: "/whatsapp-orders",
+              }).catch(() => {});
+              reply = `🎉 *Order confirmed!*\n\nTotal: €${total.toFixed(2)}\n\nYour order has been placed and our team will process it shortly. Thank you!`;
+            } else {
+              reply = `To place an order via WhatsApp, please register in our Customer Portal first. Reply 'agent' to get help from our team.`;
+            }
+          }
+
+        } else if (parsed.intent === "cancel") {
+          await clearWaCart(conv.id); // also invalidates the browse-results cache
+          reply = "Cart cleared. Start browsing again by replying 'show wines' or 'browse spirits'.";
+
+        } else if (parsed.intent === "faq") {
+          reply = "For store information, opening hours and delivery queries, please reply 'agent' to speak with our team.";
+
+        } else {
+          const cart = await getWaCart(conv.id);
+          reply = `Thanks for your message! You can:\n• 🍷 Browse: "show red wines" or "search whisky"\n• 🛒 View cart: "my cart"\n• ✅ Order: "checkout"\n• 👤 Get help: "agent"${cart.length ? `\n\nYou have ${cart.length} item(s) in your cart.` : ""}`;
+        }
+      }
+
+      // Save bot reply and send
+      await db.insert(chatMessages).values({ conversationId: conv.id, role: "bot", content: reply, channel: "whatsapp", intent });
+      await sendWhatsAppMessage(from, reply);
+    } catch (e) {
+      console.error("[WhatsApp webhook] error:", e);
+    }
+  });
+
+  return httpServer;
+}
+
+function generateInvoiceHtml(inv: any, customer: any, typeLabel: string, autoPrint: boolean = false, settings: Record<string, string> = {}) {
+  const LOGO_DATA_URL = resolveLogoDataUrl(settings);
+  const items = inv.items || [];
+  const hasDiscountPercent = items.some((li: any) => parseFloat(li.discountPercent || "0") > 0);
+  const hasDiscount = items.some((li: any) => parseFloat(li.discount || "0") > 0);
+  const hasBarcodes = items.some((li: any) => li.barcode);
+  const overallDiscount = parseFloat(inv.discountAmount || "0");
+
+  const companyName = settings.company_name || "Company";
+  const companyAddress = settings.company_address || "";
+  const companyPhone = settings.company_phone || "";
+  const companyEmail = settings.company_email || "";
+  const companyTaxId = settings.company_tax_id || "";
+  const companyRegNo = settings.company_reg_no || "";
+  const companyIban = settings.company_iban || "";
+  const companySwift = settings.company_swift || "";
+  const companyBankName = settings.company_bank_name || "";
+  const currencySymbol = settings.currency_symbol || "\u20AC";
+  const invoiceFooter = settings.invoice_footer || "Thank you for your business";
+
+  const unitDisplayLabels: Record<string, string> = { pc: "pc", bottle: "btl", pack: "pk", "6-pack": "6pk", "12-pack": "12pk" };
+
+  const invTaxRate = parseFloat(inv.taxRate || "19");
+  // Proportional factor for overall invoice discount distribution
+  const pdfLinesSubtotal = items.reduce((s: number, li: any) => s + parseFloat(li.total || "0"), 0);
+  const pdfSubtotal = parseFloat(inv.subtotal || "0");
+  const vatLineFactor = pdfLinesSubtotal > 0 ? pdfSubtotal / pdfLinesSubtotal : 1;
+
+  // Build per-rate VAT breakdown for display in totals (uses current item rates)
+  const vatByRate = new Map<number, number>();
+  for (const li of items as any[]) {
+    const lr: number = li.lineVatRate != null ? li.lineVatRate : invTaxRate;
+    const lineVatAmt = parseFloat(li.total || "0") * vatLineFactor * lr / 100;
+    vatByRate.set(lr, (vatByRate.get(lr) || 0) + lineVatAmt);
+  }
+  const multipleVatRates = vatByRate.size > 1;
+  // Authoritative stored totals — always use these for VAT and Grand Total lines
+  const storedVat = parseFloat(String(inv.taxAmount || "0"));
+  const storedTotal = parseFloat(String(inv.total || "0"));
+
+  const itemRows = items.map((li: any, idx: number) => {
+    const qty = li.quantity != null && Number(li.quantity) > 0 ? Number(li.quantity) : (li.quantity != null ? li.quantity : "—");
+    const unit = li.saleUnit || "pc";
+    const unitLabel = unitDisplayLabels[unit] || unit;
+    const discPercent = parseFloat(li.discountPercent || "0");
+    const discAmount = parseFloat(li.discount || "0");
+    // Use per-line item VAT rate (enriched from item catalogue), fall back to invoice rate
+    const lineRate = li.lineVatRate != null ? li.lineVatRate : invTaxRate;
+    const lineVat = (parseFloat(li.total) * vatLineFactor * lineRate / 100).toFixed(2);
+
+    return `
+    <tr class="${idx % 2 === 1 ? 'alt-row' : ''}">
+      <td class="cell">${li.description || ""}</td>
+      ${hasBarcodes ? `<td class="cell barcode-cell">${li.barcode || "-"}</td>` : ""}
+      <td class="cell center">${qty} ${unitLabel}</td>
+      <td class="cell right">${currencySymbol}${parseFloat(li.unitPrice).toFixed(2)}</td>
+      ${hasDiscountPercent ? `<td class="cell right">${discPercent > 0 ? `<span class="disc-pill">${discPercent.toFixed(1)}%</span>` : "-"}</td>` : ""}
+      ${hasDiscountPercent ? `<td class="cell right">${currencySymbol}${(Number(li.quantity) > 0 ? parseFloat(li.total) / Number(li.quantity) : parseFloat(li.unitPrice)).toFixed(2)}</td>` : ""}
+      <td class="cell right vat-col"><span style="font-size:10px;color:#999;">${lineRate.toFixed(0)}%</span> ${currencySymbol}${lineVat}</td>
+      <td class="cell right bold">${currencySymbol}${parseFloat(li.total).toFixed(2)}</td>
+    </tr>`;
+  }).join("");
+
+  const hasBankDetails = companyIban || companySwift || companyBankName;
+
+  const printScript = autoPrint ? `<script>window.onload = function() { window.print(); }</script>` : "";
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${typeLabel} - ${inv.invoiceNumber}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; padding: 0; background: #f5f5f5; }
+  .page { max-width: 800px; margin: 0 auto; background: #fff; padding: 48px; min-height: 100vh; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; padding-bottom: 24px; border-bottom: 3px solid #1a1a1a; }
+  .brand { }
+  .brand-top { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+  .brand-logo { height: 48px; width: auto; object-fit: contain; }
+  .brand-name { font-size: 22px; font-weight: 800; color: #1a1a1a; letter-spacing: -0.5px; }
+  .brand-sub { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; }
+  .brand-detail { font-size: 11px; color: #666; line-height: 1.6; margin-top: 4px; }
+  .doc-info { text-align: right; }
+  .doc-type { font-size: 22px; font-weight: 700; color: #333; text-transform: uppercase; letter-spacing: 1px; }
+  .doc-number { font-size: 14px; color: #666; margin-top: 4px; }
+  .parties { display: flex; justify-content: space-between; gap: 40px; margin-bottom: 32px; }
+  .party { flex: 1; }
+  .party-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; font-weight: 600; margin-bottom: 8px; }
+  .party-name { font-size: 15px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; }
+  .party-detail { font-size: 12px; color: #555; line-height: 1.6; }
+  .meta-row { display: flex; gap: 24px; margin-bottom: 28px; padding: 14px 18px; background: #f5f5f5; border-radius: 6px; border: 1px solid #f0ebe6; }
+  .meta-item { flex: 1; }
+  .meta-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; }
+  .meta-value { font-size: 13px; font-weight: 600; color: #333; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+  thead th { background: #1a1a1a; color: #fff; padding: 10px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: left; }
+  thead th.center { text-align: center; }
+  thead th.right { text-align: right; }
+  .cell { padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #f0f0f0; }
+  .center { text-align: center; }
+  .right { text-align: right; }
+  .bold { font-weight: 600; }
+  .alt-row { background: #fdfcfb; }
+  .barcode-cell { font-family: 'Courier New', Courier, monospace; font-size: 11px; letter-spacing: 0.5px; color: #555; }
+  .disc-pill { display: inline-block; background: #fef3c7; color: #b45309; border: 1px solid #fcd34d; border-radius: 9999px; padding: 1px 7px; font-size: 10px; font-weight: 600; }
+  .totals-section { display: flex; justify-content: flex-end; margin-bottom: 28px; }
+  .totals-box { width: 280px; }
+  .totals-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; }
+  .totals-row.subtotal { color: #555; }
+  .totals-row.tax { color: #555; }
+  .vat-col { color: #555; font-style: italic; }
+  .totals-row.grand { font-size: 18px; font-weight: 800; color: #1a1a1a; padding-top: 12px; margin-top: 4px; border-top: 2px solid #1a1a1a; }
+  .notes-box { padding: 16px 20px; background: #f5f5f5; border-radius: 6px; border-left: 3px solid #1a1a1a; margin-bottom: 32px; }
+  .notes-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; margin-bottom: 4px; }
+  .notes-text { font-size: 12px; color: #444; line-height: 1.6; }
+  .bank-details { padding: 16px 20px; background: #f8f9fa; border-radius: 6px; border: 1px solid #e9ecef; margin-bottom: 32px; }
+  .bank-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; font-weight: 600; margin-bottom: 6px; }
+  .bank-text { font-size: 12px; color: #444; line-height: 1.8; }
+  .footer { text-align: center; padding-top: 24px; border-top: 1px solid #eee; }
+  .footer p { font-size: 11px; color: #aaa; line-height: 1.8; }
+  .no-print { text-align: center; margin-bottom: 16px; padding: 12px; }
+  .no-print button { padding: 10px 28px; font-size: 14px; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; margin: 0 6px; }
+  .btn-print { background: #1a1a1a; color: #fff; }
+  .btn-print:hover { background: #5a2530; }
+  .btn-close { background: #e5e5e5; color: #333; }
+  .btn-close:hover { background: #d5d5d5; }
+  @page { margin: 0; size: A4; }
+  @media print {
+    body { background: #fff; padding: 0; margin: 10mm 15mm; }
+    .page { padding: 0; max-width: 100%; box-shadow: none; min-height: auto !important; }
+    .no-print { display: none !important; }
+    .header { border-bottom-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin-bottom: 20px !important; padding-bottom: 16px !important; }
+    .parties { margin-bottom: 20px !important; }
+    .meta-row { margin-bottom: 16px !important; background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    thead th { background: #1a1a1a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .totals-row.grand { color: #1a1a1a !important; border-top-color: #1a1a1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .totals-section { margin-bottom: 16px !important; }
+    .notes-box { margin-bottom: 16px !important; }
+    .bank-details { margin-bottom: 16px !important; }
+    .footer { padding-top: 12px !important; }
+    .alt-row { background: #fdfcfb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+  <div class="no-print">
+    <button class="btn-print" onclick="window.print()">Print Document</button>
+    <button class="btn-close" onclick="window.close()">Close</button>
+  </div>
+  <div class="page">
+    <div class="header">
+      <div class="brand">
+        <div class="brand-top">
+          <img src="${LOGO_DATA_URL}" alt="Logo" class="brand-logo" />
+          <div class="brand-name">${companyName}</div>
+        </div>
+        <div class="brand-detail">
+          ${companyAddress ? companyAddress + "<br>" : ""}
+          ${companyPhone ? "Tel: " + companyPhone : ""}${companyEmail ? " | " + companyEmail : ""}
+          ${companyTaxId ? "<br>TIN: " + companyTaxId : ""}${companyRegNo ? " | Reg: " + companyRegNo : ""}
+        </div>
+      </div>
+      <div class="doc-info">
+        <div class="doc-type">${typeLabel}</div>
+        <div class="doc-number">${inv.invoiceNumber}</div>
+      </div>
+    </div>
+
+    <div class="parties">
+      <div class="party">
+        <div class="party-label">Bill To</div>
+        <div class="party-name">${customer?.name || "N/A"}</div>
+        <div class="party-detail">
+          ${customer?.address ? customer.address + "<br>" : ""}
+          ${customer?.city || ""}
+          ${customer?.taxId ? "<br>Tax ID: " + customer.taxId : ""}
+        </div>
+      </div>
+      ${(inv as any).deliveryLocation ? `
+      <div class="party">
+        <div class="party-label">Deliver To</div>
+        <div class="party-name">${(inv as any).deliveryLocation}</div>
+        <div class="party-detail">
+          ${(inv as any).deliveryAddress ? (inv as any).deliveryAddress.replace(/\n/g, "<br>") + "<br>" : ""}
+        </div>
+      </div>` : ""}
+      <div class="party" style="text-align:right;">
+        <div class="party-label">Document Details</div>
+        <div class="party-detail">
+          <strong>Date:</strong> ${new Date(inv.date).toLocaleDateString("en-GB")}<br>
+          ${inv.dueDate ? "<strong>Due:</strong> " + new Date(inv.dueDate).toLocaleDateString("en-GB") + "<br>" : ""}
+          <strong>Status:</strong> ${inv.status}<br>
+          <strong>Terms:</strong> ${customer?.paymentTerms || "cash"}
+        </div>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Description</th>
+          ${hasBarcodes ? '<th>Barcode</th>' : ""}
+          <th class="center">Qty</th>
+          <th class="right">List Price</th>
+          ${hasDiscountPercent ? '<th class="right">Disc %</th>' : ""}
+          ${hasDiscountPercent ? '<th class="right">Net Price</th>' : ""}
+          <th class="right">VAT</th>
+          <th class="right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${itemRows}
+      </tbody>
+    </table>
+
+    <div class="totals-section">
+      <div class="totals-box">
+        ${overallDiscount > 0 ? `
+        <div class="totals-row subtotal">
+          <span>Lines Subtotal</span>
+          <span>${currencySymbol}${(parseFloat(inv.subtotal) + overallDiscount).toFixed(2)}</span>
+        </div>
+        <div class="totals-row discount">
+          <span>Discount</span>
+          <span style="color:#c0392b;">-${currencySymbol}${overallDiscount.toFixed(2)}</span>
+        </div>
+        ` : ""}
+        <div class="totals-row subtotal">
+          <span>Subtotal</span>
+          <span>${currencySymbol}${parseFloat(inv.subtotal).toFixed(2)}</span>
+        </div>
+        ${multipleVatRates
+          ? Array.from(vatByRate.entries()).sort((a, b) => a[0] - b[0]).map(([rate, amt]) =>
+              `<div class="totals-row tax"><span>VAT ${rate.toFixed(0)}%</span><span>${currencySymbol}${amt.toFixed(2)}</span></div>`
+            ).join("") +
+            `<div class="totals-row tax" style="border-top:1px solid #e5e5e5;margin-top:2px;padding-top:4px;"><span><strong>Total VAT</strong></span><span><strong>${currencySymbol}${storedVat.toFixed(2)}</strong></span></div>`
+          : `<div class="totals-row tax"><span>VAT ${invTaxRate.toFixed(0)}%</span><span>${currencySymbol}${storedVat.toFixed(2)}</span></div>`
+        }
+        <div class="totals-row grand">
+          <span>Total</span>
+          <span>${currencySymbol}${storedTotal.toFixed(2)}</span>
+        </div>
+      </div>
+    </div>
+
+    ${inv.notes ? `
+    <div class="notes-box">
+      <div class="notes-label">Notes</div>
+      <div class="notes-text">${inv.notes}</div>
+    </div>` : ""}
+
+    ${hasBankDetails ? `
+    <div class="bank-details">
+      <div class="bank-label">Bank Details</div>
+      <div class="bank-text">
+        ${companyBankName ? "<strong>Bank:</strong> " + companyBankName + "<br>" : ""}
+        ${companyIban ? "<strong>IBAN:</strong> " + companyIban + "<br>" : ""}
+        ${companySwift ? "<strong>SWIFT/BIC:</strong> " + companySwift : ""}
+      </div>
+    </div>` : ""}
+
+    <div class="footer">
+      <p>${companyName}</p>
+      <p>${invoiceFooter}</p>
+    </div>
+  </div>
+  ${printScript}
+</body>
+</html>`;
+}
+
+function generateStatementHtml(customer: any, statement: any, autoPrint: boolean = false, settings: Record<string, string> = {}) {
+  const LOGO_DATA_URL = resolveLogoDataUrl(settings);
+  const companyName = settings.company_name || "Company";
+  const companyAddress = settings.company_address || "";
+  const companyPhone = settings.company_phone || "";
+  const companyEmail = settings.company_email || "";
+  const companyRegNo = settings.company_reg_no || "";
+  const companyTaxId = settings.company_tax_id || "";
+  const companyIban = settings.company_iban || "";
+  const companyBankName = settings.company_bank_name || "";
+  const companySwift = settings.company_swift || "";
+  const currencySymbol = settings.currency_symbol || "\u20AC";
+  const fmt = (v: number | string) => `${currencySymbol}${parseFloat(String(v) || "0").toFixed(2)}`;
+
+  const paymentTermsLabel: Record<string, string> = {
+    cash: "Cash on Delivery", credit_7: "Net 7 Days", credit_14: "Net 14 Days",
+    credit_30: "Net 30 Days", credit_60: "Net 60 Days", credit_90: "Net 90 Days",
+  };
+  const methodLabels: Record<string, string> = {
+    cash: "Cash", bank_transfer: "Bank Transfer", cheque: "Cheque", card: "Card", other: "Other",
+  };
+  const typeLabels: Record<string, string> = {
+    invoice: "Invoice", credit_note: "Credit Note", proforma: "Proforma", quotation: "Quotation",
+  };
+
+  const statementInvoices: any[] = statement?.invoices || [];
+  const statementPayments: any[] = statement?.payments || [];
+  const stmtDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
+  const balanceDue = parseFloat(statement?.balance || "0");
+  const balanceAsOfPrevMonthEnd = parseFloat(statement?.balanceAsOfPrevMonthEnd ?? statement?.balance ?? "0");
+  const prevMonthEndLabel: string = statement?.prevMonthEndLabel || stmtDate;
+  const ag = statement?.aging || {};
+
+  // Build a single chronological activity list (invoices + payments merged, sorted by date)
+  type Activity = { date: Date; dateStr: string; type: "invoice" | "payment"; ref: string; description: string; dueDate: string; amount: number; isCredit: boolean; };
+  const activities: Activity[] = [];
+
+  for (const inv of statementInvoices) {
+    const d = inv.date ? new Date(inv.date) : new Date();
+    const dueStr = inv.effectiveDueDate
+      ? new Date(inv.effectiveDueDate).toLocaleDateString("en-GB")
+      : inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—";
+    activities.push({
+      date: d,
+      dateStr: d.toLocaleDateString("en-GB"),
+      type: "invoice",
+      ref: inv.invoiceNumber || "—",
+      description: typeLabels[inv.type] || inv.type,
+      dueDate: dueStr,
+      amount: parseFloat(inv.total || "0"),
+      isCredit: inv.type === "credit_note",
+    });
+  }
+  for (const pmt of statementPayments) {
+    const d = pmt.date ? new Date(pmt.date) : new Date();
+    const method = methodLabels[pmt.paymentMethod] || pmt.paymentMethod || "Other";
+    const ref = [pmt.reference, pmt.invoiceNumber].filter(Boolean).join(" / ") || "—";
+    activities.push({
+      date: d,
+      dateStr: d.toLocaleDateString("en-GB"),
+      type: "payment",
+      ref,
+      description: `Payment Received (${method})`,
+      dueDate: "—",
+      amount: parseFloat(pmt.amount || "0"),
+      isCredit: false,
+    });
+  }
+  activities.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  // Running balance — starts from opening balance (carry-over from previous system)
+  const openingBal = parseFloat(statement?.openingBalance || "0");
+  let runningBalance = openingBal;
+  const activityRows = activities.map((a, idx) => {
+    if (a.type === "payment") {
+      runningBalance -= a.amount;
+    } else if (a.isCredit) {
+      runningBalance -= a.amount;
+    } else {
+      runningBalance += a.amount;
+    }
+    const isPayment = a.type === "payment" || a.isCredit;
+    const bg = idx % 2 === 1 ? "background:#f9f9f9;" : "";
+    return `<tr style="${bg}">
+      <td style="padding:8px 10px;font-size:11px;color:#555;white-space:nowrap;">${a.dateStr}</td>
+      <td style="padding:8px 10px;font-size:11px;font-weight:600;color:#1a1a1a;">${a.ref}</td>
+      <td style="padding:8px 10px;font-size:11px;color:#555;">${a.description}</td>
+      <td style="padding:8px 10px;font-size:11px;color:#555;text-align:center;white-space:nowrap;">${a.dueDate}</td>
+      <td style="padding:8px 10px;font-size:11px;text-align:right;font-weight:600;color:${isPayment ? "#2e7d32" : "#1a1a1a"};">${isPayment ? `(${fmt(a.amount)})` : fmt(a.amount)}</td>
+      <td style="padding:8px 10px;font-size:12px;text-align:right;font-weight:700;color:${runningBalance > 0 ? "#1a1a1a" : "#2e7d32"};">${fmt(Math.abs(runningBalance))}${runningBalance < 0 ? "&nbsp;CR" : ""}</td>
+    </tr>`;
+  }).join("");
+
+  const bfwdRow = openingBal > 0
+    ? `<tr style="background:#f0f4ff;">
+        <td style="padding:8px 10px;font-size:11px;color:#555;white-space:nowrap;">—</td>
+        <td style="padding:8px 10px;font-size:11px;font-weight:600;color:#1a1a1a;">B/F</td>
+        <td style="padding:8px 10px;font-size:11px;color:#555;font-style:italic;">Balance Brought Forward (previous system)</td>
+        <td style="padding:8px 10px;font-size:11px;color:#555;text-align:center;">—</td>
+        <td style="padding:8px 10px;font-size:11px;text-align:right;font-weight:600;color:#1a1a1a;">${fmt(openingBal)}</td>
+        <td style="padding:8px 10px;font-size:12px;text-align:right;font-weight:700;color:#1a1a1a;">${fmt(openingBal)}</td>
+      </tr>`
+    : "";
+
+  // Aging grid columns: Current | 1-30 | 31-60 | 61-90 | >90 | Amount Due
+  const agCurrent = parseFloat(ag.withinTermsFuture || "0") + parseFloat(ag.dueThisMonth || "0");
+  const ag1_30 = parseFloat(ag.overdue1_30 || "0");
+  const ag31_60 = parseFloat(ag.overdue31_60 || "0");
+  const ag60plus = parseFloat(ag.overdue60plus || "0");
+  // Split 60+ into 61-90 and >90 (we only have combined; show as one column for now)
+  const agingCols = [
+    { label: "Current", value: agCurrent },
+    { label: "1-30 Days\nPast Due", value: ag1_30 },
+    { label: "31-60 Days\nPast Due", value: ag31_60 },
+    { label: "Over 60 Days\nPast Due", value: ag60plus },
+    { label: "Amount Due", value: balanceAsOfPrevMonthEnd, highlight: true },
+  ];
+  const agingCells = agingCols.map(col => `
+    <td style="padding:10px 8px;text-align:center;border-right:1px solid #ddd;${col.highlight ? "background:#1a1a1a;" : ""}">
+      <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:${col.highlight ? "#aaa" : "#888"};font-weight:600;margin-bottom:4px;white-space:pre-line;">${col.label}</div>
+      <div style="font-size:13px;font-weight:800;color:${col.highlight ? "#fff" : col.value > 0 ? "#1a1a1a" : "#999"};">${col.value > 0 ? fmt(col.value) : "—"}</div>
+    </td>`).join("");
+
+  const printScript = autoPrint ? `<script>window.onload = function() { window.print(); }</script>` : "";
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Statement - ${customer.name}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; background: #e8e8e8; }
+  .page { max-width: 820px; margin: 0 auto; background: #fff; padding: 36px 40px; min-height: 100vh; }
+  .no-print { text-align:center; padding:12px; background:#fff; border-bottom:1px solid #ddd; }
+  .no-print button { padding:8px 24px; font-size:13px; font-weight:600; border:none; border-radius:5px; cursor:pointer; margin:0 5px; }
+  .btn-print { background:#1a1a1a; color:#fff; }
+  .btn-close { background:#e0e0e0; color:#333; }
+  @page { size: A4; margin: 0; }
+  @media print {
+    body { background:#fff; }
+    .no-print { display:none !important; }
+    .page { padding:14mm 12mm; max-width:100%; }
+    .aging-highlight { background:#1a1a1a !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    thead tr { background:#1a1a1a !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  }
+</style>
+</head>
+<body>
+<div class="no-print">
+  <button class="btn-print" onclick="window.print()">&#128438; Print Statement</button>
+  <button class="btn-close" onclick="window.close()">Close</button>
+</div>
+<div class="page">
+
+  <!-- TOP HEADER -->
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+    <tr>
+      <td style="width:55%;vertical-align:top;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+          <img src="${LOGO_DATA_URL}" alt="" style="height:44px;width:auto;object-fit:contain;" />
+          <div>
+            <div style="font-size:18px;font-weight:800;color:#1a1a1a;line-height:1.1;">${companyName}</div>
+            ${companyRegNo ? `<div style="font-size:10px;color:#888;margin-top:2px;">Reg. No: ${companyRegNo}</div>` : ""}
+          </div>
+        </div>
+        <div style="font-size:10px;color:#555;line-height:1.7;">
+          ${companyAddress ? `${companyAddress.replace(/\n/g,"<br>")}<br>` : ""}
+          ${companyPhone ? `Tel: ${companyPhone}` : ""}${companyPhone && companyEmail ? " &nbsp;|&nbsp; " : ""}${companyEmail ? companyEmail : ""}
+          ${companyTaxId ? `<br>VAT/Tax ID: ${companyTaxId}` : ""}
+        </div>
+      </td>
+      <td style="width:45%;vertical-align:top;text-align:right;">
+        <div style="font-size:26px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:#1a1a1a;line-height:1;">Statement</div>
+        <div style="font-size:11px;color:#666;margin-top:6px;">Date: <strong>${stmtDate}</strong></div>
+        <div style="font-size:11px;color:#666;margin-top:2px;">Account No: <strong>${customer.code}</strong></div>
+        <div style="font-size:11px;color:#666;margin-top:2px;">Terms: <strong>${paymentTermsLabel[customer.paymentTerms] || customer.paymentTerms}</strong></div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- BILL TO + AMOUNT DUE -->
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+    <tr>
+      <td style="width:55%;vertical-align:top;padding:16px 20px;background:#f7f7f7;border:1px solid #ddd;border-radius:4px;">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#999;font-weight:700;margin-bottom:6px;">Bill To</div>
+        <div style="font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:3px;">${customer.name}</div>
+        ${customer.address ? `<div style="font-size:11px;color:#555;line-height:1.6;">${customer.address.replace(/\n/g,"<br>")}</div>` : ""}
+        ${customer.city ? `<div style="font-size:11px;color:#555;">${customer.city}</div>` : ""}
+        ${customer.taxId ? `<div style="font-size:11px;color:#777;margin-top:3px;">Tax ID: ${customer.taxId}</div>` : ""}
+      </td>
+      <td style="width:10%;"></td>
+      <td style="width:35%;vertical-align:top;text-align:center;padding:16px 20px;background:#1a1a1a;border-radius:4px;">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#aaa;font-weight:700;margin-bottom:8px;">Amount Due</div>
+        <div style="font-size:28px;font-weight:900;color:#fff;letter-spacing:-0.5px;">${fmt(balanceAsOfPrevMonthEnd)}</div>
+        <div style="font-size:9px;color:#888;margin-top:8px;text-transform:uppercase;letter-spacing:0.5px;">As of ${prevMonthEndLabel}</div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- ACTIVITY TABLE -->
+  <table style="width:100%;border-collapse:collapse;margin-bottom:0;">
+    <thead>
+      <tr style="background:#1a1a1a;">
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:left;">Date</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:left;">Reference</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:left;">Description</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:center;">Due Date</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:right;">Amount</th>
+        <th style="padding:9px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.8px;font-weight:700;color:#fff;text-align:right;">Balance</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${bfwdRow}${activityRows || `<tr><td colspan="6" style="padding:16px;text-align:center;color:#999;font-size:12px;">No activity</td></tr>`}
+      <!-- Total row -->
+      <tr style="border-top:2px solid #1a1a1a;">
+        <td colspan="4" style="padding:10px;font-size:11px;font-weight:700;text-align:right;text-transform:uppercase;letter-spacing:0.5px;color:#555;">Total Balance Due</td>
+        <td colspan="2" style="padding:10px;font-size:14px;font-weight:900;text-align:right;color:#1a1a1a;">${fmt(balanceDue)}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- AGING GRID -->
+  <table style="width:100%;border-collapse:collapse;border:1px solid #ddd;margin-top:24px;">
+    <thead>
+      <tr style="background:#f0f0f0;">
+        <th colspan="5" style="padding:7px 10px;font-size:9px;text-transform:uppercase;letter-spacing:1px;font-weight:700;color:#555;text-align:left;border-bottom:1px solid #ddd;">Aging Summary</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>${agingCells}</tr>
+    </tbody>
+  </table>
+
+  ${companyIban ? `
+  <!-- REMIT TO -->
+  <table style="width:100%;border-collapse:collapse;margin-top:24px;">
+    <tr>
+      <td style="padding:16px 20px;background:#f7f7f7;border:1px solid #ddd;border-radius:4px;vertical-align:top;">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#999;font-weight:700;margin-bottom:8px;">Remit To / Payment Details</div>
+        <table style="border-collapse:collapse;width:100%;">
+          ${companyBankName ? `<tr><td style="font-size:10px;color:#888;padding:2px 0;width:100px;">Bank</td><td style="font-size:11px;font-weight:600;color:#1a1a1a;padding:2px 0;">${companyBankName}</td></tr>` : ""}
+          <tr><td style="font-size:10px;color:#888;padding:2px 0;">IBAN</td><td style="font-size:11px;font-weight:700;color:#1a1a1a;padding:2px 0;letter-spacing:0.5px;">${companyIban}</td></tr>
+          ${companySwift ? `<tr><td style="font-size:10px;color:#888;padding:2px 0;">SWIFT/BIC</td><td style="font-size:11px;font-weight:600;color:#1a1a1a;padding:2px 0;">${companySwift}</td></tr>` : ""}
+          <tr><td style="font-size:10px;color:#888;padding:2px 0;">Reference</td><td style="font-size:11px;color:#555;padding:2px 0;">Please quote: <strong>${customer.code}</strong></td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>` : ""}
+
+  <!-- FOOTER -->
+  <div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;text-align:center;">
+    <p style="font-size:10px;color:#aaa;">${companyName} &mdash; Thank you for your business</p>
+  </div>
+
+</div>
+${printScript}
+</body>
+</html>`;
+}
+
+async function acquireCatalogImportLock(): Promise<() => Promise<void>> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<{ locked: boolean }>(
+        "SELECT pg_try_advisory_lock($1) AS locked",
+        [22_300_001],
+      );
+      if (result.rows[0]?.locked) {
+        return async () => {
+          try { await client.query("SELECT pg_advisory_unlock($1)", [22_300_001]); }
+          finally { client.release(); }
+        };
+      }
+    } catch (error) {
+      client.release();
+      throw error;
+    }
+    client.release();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Another catalog import is still running; please retry shortly");
+}
+
+async function assertBarcodeAvailable(barcode: unknown, allowedOwnerKey?: string): Promise<void> {
+  if (barcode === null || barcode === undefined || String(barcode).trim() === "") return;
+  const normalized = String(barcode).trim().replace(/\s+/g, "");
+  const owners = new Set(await storage.getBarcodeOwnerKeys(normalized));
+  if (allowedOwnerKey) owners.delete(allowedOwnerKey);
+  if (owners.size > 0) throw new Error(`Barcode ${normalized} is already assigned to another product`);
+}

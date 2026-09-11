@@ -1,0 +1,503 @@
+// Resend email integration — uses Replit connector SDK (@replit/connectors-sdk)
+// Priority 1: DB-stored API key (set in Settings → Email)
+// Priority 2: Replit connector (managed via Replit integrations)
+import { Resend } from 'resend';
+import { ReplitConnectors } from '@replit/connectors-sdk';
+import { db } from './db';
+import { systemSettings } from '@workspace/db';
+import { eq } from 'drizzle-orm';
+
+function escHtml(str: unknown): string {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+async function getSettingValue(key: string): Promise<string | null> {
+  try {
+    const rows = await db.select().from(systemSettings).where(eq(systemSettings.key, key));
+    return rows[0]?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const PERSONAL_EMAIL_DOMAINS = [
+  'gmail.com','yahoo.com','yahoo.co.uk','hotmail.com','outlook.com',
+  'live.com','icloud.com','me.com','aol.com','protonmail.com','cytanet.com.cy'
+];
+
+function isSendableFromAddress(email: string): boolean {
+  if (!email) return false;
+  const domain = email.split('@')[1]?.toLowerCase();
+  return !!domain && !PERSONAL_EMAIL_DOMAINS.includes(domain);
+}
+
+async function getFromEmail(): Promise<string> {
+  const dbFromEmail = await getSettingValue('resend_from_email');
+  if (dbFromEmail && isSendableFromAddress(dbFromEmail)) return dbFromEmail;
+  return 'onboarding@resend.dev';
+}
+
+async function getReplyToEmail(): Promise<string | null> {
+  const val = await getSettingValue('resend_reply_to');
+  return val && val.trim() ? val.trim() : null;
+}
+
+interface EmailPayload {
+  from: string;
+  to: string | string[];
+  subject: string;
+  html: string;
+  reply_to?: string;
+  attachments?: Array<{ filename: string; content: string }>;
+}
+
+async function sendEmailPayload(payload: EmailPayload): Promise<void> {
+  const dbApiKey = await getSettingValue('resend_api_key');
+
+  if (dbApiKey && dbApiKey.startsWith('re_')) {
+    // Use Resend SDK directly with the stored API key
+    // Resend SDK uses camelCase `replyTo`; our internal payload uses snake_case `reply_to`
+    const client = new Resend(dbApiKey);
+    const { reply_to, ...rest } = payload;
+    const sdkPayload: any = { ...rest };
+    if (reply_to) sdkPayload.replyTo = reply_to;
+    const result = await client.emails.send(sdkPayload);
+    if ((result as any).error) {
+      throw new Error((result as any).error.message || 'Resend API error');
+    }
+    return;
+  }
+
+  // Use Replit connector proxy — auth handled automatically
+  const connectors = new ReplitConnectors();
+  const response = await connectors.proxy('resend', '/emails', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Resend error (${response.status}): ${errText}`);
+  }
+}
+
+export async function getEmailStatus(): Promise<{
+  connected: boolean;
+  configuredFrom: string;
+  actualFrom: string;
+  usingFallback: boolean;
+  source: 'db' | 'connector' | 'none';
+  hasDbApiKey: boolean;
+  dbFromEmail: string;
+  dbReplyTo: string;
+  error?: string;
+}> {
+  const dbApiKey = await getSettingValue('resend_api_key');
+  const dbFromEmail = await getSettingValue('resend_from_email') || '';
+  const dbReplyTo = await getSettingValue('resend_reply_to') || '';
+  const hasDbApiKey = !!(dbApiKey && dbApiKey.startsWith('re_'));
+
+  try {
+    let source: 'db' | 'connector' = 'connector';
+    if (hasDbApiKey) source = 'db';
+
+    const fromEmail = await getFromEmail();
+    const usingFallback = fromEmail === 'onboarding@resend.dev';
+
+    // Connector-mode: we don't do a live check because the managed key may be
+    // restricted to send-only (no /domains or /emails GET permission). Sending
+    // will succeed or fail at call time; we report connected:true optimistically.
+
+    return {
+      connected: true,
+      configuredFrom: dbFromEmail,
+      actualFrom: fromEmail,
+      usingFallback,
+      source,
+      hasDbApiKey,
+      dbFromEmail,
+      dbReplyTo,
+    };
+  } catch (e: any) {
+    return {
+      connected: false,
+      configuredFrom: dbFromEmail,
+      actualFrom: '',
+      usingFallback: false,
+      source: 'none',
+      hasDbApiKey,
+      dbFromEmail,
+      dbReplyTo,
+      error: e.message,
+    };
+  }
+}
+
+export async function sendTestEmail(
+  toEmail: string
+): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+  try {
+    const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: toEmail,
+      subject: 'Gastro Nobile — Email Test',
+      html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <h2 style="color:#374151;margin-top:0;">Email Test Successful</h2>
+        <p style="color:#374151;">This is a test email sent from your <strong>Gastro Nobile</strong> system to confirm email delivery is working correctly.</p>
+        <p style="color:#6b7280;font-size:13px;">Sent via Resend · From: ${escHtml(fromEmail)}${replyTo ? ` · Reply-To: ${escHtml(replyTo)}` : ''}</p>
+      </div>`,
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true, fromEmail };
+  } catch (error: any) {
+    console.error('Test email error:', error?.message || error);
+    return { success: false, fromEmail: '', error: error?.message || 'Failed to send test email' };
+  }
+}
+
+export async function sendEmailWithContent(
+  toEmail: string,
+  subject: string,
+  htmlContent: string
+): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+  try {
+    const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: toEmail,
+      subject,
+      html: htmlContent,
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true, fromEmail };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to send email';
+    console.error('Email send error:', message);
+    return { success: false, fromEmail: '', error: message };
+  }
+}
+
+export type DomainStatusNotification = {
+  clientName: string;
+  slug: string;
+  customerDomain: string;
+  posDomain: string | null;
+  status: 'failed' | 'recovered';
+  message: string;
+  failureStartedAt: Date | null;
+  checkedAt: Date;
+};
+
+export async function sendCustomerAiPersistenceAlert(
+  operation: 'load' | 'save',
+): Promise<{ success: boolean; skipped?: boolean; reason?: 'support_recipient_missing' | 'email_delivery_failed'; error?: string }> {
+  const supportEmail = await getSettingValue('resend_reply_to');
+  if (!supportEmail?.trim()) {
+    console.warn('[operator-alert] Customer AI persistence notification skipped: support recipient is not configured');
+    return {
+      success: false,
+      skipped: true,
+      reason: 'support_recipient_missing',
+      error: 'Support recipient is not configured',
+    };
+  }
+
+  try {
+    const fromEmail = await getFromEmail();
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: supportEmail.trim(),
+      subject: `[Service warning] Customer AI health history ${operation} failed`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:#b45309;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">Customer AI health history unavailable</h2>
+        </div>
+        <p style="color:#374151;">The deployment could not ${operation} its customer AI operational health history.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">Event</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">customer_ai_health_persistence_failed</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Operation</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${operation}</td></tr>
+        </table>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated GlobiPOS deployment-monitoring notification.</p>
+      </div>`,
+    };
+    const replyTo = await getReplyToEmail();
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to deliver operator alert';
+    console.error(`[operator-alert] customer_ai_health_persistence_failed ${operation} delivery failed`);
+    return { success: false, reason: 'email_delivery_failed', error: message };
+  }
+}
+
+export async function sendDomainStatusNotification(
+  notification: DomainStatusNotification,
+): Promise<{ success: boolean; skipped?: boolean; reason?: 'support_recipient_missing' | 'email_delivery_failed'; error?: string }> {
+  try {
+    const supportEmail = await getSettingValue('resend_reply_to');
+    if (!supportEmail?.trim()) {
+      console.warn('[domain-monitor] Support notification skipped: Resend reply-to address is not configured');
+      return {
+        success: false,
+        skipped: true,
+        reason: 'support_recipient_missing',
+        error: 'Support recipient is not configured',
+      };
+    }
+
+    const fromEmail = await getFromEmail();
+    const recovered = notification.status === 'recovered';
+    const color = recovered ? '#047857' : '#b91c1c';
+    const heading = recovered ? 'Customer domain recovered' : 'Customer domain outage detected';
+    const subject = recovered
+      ? `[Resolved] ${notification.clientName} domain is available`
+      : `[Outage] ${notification.clientName} domain check failed`;
+    const domains = [
+      notification.customerDomain,
+      ...(notification.posDomain ? [notification.posDomain] : []),
+    ].join(', ');
+    const duration = recovered && notification.failureStartedAt
+      ? `<tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Outage began</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(notification.failureStartedAt.toISOString())}</td></tr>`
+      : '';
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: supportEmail.trim(),
+      subject,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:${color};padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">${heading}</h2>
+        </div>
+        <p style="color:#374151;">${recovered
+          ? 'Automated DNS and HTTPS checks are passing again.'
+          : 'Automated monitoring found that one or more required customer domains are unavailable.'}</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">Customer</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(notification.clientName)} (${escHtml(notification.slug)})</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Domains</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${escHtml(domains)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Checked</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(notification.checkedAt.toISOString())}</td></tr>
+          ${duration}
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Details</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(notification.message)}</td></tr>
+        </table>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated GlobiPOS fleet-monitoring notification.</p>
+      </div>`,
+    };
+    const replyTo = await getReplyToEmail();
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to send domain status notification';
+    console.error('[domain-monitor] Support notification failed:', message);
+    return { success: false, reason: 'email_delivery_failed', error: message };
+  }
+}
+
+export async function sendInvoiceEmail(
+  toEmail: string,
+  subject: string,
+  htmlContent: string
+): Promise<{ success: boolean; fromEmail: string; replyTo: string | null; error?: string }> {
+  try {
+    const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = { from: fromEmail, to: toEmail, subject, html: htmlContent };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true, fromEmail, replyTo };
+  } catch (error: any) {
+    console.error('Invoice email error:', error?.message || error);
+    return { success: false, fromEmail: '', replyTo: null, error: error?.message || 'Failed to send email' };
+  }
+}
+
+export async function sendSavingsReportEmail(
+  toEmail: string,
+  subject: string,
+  htmlContent: string,
+  customerName: string
+): Promise<{ success: boolean; fromEmail: string; error?: string }> {
+  try {
+    const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
+    const filename = `savings-report-${customerName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.html`;
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: toEmail,
+      subject,
+      html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;">
+        <h2 style="color:#059669;margin-top:0;">Your Savings Report</h2>
+        <p style="color:#374151;">Please find your savings report attached to this email.</p>
+        <p style="color:#6b7280;font-size:13px;">Open the attached HTML file in your browser to view the full report with all details.</p>
+      </div>`,
+      attachments: [{ filename, content: Buffer.from(htmlContent).toString('base64') }],
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true, fromEmail };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to send savings report email';
+    console.error('Savings report email error:', message);
+    return { success: false, fromEmail: '', error: message };
+  }
+}
+
+export async function sendBackupEmail(
+  toEmail: string,
+  companyName: string,
+  backupJson: string,
+  date: string,
+  backupType?: string,
+  sinceDate?: string | null,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
+    const slug = (companyName || "backup").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "backup";
+    const isDiff = backupType === "differential";
+    const tag = isDiff ? `diff-since-${(sinceDate || date).slice(0, 10)}` : "full";
+    const filename = `${slug}-backup-${date}-${tag}.json`;
+    const typeLabel = isDiff ? "Differential" : "Full";
+    const diffNote = isDiff && sinceDate
+      ? `<p>This is a <strong>differential backup</strong> — it contains only records created since <strong>${escHtml(new Date(sinceDate).toLocaleString())}</strong>.<br>Keep this file together with your previous full backup for a complete recovery set.</p>`
+      : `<p>This is a <strong>full backup</strong> — it contains all data and can be used to restore the system independently.</p>`;
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: toEmail,
+      subject: `${companyName} — ${typeLabel} Database Backup ${date}`,
+      html: `<p>Automated database backup for <strong>${escHtml(companyName)}</strong>.</p>
+             <p>Date: ${escHtml(date)}</p>
+             ${diffNote}
+             <p>Attached file: <code>${escHtml(filename)}</code></p>
+             <p style="color:#666;font-size:12px;">This is an automated backup email. Store this file securely.</p>`,
+      attachments: [{ filename, content: Buffer.from(backupJson).toString('base64') }],
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+    return { success: true };
+  } catch (error: any) {
+    console.error('Backup email error:', error?.message || error);
+    return { success: false, error: error?.message || 'Failed to send backup email' };
+  }
+}
+
+export async function sendLoginAlertEmail(
+  adminEmails: string[],
+  username: string,
+  ip: string,
+  userAgent: string,
+  timestamp: string
+): Promise<void> {
+  try {
+    const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: adminEmails,
+      subject: `🔐 Security Alert: ${username} logged in from new location`,
+      html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:#dc2626;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">⚠️ New Login Location Detected</h2>
+        </div>
+        <p style="color:#374151;">A user has logged in from a <strong>new IP address</strong> that has not been seen before.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(username)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">IP Address</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${escHtml(ip)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(timestamp)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Browser</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-size:12px;color:#6b7280;">${escHtml(userAgent)}</td></tr>
+        </table>
+        <p style="color:#374151;">If this was not you, log in immediately and deactivate this account.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Gastro Nobile.</p>
+      </div>`,
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+  } catch (error: any) {
+    console.error('Login alert email error:', error?.message || error);
+  }
+}
+
+export async function sendFailedLoginAlertEmail(
+  adminEmails: string[],
+  attemptedUsername: string,
+  ip: string,
+  failCount: number,
+  timestamp: string
+): Promise<void> {
+  try {
+    const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: adminEmails,
+      subject: `🚨 Security Alert: ${failCount} failed login attempts from ${ip}`,
+      html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:#b45309;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">🚨 Multiple Failed Login Attempts</h2>
+        </div>
+        <p style="color:#374151;">There have been <strong>${failCount} failed login attempts</strong> in a short period. This may indicate a brute-force attack.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">Target User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(attemptedUsername) || '(unknown)'}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Attack IP</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${escHtml(ip)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Attempts</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${failCount} failed attempts</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(timestamp)}</td></tr>
+        </table>
+        <p style="color:#374151;">The IP has been temporarily blocked. Review your system if this activity is unexpected.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Gastro Nobile.</p>
+      </div>`,
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+  } catch (error: any) {
+    console.error('Failed login alert email error:', error?.message || error);
+  }
+}
+
+export async function sendNewAdminAlertEmail(
+  adminEmails: string[],
+  newUsername: string,
+  createdBy: string,
+  ip: string,
+  timestamp: string
+): Promise<void> {
+  try {
+    const fromEmail = await getFromEmail();
+    const replyTo = await getReplyToEmail();
+    const payload: EmailPayload = {
+      from: fromEmail,
+      to: adminEmails,
+      subject: `👤 Security Alert: New admin user "${newUsername}" created`,
+      html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <div style="background:#7c3aed;padding:16px 24px;border-radius:6px 6px 0 0;margin:-24px -24px 24px;">
+          <h2 style="color:#fff;margin:0;font-size:18px;">👤 New Admin User Created</h2>
+        </div>
+        <p style="color:#374151;">A new <strong>admin user</strong> has been created on the system.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;width:140px;">New User</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(newUsername)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Created By</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(createdBy)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">From IP</td><td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;">${escHtml(ip)}</td></tr>
+          <tr><td style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;font-weight:600;">Time</td><td style="padding:8px 12px;border:1px solid #e5e7eb;">${escHtml(timestamp)}</td></tr>
+        </table>
+        <p style="color:#374151;">If you did not create this user, log in immediately and deactivate them.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated security alert from Gastro Nobile.</p>
+      </div>`,
+    };
+    if (replyTo) payload.reply_to = replyTo;
+    await sendEmailPayload(payload);
+  } catch (error: any) {
+    console.error('New admin alert email error:', error?.message || error);
+  }
+}

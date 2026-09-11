@@ -1,0 +1,22 @@
+# Development tooling and local caches
+.agents/
+.cache/
+.config/
+.git/
+.local/
+.pythonlibs/
+.upm/
+
+# Keep root dist/ and node_modules/ in the final image: the production server
+# is generated in dist/ and intentionally loads some runtime dependencies.
+customer-app/node_modules/
+customer-app/dist/
+
+# Separate applications and design artifacts are not used by the web deployment
+pos-app/
+pda-app/
+artifacts/
+
+# Local uploads and test output are not runtime dependencies
+attached_assets/
+test-results/
