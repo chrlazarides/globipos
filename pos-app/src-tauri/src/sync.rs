@@ -288,8 +288,83 @@ fn decode_scoped_cursor(value: &str, scope: &CatalogScope) -> Option<String> {
 }
 
 #[cfg(test)]
-mod cursor_tests {
+mod catalog_page_tests {
     use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        task::JoinHandle,
+    };
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory SQLite should open");
+        crate::migrations::run_migrations(&pool)
+            .await
+            .expect("migrations should run");
+        pool
+    }
+
+    fn http_response(
+        status: &str,
+        content_type: &str,
+        body: &[u8],
+        content_length: usize,
+    ) -> Vec<u8> {
+        [
+            format!(
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+            )
+            .into_bytes(),
+            body.to_vec(),
+        ]
+        .concat()
+    }
+
+    async fn serve_catalog_responses(responses: Vec<Vec<u8>>) -> (String, JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("test listener should have an address");
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.expect("request should connect");
+                let mut request = vec![0; 4096];
+                let bytes_read = stream
+                    .read(&mut request)
+                    .await
+                    .expect("request should be readable");
+                requests.push(String::from_utf8_lossy(&request[..bytes_read]).to_string());
+                stream
+                    .write_all(&response)
+                    .await
+                    .expect("response should be writable");
+            }
+            requests
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn catalog_body(done: bool) -> Vec<u8> {
+        serde_json::json!({
+            "items": [{
+                "id": "item-after-retry",
+                "name": "Recovered product",
+                "sku": "RECOVERED-1"
+            }],
+            "categories": [],
+            "done": done
+        })
+        .to_string()
+        .into_bytes()
+    }
 
     #[test]
     fn cursor_scope_normalizes_and_rejects_other_terminal() {
@@ -305,6 +380,102 @@ mod cursor_tests {
         );
         let other = catalog_scope("https://pos.example", "t02");
         assert!(decode_scoped_cursor(&saved.to_string(), &other).is_none());
+    }
+
+    #[tokio::test]
+    async fn truncated_page_body_retries_saved_cursor_and_applies_recovery_once() {
+        let body = catalog_body(true);
+        let interrupted = http_response(
+            "200 OK",
+            "application/json",
+            br#"{"items":["#,
+            body.len() + 100,
+        );
+        let recovered = http_response("200 OK", "application/json", &body, body.len());
+        let (server_url, server) = serve_catalog_responses(vec![interrupted, recovered]).await;
+        let pool = test_pool().await;
+        let terminal_code = "T-RETRY";
+        let scope = catalog_scope(&server_url, terminal_code);
+        sqlx::query("INSERT INTO schema_meta (key, value) VALUES ('catalog_bootstrap_cursor', ?)")
+            .bind(
+                serde_json::json!({
+                    "serverUrl": scope.server_url,
+                    "terminalCode": scope.terminal_code,
+                    "cursor": "resume-after-page-250"
+                })
+                .to_string(),
+            )
+            .execute(&pool)
+            .await
+            .expect("saved bootstrap cursor should insert");
+
+        let synced = fetch_catalog_pages(&pool, &server_url, terminal_code, None)
+            .await
+            .expect("the recovered page should sync");
+        let requests = server.await.expect("test server should finish");
+        let product_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM local_products")
+            .fetch_one(&pool)
+            .await
+            .expect("synced products should be queryable");
+        let product_name: String = sqlx::query_scalar(
+            "SELECT name FROM local_products WHERE server_id = 'item-after-retry'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("recovered product should be stored");
+
+        assert_eq!(requests.len(), 2);
+        for request in requests {
+            let target = request
+                .lines()
+                .next()
+                .expect("request should include a request line");
+            assert!(
+                target.contains("cursor=resume-after-page-250"),
+                "retry must keep the saved cursor: {target}"
+            );
+        }
+        assert_eq!(synced, 1);
+        assert_eq!(product_count, 1, "the recovered page must be applied once");
+        assert_eq!(product_name, "Recovered product");
+    }
+
+    #[tokio::test]
+    async fn non_success_catalog_response_is_not_retried() {
+        let response = http_response(
+            "503 Service Unavailable",
+            "text/plain",
+            b"upstream unavailable",
+            "upstream unavailable".len(),
+        );
+        let (server_url, server) = serve_catalog_responses(vec![response]).await;
+        let pool = test_pool().await;
+
+        let error = fetch_catalog_pages(&pool, &server_url, "T-ERROR", None)
+            .await
+            .expect_err("a 503 must remain an actionable error");
+        let requests = server.await.expect("test server should finish");
+
+        assert_eq!(requests.len(), 1, "non-success responses must not retry");
+        assert!(error.contains("503 Service Unavailable"));
+        assert!(error.contains("upstream unavailable"));
+    }
+
+    #[tokio::test]
+    async fn invalid_catalog_json_is_not_retried() {
+        let invalid = br#"{"items":"not-an-array""#;
+        let response = http_response("200 OK", "application/json", invalid, invalid.len());
+        let (server_url, server) = serve_catalog_responses(vec![response]).await;
+        let pool = test_pool().await;
+
+        let error = fetch_catalog_pages(&pool, &server_url, "T-INVALID", None)
+            .await
+            .expect_err("invalid JSON must remain an actionable error");
+        let requests = server.await.expect("test server should finish");
+
+        assert_eq!(requests.len(), 1, "invalid JSON must not retry");
+        assert!(error.contains("Catalog sync parse error"));
+        assert!(error.contains("application/json"));
     }
 
     #[test]
