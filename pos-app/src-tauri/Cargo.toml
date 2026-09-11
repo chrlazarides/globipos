@@ -1,6 +1,6 @@
 [package]
 name = "globipos-terminal"
-version = "1.0.10"
+version = "1.0.11"
 description = "GlobiPOS Terminal — offline-first POS app"
 authors = ["GlobiPOS"]
 license = "UNLICENSED"
