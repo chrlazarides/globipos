@@ -12,6 +12,12 @@ $ErrorActionPreference = "Stop"
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RootDir    = Split-Path -Parent $ScriptDir
 $PosAppDir  = Join-Path $RootDir "pos-app"
+$DefaultTargetDir = Join-Path $env:LOCALAPPDATA "GlobiPOS\cargo-target"
+if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = $DefaultTargetDir }
+$TargetResolver = Join-Path $ScriptDir "resolve-native-target.mjs"
+$ResolvedTargetDir = & node $TargetResolver $env:CARGO_TARGET_DIR $RootDir
+if ($LASTEXITCODE -ne 0) { Write-Fail "CARGO_TARGET_DIR must be outside the project workspace." }
+$env:CARGO_TARGET_DIR = $ResolvedTargetDir.Trim()
 
 function Write-Info    { param($m) Write-Host "[INFO]  $m" -ForegroundColor Cyan }
 function Write-Success { param($m) Write-Host "[OK]    $m" -ForegroundColor Green }
@@ -19,6 +25,7 @@ function Write-Warn    { param($m) Write-Host "[WARN]  $m" -ForegroundColor Yell
 function Write-Fail    { param($m) Write-Host "[ERROR] $m" -ForegroundColor Red; exit 1 }
 
 Write-Host ""
+Write-Info "Rust build cache: $env:CARGO_TARGET_DIR (outside the project workspace)"
 Write-Host "  ╔══════════════════════════════════════════════╗" -ForegroundColor Magenta
 Write-Host "  ║     GlobiPOS Terminal — Windows Build        ║" -ForegroundColor Magenta
 Write-Host "  ╚══════════════════════════════════════════════╝" -ForegroundColor Magenta
@@ -97,8 +104,7 @@ Write-Success "npm dependencies ready"
 # ── 4. Optional clean ─────────────────────────────────────────────────────────
 if ($Clean) {
   Write-Info "Cleaning previous build artifacts…"
-  $targetDir = Join-Path $PosAppDir "src-tauri\target"
-  if (Test-Path $targetDir) { Remove-Item $targetDir -Recurse -Force }
+  if (Test-Path $env:CARGO_TARGET_DIR) { Remove-Item $env:CARGO_TARGET_DIR -Recurse -Force }
 }
 
 # ── 5. Build ──────────────────────────────────────────────────────────────────
@@ -115,7 +121,7 @@ Write-Host "  ══════════════════════
 Write-Success "Build complete!"
 Write-Host ""
 
-$bundleDir = Join-Path $PosAppDir "src-tauri\target\release\bundle"
+$bundleDir = Join-Path $env:CARGO_TARGET_DIR "release\bundle"
 $msi = Get-ChildItem -Path $bundleDir -Filter "*.msi" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 $exe = Get-ChildItem -Path $bundleDir -Filter "*-setup.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 

@@ -2,12 +2,10 @@
 
 const [repo, rawTag] = process.argv.slice(2);
 if (!repo || !rawTag) {
-  console.error("Usage: node scripts/verify-pos-release.mjs owner/repo v1.2.3");
+  console.error("Usage: node scripts/verify-pos-release.mjs owner/repo <v1.2.3|latest>");
   process.exit(2);
 }
 
-const tag = rawTag.startsWith("v") ? rawTag : `v${rawTag}`;
-const version = tag.slice(1);
 const apiUrl = (process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/$/, "");
 const headers = {
   Accept: "application/vnd.github+json",
@@ -15,14 +13,32 @@ const headers = {
 };
 if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
 
-const response = await fetch(`${apiUrl}/repos/${repo}/releases/tags/${tag}`, { headers });
+const releasePath = rawTag === "latest" ? "releases/latest" : `releases/tags/${rawTag.startsWith("v") ? rawTag : `v${rawTag}`}`;
+const response = await fetch(`${apiUrl}/repos/${repo}/${releasePath}`, { headers });
 if (!response.ok) {
   throw new Error(`GitHub release lookup failed with HTTP ${response.status}.`);
 }
 const release = await response.json();
+const tag = release.tag_name;
+if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error(`GitHub release has invalid tag ${tag || "(missing)"}.`);
+const version = tag.slice(1);
 if (release.draft || release.prerelease) throw new Error(`${tag} is not a final published release.`);
 
-const names = release.assets.map((asset) => asset.name);
+const assets = release.assets ?? [];
+const isSecureDownloadUrl = (value) =>
+  /^https:\/\//.test(value ?? "") ||
+  /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//.test(value ?? "");
+const invalidAssets = assets.filter((asset) =>
+  asset.state !== "uploaded" ||
+  !Number.isFinite(asset.size) ||
+  asset.size <= 0 ||
+  !isSecureDownloadUrl(asset.browser_download_url)
+);
+if (invalidAssets.length) {
+  throw new Error(`Release ${tag} has assets that are not ready: ${invalidAssets.map((asset) => asset.name).join(", ")}.`);
+}
+
+const names = assets.map((asset) => asset.name);
 const required = [
   ["Windows MSI", new RegExp(`${version.replaceAll(".", "\\.")}.*\\.msi$`, "i")],
   ["Windows EXE", new RegExp(`${version.replaceAll(".", "\\.")}.*\\.exe$`, "i")],
@@ -40,6 +56,20 @@ const latestResponse = await fetch(latestAsset.browser_download_url, { headers: 
 if (!latestResponse.ok) throw new Error(`latest.json download failed with HTTP ${latestResponse.status}.`);
 const latest = await latestResponse.json();
 if (latest.version !== version) throw new Error(`latest.json reports ${latest.version}, expected ${version}.`);
-if (!latest.platforms?.["windows-x86_64"]) throw new Error("latest.json has no Windows updater entry.");
+const updaterPlatformGroups = [
+  ["Windows", ["windows-x86_64"]],
+  ["Linux", ["linux-x86_64", "linux-x86_64-appimage"]],
+  ["macOS", ["darwin-universal", "darwin-aarch64", "darwin-x86_64"]],
+];
+for (const [label, keys] of updaterPlatformGroups) {
+  const entries = keys.map((key) => latest.platforms?.[key]).filter(Boolean);
+  if (!entries.length) throw new Error(`latest.json has no ${label} updater entry.`);
+  for (const entry of entries) {
+    if (!/^https:\/\//.test(entry.url ?? "")) throw new Error(`latest.json has an invalid ${label} updater URL.`);
+    if (typeof entry.signature !== "string" || entry.signature.trim().length === 0) {
+      throw new Error(`latest.json has no ${label} updater signature.`);
+    }
+  }
+}
 
 console.log(`Verified ${tag}: all desktop, Android, and updater assets are published.`);

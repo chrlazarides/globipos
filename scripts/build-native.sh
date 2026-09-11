@@ -8,6 +8,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 POS_APP_DIR="$ROOT_DIR/pos-app"
+REQUESTED_TARGET_DIR="${CARGO_TARGET_DIR:-${TMPDIR:-/tmp}/globipos-tauri-target}"
+CARGO_TARGET_DIR="$(node "$SCRIPT_DIR/resolve-native-target.mjs" "$REQUESTED_TARGET_DIR" "$ROOT_DIR")" \
+  || error "CARGO_TARGET_DIR must be outside the project workspace."
+export CARGO_TARGET_DIR
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
@@ -41,6 +45,7 @@ success "$RUST_VER"
 OS=$(uname -s)
 ARCH=$(uname -m)
 info "Platform: $OS $ARCH"
+info "Rust build cache: $CARGO_TARGET_DIR (outside the project workspace)"
 
 # macOS: check for Xcode CLT
 if [[ "$OS" == "Darwin" ]]; then
@@ -114,11 +119,11 @@ success "Build complete!"
 echo ""
 
 if [[ "$OS" == "Darwin" ]]; then
-  DMG=$(find "$POS_APP_DIR/src-tauri/target" -name "*.dmg" 2>/dev/null | head -1)
+  DMG=$(find "$CARGO_TARGET_DIR" -name "*.dmg" 2>/dev/null | head -1)
   [[ -n "$DMG" ]] && echo "  DMG: $DMG"
 elif [[ "$OS" == "Linux" ]]; then
-  APPIMAGE=$(find "$POS_APP_DIR/src-tauri/target" -name "*.AppImage" 2>/dev/null | head -1)
-  DEB=$(find "$POS_APP_DIR/src-tauri/target" -name "*.deb" 2>/dev/null | head -1)
+  APPIMAGE=$(find "$CARGO_TARGET_DIR" -name "*.AppImage" 2>/dev/null | head -1)
+  DEB=$(find "$CARGO_TARGET_DIR" -name "*.deb" 2>/dev/null | head -1)
   [[ -n "$APPIMAGE" ]] && echo "  AppImage : $APPIMAGE"
   [[ -n "$DEB" ]]      && echo "  DEB      : $DEB"
 fi

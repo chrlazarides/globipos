@@ -16,13 +16,19 @@ const completeAssets = [
   "latest.json",
 ];
 
-async function runVerifier(assets) {
+const completePlatforms = {
+  "windows-x86_64": { url: "https://example.test/windows", signature: "windows-signature" },
+  "linux-x86_64": { url: "https://example.test/linux", signature: "linux-signature" },
+  "darwin-universal": { url: "https://example.test/macos", signature: "macos-signature" },
+};
+
+async function runVerifier(assets, { rawTag = `v${version}`, platforms = completePlatforms, mutateAssets } = {}) {
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.url === "/latest.json") {
       response.end(JSON.stringify({
         version,
-        platforms: { "windows-x86_64": { url: "https://example.test/installer", signature: "test" } },
+        platforms,
       }));
       return;
     }
@@ -30,8 +36,17 @@ async function runVerifier(assets) {
       tag_name: `v${version}`,
       draft: false,
       prerelease: false,
-      assets: assets.map((name) => ({
+       assets: assets.map((name) => mutateAssets?.({
+         name,
+         state: "uploaded",
+         size: 1024,
+         browser_download_url: name === "latest.json"
+           ? `http://127.0.0.1:${server.address().port}/latest.json`
+           : `https://example.test/${name}`,
+       }) ?? ({
         name,
+         state: "uploaded",
+         size: 1024,
         browser_download_url: name === "latest.json"
           ? `http://127.0.0.1:${server.address().port}/latest.json`
           : `https://example.test/${name}`,
@@ -39,7 +54,7 @@ async function runVerifier(assets) {
     }));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const child = spawn(process.execPath, [verifier, "example/globipos", `v${version}`], {
+  const child = spawn(process.execPath, [verifier, "example/globipos", rawTag], {
     env: {
       ...process.env,
       GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`,
@@ -66,3 +81,53 @@ test("rejects a release missing its Windows installer", async () => {
   assert.equal(result.code, 1);
   assert.match(result.stderr, /Windows EXE/);
 });
+
+test("accepts the latest release endpoint", async () => {
+  const result = await runVerifier(completeAssets, { rawTag: "latest" });
+  assert.equal(result.code, 0, result.stderr);
+});
+
+for (const [label, suffix] of [
+  ["macOS DMG", ".dmg"],
+  ["Linux AppImage", ".AppImage"],
+  ["Linux DEB", ".deb"],
+  ["Android APK", ".apk"],
+]) {
+  test(`rejects a release missing its ${label}`, async () => {
+    const result = await runVerifier(completeAssets.filter((name) => !name.endsWith(suffix)));
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, new RegExp(label));
+  });
+}
+
+test("rejects an empty or unprocessed release asset", async () => {
+  const result = await runVerifier(completeAssets, {
+    mutateAssets: (asset) => asset.name.endsWith(".msi") ? { ...asset, state: "new", size: 0 } : asset,
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /not ready/);
+});
+
+for (const [label, key] of [
+  ["Windows", "windows-x86_64"],
+  ["Linux", "linux-x86_64"],
+  ["macOS", "darwin-universal"],
+]) {
+  test(`rejects missing ${label} updater metadata`, async () => {
+    const platforms = { ...completePlatforms };
+    delete platforms[key];
+    const result = await runVerifier(completeAssets, { platforms });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, new RegExp(`no ${label} updater entry`));
+  });
+
+  test(`rejects missing ${label} updater signature`, async () => {
+    const platforms = {
+      ...completePlatforms,
+      [key]: { ...completePlatforms[key], signature: "" },
+    };
+    const result = await runVerifier(completeAssets, { platforms });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, new RegExp(`no ${label} updater signature`));
+  });
+}

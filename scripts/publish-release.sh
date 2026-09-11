@@ -223,8 +223,9 @@ node scripts/pos-version.mjs --check "$TAG"
 success "Package, Cargo, Tauri, lockfile, and tag versions agree at $VERSION"
 
 info "Running deterministic frontend and native preflight checks…"
-(cd pos-app && npm ci && npm run build && npx tauri build --no-bundle -- --locked)
-success "Frontend and native POS checks passed"
+info "Local checks intentionally avoid compiling Rust inside the Replit workspace."
+(cd pos-app && npm ci && npm run typecheck && npm run build)
+success "Local frontend checks passed; GitHub will perform the Linux and Windows native preflight"
 RELEASE_VERSION_MUTATED=0
 
 # ── Commit the version bump ───────────────────────────────────────────────────

@@ -285,7 +285,7 @@ exit 0
   return { root, gitLog };
 }
 
-for (const failStage of ["install", "frontend", "native"]) {
+for (const failStage of ["install", "frontend"]) {
   test(`release script restores all version files when ${failStage} preflight fails`, async (t) => {
     const { root, gitLog } = await createReleaseFixture();
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -312,7 +312,7 @@ for (const failStage of ["install", "frontend", "native"]) {
           COMMAND_LOG: path.join(root, "commands.log"),
         },
       }),
-      (error) => error.code === { install: 41, frontend: 42, native: 43 }[failStage],
+      (error) => error.code === { install: 41, frontend: 42 }[failStage],
     );
 
     for (const [file, contents] of originals) {
