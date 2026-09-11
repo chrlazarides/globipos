@@ -34,11 +34,26 @@ export function normalizeTerminalOrigin(value: string): string | null {
   }
 }
 
-/** Parse, normalize, and deduplicate the explicitly configured origins. */
-export function parseTerminalOrigins(value = process.env.GLOBIPOS_TERMINAL_ORIGINS): Set<string> {
+/**
+ * Parse, normalize, and deduplicate explicitly configured origins plus the
+ * exact domains assigned to this deployment. Supplying `value` explicitly in
+ * tests keeps environment domains out unless `deployedDomains` is also passed.
+ */
+export function parseTerminalOrigins(value?: string, deployedDomains?: string): Set<string> {
+  const useEnvironmentDefaults = value === undefined && deployedDomains === undefined;
+  const configured = value ?? process.env.GLOBIPOS_TERMINAL_ORIGINS ?? "";
+  const deployed = useEnvironmentDefaults ? process.env.REPLIT_DOMAINS ?? "" : deployedDomains ?? "";
   const origins = new Set<string>();
-  for (const entry of (value ?? "").split(",")) {
+  for (const entry of configured.split(",")) {
     const normalized = normalizeTerminalOrigin(entry);
+    if (normalized) origins.add(normalized);
+  }
+  for (const entry of deployed.split(",")) {
+    const candidate = entry.trim();
+    if (!candidate) continue;
+    const normalized = normalizeTerminalOrigin(
+      candidate.startsWith("https://") ? candidate : `https://${candidate}`,
+    );
     if (normalized) origins.add(normalized);
   }
   return origins;

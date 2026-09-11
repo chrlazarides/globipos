@@ -25,6 +25,16 @@ test("normalizes and deduplicates only HTTPS origins", () => {
   );
 });
 
+test("includes exact deployment aliases without allowing URL prefixes", () => {
+  assert.deepEqual(
+    [...parseTerminalOrigins(
+      "https://terminal.example",
+      "globipos.shop,globipos.replit.app,https://other.example/path",
+    )],
+    ["https://terminal.example", "https://globipos.shop", "https://globipos.replit.app"],
+  );
+});
+
 test("scopes strict CORS to the Terminal API surface", () => {
   assert.equal(isTerminalCorsPath("/api/sync/catalog"), true);
   assert.equal(isTerminalCorsPath("/api/sync/bills"), true);

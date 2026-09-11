@@ -226,7 +226,7 @@ export default function VersionControlPage() {
 
   const createMutation = useMutation({
     mutationFn: (body: { name: string; description: string; type: string }) =>
-      apiRequest("POST", "/api/version-control", body),
+      apiRequest("POST", "/api/version-control", { ...body, appVersion: buildInfo.version }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/version-control"] });
       setCreateOpen(false);

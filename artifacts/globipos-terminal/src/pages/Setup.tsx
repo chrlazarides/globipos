@@ -11,7 +11,8 @@ interface SetupProps {
 }
 
 export function Setup({ initialConfig, onComplete }: SetupProps) {
-  const [serverUrl, setServerUrl] = useState(initialConfig?.server_url ?? "");
+  const sameOriginDefault = window.location.protocol === "https:" ? window.location.origin : "";
+  const [serverUrl, setServerUrl] = useState(initialConfig?.server_url ?? sameOriginDefault);
   const [termCode, setTermCode] = useState(initialConfig?.terminal_code ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

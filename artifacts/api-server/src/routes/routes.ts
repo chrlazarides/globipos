@@ -5390,12 +5390,15 @@ export async function registerRoutes(
 
   app.post("/api/version-control", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { name, description = "", type = "manual" } = req.body;
+      const { name, description = "", type = "manual", appVersion: requestedAppVersion } = req.body;
       if (!name?.trim()) return res.status(400).json({ message: "Name is required" });
       const user = (req as any).user;
       const createdBy = user?.username || "system";
       const appVersionSetting = await storage.getSetting("app_version");
-      const appVersion = appVersionSetting?.value || "1.0";
+      const appVersion = typeof requestedAppVersion === "string" &&
+        /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,79}$/.test(requestedAppVersion)
+        ? requestedAppVersion
+        : appVersionSetting?.value || "1.0";
       const json = await generateBackupJson();
       const parsed = JSON.parse(json);
       const tableCounts = JSON.stringify(parsed.tableCounts || {});

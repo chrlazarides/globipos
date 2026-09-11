@@ -30,6 +30,16 @@ const buildReference = (
   process.env.REPLIT_GIT_COMMIT_SHA ||
   "local"
 ).slice(0, 8);
+const buildDate = new Date();
+const buildStamp = [
+  buildDate.getUTCFullYear(),
+  String(buildDate.getUTCMonth() + 1).padStart(2, "0"),
+  String(buildDate.getUTCDate()).padStart(2, "0"),
+  String(buildDate.getUTCHours()).padStart(2, "0"),
+  String(buildDate.getUTCMinutes()).padStart(2, "0"),
+  String(buildDate.getUTCSeconds()).padStart(2, "0"),
+].join("");
+const appVersion = process.env.GLOBIPOS_APP_VERSION || `${packageVersion}+${buildStamp}`;
 
 if (!basePath) {
   throw new Error(
@@ -40,7 +50,7 @@ if (!basePath) {
 export default defineConfig({
   base: basePath,
   define: {
-    __APP_VERSION__: JSON.stringify(packageVersion),
+    __APP_VERSION__: JSON.stringify(appVersion),
     __BUILD_REFERENCE__: JSON.stringify(buildReference),
     __BUILD_ENVIRONMENT__: JSON.stringify(process.env.NODE_ENV || "development"),
   },
