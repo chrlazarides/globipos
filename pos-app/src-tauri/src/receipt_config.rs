@@ -48,7 +48,10 @@ impl Default for ReceiptConfig {
 
 pub async fn load_receipt_config(pool: &SqlitePool) -> ReceiptConfig {
     let row = sqlx::query("SELECT value FROM schema_meta WHERE key = 'receipt_config'")
-        .fetch_optional(pool).await.ok().flatten();
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
     row.and_then(|r| r.try_get::<String, _>("value").ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()

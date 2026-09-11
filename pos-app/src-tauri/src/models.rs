@@ -168,7 +168,7 @@ pub struct CashierSeed {
     pub id: String,
     pub name: String,
     #[serde(rename = "pinHash")]
-    pub pin_hash: String,  // SHA-256 hex hash; stored directly, no re-hashing
+    pub pin_hash: String, // SHA-256 hex hash; stored directly, no re-hashing
     pub role: String,
 }
 

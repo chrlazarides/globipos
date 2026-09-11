@@ -1,4 +1,4 @@
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 
 use crate::models::CashierSession;
@@ -10,19 +10,20 @@ pub fn hash_pin(pin: &str) -> String {
 }
 
 /// Validate a cashier PIN against the local DB.
-pub async fn validate_pin(pool: &SqlitePool, pin: &str) -> Result<Option<CashierSession>, sqlx::Error> {
+pub async fn validate_pin(
+    pool: &SqlitePool,
+    pin: &str,
+) -> Result<Option<CashierSession>, sqlx::Error> {
     let hash = hash_pin(pin);
-    let row = sqlx::query(
-        "SELECT id, name, role FROM cashiers WHERE pin_hash = ? AND active = 1"
-    )
-    .bind(&hash)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query("SELECT id, name, role FROM cashiers WHERE pin_hash = ? AND active = 1")
+        .bind(&hash)
+        .fetch_optional(pool)
+        .await?;
 
     Ok(row.map(|r| {
         let role: String = r.try_get("role").unwrap_or_default();
         CashierSession {
-            cashier_id:   r.try_get("id").unwrap_or_default(),
+            cashier_id: r.try_get("id").unwrap_or_default(),
             cashier_name: r.try_get("name").unwrap_or_default(),
             role: role.clone(),
             pin_hash: hash.clone(),
@@ -36,26 +37,49 @@ pub async fn authorize_pin(
     pin: &str,
     required_permission: &str,
 ) -> Result<Option<CashierSession>, sqlx::Error> {
-    Ok(validate_pin(pool, pin)
-        .await?
-        .filter(|session| session.permissions.iter().any(|permission| permission == required_permission)))
+    Ok(validate_pin(pool, pin).await?.filter(|session| {
+        session
+            .permissions
+            .iter()
+            .any(|permission| permission == required_permission)
+    }))
 }
 
 fn default_permissions(role: &str) -> Vec<String> {
     match role {
         "manager" => vec![
-            "sell","void_order","void_line","price_override","discount",
-            "hold","recall","refund","promo_code","open_drawer",
-            "reports","manage_cashiers","end_shift","reconcile_card_payment",
-        ],
-        "supervisor" => vec![
-            "sell","void_line","price_override","discount",
-            "hold","recall","promo_code","open_drawer","end_shift",
+            "sell",
+            "void_order",
+            "void_line",
+            "price_override",
+            "discount",
+            "hold",
+            "recall",
+            "refund",
+            "promo_code",
+            "open_drawer",
+            "reports",
+            "manage_cashiers",
+            "end_shift",
             "reconcile_card_payment",
         ],
-        _ => vec!["sell","hold","recall"],
+        "supervisor" => vec![
+            "sell",
+            "void_line",
+            "price_override",
+            "discount",
+            "hold",
+            "recall",
+            "promo_code",
+            "open_drawer",
+            "end_shift",
+            "reconcile_card_payment",
+        ],
+        _ => vec!["sell", "hold", "recall"],
     }
-    .iter().map(|s| s.to_string()).collect()
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// Create or update a cashier from a plaintext PIN (hashed locally before storage).
@@ -105,7 +129,7 @@ pub async fn audit(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"INSERT INTO audit_log (cashier_id, cashier_name, action, entity, entity_id, detail)
-           VALUES (?, ?, ?, ?, ?, ?)"#
+           VALUES (?, ?, ?, ?, ?, ?)"#,
     )
     .bind(cashier_id)
     .bind(cashier_name)

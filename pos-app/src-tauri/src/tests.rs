@@ -17,7 +17,10 @@ mod unit {
     fn hash_pin_produces_64_char_hex() {
         let h = hash_pin("1234");
         assert_eq!(h.len(), 64, "SHA-256 hex should be 64 chars");
-        assert!(h.chars().all(|c| c.is_ascii_hexdigit()), "all chars should be hex digits");
+        assert!(
+            h.chars().all(|c| c.is_ascii_hexdigit()),
+            "all chars should be hex digits"
+        );
     }
 
     #[test]
@@ -54,15 +57,15 @@ mod unit {
     #[test]
     fn terminal_config_round_trips_through_json() {
         let cfg = TerminalConfig {
-            server_url:        "https://globipos.example.com".to_string(),
-            terminal_code:     "T001".to_string(),
-            terminal_id:       "tid-abc".to_string(),
-            terminal_name:     "Main Till".to_string(),
-            location_id:       "loc-1".to_string(),
-            location_name:     "Main Store".to_string(),
-            price_level:       1,
+            server_url: "https://globipos.example.com".to_string(),
+            terminal_code: "T001".to_string(),
+            terminal_id: "tid-abc".to_string(),
+            terminal_name: "Main Till".to_string(),
+            location_id: "loc-1".to_string(),
+            location_name: "Main Store".to_string(),
+            price_level: 1,
             mirror_server_url: None,
-            sco_mode:          None,
+            sco_mode: None,
         };
         let json = serde_json::to_string(&cfg).expect("should serialise");
         let cfg2: TerminalConfig = serde_json::from_str(&json).expect("should deserialise");
@@ -76,34 +79,37 @@ mod unit {
     #[test]
     fn terminal_config_omits_none_optional_fields_in_json() {
         let cfg = TerminalConfig {
-            server_url:        "https://x.com".to_string(),
-            terminal_code:     "T002".to_string(),
-            terminal_id:       "t2".to_string(),
-            terminal_name:     "T2".to_string(),
-            location_id:       "l2".to_string(),
-            location_name:     "L2".to_string(),
-            price_level:       2,
+            server_url: "https://x.com".to_string(),
+            terminal_code: "T002".to_string(),
+            terminal_id: "t2".to_string(),
+            terminal_name: "T2".to_string(),
+            location_id: "l2".to_string(),
+            location_name: "L2".to_string(),
+            price_level: 2,
             mirror_server_url: None,
-            sco_mode:          None,
+            sco_mode: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         // skip_serializing_if = "Option::is_none" — these keys must be absent
-        assert!(!json.contains("mirror_server_url"), "mirror_server_url should be omitted");
+        assert!(
+            !json.contains("mirror_server_url"),
+            "mirror_server_url should be omitted"
+        );
         assert!(!json.contains("sco_mode"), "sco_mode should be omitted");
     }
 
     #[test]
     fn terminal_config_includes_optional_fields_when_set() {
         let cfg = TerminalConfig {
-            server_url:        "https://x.com".to_string(),
-            terminal_code:     "T003".to_string(),
-            terminal_id:       "t3".to_string(),
-            terminal_name:     "T3".to_string(),
-            location_id:       "l3".to_string(),
-            location_name:     "L3".to_string(),
-            price_level:       3,
+            server_url: "https://x.com".to_string(),
+            terminal_code: "T003".to_string(),
+            terminal_id: "t3".to_string(),
+            terminal_name: "T3".to_string(),
+            location_id: "l3".to_string(),
+            location_name: "L3".to_string(),
+            price_level: 3,
             mirror_server_url: Some("https://mirror.example.com".to_string()),
-            sco_mode:          Some(true),
+            sco_mode: Some(true),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("mirror_server_url"));
@@ -128,8 +134,8 @@ mod unit {
         let vat = net * (vat_rate / 100.0);
         let total = net + vat;
 
-        assert!((net   - 27.00).abs() < 0.001, "net should be 27.00");
-        assert!((vat   -  5.13).abs() < 0.001, "vat should be 5.13");
+        assert!((net - 27.00).abs() < 0.001, "net should be 27.00");
+        assert!((vat - 5.13).abs() < 0.001, "vat should be 5.13");
         assert!((total - 32.13).abs() < 0.001, "total should be 32.13");
     }
 
@@ -152,22 +158,22 @@ mod unit {
     #[test]
     fn order_line_round_trips_through_json() {
         let line = OrderLine {
-            id:                  "line-1".to_string(),
-            order_id:            "order-1".to_string(),
-            product_id:          Some("prod-a".to_string()),
-            description:         "Bottle of Wine".to_string(),
-            sku:                 Some("WIN-001".to_string()),
-            qty:                 2.0,
-            unit_price:          15.50,
-            override_price:      None,
-            line_discount_pct:   0.0,
+            id: "line-1".to_string(),
+            order_id: "order-1".to_string(),
+            product_id: Some("prod-a".to_string()),
+            description: "Bottle of Wine".to_string(),
+            sku: Some("WIN-001".to_string()),
+            qty: 2.0,
+            unit_price: 15.50,
+            override_price: None,
+            line_discount_pct: 0.0,
             line_discount_fixed: 0.0,
-            line_surcharge_pct:  0.0,
-            vat_rate:            19.0,
-            line_total:          31.00,
-            vat_amount:          4.95,
-            note:                None,
-            voided:              false,
+            line_surcharge_pct: 0.0,
+            vat_rate: 19.0,
+            line_total: 31.00,
+            vat_amount: 4.95,
+            note: None,
+            voided: false,
         };
         let json = serde_json::to_string(&line).unwrap();
         let line2: OrderLine = serde_json::from_str(&json).unwrap();
@@ -181,12 +187,12 @@ mod unit {
     #[test]
     fn sync_status_defaults_are_sane() {
         let s = SyncStatus {
-            online:            false,
-            syncing:           false,
+            online: false,
+            syncing: false,
             last_catalog_sync: None,
-            last_inbox_sync:   None,
-            outbox_pending:    0,
-            outbox_failed:     0,
+            last_inbox_sync: None,
+            outbox_pending: 0,
+            outbox_failed: 0,
         };
         assert!(!s.online);
         assert!(!s.syncing);
@@ -199,11 +205,11 @@ mod unit {
     #[test]
     fn cashier_session_round_trips() {
         let s = CashierSession {
-            cashier_id:   "csh-1".to_string(),
+            cashier_id: "csh-1".to_string(),
             cashier_name: "Alice".to_string(),
-            role:         "manager".to_string(),
-            pin_hash:     hash_pin("0000"),
-            permissions:  vec!["sell".to_string(), "void_order".to_string()],
+            role: "manager".to_string(),
+            pin_hash: hash_pin("0000"),
+            permissions: vec!["sell".to_string(), "void_order".to_string()],
         };
         let json = serde_json::to_string(&s).unwrap();
         let s2: CashierSession = serde_json::from_str(&json).unwrap();
@@ -236,8 +242,8 @@ mod unit {
 
 #[cfg(test)]
 mod db {
-    use sqlx::SqlitePool;
     use crate::auth;
+    use sqlx::SqlitePool;
 
     /// Boot a minimal in-memory SQLite DB with just the `cashiers` table.
     async fn setup() -> SqlitePool {
@@ -275,8 +281,14 @@ mod db {
         let s = session.expect("session should be Some for correct PIN");
         assert_eq!(s.cashier_name, "Alice");
         assert_eq!(s.role, "manager");
-        assert!(s.permissions.contains(&"void_order".to_string()), "manager needs void_order");
-        assert!(s.permissions.contains(&"reports".to_string()), "manager needs reports");
+        assert!(
+            s.permissions.contains(&"void_order".to_string()),
+            "manager needs void_order"
+        );
+        assert!(
+            s.permissions.contains(&"reports".to_string()),
+            "manager needs reports"
+        );
     }
 
     #[tokio::test]
@@ -293,19 +305,33 @@ mod db {
     #[tokio::test]
     async fn cashier_cannot_authorize_card_reconciliation() {
         let pool = setup().await;
-        auth::upsert_cashier(&pool, "c-cashier", "Cashier", "1111", "cashier").await.unwrap();
+        auth::upsert_cashier(&pool, "c-cashier", "Cashier", "1111", "cashier")
+            .await
+            .unwrap();
 
-        let session = auth::authorize_pin(&pool, "1111", "reconcile_card_payment").await.unwrap();
-        assert!(session.is_none(), "cashier PIN must not authorize card reconciliation");
+        let session = auth::authorize_pin(&pool, "1111", "reconcile_card_payment")
+            .await
+            .unwrap();
+        assert!(
+            session.is_none(),
+            "cashier PIN must not authorize card reconciliation"
+        );
     }
 
     #[tokio::test]
     async fn supervisor_can_authorize_card_reconciliation() {
         let pool = setup().await;
-        auth::upsert_cashier(&pool, "c-supervisor", "Supervisor", "2222", "supervisor").await.unwrap();
+        auth::upsert_cashier(&pool, "c-supervisor", "Supervisor", "2222", "supervisor")
+            .await
+            .unwrap();
 
-        let session = auth::authorize_pin(&pool, "2222", "reconcile_card_payment").await.unwrap();
-        assert_eq!(session.expect("supervisor should be authorized").role, "supervisor");
+        let session = auth::authorize_pin(&pool, "2222", "reconcile_card_payment")
+            .await
+            .unwrap();
+        assert_eq!(
+            session.expect("supervisor should be authorized").role,
+            "supervisor"
+        );
     }
 
     #[tokio::test]
@@ -325,9 +351,13 @@ mod db {
     #[tokio::test]
     async fn upsert_updates_existing_cashier() {
         let pool = setup().await;
-        auth::upsert_cashier(&pool, "c-4", "Dave", "1234", "cashier").await.unwrap();
+        auth::upsert_cashier(&pool, "c-4", "Dave", "1234", "cashier")
+            .await
+            .unwrap();
         // Update name + role
-        auth::upsert_cashier(&pool, "c-4", "David", "1234", "supervisor").await.unwrap();
+        auth::upsert_cashier(&pool, "c-4", "David", "1234", "supervisor")
+            .await
+            .unwrap();
 
         let session = auth::validate_pin(&pool, "1234").await.unwrap().unwrap();
         assert_eq!(session.cashier_name, "David");
@@ -337,7 +367,9 @@ mod db {
     #[tokio::test]
     async fn inactive_cashier_cannot_log_in() {
         let pool = setup().await;
-        auth::upsert_cashier(&pool, "c-5", "Eve", "5555", "cashier").await.unwrap();
+        auth::upsert_cashier(&pool, "c-5", "Eve", "5555", "cashier")
+            .await
+            .unwrap();
 
         // Deactivate
         sqlx::query("UPDATE cashiers SET active = 0 WHERE id = ?")
@@ -347,15 +379,24 @@ mod db {
             .unwrap();
 
         let session = auth::validate_pin(&pool, "5555").await.unwrap();
-        assert!(session.is_none(), "inactive cashier should not authenticate");
+        assert!(
+            session.is_none(),
+            "inactive cashier should not authenticate"
+        );
     }
 
     #[tokio::test]
     async fn multiple_cashiers_resolve_to_correct_one() {
         let pool = setup().await;
-        auth::upsert_cashier(&pool, "c-10", "Cashier A", "1111", "cashier").await.unwrap();
-        auth::upsert_cashier(&pool, "c-11", "Cashier B", "2222", "supervisor").await.unwrap();
-        auth::upsert_cashier(&pool, "c-12", "Cashier C", "3333", "manager").await.unwrap();
+        auth::upsert_cashier(&pool, "c-10", "Cashier A", "1111", "cashier")
+            .await
+            .unwrap();
+        auth::upsert_cashier(&pool, "c-11", "Cashier B", "2222", "supervisor")
+            .await
+            .unwrap();
+        auth::upsert_cashier(&pool, "c-12", "Cashier C", "3333", "manager")
+            .await
+            .unwrap();
 
         let a = auth::validate_pin(&pool, "1111").await.unwrap().unwrap();
         let b = auth::validate_pin(&pool, "2222").await.unwrap().unwrap();

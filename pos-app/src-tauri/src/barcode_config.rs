@@ -31,24 +31,24 @@ pub enum BarcodeRuleKind {
 /// check digit. Total barcode length = prefix.len() + plu_digits + value_digits + 1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarcodeRule {
-    pub id:          String,
-    pub label:       String,        // e.g. "Pittas weight PLU (28xxx)"
-    pub prefix:      String,        // e.g. "28" — literal leading digits to match
-    pub kind:        BarcodeRuleKind,
-    pub plu_digits:  u8,            // digits after the prefix used as PLU lookup code (BBBAA)
-    pub value_digits: u8,           // digits after the PLU used as the embedded value (XXXXX)
+    pub id: String,
+    pub label: String,  // e.g. "Pittas weight PLU (28xxx)"
+    pub prefix: String, // e.g. "28" — literal leading digits to match
+    pub kind: BarcodeRuleKind,
+    pub plu_digits: u8, // digits after the prefix used as PLU lookup code (BBBAA)
+    pub value_digits: u8, // digits after the PLU used as the embedded value (XXXXX)
     /// Divides the raw integer value to produce the real-world unit:
     ///   weight → grams / divisor = kg (divisor 1000)
     ///   price  → cents  / divisor = currency (divisor 100)
     pub value_divisor: f64,
-    pub check_digit: bool,          // whether to validate an EAN-13 check digit at the end
-    pub enabled:     bool,
+    pub check_digit: bool, // whether to validate an EAN-13 check digit at the end
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarcodeConfig {
     pub enabled: bool,
-    pub rules:   Vec<BarcodeRule>,
+    pub rules: Vec<BarcodeRule>,
 }
 
 impl Default for BarcodeConfig {
@@ -121,7 +121,10 @@ impl Default for BarcodeConfig {
 
 pub async fn load_barcode_config(pool: &SqlitePool) -> BarcodeConfig {
     let row = sqlx::query("SELECT value FROM schema_meta WHERE key = 'barcode_config'")
-        .fetch_optional(pool).await.ok().flatten();
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
     row.and_then(|r| r.try_get::<String, _>("value").ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
@@ -130,12 +133,21 @@ pub async fn load_barcode_config(pool: &SqlitePool) -> BarcodeConfig {
 pub async fn save_barcode_config(pool: &SqlitePool, cfg: &BarcodeConfig) -> Result<(), String> {
     for rule in &cfg.rules {
         if rule.prefix.is_empty() || !rule.prefix.chars().all(|c| c.is_ascii_digit()) {
-            return Err(format!("Rule '{}': prefix must be non-empty digits", rule.label));
+            return Err(format!(
+                "Rule '{}': prefix must be non-empty digits",
+                rule.label
+            ));
         }
         if rule.plu_digits == 0 || rule.value_digits == 0 {
-            return Err(format!("Rule '{}': plu_digits and value_digits must be > 0", rule.label));
+            return Err(format!(
+                "Rule '{}': plu_digits and value_digits must be > 0",
+                rule.label
+            ));
         }
-        let total_len = rule.prefix.len() as u8 + rule.plu_digits + rule.value_digits + if rule.check_digit { 1 } else { 0 };
+        let total_len = rule.prefix.len() as u8
+            + rule.plu_digits
+            + rule.value_digits
+            + if rule.check_digit { 1 } else { 0 };
         if total_len != 13 {
             return Err(format!(
                 "Rule '{}': total barcode length must be 13 digits (prefix {} + PLU {} + value {} + check {} = {})",
@@ -148,8 +160,14 @@ pub async fn save_barcode_config(pool: &SqlitePool, cfg: &BarcodeConfig) -> Resu
         for j in (i + 1)..cfg.rules.len() {
             let a = &cfg.rules[i].prefix;
             let b = &cfg.rules[j].prefix;
-            if cfg.rules[i].enabled && cfg.rules[j].enabled && (a.starts_with(b.as_str()) || b.starts_with(a.as_str())) {
-                return Err(format!("Prefixes '{}' and '{}' overlap — each barcode must match exactly one rule", a, b));
+            if cfg.rules[i].enabled
+                && cfg.rules[j].enabled
+                && (a.starts_with(b.as_str()) || b.starts_with(a.as_str()))
+            {
+                return Err(format!(
+                    "Prefixes '{}' and '{}' overlap — each barcode must match exactly one rule",
+                    a, b
+                ));
             }
         }
     }

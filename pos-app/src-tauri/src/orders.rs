@@ -17,7 +17,7 @@ pub async fn save_order(
              price_level, order_discount_pct, order_discount_fixed,
              subtotal, discount_amount, vat_amount, total,
              note, payment_method, amount_tendered, change_due, payment_ref, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))"#
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))"#,
     )
     .bind(&order.id)
     .bind(&order.order_number)
@@ -102,19 +102,21 @@ fn build_outbox_payload(
 ) -> serde_json::Value {
     let line_values: Vec<serde_json::Value> = lines
         .iter()
-        .map(|l| serde_json::json!({
-            "itemId":        l.product_id,
-            "description":   l.description,
-            "sku":           l.sku,
-            "quantity":      l.qty,
-            "unitPrice":     l.unit_price,
-            "discountPercent": l.line_discount_pct,
-            "vatRate":       l.vat_rate,
-            "total":         l.line_total,
-            "vatAmount":     l.vat_amount,
-            "voided":        l.voided,
-            "note":          l.note,
-        }))
+        .map(|l| {
+            serde_json::json!({
+                "itemId":        l.product_id,
+                "description":   l.description,
+                "sku":           l.sku,
+                "quantity":      l.qty,
+                "unitPrice":     l.unit_price,
+                "discountPercent": l.line_discount_pct,
+                "vatRate":       l.vat_rate,
+                "total":         l.line_total,
+                "vatAmount":     l.vat_amount,
+                "voided":        l.voided,
+                "note":          l.note,
+            })
+        })
         .collect();
 
     serde_json::json!({

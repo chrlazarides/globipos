@@ -16,7 +16,10 @@ pub async fn register_terminal(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let url = format!("{}/api/pos/terminals/register", server_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/api/pos/terminals/register",
+        server_url.trim_end_matches('/')
+    );
     let resp = client
         .post(&url)
         .json(&serde_json::json!({
@@ -104,55 +107,75 @@ async fn fetch_catalog_pages(
     terminal_code: &str,
     since: Option<&str>,
 ) -> Result<usize, String> {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
         .map_err(|e| e.to_string())?;
     let base = format!("{}/api/sync/catalog", server_url.trim_end_matches('/'));
     let scope = catalog_scope(server_url, terminal_code);
     let mut cursor: Option<String> = if since.is_none() {
         sqlx::query("SELECT value FROM schema_meta WHERE key = 'catalog_bootstrap_cursor'")
-            .fetch_optional(pool).await.map_err(|e| e.to_string())?
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?
             .and_then(|r| r.try_get::<String, _>("value").ok())
             .and_then(|value| decode_scoped_cursor(&value, &scope))
-    } else { None };
+    } else {
+        None
+    };
     let mut total = 0usize;
     loop {
         let mut url = reqwest::Url::parse(&base).map_err(|e| e.to_string())?;
         url.query_pairs_mut().append_pair("limit", "250");
-        if let Some(s) = since { url.query_pairs_mut().append_pair("since", s); }
-        if let Some(c) = cursor.as_deref() { url.query_pairs_mut().append_pair("cursor", c); }
+        if let Some(s) = since {
+            url.query_pairs_mut().append_pair("since", s);
+        }
+        if let Some(c) = cursor.as_deref() {
+            url.query_pairs_mut().append_pair("cursor", c);
+        }
         let resp = client
             .get(url.clone())
             .header("X-Terminal-Code", terminal_code)
             // reqwest is built without compression features. Prevent an intermediary from
             // returning compressed bytes that serde_json would otherwise try to parse.
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Catalog sync network error: {}", e))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             return Err(format!("Catalog sync server error {}: {}", status, body));
         }
-        let content_type = resp.headers()
+        let content_type = resp
+            .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("missing")
             .to_string();
-        let body = resp.bytes().await
+        let body = resp
+            .bytes()
+            .await
             .map_err(|e| format!("Catalog sync response read error from {}: {}", url, e))?;
         let data = decode_catalog_body(&body, &content_type, url.as_str())?;
         let items = data["items"].as_array().cloned().unwrap_or_default();
         let cats = data["categories"].as_array().cloned().unwrap_or_default();
-        db::upsert_catalog_page(pool, &items, &cats).await.map_err(|e| e.to_string())?;
+        db::upsert_catalog_page(pool, &items, &cats)
+            .await
+            .map_err(|e| e.to_string())?;
         total += items.len() + cats.len();
         if data["done"].as_bool().unwrap_or(true) {
             if since.is_none() {
                 sqlx::query("DELETE FROM schema_meta WHERE key = 'catalog_bootstrap_cursor'")
-                    .execute(pool).await.map_err(|e| e.to_string())?;
+                    .execute(pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
             break;
         }
-        let next = data["nextCursor"].as_str().filter(|c| !c.is_empty())
+        let next = data["nextCursor"]
+            .as_str()
+            .filter(|c| !c.is_empty())
             .ok_or_else(|| "Catalog sync response missing nextCursor".to_string())?;
         cursor = Some(next.to_string());
         if since.is_none() {
@@ -202,7 +225,10 @@ fn decode_scoped_cursor(value: &str, scope: &CatalogScope) -> Option<String> {
     {
         return None;
     }
-    saved["cursor"].as_str().filter(|cursor| !cursor.is_empty()).map(str::to_owned)
+    saved["cursor"]
+        .as_str()
+        .filter(|cursor| !cursor.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -217,7 +243,10 @@ mod cursor_tests {
             "terminalCode": scope.terminal_code,
             "cursor": "opaque"
         });
-        assert_eq!(decode_scoped_cursor(&saved.to_string(), &scope).as_deref(), Some("opaque"));
+        assert_eq!(
+            decode_scoped_cursor(&saved.to_string(), &scope).as_deref(),
+            Some("opaque")
+        );
         let other = catalog_scope("https://pos.example", "t02");
         assert!(decode_scoped_cursor(&saved.to_string(), &other).is_none());
     }
@@ -249,7 +278,11 @@ pub async fn sync_inbox(
         .map_err(|e| e.to_string())?;
 
     let base = format!("{}/api/sync/inbox", server_url.trim_end_matches('/'));
-    let url = if let Some(s) = since { format!("{}?since={}", base, s) } else { base };
+    let url = if let Some(s) = since {
+        format!("{}?since={}", base, s)
+    } else {
+        base
+    };
 
     let resp = client
         .get(&url)
@@ -266,10 +299,13 @@ pub async fn sync_inbox(
     let items = data["items"].as_array().cloned().unwrap_or_default();
 
     for item in &items {
-        let server_id    = item["id"].as_str().unwrap_or("").to_string();
-        let message_type = item["messageType"].as_str().unwrap_or("unknown").to_string();
-        let payload      = serde_json::to_string(item).unwrap_or_default();
-        let local_id     = uuid::Uuid::new_v4().to_string();
+        let server_id = item["id"].as_str().unwrap_or("").to_string();
+        let message_type = item["messageType"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+        let payload = serde_json::to_string(item).unwrap_or_default();
+        let local_id = uuid::Uuid::new_v4().to_string();
 
         sqlx::query(
             "INSERT OR IGNORE INTO pos_inbox (id, server_id, message_type, payload, processed) VALUES (?,?,?,?,0)"
@@ -283,11 +319,14 @@ pub async fn sync_inbox(
         // Auto-process price_change messages
         if message_type == "price_change" {
             if let Some(product_id) = item["productId"].as_str() {
-                let price = item["price"].as_f64()
+                let price = item["price"]
+                    .as_f64()
                     .or_else(|| item["price"].as_str().and_then(|s| s.parse().ok()))
                     .unwrap_or(0.0);
                 let valid_from = item["validFrom"].as_str().filter(|value| !value.is_empty());
-                let valid_until = item["validUntil"].as_str().filter(|value| !value.is_empty());
+                let valid_until = item["validUntil"]
+                    .as_str()
+                    .filter(|value| !value.is_empty());
 
                 sqlx::query(
                     "INSERT OR REPLACE INTO price_overrides (product_id, override_price, valid_from, valid_until, reason) VALUES (?,?,?,?,'inbox')"
@@ -324,13 +363,15 @@ pub async fn flush_outbox(
         r#"SELECT id, order_id, payload, attempts FROM pos_outbox
            WHERE status = 'pending'
              AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))
-           ORDER BY created_at ASC LIMIT 20"#
+           ORDER BY created_at ASC LIMIT 20"#,
     )
     .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
 
-    if rows.is_empty() { return Ok(0); }
+    if rows.is_empty() {
+        return Ok(0);
+    }
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -341,17 +382,20 @@ pub async fn flush_outbox(
     let mut synced = 0;
 
     for row in &rows {
-        let outbox_id: String  = row.try_get("id").unwrap_or_default();
+        let outbox_id: String = row.try_get("id").unwrap_or_default();
         let payload_str: String = row.try_get("payload").unwrap_or_default();
-        let attempts: i32       = row.try_get("attempts").unwrap_or(0);
+        let attempts: i32 = row.try_get("attempts").unwrap_or(0);
 
         let payload: Value = serde_json::from_str(&payload_str).unwrap_or(Value::Null);
 
         sqlx::query("UPDATE pos_outbox SET status = 'syncing' WHERE id = ?")
             .bind(&outbox_id)
-            .execute(pool).await.map_err(|e| e.to_string())?;
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
-        match client.post(&url)
+        match client
+            .post(&url)
             .header("X-Terminal-Code", terminal_code)
             .json(&payload)
             .send()
@@ -366,7 +410,13 @@ pub async fn flush_outbox(
                 synced += 1;
             }
             Ok(resp) => {
-                schedule_retry(pool, &outbox_id, attempts, &format!("HTTP {}", resp.status())).await?;
+                schedule_retry(
+                    pool,
+                    &outbox_id,
+                    attempts,
+                    &format!("HTTP {}", resp.status()),
+                )
+                .await?;
             }
             Err(e) => {
                 schedule_retry(pool, &outbox_id, attempts, &e.to_string()).await?;
@@ -386,34 +436,43 @@ pub async fn push_audit_logs(
 ) -> Result<usize, String> {
     let rows = sqlx::query(
         r#"SELECT id, cashier_id, cashier_name, action, entity, entity_id, detail, created_at
-           FROM audit_log WHERE pushed = 0 ORDER BY id ASC LIMIT 200"#
+           FROM audit_log WHERE pushed = 0 ORDER BY id ASC LIMIT 200"#,
     )
     .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
 
-    if rows.is_empty() { return Ok(0); }
+    if rows.is_empty() {
+        return Ok(0);
+    }
 
-    let entries: Vec<Value> = rows.iter().map(|r| {
-        serde_json::json!({
-            "localId":     r.try_get::<i64, _>("id").unwrap_or_default(),
-            "cashierId":   r.try_get::<Option<String>, _>("cashier_id").unwrap_or(None),
-            "cashierName": r.try_get::<Option<String>, _>("cashier_name").unwrap_or(None),
-            "action":      r.try_get::<String, _>("action").unwrap_or_default(),
-            "entity":      r.try_get::<Option<String>, _>("entity").unwrap_or(None),
-            "entityId":    r.try_get::<Option<String>, _>("entity_id").unwrap_or(None),
-            "detail":      r.try_get::<Option<String>, _>("detail").unwrap_or(None),
-            "createdAt":   r.try_get::<String, _>("created_at").unwrap_or_default(),
+    let entries: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "localId":     r.try_get::<i64, _>("id").unwrap_or_default(),
+                "cashierId":   r.try_get::<Option<String>, _>("cashier_id").unwrap_or(None),
+                "cashierName": r.try_get::<Option<String>, _>("cashier_name").unwrap_or(None),
+                "action":      r.try_get::<String, _>("action").unwrap_or_default(),
+                "entity":      r.try_get::<Option<String>, _>("entity").unwrap_or(None),
+                "entityId":    r.try_get::<Option<String>, _>("entity_id").unwrap_or(None),
+                "detail":      r.try_get::<Option<String>, _>("detail").unwrap_or(None),
+                "createdAt":   r.try_get::<String, _>("created_at").unwrap_or_default(),
+            })
         })
-    }).collect();
+        .collect();
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let url = format!("{}/api/pos/sync/audit-logs", server_url.trim_end_matches('/'));
-    let resp = client.post(&url)
+    let url = format!(
+        "{}/api/pos/sync/audit-logs",
+        server_url.trim_end_matches('/')
+    );
+    let resp = client
+        .post(&url)
         .header("X-Terminal-Code", terminal_code)
         .json(&serde_json::json!({ "entries": entries }))
         .send()
@@ -424,7 +483,11 @@ pub async fn push_audit_logs(
         return Err(format!("HTTP {}", resp.status()));
     }
 
-    let max_id: i64 = rows.iter().map(|r| r.try_get::<i64, _>("id").unwrap_or(0)).max().unwrap_or(0);
+    let max_id: i64 = rows
+        .iter()
+        .map(|r| r.try_get::<i64, _>("id").unwrap_or(0))
+        .max()
+        .unwrap_or(0);
     sqlx::query("UPDATE audit_log SET pushed = 1 WHERE id <= ? AND pushed = 0")
         .bind(max_id)
         .execute(pool)

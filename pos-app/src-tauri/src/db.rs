@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
-use sqlx::{Column, Row, TypeInfo, ValueRef};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Acquire;
+use sqlx::{Column, Row, TypeInfo, ValueRef};
 
 /// Convert a SqliteRow into a serde_json::Value object.
 /// Handles TEXT, INTEGER, REAL, BOOLEAN, and NULL types.
@@ -31,9 +31,7 @@ pub fn row_to_json(row: SqliteRow) -> Value {
                 }
                 "REAL" | "FLOAT" | "DOUBLE" | "NUMERIC" | "DECIMAL" => {
                     if let Ok(v) = row.try_get::<f64, _>(ordinal) {
-                        Value::Number(
-                            serde_json::Number::from_f64(v).unwrap_or_else(|| 0.into()),
-                        )
+                        Value::Number(serde_json::Number::from_f64(v).unwrap_or_else(|| 0.into()))
                     } else {
                         Value::Null
                     }
@@ -64,9 +62,9 @@ pub fn row_to_json(row: SqliteRow) -> Value {
 
 /// Upsert a single product from a server JSON payload
 pub async fn upsert_product(pool: &sqlx::SqlitePool, p: &Value) -> Result<(), sqlx::Error> {
-    let id        = uuid_from(p, "id");
+    let id = uuid_from(p, "id");
     let server_id = str_val(p, "id");
-    let active    = p["active"].as_bool().unwrap_or(true) as i32;
+    let active = p["active"].as_bool().unwrap_or(true) as i32;
 
     sqlx::query(
         r#"INSERT INTO local_products
@@ -81,7 +79,7 @@ pub async fn upsert_product(pool: &sqlx::SqlitePool, p: &Value) -> Result<(), sq
              price4=excluded.price4, price5=excluded.price5, cost_price=excluded.cost_price,
              vat_rate=excluded.vat_rate, unit_type=excluded.unit_type, pack_size=excluded.pack_size,
              stock_quantity=excluded.stock_quantity, active=excluded.active,
-             updated_at=excluded.updated_at, synced_at=datetime('now')"#
+             updated_at=excluded.updated_at, synced_at=datetime('now')"#,
     )
     .bind(&id)
     .bind(&server_id)
@@ -109,9 +107,9 @@ pub async fn upsert_product(pool: &sqlx::SqlitePool, p: &Value) -> Result<(), sq
 
 /// Upsert a category from server JSON
 pub async fn upsert_category(pool: &sqlx::SqlitePool, c: &Value) -> Result<(), sqlx::Error> {
-    let id        = uuid_from(c, "id");
+    let id = uuid_from(c, "id");
     let server_id = str_val(c, "id");
-    let active    = c["active"].as_bool().unwrap_or(true) as i32;
+    let active = c["active"].as_bool().unwrap_or(true) as i32;
 
     sqlx::query(
         r#"INSERT INTO local_categories (id, server_id, name, description, parent_id, vat_rate, active)
@@ -185,12 +183,11 @@ pub async fn upsert_catalog_page(
 
 /// Replace all layout buttons atomically
 pub async fn replace_layout(pool: &sqlx::SqlitePool, buttons: &[Value]) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM local_layout").execute(pool).await?;
+    sqlx::query("DELETE FROM local_layout")
+        .execute(pool)
+        .await?;
     for btn in buttons {
-        let btn_type = btn["buttonType"]
-            .as_str()
-            .unwrap_or("empty")
-            .to_string();
+        let btn_type = btn["buttonType"].as_str().unwrap_or("empty").to_string();
         let color = btn["color"].as_str().unwrap_or("#6b7280").to_string();
         sqlx::query(
             r#"INSERT INTO local_layout (position, label, color, icon, button_type, item_id, category_id, action_code)

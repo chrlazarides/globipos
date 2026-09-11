@@ -3,7 +3,7 @@ use sqlx::{Row, SqlitePool};
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Bootstrap meta table first (survives repeated calls)
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        "CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     )
     .execute(pool)
     .await?;
@@ -405,14 +405,54 @@ async fn run_v3(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
 async fn run_v2(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let defaults = vec![
-        ("customer_lookup",      "Customer lookup offline",          "allow",              "Allow sale to proceed without customer record when server unreachable"),
-        ("loyalty_earn",         "Loyalty points earn offline",      "allow",              "Allow loyalty points to be earned offline; sync later"),
-        ("loyalty_redeem",       "Loyalty points redeem offline",    "block_with_message", "Block loyalty redemption when server unreachable"),
-        ("credit_check",         "Credit limit check offline",       "allow",              "Allow sale when credit check cannot be performed"),
-        ("price_level_override", "Price level override offline",     "allow",              "Allow price level changes without server validation"),
-        ("promo_code",           "Promo code validation offline",    "block",              "Block promo codes when server unreachable"),
-        ("void_order",           "Void order requires manager",      "allow",              "Allow manager PIN void without server confirmation"),
-        ("refund",               "Refund without server",            "block_with_message", "Block refunds when server unreachable"),
+        (
+            "customer_lookup",
+            "Customer lookup offline",
+            "allow",
+            "Allow sale to proceed without customer record when server unreachable",
+        ),
+        (
+            "loyalty_earn",
+            "Loyalty points earn offline",
+            "allow",
+            "Allow loyalty points to be earned offline; sync later",
+        ),
+        (
+            "loyalty_redeem",
+            "Loyalty points redeem offline",
+            "block_with_message",
+            "Block loyalty redemption when server unreachable",
+        ),
+        (
+            "credit_check",
+            "Credit limit check offline",
+            "allow",
+            "Allow sale when credit check cannot be performed",
+        ),
+        (
+            "price_level_override",
+            "Price level override offline",
+            "allow",
+            "Allow price level changes without server validation",
+        ),
+        (
+            "promo_code",
+            "Promo code validation offline",
+            "block",
+            "Block promo codes when server unreachable",
+        ),
+        (
+            "void_order",
+            "Void order requires manager",
+            "allow",
+            "Allow manager PIN void without server confirmation",
+        ),
+        (
+            "refund",
+            "Refund without server",
+            "block_with_message",
+            "Block refunds when server unreachable",
+        ),
     ];
 
     for (key, label, behavior, desc) in defaults {

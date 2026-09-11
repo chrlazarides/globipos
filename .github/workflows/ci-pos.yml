@@ -93,7 +93,6 @@ jobs:
       - name: cargo fmt check
         working-directory: pos-app/src-tauri
         run: cargo fmt --all -- --check
-        continue-on-error: true  # Format differences are advisory
 
   # ── Job 3: Rust unit tests ───────────────────────────────────────────────────
   rust-test:
