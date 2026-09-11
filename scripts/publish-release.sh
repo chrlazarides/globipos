@@ -54,11 +54,11 @@ cleanup_release() {
 trap cleanup_release EXIT
 
 configure_github_auth() {
-  if git ls-remote --exit-code "$GITHUB_REMOTE" HEAD >/dev/null 2>&1; then
+  if [[ -z "${GLOBISYNC:-}" ]]; then
+    git ls-remote --exit-code "$GITHUB_REMOTE" HEAD >/dev/null 2>&1 \
+      || error "Cannot read the GitHub repository. Reconnect GitHub or configure the project-scoped GLOBISYNC secret."
     return
   fi
-  [[ -n "${GLOBISYNC:-}" ]] || error \
-    "Cannot authenticate to GitHub. Reconnect GitHub or configure the project-scoped GLOBISYNC secret."
   RELEASE_ASKPASS=$(mktemp)
   chmod 700 "$RELEASE_ASKPASS"
   cat >"$RELEASE_ASKPASS" <<'EOF'
