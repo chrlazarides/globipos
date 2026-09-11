@@ -9,6 +9,7 @@
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "test": "node --experimental-strip-types --test src/lib/utils.test.ts src/lib/terminal-contract.test.ts src/lib/pos-calculations.test.ts tests/pwa.test.mjs",
     "test:browser-sync-scale": "node --test tests/browser-sync-scale.test.mjs",
+    "test:browser-sync-atomicity": "node --test --test-name-pattern=\"in-flight\" tests/browser-sync-scale.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

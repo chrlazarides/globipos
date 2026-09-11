@@ -23,7 +23,8 @@ async function waitForServer(server) {
   throw new Error("Timed out waiting for the scale-test server");
 }
 
-async function runBrowser(profile, url) {
+async function runBrowser(profile, url, options = {}) {
+  const { stopAtStatus = "passed", killSignal = "SIGTERM" } = options;
   const browser = spawn("chromium", [
     "--headless",
     "--no-sandbox",
@@ -91,8 +92,8 @@ async function runBrowser(profile, url) {
         text: document.querySelector("#result")?.textContent
       })`);
       const value = response.result.value;
-      if (value?.status === "failed") throw new Error(`Browser test failed:\n${value.text}`);
-      if (value?.status === "passed") {
+       if (value?.status === "failed") throw new Error(`Browser test failed:\n${value.text}`);
+       if (value?.status === stopAtStatus) {
         socket.close();
         return JSON.parse(value.text);
       }
@@ -100,41 +101,84 @@ async function runBrowser(profile, url) {
     }
     throw new Error(`Timed out waiting for browser test\n${diagnostics}`);
   } finally {
-    browser.kill("SIGTERM");
-    await new Promise((resolve) => browser.once("exit", resolve));
+    if (browser.exitCode === null && browser.signalCode === null) {
+      browser.kill(killSignal);
+      await new Promise((resolve) => browser.once("exit", resolve));
+    }
   }
 }
 
-test("130,000-product browser sync survives repeated browser restarts", { timeout: 120_000 }, async () => {
-  const profile = await mkdtemp(path.join(tmpdir(), "globipos-browser-sync-"));
+async function withScaleServer(run) {
   const server = spawn("pnpm", ["exec", "vite", "--config", "vite.config.ts", "--host", "127.0.0.1"], {
     cwd: artifactRoot,
     env: { ...process.env, PORT: String(port), BASE_PATH: "/terminal/" },
     stdio: "ignore",
   });
-
   try {
     await waitForServer(server);
-    const checkpoints = [9_250, 43_250, 102_750, 130_000];
-    const results = [];
-
-    for (const stopAfter of checkpoints) {
-      try {
-        results.push(await runBrowser(profile, `${baseUrl}?stopAfter=${stopAfter}`));
-      } catch (error) {
-        throw new Error(
-          `Catalog scale sync failed at restart checkpoint ${stopAfter.toLocaleString("en-US")} products`,
-          { cause: error },
-        );
-      }
-    }
-
-    assert.deepEqual(results.map((entry) => entry.productCount), checkpoints);
-    assert.deepEqual(results.map((entry) => entry.cursor), ["9250", "43250", "102750", null]);
-    assert.deepEqual(results.map((entry) => entry.firstRequestedOffset), [0, 9250, 43250, 102750]);
-    assert.equal(results.at(-1).productCount, 130_000);
+    return await run();
   } finally {
     server.kill("SIGTERM");
-    await rm(profile, { recursive: true, force: true });
+  }
+}
+
+test("130,000-product browser sync survives repeated browser restarts", { timeout: 120_000 }, async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), "globipos-browser-sync-"));
+  try {
+    await withScaleServer(async () => {
+      const checkpoints = [9_250, 43_250, 102_750, 130_000];
+      const results = [];
+
+      for (const stopAfter of checkpoints) {
+        try {
+          results.push(await runBrowser(profile, `${baseUrl}?stopAfter=${stopAfter}`));
+        } catch (error) {
+          throw new Error(
+            `Catalog scale sync failed at restart checkpoint ${stopAfter.toLocaleString("en-US")} products`,
+            { cause: error },
+          );
+        }
+      }
+
+      assert.deepEqual(results.map((entry) => entry.productCount), checkpoints);
+      assert.deepEqual(results.map((entry) => entry.cursor), ["9250", "43250", "102750", null]);
+      assert.deepEqual(results.map((entry) => entry.firstRequestedOffset), [0, 9250, 43250, 102750]);
+      assert.equal(results.at(-1).productCount, 130_000);
+    });
+  } finally {
+    await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test("catalog sync resumes atomically after Chromium is killed during an in-flight IndexedDB write", { timeout: 120_000 }, async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), "globipos-browser-sync-atomicity-"));
+  const committedOffset = 1_000;
+
+  try {
+    await withScaleServer(async () => {
+      const committed = await runBrowser(profile, `${baseUrl}?stopAfter=${committedOffset}`);
+      assert.equal(committed.cursor, String(committedOffset));
+      assert.equal(committed.productCount, committedOffset);
+
+      const interrupted = await runBrowser(
+        profile,
+        `${baseUrl}?killDuringOffset=${committedOffset}`,
+        { stopAtStatus: "writing", killSignal: "SIGKILL" },
+      );
+      assert.equal(interrupted.cursor, String(committedOffset));
+      assert.equal(interrupted.killDuringOffset, committedOffset);
+      assert.equal(interrupted.writeCount, 50);
+
+      const recovered = await runBrowser(
+        profile,
+        `${baseUrl}?killDuringOffset=${committedOffset}&verifyRecovery=true`,
+      );
+      assert.equal(recovered.firstRequestedOffset, committedOffset);
+      assert.equal(recovered.productsBeforeRecovery, committedOffset);
+      assert.equal(recovered.productCount, 130_000);
+      assert.equal(recovered.cursor, null);
+    });
+  } finally {
+    await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });

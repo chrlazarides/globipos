@@ -8,6 +8,8 @@ const TERMINAL_CODE = "SCALE-TERMINAL";
 
 const query = new URLSearchParams(location.search);
 const stopAfter = Number(query.get("stopAfter") ?? TOTAL_PRODUCTS);
+const killDuringOffset = query.has("killDuringOffset") ? Number(query.get("killDuringOffset")) : null;
+const verifyRecovery = query.get("verifyRecovery") === "true";
 const result = document.querySelector<HTMLPreElement>("#result");
 
 function catalogItem(index: number) {
@@ -43,7 +45,40 @@ async function run() {
   });
 
   const startingCursor = await getSyncCursor(SERVER_ORIGIN, TERMINAL_CODE);
+  const productsBeforeRecovery = verifyRecovery ? await getProducts() : [];
+  if (verifyRecovery) {
+    const expectedCursor = String(killDuringOffset);
+    if (startingCursor !== expectedCursor) {
+      throw new Error(`Partially committed page advanced cursor: expected ${expectedCursor}, found ${startingCursor}`);
+    }
+    if (productsBeforeRecovery.length !== killDuringOffset) {
+      throw new Error(`Partially committed page saved products: expected ${killDuringOffset}, found ${productsBeforeRecovery.length}`);
+    }
+  }
   const requestedOffsets: number[] = [];
+  let writeCount = 0;
+  const originalPut = IDBObjectStore.prototype.put;
+  if (!verifyRecovery && killDuringOffset !== null) {
+    IDBObjectStore.prototype.put = function (...args: Parameters<IDBObjectStore["put"]>) {
+      if (this.name === "products" && requestedOffsets.at(-1) === killDuringOffset) {
+        writeCount += 1;
+        if (writeCount === 50) {
+          result!.dataset.status = "writing";
+          result!.textContent = JSON.stringify({ cursor: startingCursor, killDuringOffset, writeCount });
+          let keepAliveWrites = 0;
+          const keepTransactionAlive = () => {
+            const request = originalPut.call(this, args[0]);
+            request.onsuccess = () => {
+              keepAliveWrites += 1;
+              if (keepAliveWrites < 100_000) keepTransactionAlive();
+            };
+          };
+          keepTransactionAlive();
+        }
+      }
+      return originalPut.apply(this, args);
+    };
+  }
   globalThis.fetch = async (input) => {
     const url = new URL(String(input));
     const offset = Number(url.searchParams.get("cursor") ?? "0");
@@ -135,6 +170,7 @@ async function run() {
     cursor,
     firstRequestedOffset: requestedOffsets[0],
     pagesRequested: requestedOffsets.length,
+    productsBeforeRecovery: productsBeforeRecovery.length,
   });
 }
 

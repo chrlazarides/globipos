@@ -1,4 +1,4 @@
-import { getConfig, saveCatalogPage, getOutbox, clearOutboxItem, saveCashiers, getSyncCursor, saveSyncCursor, clearSyncCursor, getActiveProductsCount, getAuditOutbox, clearAuditItem, setConfig } from "./db";
+import { getConfig, saveCatalogPage, getOutbox, clearOutboxItem, saveCashiers, getSyncCursor, getActiveProductsCount, getAuditOutbox, clearAuditItem, setConfig } from "./db";
 import type { Category, Product, CashierSession, TerminalConfig } from "../types";
 import { fetchOnce, fetchWithRetry, normalizeServerUrl } from "./utils";
 import { mapCashier, mapCategory, mapProduct, toAuditEntry, toBillPayload } from "./terminal-contract";
@@ -79,20 +79,21 @@ export async function syncCatalog(onProgress?: (progress: number) => void): Prom
     const categories: Category[] = data.categories.map(mapCategory);
     const products: Product[] = data.items.map(mapProduct);
     
+    const nextCursor = data.done ? null : data.nextCursor as string;
     await saveCatalogPage(
-      categories.length > 0 ? categories : null, 
-      products, 
-      firstPage
+      categories.length > 0 ? categories : null,
+      products,
+      firstPage,
+      baseUrl,
+      config.terminal_code,
+      nextCursor,
     );
     
     if (data.done) {
-      await clearSyncCursor(baseUrl, config.terminal_code);
       if (onProgress) onProgress(100);
       break;
     }
-    const nextCursor = data.nextCursor as string;
     cursor = nextCursor;
-    await saveSyncCursor(baseUrl, config.terminal_code, nextCursor);
     firstPage = false;
   }
   

@@ -137,10 +137,17 @@ export async function getProducts(categoryId?: string, search?: string): Promise
   });
 }
 
-export async function saveCatalogPage(categories: Category[] | null, products: Product[], isFirstPage: boolean): Promise<void> {
+export async function saveCatalogPage(
+  categories: Category[] | null,
+  products: Product[],
+  isFirstPage: boolean,
+  origin: string,
+  terminalCode: string,
+  nextCursor: string | null,
+): Promise<void> {
   const db = await getDb();
   return new Promise((resolve, reject) => {
-    const t = db.transaction(["categories", "products"], "readwrite");
+    const t = db.transaction(["categories", "products", "sync_cursor"], "readwrite");
     
     if (categories && isFirstPage) {
       const catStore = t.objectStore("categories");
@@ -153,6 +160,14 @@ export async function saveCatalogPage(categories: Category[] | null, products: P
       prodStore.clear();
     }
     products.forEach(p => prodStore.put(p));
+
+    const cursorStore = t.objectStore("sync_cursor");
+    const cursorId = `${origin}:${terminalCode}`;
+    if (nextCursor === null) {
+      cursorStore.delete(cursorId);
+    } else {
+      cursorStore.put({ id: cursorId, cursor: nextCursor });
+    }
     
     t.oncomplete = () => resolve();
     t.onerror = () => reject(t.error);
