@@ -51,5 +51,5 @@
 - [Tauri POS indexed search](tauri-pos-indexed-search.md) — use exact barcode/SKU indexes plus FTS5 prefix search; hydrate layout items separately from bounded browse pages
 - [Promotional shelf-label prior prices](promotional-shelf-label-prior-prices.md) — keep prior-price provenance explicit; legacy attestation must never masquerade as complete 30-day history
 - [Item image storage fallback](item-image-storage-fallback.md) — App Storage needs an attached bucket; item renditions must retain a deployment-local durable fallback
-- [Deployment image exclusions](deployment-image-exclusions.md) — use deployment.ignorePaths, not the UI hidden list, to keep native targets and caches out of publish images
+- [Deployment image exclusions](deployment-image-exclusions.md) — use .replitignore for publish bundles; hidden and deployment.ignorePaths did not exclude a native target from Autoscale
 - [GlobiPOS app icon](globipos-app-icon.md) — installer and launcher icons use the standalone blue aperture mark; horizontal wordmarks become unreadable at taskbar sizes
