@@ -16,6 +16,7 @@ const TERMINAL_CODE = "SCALE-TERMINAL";
 const query = new URLSearchParams(location.search);
 const stopAfter = Number(query.get("stopAfter") ?? TOTAL_PRODUCTS);
 const killDuringOffset = query.has("killDuringOffset") ? Number(query.get("killDuringOffset")) : null;
+const killStage = query.get("killStage");
 const verifyRecovery = query.get("verifyRecovery") === "true";
 const seedExistingCatalog = query.get("seedExistingCatalog") === "true";
 const verifyFreshReplacement = query.get("verifyFreshReplacement") === "true";
@@ -111,26 +112,65 @@ async function run() {
   }
   const requestedOffsets: number[] = [];
   let writeCount = 0;
+  let categoryWriteCount = 0;
+  let killStageReached = false;
   const originalPut = IDBObjectStore.prototype.put;
-  if (!verifyRecovery && killDuringOffset !== null) {
+  const originalClear = IDBObjectStore.prototype.clear;
+  const originalDelete = IDBObjectStore.prototype.delete;
+  const pauseTransaction = (store: IDBObjectStore, stage: string) => {
+    if (killStageReached) return;
+    killStageReached = true;
+    result!.dataset.status = "writing";
+    result!.textContent = JSON.stringify({
+      cursor: startingCursor,
+      killDuringOffset,
+      killStage: stage,
+      writeCount,
+    });
+    const productStore = store.transaction.objectStore("products");
+    let keepAliveWrites = 0;
+    const keepTransactionAlive = () => {
+      const request = originalPut.call(productStore, catalogItem(0));
+      request.onsuccess = () => {
+        keepAliveWrites += 1;
+        if (keepAliveWrites < 100_000) keepTransactionAlive();
+      };
+    };
+    keepTransactionAlive();
+  };
+  if (!verifyRecovery && (killDuringOffset !== null || killStage !== null)) {
+    IDBObjectStore.prototype.clear = function (...args: Parameters<IDBObjectStore["clear"]>) {
+      const request = originalClear.apply(this, args);
+      if (killStage === "after-category-clear" && this.name === "categories" && requestedOffsets.at(-1) === 0) {
+        pauseTransaction(this, killStage);
+      }
+      return request;
+    };
     IDBObjectStore.prototype.put = function (...args: Parameters<IDBObjectStore["put"]>) {
-      if (this.name === "products" && requestedOffsets.at(-1) === killDuringOffset) {
-        writeCount += 1;
-        if (writeCount === 50) {
-          result!.dataset.status = "writing";
-          result!.textContent = JSON.stringify({ cursor: startingCursor, killDuringOffset, writeCount });
-          let keepAliveWrites = 0;
-          const keepTransactionAlive = () => {
-            const request = originalPut.call(this, args[0]);
-            request.onsuccess = () => {
-              keepAliveWrites += 1;
-              if (keepAliveWrites < 100_000) keepTransactionAlive();
-            };
-          };
-          keepTransactionAlive();
+      if (this.name === "categories" && requestedOffsets.at(-1) === 0) {
+        categoryWriteCount += 1;
+        if (killStage === "during-category-writes" && categoryWriteCount === 10) {
+          pauseTransaction(this, killStage);
         }
       }
-      return originalPut.apply(this, args);
+      if (this.name === "products" && requestedOffsets.at(-1) === killDuringOffset) {
+        writeCount += 1;
+        if (writeCount === 50 && (killStage === null || killStage === "during-product-writes")) {
+          pauseTransaction(this, killStage ?? "during-product-writes");
+        }
+      }
+      const request = originalPut.apply(this, args);
+      if (killStage === "before-commit" && this.name === "sync_cursor" && requestedOffsets.at(-1) === 0) {
+        pauseTransaction(this, killStage);
+      }
+      return request;
+    };
+    IDBObjectStore.prototype.delete = function (...args: Parameters<IDBObjectStore["delete"]>) {
+      const request = originalDelete.apply(this, args);
+      if (killStage === "before-commit" && this.name === "sync_cursor" && requestedOffsets.at(-1) === 0) {
+        pauseTransaction(this, killStage);
+      }
+      return request;
     };
   }
   globalThis.fetch = async (input) => {
@@ -190,6 +230,7 @@ async function run() {
       throw new Error(`Expected sync to start at ${expectedStart}, requested ${requestedOffsets[0]}`);
     }
   } else {
+    const categories = await getCategories();
     if (products.length !== TOTAL_PRODUCTS) {
       throw new Error(`Expected ${TOTAL_PRODUCTS} products, found ${products.length}`);
     }
@@ -200,6 +241,14 @@ async function run() {
     for (let index = 0; index < TOTAL_PRODUCTS; index += 1) {
       const id = `product-${index.toString().padStart(6, "0")}`;
       if (!ids.has(id)) throw new Error(`Missing ${id}`);
+    }
+    const categoryIds = new Set(categories.map((category) => category.id));
+    if (categoryIds.size !== 20 || categories.length !== 20) {
+      throw new Error(`Expected 20 unique categories, found ${categoryIds.size} unique among ${categories.length}`);
+    }
+    for (let index = 0; index < 20; index += 1) {
+      const id = `category-${index}`;
+      if (!categoryIds.has(id)) throw new Error(`Missing ${id}`);
     }
     if (cursor !== null) throw new Error(`Completed sync retained cursor ${cursor}`);
 
@@ -221,6 +270,7 @@ async function run() {
     status: "passed",
     stopAfter,
     productCount: products.length,
+    categoryCount: (await getCategories()).length,
     cursor,
     firstRequestedOffset: requestedOffsets[0],
     pagesRequested: requestedOffsets.length,
