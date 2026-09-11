@@ -112,6 +112,22 @@ run_windows_preflight() {
       const expectedSha = process.argv[1];
       const dispatchedAt = Date.parse(process.argv[2]);
       const data = JSON.parse(fs.readFileSync(0, "utf8"));
+      if (!data || typeof data !== "object" || !Array.isArray(data.workflow_runs)) {
+        throw new Error("Malformed GitHub workflow run-list response: workflow_runs must be an array");
+      }
+      for (const item of data.workflow_runs) {
+        if (
+          !item ||
+          typeof item !== "object" ||
+          !(typeof item.id === "number" && Number.isSafeInteger(item.id) && item.id > 0) ||
+          typeof item.head_sha !== "string" ||
+          item.head_sha.length === 0 ||
+          typeof item.created_at !== "string" ||
+          !Number.isFinite(Date.parse(item.created_at))
+        ) {
+          throw new Error("Malformed GitHub workflow run-list response: invalid workflow run");
+        }
+      }
       const run = data.workflow_runs.find((item) =>
         item.head_sha === expectedSha && Date.parse(item.created_at) >= dispatchedAt
       );
@@ -129,6 +145,17 @@ run_windows_preflight() {
     read -r status conclusion < <(node -e '
       const fs = require("fs");
       const run = JSON.parse(fs.readFileSync(0, "utf8"));
+      const statuses = new Set(["queued", "in_progress", "completed"]);
+      if (!run || typeof run !== "object" || !statuses.has(run.status)) {
+        throw new Error("Malformed GitHub workflow run-status response: invalid status");
+      }
+      if (
+        !Object.hasOwn(run, "conclusion") ||
+        (run.conclusion !== null && typeof run.conclusion !== "string") ||
+        (run.status === "completed" && !run.conclusion)
+      ) {
+        throw new Error("Malformed GitHub workflow run-status response: invalid conclusion");
+      }
       process.stdout.write(`${run.status} ${run.conclusion || "-"}\n`);
     ' <<<"$run_json")
     [[ "$status" == "completed" ]] && break

@@ -86,11 +86,13 @@ case "$url" in
     exit 0
     ;;
   *"/runs?event="*)
-    if [[ "$TEST_SCENARIO" == "missing" ]]; then
-      printf '{"workflow_runs":[]}'
-    else
-      printf '{"workflow_runs":[{"id":4242,"head_sha":"release-head-sha","created_at":"2026-09-10T12:00:01Z"}]}'
-    fi
+    case "$TEST_SCENARIO" in
+      missing) printf '{"workflow_runs":[]}' ;;
+      malformed-run-list-json) printf '{"workflow_runs":[' ;;
+      malformed-run-list-shape) printf '{"workflow_runs":{}}' ;;
+      malformed-run-list-fields) printf '{"workflow_runs":[{"id":4242,"head_sha":"release-head-sha"}]}' ;;
+      *) printf '{"workflow_runs":[{"id":4242,"head_sha":"release-head-sha","created_at":"2026-09-10T12:00:01Z"}]}' ;;
+    esac
     ;;
   */actions/runs/4242)
     case "$TEST_SCENARIO" in
@@ -102,6 +104,9 @@ case "$url" in
         printf '{"message":"run status unavailable"}' >&2
         exit 22
         ;;
+      malformed-status-json) printf '{"status":' ;;
+      malformed-status-missing) printf '{"conclusion":"success"}' ;;
+      malformed-status-fields) printf '{"status":"completed","conclusion":null}' ;;
     esac
     ;;
 esac
@@ -204,6 +209,29 @@ for (const [scenario, expectedMessage] of [
     await assert.rejects(
       fixture.run(),
       (error) => error.code === 1 && error.stderr.includes(expectedMessage),
+    );
+
+    const operations = await readGitOperations(fixture.gitLog);
+    assert.doesNotMatch(operations, /^tag -a /m);
+    assert.doesNotMatch(operations, /^push origin v1\.2\.3$/m);
+  });
+}
+
+for (const scenario of [
+  "malformed-run-list-json",
+  "malformed-run-list-shape",
+  "malformed-run-list-fields",
+  "malformed-status-json",
+  "malformed-status-missing",
+  "malformed-status-fields",
+]) {
+  test(`fails closed without tagging for ${scenario}`, async (t) => {
+    const fixture = await createWindowsPreflightFixture(scenario);
+    t.after(() => rm(fixture.root, { recursive: true, force: true }));
+
+    await assert.rejects(
+      fixture.run(),
+      (error) => error.code !== 0,
     );
 
     const operations = await readGitOperations(fixture.gitLog);
