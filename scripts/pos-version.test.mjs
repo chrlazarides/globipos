@@ -6,7 +6,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { parse } from "yaml";
+import {
+  actionReferences,
+  assertJobRuns,
+  parseWorkflow,
+  workflowJob,
+  workflowSteps,
+} from "./workflow-test-helpers.mjs";
 
 const execFileAsync = promisify(execFile);
 const helper = fileURLToPath(new URL("./pos-version.mjs", import.meta.url));
@@ -16,51 +22,15 @@ const ciWorkflow = fileURLToPath(new URL("../.github/workflows/ci-pos.yml", impo
 const originalVersion = "1.2.3";
 const updatedVersion = "2.4.6";
 
-function parseWorkflow(source, description) {
-  try {
-    return parse(source);
-  } catch (error) {
-    assert.fail(`${description} must contain valid YAML: ${error.message}`);
-  }
-}
-
-function workflowJob(workflow, jobName, description) {
-  const job = workflow?.jobs?.[jobName];
-  assert.ok(job, `${description} must keep the ${jobName} job`);
-  return job;
-}
-
-function workflowSteps(workflow, description) {
-  const jobs = workflow?.jobs;
-  assert.ok(jobs && typeof jobs === "object", `${description} must define jobs`);
-
-  return Object.entries(jobs).flatMap(([jobName, job]) => {
-    assert.ok(Array.isArray(job?.steps), `${description} ${jobName} must define steps`);
-    return job.steps;
-  });
-}
-
-function actionReferences(workflow, description) {
-  return workflowSteps(workflow, description)
-    .filter((step) => typeof step?.uses === "string")
-    .map((step) => step.uses);
-}
-
-function assertStepRuns(job, command, message) {
-  const runsCommand = job?.steps?.some(
-    (step) =>
-      typeof step?.run === "string" &&
-      step.run.split("\n").some((line) => {
-        const trimmed = line.trim();
-        return trimmed === command || trimmed.startsWith(`${command} `);
-      }),
-  );
-  assert.ok(runsCommand, message);
-}
-
 function validateReleaseWorkflowGates(source) {
   const description = "POS release workflow";
   const workflow = parseWorkflow(source, description);
+  const pullRequestPaths = workflow?.on?.pull_request?.paths;
+  assert.ok(Array.isArray(pullRequestPaths), `${description} must keep pull-request path filters`);
+  assert.ok(
+    pullRequestPaths.includes("scripts/workflow-test-helpers.mjs"),
+    `${description} pull requests must run when shared workflow test helpers change`,
+  );
   const desktopJob = workflowJob(workflow, "build-desktop", description);
   const androidJob = workflowJob(workflow, "build-android", description);
   const verifyJob = workflowJob(workflow, "verify-release", description);
@@ -87,7 +57,7 @@ function validateReleaseWorkflowGates(source) {
     ["build-desktop", "build-android"],
     `${description} verify-release must depend on every release build`,
   );
-  assertStepRuns(
+  assertJobRuns(
     verifyJob,
     "node scripts/verify-pos-release.mjs",
     `${description} verify-release must run the published-asset verifier`,
@@ -150,6 +120,10 @@ test("POS release workflow keeps desktop, Android, and published-release verific
 
 test("a commented-out POS release platform does not satisfy the workflow guard", () => {
   const missingPlatformWorkflow = `
+on:
+  pull_request:
+    paths:
+      - scripts/workflow-test-helpers.mjs
 jobs:
   build-desktop:
     needs: [validate-version, native-preflight, desktop-native-preflight]
@@ -178,6 +152,10 @@ jobs:
 
 test("a commented-out POS release verifier does not satisfy the workflow guard", () => {
   const missingVerifierWorkflow = `
+on:
+  pull_request:
+    paths:
+      - scripts/workflow-test-helpers.mjs
 jobs:
   build-desktop:
     needs: [validate-version, native-preflight, desktop-native-preflight]

@@ -9,6 +9,7 @@ on:
       - '.github/workflows/build-pos.yml'
       - '.github/workflows/ci-pos.yml'
       - 'scripts/pos-toolchain-config.test.mjs'
+      - 'scripts/workflow-test-helpers.mjs'
   pull_request:
     branches: [ main ]
     paths:
@@ -17,6 +18,7 @@ on:
       - '.github/workflows/build-pos.yml'
       - '.github/workflows/ci-pos.yml'
       - 'scripts/pos-toolchain-config.test.mjs'
+      - 'scripts/workflow-test-helpers.mjs'
 
 concurrency:
   group: ci-pos-${{ github.ref }}
