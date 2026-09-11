@@ -7,9 +7,13 @@ test("terminal-code sync routes can reach their own authentication middleware", 
   assert.equal(isPublicPath("/api/sync/inbox"), true);
   assert.equal(isPublicPath("/api/pos/sync/catalog-v2"), true);
   assert.equal(isPublicPath("/api/pos/sync/customer-search"), true);
+  assert.equal(isPublicPath("/api/pos/terminals/terminal-id/heartbeat"), true);
 });
 
 test("admin sync configuration routes still require a user session", () => {
   assert.equal(isPublicPath("/api/pos/sync-config"), false);
   assert.equal(isPublicPath("/api/pos/sync-config/catalog"), false);
+  assert.equal(isPublicPath("/api/pos/terminals"), false);
+  assert.equal(isPublicPath("/api/pos/terminals/terminal-id"), false);
+  assert.equal(isPublicPath("/api/pos/terminals/terminal-id/peripheral-config"), false);
 });

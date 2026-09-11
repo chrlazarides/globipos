@@ -127,6 +127,9 @@ const PUBLIC_PATHS = [
 ];
 
 export function isPublicPath(path: string) {
+  if (/^\/api\/pos\/terminals\/[^/]+\/heartbeat$/.test(path)) {
+    return true;
+  }
   return PUBLIC_PATHS.some(p => path === p || path.startsWith(p + "/"));
 }
 

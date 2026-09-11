@@ -46,8 +46,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Setup Node.js 20
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20
       - name: Test version and published-asset release safeguards
-        run: npm run test:pos-release-tools
+        run: node --test --test-concurrency=1 scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs
 
   validate-web-app-install:
     name: Validate POS web-app installation
@@ -66,7 +70,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
       - name: Check install action, manifest, service worker, and icons
         run: npm run test:pos-pwa
 
