@@ -71,10 +71,9 @@ jobs:
             libxdo-dev \
             libssl-dev
 
-      - name: Install Rust stable + components
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Install pinned Rust toolchain
+        working-directory: pos-app
+        run: rustup show active-toolchain
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -113,8 +112,9 @@ jobs:
             libxdo-dev \
             libssl-dev
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust toolchain
+        working-directory: pos-app
+        run: rustup show active-toolchain
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -143,8 +143,9 @@ jobs:
           cache: npm
           cache-dependency-path: pos-app/package-lock.json
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust toolchain
+        working-directory: pos-app
+        run: rustup show active-toolchain
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
