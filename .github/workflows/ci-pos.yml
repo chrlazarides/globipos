@@ -5,18 +5,37 @@ on:
     branches: [ main, dev, 'feature/**' ]
     paths:
       - 'pos-app/**'
+      - '.github/dependabot.yml'
       - '.github/workflows/ci-pos.yml'
+      - 'scripts/pos-toolchain-config.test.mjs'
   pull_request:
     branches: [ main ]
     paths:
       - 'pos-app/**'
+      - '.github/dependabot.yml'
       - '.github/workflows/ci-pos.yml'
+      - 'scripts/pos-toolchain-config.test.mjs'
 
 concurrency:
   group: ci-pos-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  configuration-check:
+    name: POS toolchain configuration
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20
+
+      - name: Verify Dependabot and POS CI remain connected
+        run: npm run test:pos-toolchain-config
+
   # ── Job 1: Frontend — TypeScript + Vite build ───────────────────────────────
   frontend:
     name: Frontend (TypeScript + Vite)

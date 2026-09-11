@@ -13,6 +13,7 @@
     "test:customer-ai": "tsx --test server/customer-ai-service.test.ts server/customer-ai-routes.test.ts server/customer-ai-health-persistence.test.ts server/operator-alerting.test.ts server/operator-alerting-database.test.ts",
     "test:operator-alerting-db": "tsx --test server/operator-alerting-database.test.ts",
     "test:pos-version": "node --test scripts/pos-version.test.mjs",
+    "test:pos-toolchain-config": "node --test scripts/pos-toolchain-config.test.mjs",
     "test:pos-release-tools": "node --test scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs",
     "test:pos-pwa": "playwright test --config playwright.pos-pwa.config.ts",
     "verify:pos-release": "node scripts/verify-pos-release.mjs",
