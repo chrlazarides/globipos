@@ -7,6 +7,16 @@ on:
   pull_request:
     paths:
       - 'scripts/pos-*.mjs'
+      - 'client/src/pages/pos-download.tsx'
+      - 'client/src/hooks/use-pwa-install.ts'
+      - 'client/src/main.tsx'
+      - 'client/public/manifest.json'
+      - 'client/public/sw.js'
+      - 'client/public/icons/**'
+      - 'tests/pos-pwa-install.spec.ts'
+      - 'playwright.pos-pwa.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
       - 'pos-app/**'
       - '.github/workflows/build-pos.yml'
   workflow_dispatch:
@@ -38,6 +48,27 @@ jobs:
       - name: Test version and published-asset release safeguards
         run: npm run test:pos-release-tools
 
+  validate-web-app-install:
+    name: Validate POS web-app installation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.preflight_only)) && github.sha || env.TAG_NAME }}
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Check install action, manifest, service worker, and icons
+        run: npm run test:pos-pwa
+
   validate-version:
     name: Validate release version
     if: github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)
@@ -59,6 +90,7 @@ jobs:
   native-preflight:
     name: Validate native POS build
     runs-on: ubuntu-22.04
+    needs: validate-web-app-install
     steps:
       - uses: actions/checkout@v4
         with:
