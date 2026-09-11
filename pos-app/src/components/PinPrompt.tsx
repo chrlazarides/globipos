@@ -11,6 +11,8 @@ interface PinPromptProps {
 }
 
 const ROLE_LABELS = { supervisor: "Supervisor", manager: "Manager" };
+const MIN_PIN_LENGTH = 4;
+const MAX_PIN_LENGTH = 8;
 
 export function PinPrompt({ action, requiredRole, onGranted, onDenied }: PinPromptProps) {
   const [pin, setPin]     = useState("");
@@ -18,11 +20,9 @@ export function PinPrompt({ action, requiredRole, onGranted, onDenied }: PinProm
   const [loading, setLoading] = useState(false);
 
   function handleDigit(d: string) {
-    if (pin.length >= 6 || loading) return;
-    const newPin = pin + d;
-    setPin(newPin);
+    if (pin.length >= MAX_PIN_LENGTH || loading) return;
+    setPin(pin + d);
     setError(null);
-    if (newPin.length >= 4) submit(newPin);
   }
 
   function handleDelete() {
@@ -79,7 +79,7 @@ export function PinPrompt({ action, requiredRole, onGranted, onDenied }: PinProm
 
         {/* Dots */}
         <div className="flex justify-center gap-2.5 mb-4">
-          {Array.from({ length: 6 }).map((_, i) => (
+          {Array.from({ length: MAX_PIN_LENGTH }).map((_, i) => (
             <div
               key={i}
               className={`w-3 h-3 rounded-full transition-colors ${
@@ -108,13 +108,22 @@ export function PinPrompt({ action, requiredRole, onGranted, onDenied }: PinProm
               );
             }
             return (
-              <button key={i} onClick={() => handleDigit(k)} disabled={loading}
+              <button key={i} onClick={() => handleDigit(k)} disabled={loading || pin.length >= MAX_PIN_LENGTH}
                 className="h-11 flex items-center justify-center rounded-xl bg-gray-800 hover:bg-amber-900/50 text-white font-semibold text-lg transition-colors active:scale-95 disabled:opacity-40">
                 {k}
               </button>
             );
           })}
         </div>
+        <button
+          type="button"
+          onClick={() => void submit(pin)}
+          disabled={loading || pin.length < MIN_PIN_LENGTH}
+          className="mt-3 h-11 w-full rounded-xl bg-amber-700 hover:bg-amber-600 text-white font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+          data-testid="button-pin-authorize"
+        >
+          {loading ? "Checking…" : "Authorize"}
+        </button>
       </div>
     </div>
   );
