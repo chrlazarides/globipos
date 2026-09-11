@@ -234,3 +234,46 @@ test("fresh catalog replacement stays atomic at every first-page write stage", {
     }
   });
 });
+
+test("final catalog page and cursor deletion remain atomic when Chromium is killed", { timeout: 120_000 }, async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), "globipos-browser-sync-final-page-atomicity-"));
+  const finalPageOffset = 130_000 - 250;
+
+  try {
+    await withScaleServer(async () => {
+      const committed = await runBrowser(profile, `${baseUrl}?stopAfter=${finalPageOffset}`);
+      assert.equal(committed.cursor, String(finalPageOffset));
+      assert.equal(committed.productCount, finalPageOffset);
+
+      const interrupted = await runBrowser(
+        profile,
+        `${baseUrl}?killDuringOffset=${finalPageOffset}`,
+        { stopAtStatus: "writing", killSignal: "SIGKILL" },
+      );
+      assert.equal(interrupted.cursor, String(finalPageOffset));
+      assert.equal(interrupted.killDuringOffset, finalPageOffset);
+      assert.equal(interrupted.writeCount, 50);
+
+      const recovered = await runBrowser(
+        profile,
+        `${baseUrl}?killDuringOffset=${finalPageOffset}&verifyFinalRecovery=true`,
+      );
+      assert.ok(
+        recovered.finalRecoveryState === "rolled-back" || recovered.finalRecoveryState === "committed",
+        `Unexpected final-page recovery state ${recovered.finalRecoveryState}`,
+      );
+      assert.equal(
+        recovered.productsBeforeRecovery,
+        recovered.finalRecoveryState === "rolled-back" ? finalPageOffset : 130_000,
+      );
+      assert.equal(
+        recovered.firstRequestedOffset,
+        recovered.finalRecoveryState === "rolled-back" ? finalPageOffset : undefined,
+      );
+      assert.equal(recovered.productCount, 130_000);
+      assert.equal(recovered.cursor, null);
+    });
+  } finally {
+    await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});

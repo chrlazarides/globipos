@@ -18,6 +18,7 @@ const stopAfter = Number(query.get("stopAfter") ?? TOTAL_PRODUCTS);
 const killDuringOffset = query.has("killDuringOffset") ? Number(query.get("killDuringOffset")) : null;
 const killStage = query.get("killStage");
 const verifyRecovery = query.get("verifyRecovery") === "true";
+const verifyFinalRecovery = query.get("verifyFinalRecovery") === "true";
 const seedExistingCatalog = query.get("seedExistingCatalog") === "true";
 const verifyFreshReplacement = query.get("verifyFreshReplacement") === "true";
 const result = document.querySelector<HTMLPreElement>("#result");
@@ -79,9 +80,10 @@ async function run() {
   }
 
   const startingCursor = await getSyncCursor(SERVER_ORIGIN, TERMINAL_CODE);
-  const productsBeforeRecovery = verifyRecovery || verifyFreshReplacement ? await getProducts() : [];
+  const productsBeforeRecovery = verifyRecovery || verifyFinalRecovery || verifyFreshReplacement ? await getProducts() : [];
   const categoriesBeforeRecovery = verifyFreshReplacement ? await getCategories() : [];
   let freshRecoveryState: "old" | "replacement" | null = null;
+  let finalRecoveryState: "rolled-back" | "committed" | null = null;
   if (verifyRecovery) {
     const expectedCursor = String(killDuringOffset);
     if (startingCursor !== expectedCursor) {
@@ -109,6 +111,19 @@ async function run() {
     if (startingCursor !== expectedCursor) {
       throw new Error(`Fresh replacement state ${freshRecoveryState} retained cursor ${startingCursor}`);
     }
+  }
+  if (verifyFinalRecovery) {
+    const finalPageOffset = TOTAL_PRODUCTS - PAGE_SIZE;
+    const rolledBack = startingCursor === String(finalPageOffset)
+      && productsBeforeRecovery.length === finalPageOffset;
+    const committed = startingCursor === null
+      && productsBeforeRecovery.length === TOTAL_PRODUCTS;
+    if (!rolledBack && !committed) {
+      throw new Error(
+        `Final page and cursor deletion were not atomic: found ${productsBeforeRecovery.length} products with cursor ${startingCursor}`,
+      );
+    }
+    finalRecoveryState = rolledBack ? "rolled-back" : "committed";
   }
   const requestedOffsets: number[] = [];
   let writeCount = 0;
@@ -205,13 +220,15 @@ async function run() {
   };
 
   let interrupted = false;
-  try {
-    await syncCatalog();
-  } catch (error) {
-    if (stopAfter >= TOTAL_PRODUCTS || !(error instanceof Error) || error.message !== "Catalog sync response is invalid") {
-      throw error;
+  if (finalRecoveryState !== "committed") {
+    try {
+      await syncCatalog();
+    } catch (error) {
+      if (stopAfter >= TOTAL_PRODUCTS || !(error instanceof Error) || error.message !== "Catalog sync response is invalid") {
+        throw error;
+      }
+      interrupted = true;
     }
-    interrupted = true;
   }
 
   const products = await getProducts();
@@ -277,6 +294,7 @@ async function run() {
     productsBeforeRecovery: productsBeforeRecovery.length,
     categoriesBeforeRecovery: categoriesBeforeRecovery.length,
     freshRecoveryState,
+    finalRecoveryState,
   });
 }
 
