@@ -23,10 +23,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
           cache: npm
@@ -46,7 +46,7 @@ jobs:
         run: npm run build
 
       - name: Upload frontend dist
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: frontend-dist
           path: pos-app/dist/
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Linux system dependencies
         run: |
@@ -76,7 +76,7 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: './pos-app/src-tauri -> target'
 
@@ -99,7 +99,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Linux system dependencies
         run: |
@@ -117,7 +117,7 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: './pos-app/src-tauri -> target'
 
@@ -134,10 +134,10 @@ jobs:
     needs: [ frontend, rust-check ]  # Only run if fast checks pass
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
           cache: npm
@@ -148,7 +148,7 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: './pos-app/src-tauri -> target'
 
@@ -177,7 +177,7 @@ jobs:
         # No TAURI_SIGNING_PRIVATE_KEY → unsigned binary, CI only
 
       - name: Upload smoke binary
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: pos-smoke-linux
           path: pos-app/src-tauri/target/release/globipos-terminal

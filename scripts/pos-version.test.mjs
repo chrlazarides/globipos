@@ -11,22 +11,45 @@ const execFileAsync = promisify(execFile);
 const helper = fileURLToPath(new URL("./pos-version.mjs", import.meta.url));
 const publishScript = fileURLToPath(new URL("./publish-release.sh", import.meta.url));
 const releaseWorkflow = fileURLToPath(new URL("../.github/workflows/build-pos.yml", import.meta.url));
+const ciWorkflow = fileURLToPath(new URL("../.github/workflows/ci-pos.yml", import.meta.url));
 const originalVersion = "1.2.3";
 const updatedVersion = "2.4.6";
 
-test("POS release workflow uses Node 24 actions while keeping Node 20 as the explicit build toolchain", async () => {
-  const workflow = await readFile(releaseWorkflow, "utf8");
+test("POS workflows pin reviewed actions while keeping Node 20 as the explicit build toolchain", async () => {
+  const approvedActions = new Map([
+    ["actions/checkout", ["fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", "v5"]],
+    ["actions/setup-java", ["b6effb05e454b25005698d916606bdc6ffcbf961", "v5"]],
+    ["actions/setup-node", ["a0853c24544627f65ddf259abe73b1d18a591444", "v5"]],
+    ["actions/upload-artifact", ["b7c566a772e6b6bfb58ed0dc250532a479d7789f", "v6"]],
+    ["android-actions/setup-android", ["40fd30fb8d7440372e1316f5d1809ec01dcd3699", "v4"]],
+    ["softprops/action-gh-release", ["efb35369e0ad2afab669f228072c1b0d510eae64", "v3"]],
+    ["swatinem/rust-cache", ["6323deb102c322ba6fcbdcafc7e3dddab59af2b6", "v2"]],
+    ["tauri-apps/tauri-action", ["1deb371b0cd8bd54025b384f1cd735e725c4060f", "action-v1.0.0"]],
+  ]);
 
-  assert.doesNotMatch(workflow, /actions\/checkout@v4/);
-  assert.doesNotMatch(workflow, /actions\/setup-node@v4/);
-  assert.doesNotMatch(workflow, /actions\/setup-java@v4/);
-  assert.doesNotMatch(workflow, /android-actions\/setup-android@v3/);
-  assert.doesNotMatch(workflow, /softprops\/action-gh-release@v2/);
-  assert.match(workflow, /actions\/checkout@v5/);
-  assert.match(workflow, /actions\/setup-node@v5[\s\S]*?node-version: 20/);
-  assert.match(workflow, /actions\/setup-java@v5/);
-  assert.match(workflow, /android-actions\/setup-android@v4/);
-  assert.match(workflow, /softprops\/action-gh-release@v3/);
+  for (const workflowPath of [releaseWorkflow, ciWorkflow]) {
+    const workflow = await readFile(workflowPath, "utf8");
+    const actionLines = workflow.matchAll(
+      /^\s*-?\s*uses:\s+([^@\s]+)@([^\s#]+)(?:\s+#\s*(\S+))?\s*$/gm,
+    );
+    let actionCount = 0;
+
+    for (const [, action, revision, versionComment] of actionLines) {
+      actionCount += 1;
+      const approved = approvedActions.get(action);
+      assert.ok(approved, `Unreviewed action in ${workflowPath}: ${action}`);
+      assert.equal(revision, approved[0], `Unexpected revision for ${action} in ${workflowPath}`);
+      assert.equal(versionComment, approved[1], `Missing or outdated version comment for ${action} in ${workflowPath}`);
+    }
+
+    assert.ok(actionCount > 0, `No action references found in ${workflowPath}`);
+  }
+
+  const workflow = await readFile(releaseWorkflow, "utf8");
+  assert.match(
+    workflow,
+    /actions\/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5[\s\S]*?node-version: 20/,
+  );
 });
 
 test("POS release workflow keeps desktop, Android, and published-release verification gated", async () => {

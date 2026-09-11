@@ -54,3 +54,4 @@
 - [Item image storage fallback](item-image-storage-fallback.md) — App Storage needs an attached bucket; item renditions must retain a deployment-local durable fallback
 - [Deployment image exclusions](deployment-image-exclusions.md) — use .replitignore for publish bundles; hidden and deployment.ignorePaths did not exclude a native target from Autoscale
 - [GlobiPOS app icon](globipos-app-icon.md) — installer and launcher icons use the standalone blue aperture mark; horizontal wordmarks become unreadable at taskbar sizes
+- [GitHub Action annotated tags](github-action-annotated-tags.md) — peel annotated tags before pinning actions; the tag object SHA is not the underlying commit SHA
