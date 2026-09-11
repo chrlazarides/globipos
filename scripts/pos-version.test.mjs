@@ -87,6 +87,10 @@ case "$url" in
     ;;
   *"/runs?event="*)
     case "$TEST_SCENARIO" in
+      run-list-failed)
+        printf '{"message":"workflow run lookup rejected"}' >&2
+        exit 22
+        ;;
       missing) printf '{"workflow_runs":[]}' ;;
       malformed-run-list-json) printf '{"workflow_runs":[' ;;
       malformed-run-list-shape) printf '{"workflow_runs":{}}' ;;
@@ -193,6 +197,29 @@ test("does not create or push a tag when GitHub rejects the Windows run-status r
     "https://api.github.com/repos/example/globipos/actions/workflows/build-pos.yml/dispatches",
     "https://api.github.com/repos/example/globipos/actions/workflows/build-pos.yml/runs?event=workflow_dispatch&branch=main&per_page=20",
     "https://api.github.com/repos/example/globipos/actions/runs/4242",
+  ]);
+});
+
+test("does not create or push a tag when GitHub rejects the Windows preflight run lookup", async (t) => {
+  const fixture = await createWindowsPreflightFixture("run-list-failed");
+  t.after(() => rm(fixture.root, { recursive: true, force: true }));
+
+  await assert.rejects(
+    fixture.run(),
+    (error) =>
+      error.code === 1 &&
+      error.stderr.includes("workflow run lookup rejected") &&
+      error.stderr.includes("Could not look up the Windows release preflight run"),
+  );
+
+  const operations = await readGitOperations(fixture.gitLog);
+  assert.doesNotMatch(operations, /^tag -a /m);
+  assert.doesNotMatch(operations, /^push origin v1\.2\.3$/m);
+
+  const requests = (await readFile(fixture.curlLog, "utf8")).trim().split("\n");
+  assert.deepEqual(requests, [
+    "https://api.github.com/repos/example/globipos/actions/workflows/build-pos.yml/dispatches",
+    "https://api.github.com/repos/example/globipos/actions/workflows/build-pos.yml/runs?event=workflow_dispatch&branch=main&per_page=20",
   ]);
 });
 

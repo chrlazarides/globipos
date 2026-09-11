@@ -106,7 +106,8 @@ run_windows_preflight() {
 
   run_id=""
   for _ in {1..30}; do
-    run_json=$(github_api GET "/actions/workflows/build-pos.yml/runs?event=workflow_dispatch&branch=main&per_page=20")
+    run_json=$(github_api GET "/actions/workflows/build-pos.yml/runs?event=workflow_dispatch&branch=main&per_page=20") \
+      || error "Could not look up the Windows release preflight run."
     run_id=$(node -e '
       const fs = require("fs");
       const expectedSha = process.argv[1];
