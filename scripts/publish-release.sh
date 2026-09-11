@@ -35,7 +35,6 @@ cleanup_release_auth() {
     rm -f "$RELEASE_ASKPASS"
   fi
 }
-
 cleanup_release() {
   local status=$?
   if [[ "$status" -ne 0 && "$RELEASE_VERSION_MUTATED" -eq 1 && -n "$RELEASE_VERSION_BACKUP" ]]; then
