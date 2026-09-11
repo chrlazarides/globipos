@@ -6,6 +6,7 @@ on:
     paths:
       - 'pos-app/**'
       - '.github/dependabot.yml'
+      - '.github/workflows/build-pos.yml'
       - '.github/workflows/ci-pos.yml'
       - 'scripts/pos-toolchain-config.test.mjs'
   pull_request:
@@ -13,6 +14,7 @@ on:
     paths:
       - 'pos-app/**'
       - '.github/dependabot.yml'
+      - '.github/workflows/build-pos.yml'
       - '.github/workflows/ci-pos.yml'
       - 'scripts/pos-toolchain-config.test.mjs'
 
@@ -33,7 +35,12 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install workflow configuration parser
+        run: npm install --prefix "$RUNNER_TEMP/pos-config-deps" --no-save --package-lock=false --ignore-scripts --registry=https://registry.npmjs.org yaml@2.9.0
+
       - name: Verify Dependabot and POS CI remain connected
+        env:
+          NODE_PATH: ${{ runner.temp }}/pos-config-deps/node_modules
         run: npm run test:pos-toolchain-config
 
   # ── Job 1: Frontend — TypeScript + Vite build ───────────────────────────────
@@ -146,13 +153,60 @@ jobs:
         env:
           RUST_BACKTRACE: '1'
 
-  # ── Job 4: Smoke build — full compile on Linux, no signing ──────────────────
+  # ── Job 4: Desktop platforms — compile with the pinned Rust toolchain ────────
+  desktop-platform-check:
+    name: Desktop compile (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: macos-latest
+            label: macOS
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: pos-app/package-lock.json
+
+      - name: Install pinned Rust toolchain
+        working-directory: pos-app
+        run: rustup show active-toolchain
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: './pos-app/src-tauri -> target'
+
+      - name: Install frontend dependencies deterministically
+        working-directory: pos-app
+        run: npm ci
+
+      - name: Compile native Tauri application
+        working-directory: pos-app
+        run: npx tauri build --no-bundle -- --locked
+
+  # ── Job 5: Smoke build — full compile on Linux, no signing ──────────────────
   smoke-build:
     name: Smoke build (Linux full compile)
     runs-on: ubuntu-22.04
-    needs: [ frontend, rust-check ]  # Only run if fast checks pass
+    needs: [ frontend, rust-check, desktop-platform-check ]
+    if: always()
 
     steps:
+      - name: Require all compile prerequisites to pass
+        run: |
+          test '${{ needs.frontend.result }}' = 'success'
+          test '${{ needs.rust-check.result }}' = 'success'
+          test '${{ needs.desktop-platform-check.result }}' = 'success'
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup Node.js 20

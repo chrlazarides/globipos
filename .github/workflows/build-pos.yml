@@ -122,9 +122,17 @@ jobs:
         working-directory: pos-app
         run: npx tauri build --no-bundle -- --locked
 
-  windows-native-preflight:
-    name: Validate Windows native POS build
-    runs-on: windows-latest
+  desktop-native-preflight:
+    name: Validate ${{ matrix.label }} native POS build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: macos-latest
+            label: macOS
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -150,7 +158,7 @@ jobs:
   # ── Desktop: Windows, macOS, Linux ─────────────────────────────────────────
   build-desktop:
     if: github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)
-    needs: [validate-version, native-preflight, windows-native-preflight]
+    needs: [validate-version, native-preflight, desktop-native-preflight]
     strategy:
       fail-fast: false
       matrix:
@@ -257,7 +265,7 @@ jobs:
     name: Build Android APK
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)
-    needs: [validate-version, native-preflight, windows-native-preflight]
+    needs: [validate-version, native-preflight, desktop-native-preflight]
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

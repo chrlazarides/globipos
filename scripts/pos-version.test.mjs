@@ -71,7 +71,7 @@ function validateReleaseWorkflowGates(source) {
     assert.ok(platforms.includes(platform), `${description} must build ${platform}`);
   }
 
-  const requiredPreflightJobs = ["validate-version", "native-preflight", "windows-native-preflight"];
+  const requiredPreflightJobs = ["validate-version", "native-preflight", "desktop-native-preflight"];
   assert.deepEqual(
     desktopJob.needs,
     requiredPreflightJobs,
@@ -152,7 +152,7 @@ test("a commented-out POS release platform does not satisfy the workflow guard",
   const missingPlatformWorkflow = `
 jobs:
   build-desktop:
-    needs: [validate-version, native-preflight, windows-native-preflight]
+    needs: [validate-version, native-preflight, desktop-native-preflight]
     strategy:
       matrix:
         include:
@@ -161,7 +161,7 @@ jobs:
           # - platform: ubuntu-22.04
     steps: []
   build-android:
-    needs: [validate-version, native-preflight, windows-native-preflight]
+    needs: [validate-version, native-preflight, desktop-native-preflight]
     steps: []
   verify-release:
     needs: [build-desktop, build-android]
@@ -180,7 +180,7 @@ test("a commented-out POS release verifier does not satisfy the workflow guard",
   const missingVerifierWorkflow = `
 jobs:
   build-desktop:
-    needs: [validate-version, native-preflight, windows-native-preflight]
+    needs: [validate-version, native-preflight, desktop-native-preflight]
     strategy:
       matrix:
         include:
@@ -189,7 +189,7 @@ jobs:
           - platform: ubuntu-22.04
     steps: []
   build-android:
-    needs: [validate-version, native-preflight, windows-native-preflight]
+    needs: [validate-version, native-preflight, desktop-native-preflight]
     steps: []
   verify-release:
     needs: [build-desktop, build-android]
