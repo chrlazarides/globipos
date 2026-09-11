@@ -4,6 +4,8 @@ use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use std::time::Duration;
 
+const CATALOG_PAGE_MAX_ATTEMPTS: usize = 4;
+
 // ── Terminal registration ─────────────────────────────────────────────────────
 
 pub async fn register_terminal(
@@ -133,30 +135,7 @@ async fn fetch_catalog_pages(
         if let Some(c) = cursor.as_deref() {
             url.query_pairs_mut().append_pair("cursor", c);
         }
-        let resp = client
-            .get(url.clone())
-            .header("X-Terminal-Code", terminal_code)
-            // reqwest is built without compression features. Prevent an intermediary from
-            // returning compressed bytes that serde_json would otherwise try to parse.
-            .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .send()
-            .await
-            .map_err(|e| format!("Catalog sync network error: {}", e))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Catalog sync server error {}: {}", status, body));
-        }
-        let content_type = resp
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("missing")
-            .to_string();
-        let body = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("Catalog sync response read error from {}: {}", url, e))?;
+        let (body, content_type) = fetch_catalog_page(&client, &url, terminal_code).await?;
         let data = decode_catalog_body(&body, &content_type, url.as_str())?;
         let items = data["items"].as_array().cloned().unwrap_or_default();
         let cats = data["categories"].as_array().cloned().unwrap_or_default();
@@ -189,6 +168,83 @@ async fn fetch_catalog_pages(
         }
     }
     Ok(total)
+}
+
+/// Fetches a page with retries for interrupted connections. Catalog page writes are idempotent
+/// and the cursor is only saved after the entire page is read and applied, so retrying a GET is
+/// safe even if a proxy closes the body stream after returning HTTP 200.
+async fn fetch_catalog_page(
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    terminal_code: &str,
+) -> Result<(Vec<u8>, String), String> {
+    for attempt in 1..=CATALOG_PAGE_MAX_ATTEMPTS {
+        let resp = match client
+            .get(url.clone())
+            .header("X-Terminal-Code", terminal_code)
+            // reqwest is built without compression features. Prevent an intermediary from
+            // returning compressed bytes that serde_json would otherwise try to parse.
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(error) if attempt < CATALOG_PAGE_MAX_ATTEMPTS => {
+                wait_before_catalog_retry(attempt, url, &error.to_string()).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Catalog sync network error from {} after {} attempts: {}",
+                    url, CATALOG_PAGE_MAX_ATTEMPTS, error
+                ));
+            }
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Catalog sync server error {}: {}", status, body));
+        }
+
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("missing")
+            .to_string();
+        match resp.bytes().await {
+            Ok(body) => return Ok((body.to_vec(), content_type)),
+            Err(error) if attempt < CATALOG_PAGE_MAX_ATTEMPTS => {
+                wait_before_catalog_retry(attempt, url, &error.to_string()).await;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Catalog sync response read error from {} after {} attempts: {}",
+                    url, CATALOG_PAGE_MAX_ATTEMPTS, error
+                ));
+            }
+        }
+    }
+
+    unreachable!("catalog page retry loop returns on every final attempt")
+}
+
+async fn wait_before_catalog_retry(attempt: usize, url: &reqwest::Url, error: &str) {
+    let delay = catalog_retry_delay(attempt);
+    eprintln!(
+        "Catalog sync request to {} failed on attempt {}/{}: {}; retrying in {}s",
+        url,
+        attempt,
+        CATALOG_PAGE_MAX_ATTEMPTS,
+        error,
+        delay.as_secs()
+    );
+    tokio::time::sleep(delay).await;
+}
+
+fn catalog_retry_delay(attempt: usize) -> Duration {
+    Duration::from_secs(1_u64 << (attempt - 1))
 }
 
 fn decode_catalog_body(body: &[u8], content_type: &str, url: &str) -> Result<Value, String> {
@@ -261,6 +317,13 @@ mod cursor_tests {
         assert!(error.contains("300 bytes"));
         assert!(error.contains(&"<".repeat(160)));
         assert!(!error.contains(&"<".repeat(161)));
+    }
+
+    #[test]
+    fn catalog_page_retries_back_off_and_stay_bounded() {
+        assert_eq!(catalog_retry_delay(1), Duration::from_secs(1));
+        assert_eq!(catalog_retry_delay(2), Duration::from_secs(2));
+        assert_eq!(catalog_retry_delay(3), Duration::from_secs(4));
     }
 }
 
