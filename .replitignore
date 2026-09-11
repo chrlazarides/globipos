@@ -1,0 +1,23 @@
+# Development tooling and local caches
+.agents/
+.cache/
+.config/
+.git/
+.local/
+.pythonlibs/
+.upm/
+
+# Dependencies and generated output are recreated during the deployment build
+node_modules/
+dist/
+customer-app/node_modules/
+customer-app/dist/
+
+# Separate applications and design artifacts are not used by the web deployment
+pos-app/
+pda-app/
+artifacts/
+
+# Local uploads and test output are not runtime dependencies
+attached_assets/
+test-results/

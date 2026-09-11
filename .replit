@@ -62,24 +62,6 @@ PORT = "5000"
 deploymentTarget = "autoscale"
 run = ["node", "./dist/index.cjs"]
 build = ["npm", "run", "build"]
-ignorePaths = [
-  ".agents",
-  ".cache",
-  ".config",
-  ".git",
-  ".local",
-  ".pythonlibs",
-  ".upm",
-  "artifacts",
-  "attached_assets",
-  "customer-app/dist",
-  "customer-app/node_modules",
-  "dist",
-  "node_modules",
-  "pda-app",
-  "pos-app",
-  "test-results"
-]
 
 [workflows]
 runButton = "Project"
