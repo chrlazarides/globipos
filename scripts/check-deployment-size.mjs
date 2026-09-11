@@ -10,6 +10,7 @@ const warningBytes = 6 * 1024 ** 3;
 
 const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
 const packageLock = JSON.parse(await readFile(path.join(root, "package-lock.json"), "utf8"));
+const deploymentIgnore = await readFile(path.join(root, ".replitignore"), "utf8");
 const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 if (!semverPattern.test(packageJson.version)) {
   throw new Error(`Backend package version is invalid: ${packageJson.version}.`);
@@ -18,6 +19,16 @@ if (packageLock.version !== packageJson.version || packageLock.packages?.[""]?.v
   throw new Error(
     `Backend package versions are not aligned: package=${packageJson.version}, ` +
     `lock=${packageLock.version}, lock root=${packageLock.packages?.[""]?.version}.`,
+  );
+}
+
+const ignoredPaths = deploymentIgnore
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter((line) => line && !line.startsWith("#"));
+if (ignoredPaths.includes("dist/") || ignoredPaths.includes("/dist/")) {
+  throw new Error(
+    ".replitignore must not exclude root dist/: npm run build writes the production server to dist/index.cjs.",
   );
 }
 

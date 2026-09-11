@@ -7,9 +7,9 @@
 .pythonlibs/
 .upm/
 
-# Dependencies and generated output are recreated during the deployment build
+# Dependencies are recreated during the deployment build.
+# Keep root dist/ in the final image because it contains the production server.
 node_modules/
-dist/
 customer-app/node_modules/
 customer-app/dist/
 
