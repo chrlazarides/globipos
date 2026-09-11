@@ -26,9 +26,15 @@ const ignoredPaths = deploymentIgnore
   .split(/\r?\n/)
   .map((line) => line.trim())
   .filter((line) => line && !line.startsWith("#"));
-if (ignoredPaths.includes("dist/") || ignoredPaths.includes("/dist/")) {
+const requiredRuntimePaths = ["dist/", "node_modules/"];
+const excludedRuntimePaths = requiredRuntimePaths.filter(
+  (requiredPath) =>
+    ignoredPaths.includes(requiredPath) || ignoredPaths.includes(`/${requiredPath}`),
+);
+if (excludedRuntimePaths.length > 0) {
   throw new Error(
-    ".replitignore must not exclude root dist/: npm run build writes the production server to dist/index.cjs.",
+    `.replitignore must not exclude production runtime paths: ${excludedRuntimePaths.join(", ")}. ` +
+      "The server runs from dist/index.cjs and intentionally loads some packages from node_modules.",
   );
 }
 
