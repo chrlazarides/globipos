@@ -37,11 +37,6 @@ permissions:
 
 env:
   TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-  NPM_CONFIG_MAXSOCKETS: 2000
-  NPM_CONFIG_FETCH_RETRIES: 5
-  NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: 1000
-  NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 10000
-  NPM_CONFIG_FETCH_TIMEOUT: 600000
 
 jobs:
   test-version-helper:
@@ -55,10 +50,10 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
-      - name: Pin npm for deterministic installs
-        run: npm install --global npm@10.9.3
       - name: Install dependencies deterministically
-        run: npm ci --no-audit --no-fund
+        run: |
+          corepack pnpm@9.15.9 import
+          corepack pnpm@9.15.9 install --frozen-lockfile
       - name: Test version and published-asset release safeguards
         run: node --test --test-concurrency=1 scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs
 
@@ -75,19 +70,13 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
-      - name: Pin npm for deterministic installs
-        run: npm install --global npm@10.9.3
       - name: Install dependencies
-        shell: bash
         run: |
-          if ! npm ci --no-audit --no-fund || [ ! -x node_modules/.bin/playwright ]; then
-            echo "::warning::npm ci did not produce Playwright; retrying from a clean node_modules"
-            rm -rf node_modules
-            npm ci --no-audit --no-fund
-          fi
+          corepack pnpm@9.15.9 import
+          corepack pnpm@9.15.9 install --frozen-lockfile
           test -x node_modules/.bin/playwright
       - name: Install Chromium
-        run: npx playwright install chromium
+        run: corepack pnpm@9.15.9 exec playwright install chromium
       - name: Check install action, manifest, service worker, and icons
         run: npm run test:pos-pwa
 
