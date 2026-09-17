@@ -204,6 +204,7 @@ jobs:
 
       - name: Install macOS cross-compilation targets
         if: matrix.extra-rust-targets
+        working-directory: pos-app
         run: rustup target add $(echo '${{ matrix.extra-rust-targets }}' | tr ',' ' ')
 
       - name: Rust cache
