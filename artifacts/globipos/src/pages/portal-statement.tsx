@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FileText } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { getPortalQueryFn } from "@/lib/queryClient";
 import type { Customer } from "@shared/schema";
 
 interface PortalStatementProps {
@@ -13,10 +14,12 @@ interface PortalStatementProps {
 export default function PortalStatement({ customer }: PortalStatementProps) {
   const { data: invoices, isLoading: loadingInvoices } = useQuery<any[]>({
     queryKey: ["/api/portal/customer", customer.id, "invoices"],
+    queryFn: getPortalQueryFn(`/api/portal/customer/${customer.id}/invoices`),
   });
 
   const { data: statement, isLoading: loadingStatement } = useQuery<any>({
     queryKey: ["/api/portal/customer", customer.id, "statement"],
+    queryFn: getPortalQueryFn(`/api/portal/customer/${customer.id}/statement`),
   });
 
   const fmt = (v: string | number) =>

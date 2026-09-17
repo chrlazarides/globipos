@@ -3,9 +3,16 @@ import { db } from "./db";
 import { eq, and, gte, lte, lt, gt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeQrCode, synthesizeSequentialCode } from "./barcode-utils";
 import {
+  assertPortalOrderTransition,
+  calculateCashbackReservation,
+  calculateCompletedRewards,
+  calculateRefundCashbackBalance,
+  validateRedemption,
+} from "./loyalty-policy";
+import {
   users, categories, colors, sizes, items, itemShelfPriceHistory, itemVariants, itemBarcodes, variantTemplates, inventoryInLines, customers, priceContracts, priceContractItems, priceContractRules,
   seasonalOffers, seasonalOfferItems, invoices, invoiceItems, payments,
-  portalOrders, portalOrderItems, systemSettings, customerLoyaltyPoints,
+  portalOrders, portalOrderItems, systemSettings, customerLoyaltyPoints, customerCashbackLedger,
   suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments,
   emailLogs, accounts, journalEntries, journalEntryLines, expenses,
   posLocations, posTerminals, posLayoutSets, posLayoutButtons,
@@ -177,6 +184,14 @@ export interface IStorage {
   getCustomerIdsWithWhatsappOrders(): Promise<string[]>;
   getAllPortalOrders(filters?: { source?: string; status?: string }): Promise<(PortalOrder & { items: PortalOrderItem[]; customerName: string; customerCode: string })[]>;
   updatePortalOrderStatus(id: string, status: string): Promise<PortalOrder | undefined>;
+  transitionPortalOrderStatus(id: string, status: string, policy: {
+    loyaltyEnabled: boolean; cashbackEnabled: boolean; pointsPerEuro: number;
+    silverThreshold: number; goldThreshold: number; bronzeCashbackPercent: number;
+    silverCashbackPercent: number; goldCashbackPercent: number;
+  }): Promise<PortalOrder | undefined>;
+  redeemCustomerPointsAtomic(customerId: string, points: number, redemptionKey: string, policy: {
+    loyaltyEnabled: boolean; cashbackEnabled: boolean; redeemPointsPerEuro: number; minimumRedemptionPoints: number;
+  }): Promise<{ pointsRedeemed: number; discountEuros: number; newBalance: number; replayed: boolean }>;
   setPortalOrderInvoiceId(id: string, invoiceId: string): Promise<PortalOrder | undefined>;
   createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]): Promise<PortalOrder>;
   getCustomerPortalOrderByCheckoutKey(customerId: string, checkoutKey: string): Promise<PortalOrder | undefined>;
@@ -2411,8 +2426,114 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updatePortalOrderStatus(id: string, status: string) {
+    // Legacy callers cannot apply rewards safely without policy; preserve the
+    // old mutation only for non-reward statuses. Admin routes use the guarded
+    // transition method below.
     const [updated] = await db.update(portalOrders).set({ status }).where(eq(portalOrders.id, id)).returning();
     return updated;
+  }
+
+  async transitionPortalOrderStatus(id: string, status: string, policy: any) {
+    return db.transaction(async (tx) => {
+      const [order] = await tx.select().from(portalOrders).where(eq(portalOrders.id, id)).for("update");
+      if (!order) return undefined;
+      if (order.status === status) return order;
+      assertPortalOrderTransition(order.status, status);
+      const cashback = Number(order.cashbackApplied || 0);
+      if (status === "completed") {
+        const [balanceRow] = await tx.select({ balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)` })
+          .from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, order.customerId));
+        const rewards = calculateCompletedRewards(
+          Number(order.subtotal),
+          Number(balanceRow?.balance || 0),
+          policy,
+        );
+        const points = rewards.points;
+        if (points > 0) await tx.insert(customerLoyaltyPoints).values({
+          customerId: order.customerId, points, type: "earn", reason: `Order #${id.slice(0, 8)}`,
+          sourceType: "portal_order", sourceId: id,
+        }).onConflictDoNothing();
+        const earned = rewards.cashback;
+        if (earned > 0) {
+          await tx.insert(customerCashbackLedger).values({
+            customerId: order.customerId, amount: earned.toFixed(2), type: "earn",
+            reason: `Completed order #${id.slice(0, 8)}`, sourceType: "portal_order_earn", sourceId: id,
+          }).onConflictDoNothing();
+          await tx.update(customers).set({ cashbackBalance: sql`coalesce(${customers.cashbackBalance},0) + ${earned.toFixed(2)}` })
+            .where(eq(customers.id, order.customerId));
+        }
+      }
+      if ((status === "rejected" || status === "cancelled") && cashback > 0) {
+        await tx.insert(customerCashbackLedger).values({
+          customerId: order.customerId, amount: cashback.toFixed(2), type: "release",
+          reason: `Released cashback for ${status} order`, sourceType: "portal_order_release", sourceId: id,
+        }).onConflictDoNothing();
+        await tx.update(customers).set({ cashbackBalance: sql`coalesce(${customers.cashbackBalance},0) + ${cashback.toFixed(2)}` })
+          .where(eq(customers.id, order.customerId));
+      }
+      if (status === "refunded") {
+        const [earn] = await tx.select().from(customerCashbackLedger).where(and(
+          eq(customerCashbackLedger.sourceType, "portal_order_earn"), eq(customerCashbackLedger.sourceId, id),
+        ));
+        const earnedCashback = Number(earn?.amount || 0);
+        if (earn) {
+          await tx.insert(customerCashbackLedger).values({
+            customerId: order.customerId, amount: (-Number(earn.amount)).toFixed(2), type: "reverse",
+            reason: `Refunded order #${id.slice(0, 8)}`, sourceType: "portal_order_refund", sourceId: id,
+          }).onConflictDoNothing();
+        }
+        const [points] = await tx.select().from(customerLoyaltyPoints).where(and(
+          eq(customerLoyaltyPoints.sourceType, "portal_order"), eq(customerLoyaltyPoints.sourceId, id),
+        ));
+        if (points) await tx.insert(customerLoyaltyPoints).values({
+          customerId: order.customerId, points: -points.points, type: "adjust",
+          reason: `Refunded order #${id.slice(0, 8)}`, sourceType: "portal_order_refund", sourceId: id,
+        }).onConflictDoNothing();
+        if (cashback > 0) {
+          await tx.insert(customerCashbackLedger).values({
+            customerId: order.customerId, amount: cashback.toFixed(2), type: "release",
+            reason: "Restored cashback after refund", sourceType: "portal_order_refund_applied", sourceId: id,
+          }).onConflictDoNothing();
+        }
+        const [customer] = await tx.select({ cashbackBalance: customers.cashbackBalance })
+          .from(customers).where(eq(customers.id, order.customerId)).for("update");
+        const refundedBalance = calculateRefundCashbackBalance(
+          Number(customer?.cashbackBalance || 0),
+          earnedCashback,
+          cashback,
+        );
+        await tx.update(customers).set({ cashbackBalance: refundedBalance.toFixed(2) })
+          .where(eq(customers.id, order.customerId));
+      }
+      const [updated] = await tx.update(portalOrders).set({ status }).where(eq(portalOrders.id, id)).returning();
+      return updated;
+    });
+  }
+
+  async redeemCustomerPointsAtomic(customerId: string, points: number, redemptionKey: string, policy: any) {
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`select id from ${customers} where ${customers.id} = ${customerId} for update`);
+      const [existing] = await tx.select().from(customerCashbackLedger).where(and(
+        eq(customerCashbackLedger.customerId, customerId),
+        eq(customerCashbackLedger.sourceType, "redemption"), eq(customerCashbackLedger.sourceId, redemptionKey),
+      ));
+      if (existing) {
+        const [redemption] = await tx.select({ points: customerLoyaltyPoints.points }).from(customerLoyaltyPoints)
+          .where(and(eq(customerLoyaltyPoints.sourceType, "redemption"), eq(customerLoyaltyPoints.sourceId, redemptionKey)));
+        if (redemption && Math.abs(redemption.points) !== points) throw new Error("REDEMPTION_KEY_CONFLICT");
+        const discountEuros = Number(existing.amount);
+        const [row] = await tx.select({ balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)` })
+          .from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, customerId));
+        return { pointsRedeemed: Math.round(discountEuros * policy.redeemPointsPerEuro), discountEuros, newBalance: Number(row?.balance || 0), replayed: true };
+      }
+      const [row] = await tx.select({ balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)` })
+        .from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, customerId));
+      const discountEuros = validateRedemption(points, Number(row?.balance || 0), policy);
+      await tx.insert(customerLoyaltyPoints).values({ customerId, points: -points, type: "redeem", reason: `Redeemed ${points} points`, sourceType: "redemption", sourceId: redemptionKey });
+      await tx.insert(customerCashbackLedger).values({ customerId, amount: discountEuros.toFixed(2), type: "redeem", reason: `Redeemed ${points} points`, sourceType: "redemption", sourceId: redemptionKey });
+      await tx.update(customers).set({ cashbackBalance: sql`coalesce(${customers.cashbackBalance},0) + ${discountEuros.toFixed(2)}` }).where(eq(customers.id, customerId));
+      return { pointsRedeemed: points, discountEuros, newBalance: Number(row?.balance || 0) - points, replayed: false };
+    });
   }
 
   async setPortalOrderInvoiceId(id: string, invoiceId: string) {
@@ -2470,10 +2591,12 @@ export class DatabaseStorage implements IStorage {
       const subtotal = Number(data.subtotal);
       const grossTotal = subtotal + Number(data.vatAmount);
       const availableCashback = Number(lockedCustomer.cashback_balance || 0);
-      const cashbackLimit = grossTotal * (options.maxCashbackOrderPercent / 100);
-      const cashbackApplied = options.useCashback && options.cashbackEnabled
-        ? Math.min(availableCashback, grossTotal, cashbackLimit)
-        : 0;
+      const cashbackApplied = calculateCashbackReservation(
+        availableCashback,
+        grossTotal,
+        options.useCashback,
+        options,
+      );
       const total = Math.max(0, grossTotal - cashbackApplied);
 
       const [order] = await tx.insert(portalOrders).values({
@@ -2485,38 +2608,17 @@ export class DatabaseStorage implements IStorage {
         await tx.insert(portalOrderItems).values(lineItems.map((item) => ({ ...item, orderId: order.id })));
       }
 
-      const [loyaltyTotals] = await tx.select({
-        balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}), 0)`,
-      }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, data.customerId));
-      const priorPointsBalance = Number(loyaltyTotals?.balance || 0);
-      const requestedPoints = options.loyaltyEnabled ? Math.floor(subtotal * options.pointsPerEuro) : 0;
-      let awardedPoints = 0;
-      if (requestedPoints > 0) {
-        const [award] = await tx.insert(customerLoyaltyPoints).values({
-          customerId: data.customerId,
-          points: requestedPoints,
-          type: "earn",
-          reason: `Order #${order.id.slice(0, 8)}`,
-          sourceType: "portal_order",
-          sourceId: order.id,
-        }).onConflictDoNothing().returning({ points: customerLoyaltyPoints.points });
-        awardedPoints = award?.points || 0;
+      // Pending orders only reserve wallet funds. Points and earned cashback
+      // are created by transitionPortalOrderStatus("completed").
+      if (cashbackApplied > 0) {
+        await tx.insert(customerCashbackLedger).values({
+          customerId: data.customerId, amount: (-cashbackApplied).toFixed(2),
+          type: "reserve", reason: `Reserved for order`,
+          sourceType: "portal_order_reserve", sourceId: order.id,
+        });
       }
-
-      const pointsBalance = priorPointsBalance + awardedPoints;
-      const cashbackRate = pointsBalance >= options.goldThreshold
-        ? options.goldCashbackPercent
-        : pointsBalance >= options.silverThreshold
-          ? options.silverCashbackPercent
-          : options.bronzeCashbackPercent;
-      const earnedCashback = options.cashbackEnabled
-        ? Number((subtotal * cashbackRate / 100).toFixed(2))
-        : 0;
-      const newCashbackBalance = availableCashback - cashbackApplied + earnedCashback;
-      if (newCashbackBalance < 0) throw new Error("INSUFFICIENT_CASHBACK");
-
       await tx.update(customers)
-        .set({ cashbackBalance: newCashbackBalance.toFixed(2) })
+        .set({ cashbackBalance: (availableCashback - cashbackApplied).toFixed(2) })
         .where(eq(customers.id, data.customerId));
 
       return { order, replayed: false };

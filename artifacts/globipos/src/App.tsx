@@ -35,6 +35,7 @@ import SupplierPaymentsPage from "@/pages/supplier-payments";
 import CustomerPaymentsPage from "@/pages/customer-payments";
 import ImportData from "@/pages/import-data";
 import EmailLogs from "@/pages/email-logs";
+import CustomerFeedback from "@/pages/customer-feedback";
 import ChartOfAccounts from "@/pages/chart-of-accounts";
 import JournalEntries from "@/pages/journal-entries";
 import Expenses from "@/pages/expenses";
@@ -159,6 +160,7 @@ function AdminRouter() {
       <Route path="/offers" component={Offers} />
       <Route path="/reports" component={Reports} />
       <Route path="/email-logs" component={EmailLogs} />
+      <Route path="/customer-feedback" component={CustomerFeedback} />
       <Route path="/accounting/chart-of-accounts" component={ChartOfAccounts} />
       <Route path="/accounting/journal-entries" component={JournalEntries} />
       <Route path="/accounting/expenses" component={Expenses} />

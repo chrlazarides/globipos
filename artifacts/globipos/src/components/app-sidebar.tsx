@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus, ArrowLeftRight, CalendarClock, MonitorCog, Plug } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus, ArrowLeftRight, CalendarClock, MonitorCog, Plug, MessageSquareHeart } from "lucide-react";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { LogoImg } from "@/components/logo-img";
@@ -36,6 +36,7 @@ const mainNav = [
   { title: "Expiration & Alerts", url: "/expiration", icon: CalendarClock, module: "items" },
   { title: "Customers", url: "/customers", icon: Users, module: "customers" },
   { title: "Customer Statements", url: "/reports?tab=statements", icon: ClipboardList, module: "statements" },
+  { title: "Customer Feedback", url: "/customer-feedback", icon: MessageSquareHeart, module: "customers" },
   { title: "Email Log", url: "/email-logs", icon: Mail, module: "email_logs" },
 ];
 

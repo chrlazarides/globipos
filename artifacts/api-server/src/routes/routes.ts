@@ -3,7 +3,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "../storage";
 import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, itemLocationStock, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@workspace/db";
-import { customerPreferences, customerFeedback, customerNotifications } from "@workspace/db";
+import { customerPreferences, customerFeedback, customerNotifications, customerCashbackLedger } from "@workspace/db";
 import { productFamilies, insertProductFamilySchema } from "@workspace/db";
 import { labelProfiles } from "@workspace/db";
 import { parseAdminImportRequest, shouldRestoreBackupSettings } from "../import-settings-policy";
@@ -6077,12 +6077,14 @@ export async function registerRoutes(
   });
 
   app.get("/api/portal/customer/:id", async (req, res) => {
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
     const customer = await storage.getCustomer((req.params.id as string));
     if (!customer) return res.status(404).json({ message: "Not found" });
     res.json(customer);
   });
 
   app.get("/api/portal/customer/:id/invoices", async (req, res) => {
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
     try {
       const invoices = await storage.getCustomerInvoices((req.params.id as string));
       res.json(invoices);
@@ -6092,6 +6094,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/portal/customer/:id/orders", async (req, res) => {
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
     try {
       const orders = await storage.getPortalOrders((req.params.id as string));
       res.json(orders);
@@ -6101,6 +6104,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/portal/customer/:id/statement", async (req, res) => {
+    if (!requirePortalAuth(req, res, (req.params.id as string))) return;
     try {
       const statements = await storage.getCustomerStatements();
       const st = statements.find(s => s.customerId === (req.params.id as string));
@@ -6122,12 +6126,34 @@ export async function registerRoutes(
 
   app.post("/api/portal/orders", async (req, res) => {
     try {
-      const { customerId, items: orderItems, notes } = req.body;
-      if (!customerId || !orderItems?.length) {
-        return res.status(400).json({ message: "Customer and items required" });
+      const token = (req.headers["x-portal-token"] as string | undefined) || "";
+      const payload = verifyPortalToken(token);
+      if (!payload) {
+        res.status(401).json({ message: "Portal authentication required" });
+        return;
+      }
+      const customerId = payload.customerId;
+      const { items: orderItems, notes, checkoutKey, useCashback } = req.body;
+      if (!Array.isArray(orderItems) || orderItems.length === 0 || orderItems.length > 100) {
+        res.status(400).json({ message: "Items required" });
+        return;
+      }
+      if (typeof checkoutKey !== "string" || !z.string().uuid().safeParse(checkoutKey).success) {
+        res.status(400).json({ message: "checkoutKey UUID is required" });
+        return;
+      }
+      for (const oi of orderItems) {
+        if (!oi || typeof oi.itemId !== "string" || !Number.isFinite(oi.quantity) ||
+            oi.quantity <= 0 || oi.quantity > 10000 || !Number.isInteger(oi.quantity)) {
+          res.status(400).json({ message: "Each item requires a finite positive integer quantity (maximum 10000)" });
+          return;
+        }
       }
       const customer = await storage.getCustomer(customerId);
-      if (!customer) return res.status(404).json({ message: "Customer not found" });
+      if (!customer) {
+        res.status(404).json({ message: "Customer not found" });
+        return;
+      }
 
       const VAT_RATE = 0.19;
       let subtotal = 0;
@@ -6135,8 +6161,11 @@ export async function registerRoutes(
 
       for (const oi of orderItems) {
         const item = await storage.getItem(oi.itemId);
-        if (!item) continue;
-        const bottlesNeeded = (oi.saleUnit === "pack" && item.packSize > 1) ? oi.quantity * item.packSize : oi.quantity;
+        if (!item) {
+          res.status(400).json({ message: `Item ${oi.itemId} not found` });
+          return;
+        }
+        const bottlesNeeded = oi.quantity;
         if (item.stockQuantity < bottlesNeeded) {
           return res.status(400).json({ message: `Not enough stock for ${item.name}. Available: ${item.stockQuantity} bottles` });
         }
@@ -6156,32 +6185,20 @@ export async function registerRoutes(
       const vatAmount = subtotal * VAT_RATE;
       const total = subtotal + vatAmount;
 
-      const order = await storage.createPortalOrder(
-        { customerId, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), total: total.toFixed(2), notes: notes || null, status: "pending" },
+      const loyaltyPolicy = await getLoyaltyPolicy();
+      const result = await storage.createCustomerPortalOrderAtomic(
+        { customerId, checkoutKey: checkoutKey || null, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), notes: notes || null, status: "pending" },
         processedItems.map(pi => ({ ...pi, orderId: "TEMP" }))
+        , { ...loyaltyPolicy, useCashback: useCashback === true }
       );
-
-      for (const oi of orderItems) {
-        const item = await storage.getItem(oi.itemId);
-        if (item) {
-          const bottlesToSubtract = (oi.saleUnit === "pack" && item.packSize > 1) ? oi.quantity * item.packSize : oi.quantity;
-          await storage.updateItem(item.id, { stockQuantity: item.stockQuantity - bottlesToSubtract });
-        }
-      }
-
-      // Award loyalty points using this store's configured conversion rate.
-      if (subtotal > 0) {
-        const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
-        const pts = Math.floor(subtotal * loyaltyPointsPerEuro);
-        if (pts > 0) {
-          await db.insert(customerLoyaltyPoints).values({
-            customerId, points: pts, type: "earn",
-            reason: `Order #${order.id.slice(0, 8)}`, sourceType: "portal_order", sourceId: order.id,
-          }).catch(() => {/* non-fatal */});
-        }
-      }
-
-      res.json(order);
+      const pendingPoints = loyaltyPolicy.loyaltyEnabled ? Math.floor(subtotal * loyaltyPolicy.pointsPerEuro) : 0;
+      res.json({
+        ...result.order, replayed: result.replayed,
+        grossTotal: (subtotal + vatAmount).toFixed(2),
+        cashbackApplied: result.order.cashbackApplied || "0.00",
+        awardedPoints: 0, completionPointsPreview: pendingPoints,
+        earnedCashback: "0.00",
+      });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
@@ -6210,6 +6227,65 @@ export async function registerRoutes(
     if (payload.customerId !== paramId) { res.status(403).json({ message: "Access denied" }); return false; }
     return true;
   }
+
+  // Legacy portal clients authenticate with the portal JWT rather than the
+  // newer customer-token middleware.  Keep the endpoint shape, but always
+  // derive ownership from this verified token.
+  const portalFeedbackInput = z.object({
+    orderId: z.string().uuid().optional(),
+    context: z.enum(["general", "order", "product", "recommendation", "delivery", "support"]),
+    rating: z.number().int().min(1).max(5),
+    comment: z.string().trim().min(1).max(2000).optional(),
+  }).strict();
+
+  app.post("/api/portal/customer/:id/feedback", async (req, res) => {
+    const customerId = req.params.id as string;
+    if (!requirePortalAuth(req, res, customerId)) return;
+    try {
+      const input = portalFeedbackInput.parse(req.body);
+      if (input.orderId) {
+        const [ownedOrder] = await db.select({ id: portalOrders.id }).from(portalOrders)
+          .where(and(eq(portalOrders.id, input.orderId), eq(portalOrders.customerId, customerId))).limit(1);
+        if (!ownedOrder) {
+          res.status(404).json({ message: "Order not found" });
+          return;
+        }
+      }
+      const aiConfig = resolveCustomerAiConfig(await storage.getSettings());
+      const classification = await classifyCustomerFeedback(aiConfig, {
+        context: input.context, rating: input.rating, comment: input.comment || "",
+      });
+      const comment = (input.comment || "").toLocaleLowerCase();
+      const score = Math.max(-1, Math.min(1,
+        (input.rating - 3) / 2 +
+        (["great", "good", "excellent", "love", "perfect", "helpful", "fast", "happy"].filter(w => comment.includes(w)).length -
+          ["bad", "poor", "terrible", "hate", "wrong", "late", "damaged", "awful"].filter(w => comment.includes(w)).length) * 0.15));
+      const sentiment = classification?.sentiment || (score > 0.2 ? "positive" : score < -0.2 ? "negative" : "neutral");
+      const sentimentScore = classification?.score ?? score;
+      const sentimentEngine = classification?.engine.activeProvider || "deterministic";
+      const sentimentExplanation = classification
+        ? `Classified by ${sentimentEngine} AI (${classification.engine.model}).`
+        : "Classified deterministically from the rating and comment.";
+      const [feedback] = await db.insert(customerFeedback).values({
+        ...input, customerId, sentiment, sentimentScore: sentimentScore.toFixed(2),
+        sentimentEngine, sentimentExplanation,
+      }).returning();
+      res.status(201).json(feedback);
+    } catch (e: any) {
+      res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/portal/customer/:id/feedback", async (req, res) => {
+    const customerId = req.params.id as string;
+    if (!requirePortalAuth(req, res, customerId)) return;
+    try {
+      const history = await db.select().from(customerFeedback)
+        .where(eq(customerFeedback.customerId, customerId))
+        .orderBy(desc(customerFeedback.createdAt)).limit(200);
+      res.json(history);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
 
   const customerPreferencesInput = z.object({
     dietaryPreferences: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
@@ -6421,14 +6497,19 @@ export async function registerRoutes(
         rating: input.rating,
         comment: input.comment || "",
       });
-      if (aiClassification) {
+       if (aiClassification) {
         sentiment = aiClassification.sentiment;
         sentimentScore = aiClassification.score;
       }
+       const sentimentEngine = aiClassification?.engine.activeProvider || "deterministic";
+       const sentimentExplanation = aiClassification
+         ? `Classified by ${sentimentEngine} AI (${aiClassification.engine.model}).`
+         : "Classified deterministically from the rating and comment.";
       const [feedback] = await db.insert(customerFeedback).values({
         ...input, customerId, sentiment, sentimentScore: sentimentScore.toFixed(2),
+         sentimentEngine, sentimentExplanation,
       }).returning();
-      res.status(201).json({ ...feedback, sentimentExplanation: "Score combines the 1–5 rating with matching positive or negative comment words." });
+       res.status(201).json(feedback);
     } catch (e: any) { res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message }); }
   });
 
@@ -6469,19 +6550,62 @@ export async function registerRoutes(
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
-  app.get("/api/customer-feedback", requireAdmin, async (_req, res) => {
+  app.get("/api/customer-feedback", requireAdmin, async (req, res) => {
     try {
-      const [summary, recent] = await Promise.all([
+      const query = z.object({
+        customerId: z.string().uuid().optional(),
+        orderId: z.string().uuid().optional(),
+        context: z.string().trim().max(40).optional(),
+        sentiment: z.enum(["positive", "neutral", "negative"]).optional(),
+        from: z.coerce.date().optional(),
+        to: z.coerce.date().optional(),
+        page: z.coerce.number().int().min(1).default(1),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      }).parse(req.query);
+      const filters = [
+        query.customerId ? eq(customerFeedback.customerId, query.customerId) : undefined,
+        query.orderId ? eq(customerFeedback.orderId, query.orderId) : undefined,
+        query.context ? eq(customerFeedback.context, query.context) : undefined,
+        query.sentiment ? eq(customerFeedback.sentiment, query.sentiment) : undefined,
+        query.from ? gte(customerFeedback.createdAt, query.from) : undefined,
+        query.to ? lte(customerFeedback.createdAt, query.to) : undefined,
+      ].filter(Boolean) as any[];
+      const where = filters.length ? and(...filters) : undefined;
+      const offset = (query.page - 1) * query.limit;
+      const [summary, recent, trend] = await Promise.all([
         db.select({
-          total: sql<number>`count(*)`,
+          total: sql<number>`count(*)::int`,
           averageRating: sql<number>`coalesce(avg(${customerFeedback.rating}), 0)`,
-          positive: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'positive')`,
-          neutral: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'neutral')`,
-          negative: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'negative')`,
-        }).from(customerFeedback),
-        db.select().from(customerFeedback).orderBy(desc(customerFeedback.createdAt)).limit(50),
+          positive: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'positive')::int`,
+          neutral: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'neutral')::int`,
+          negative: sql<number>`count(*) filter (where ${customerFeedback.sentiment} = 'negative')::int`,
+          rating1: sql<number>`count(*) filter (where ${customerFeedback.rating} = 1)::int`,
+          rating2: sql<number>`count(*) filter (where ${customerFeedback.rating} = 2)::int`,
+          rating3: sql<number>`count(*) filter (where ${customerFeedback.rating} = 3)::int`,
+          rating4: sql<number>`count(*) filter (where ${customerFeedback.rating} = 4)::int`,
+          rating5: sql<number>`count(*) filter (where ${customerFeedback.rating} = 5)::int`,
+        }).from(customerFeedback).where(where),
+        db.select({
+          feedback: customerFeedback,
+          customerName: customers.name,
+          customerCode: customers.code,
+          orderStatus: portalOrders.status,
+        }).from(customerFeedback)
+          .leftJoin(customers, eq(customers.id, customerFeedback.customerId))
+          .leftJoin(portalOrders, eq(portalOrders.id, customerFeedback.orderId))
+          .where(where).orderBy(desc(customerFeedback.createdAt))
+          .limit(query.limit).offset(offset),
+        db.select({
+          date: sql<string>`date(${customerFeedback.createdAt})`,
+          count: sql<number>`count(*)::int`,
+          averageRating: sql<number>`coalesce(avg(${customerFeedback.rating}), 0)`,
+        }).from(customerFeedback).where(where)
+          .groupBy(sql`date(${customerFeedback.createdAt})`)
+          .orderBy(sql`date(${customerFeedback.createdAt})`),
       ]);
-      res.json({ summary, recent });
+      res.json({ summary: summary[0] || { total: 0, averageRating: 0, positive: 0, neutral: 0, negative: 0 },
+        recent: recent.map(row => ({ ...row.feedback, customerName: row.customerName, customerCode: row.customerCode, orderStatus: row.orderStatus })),
+        trend, page: query.page, limit: query.limit });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -6533,12 +6657,43 @@ export async function registerRoutes(
         redeemed: sql<number>`coalesce(sum(case when ${customerLoyaltyPoints.type}='redeem' then ${customerLoyaltyPoints.points} else 0 end),0)`,
         balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
       }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, (req.params.id as string)));
+      const customer = await storage.getCustomer((req.params.id as string));
       const balance = totals?.balance || 0;
-      const tier = balance >= 5000 ? "Gold" : balance >= 1000 ? "Silver" : "Bronze";
-      const nextTier = tier === "Bronze" ? { name: "Silver", threshold: 1000 } : tier === "Silver" ? { name: "Gold", threshold: 5000 } : null;
-      const loyaltyPointsPerEuro = await getLoyaltyPointsPerEuro();
-      res.json({ balance, earned: totals?.earned || 0, redeemed: Math.abs(totals?.redeemed || 0), tier, nextTier, loyaltyPointsPerEuro, history });
+      const policy = await getLoyaltyPolicy();
+      const tier = loyaltyTier(balance, policy);
+      const nextTier = tier === "Bronze" ? { name: "Silver", threshold: policy.silverThreshold } : tier === "Silver" ? { name: "Gold", threshold: policy.goldThreshold } : null;
+      const loyaltyPointsPerEuro = policy.pointsPerEuro;
+      const cashbackHistory = await db.select().from(customerCashbackLedger)
+        .where(eq(customerCashbackLedger.customerId, (req.params.id as string)))
+        .orderBy(desc(customerCashbackLedger.createdAt)).limit(50);
+      res.json({ balance, earned: totals?.earned || 0, redeemed: Math.abs(totals?.redeemed || 0),
+        cashbackBalance: Number(customer?.cashbackBalance || 0), cashbackHistory,
+        loyaltyEnabled: policy.loyaltyEnabled, cashbackEnabled: policy.cashbackEnabled,
+        redeemPointsPerEuro: policy.redeemPointsPerEuro, minimumRedemptionPoints: policy.minimumRedemptionPoints,
+        silverThreshold: policy.silverThreshold, goldThreshold: policy.goldThreshold,
+        cashbackRates: { bronze: policy.bronzeCashbackPercent / 100, silver: policy.silverCashbackPercent / 100, gold: policy.goldCashbackPercent / 100 },
+        maxCashbackOrderPercent: policy.maxCashbackOrderPercent / 100,
+        tier, nextTier, loyaltyPointsPerEuro,
+        cashbackRate: policy.cashbackEnabled ? cashbackRateForTier(tier, policy) / 100 : 0,
+        tierThresholds: { silver: policy.silverThreshold, gold: policy.goldThreshold }, history });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
+  app.post("/api/portal/customer/:id/loyalty/redeem", async (req, res) => {
+    const customerId = req.params.id as string;
+    if (!requirePortalAuth(req, res, customerId)) return;
+    try {
+      const policy = await getLoyaltyPolicy();
+      if (!policy.loyaltyEnabled || !policy.cashbackEnabled) return res.status(400).json({ message: "Loyalty redemptions are disabled" });
+      const parsed = z.object({ points: z.number().int().positive(), redemptionKey: z.string().uuid() }).strict().parse(req.body);
+      if (parsed.points < policy.minimumRedemptionPoints || parsed.points % policy.redeemPointsPerEuro !== 0) {
+        return res.status(400).json({ message: "Invalid redemption amount" });
+      }
+      const result = await storage.redeemCustomerPointsAtomic(customerId, parsed.points, parsed.redemptionKey, policy);
+      res.json({ ...result, discountEuros: result.discountEuros.toFixed(2) });
+    } catch (e: any) {
+      res.status(e instanceof z.ZodError ? 400 : e.message === "INSUFFICIENT_POINTS" ? 400 : e.message === "REDEMPTION_KEY_CONFLICT" ? 409 : 500).json({ message: e.message });
+    }
   });
 
   // Portal reorder endpoint — requires portal JWT matching the customerId in request body
@@ -6578,6 +6733,19 @@ export async function registerRoutes(
 
   // ─── Admin: Portal / WhatsApp Order Queue ───────────────────────────────────
 
+  app.post("/api/portal/customer/:id/orders/:orderId/cancel", async (req, res) => {
+    const customerId = req.params.id as string;
+    if (!requirePortalAuth(req, res, customerId)) return;
+    try {
+      const orders = await storage.getPortalOrders(customerId);
+      const order = orders.find((candidate: any) => candidate.id === req.params.orderId);
+      if (!order) return res.status(404).json({ message: "Order not found" });
+      if (order.status !== "pending") return res.status(409).json({ message: "Only pending orders can be cancelled" });
+      const updated = await storage.transitionPortalOrderStatus(order.id, "cancelled", await getLoyaltyPolicy());
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
+  });
+
   // GET all portal orders (all sources) — requireAdmin
   app.get("/api/admin/portal-orders", requireAdmin, async (req, res) => {
     try {
@@ -6594,13 +6762,13 @@ export async function registerRoutes(
   app.patch("/api/admin/portal-orders/:id/status", requireAdmin, async (req, res) => {
     try {
       const { status } = req.body;
-      if (!["pending", "confirmed", "rejected", "completed"].includes(status)) {
+      if (!["pending", "confirmed", "rejected", "cancelled", "completed", "refunded"].includes(status)) {
         return res.status(400).json({ message: "Invalid status" });
       }
-      const updated = await storage.updatePortalOrderStatus((req.params.id as string), status);
+      const updated = await storage.transitionPortalOrderStatus((req.params.id as string), status, await getLoyaltyPolicy());
       if (!updated) return res.status(404).json({ message: "Order not found" });
       res.json(updated);
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) { res.status(e.message === "INVALID_ORDER_TRANSITION" ? 409 : 500).json({ message: e.message }); }
   });
 
   // POST convert portal order → draft invoice
@@ -7043,8 +7211,12 @@ export async function registerRoutes(
       let subtotal = 0;
       const processedItems: any[] = [];
       for (const oi of orderItems) {
+        if (!oi || typeof oi.itemId !== "string" || !Number.isFinite(oi.quantity) ||
+            oi.quantity <= 0 || oi.quantity > 10000 || !Number.isInteger(oi.quantity)) {
+          return res.status(400).json({ message: "Each item requires a finite positive integer quantity (maximum 10000)" });
+        }
         const item = await storage.getItem(oi.itemId);
-        if (!item) continue;
+        if (!item) return res.status(400).json({ message: `Item ${oi.itemId} not found` });
         const pl = customer.priceLevel || 1;
         let quantity = oi.quantity;
         let resolvedVariant: any | undefined;
@@ -7088,6 +7260,7 @@ export async function registerRoutes(
         const itemName = item.name.trim() || item.sku?.trim() || `Item ${item.id}`;
         processedItems.push({ itemId: item.id, itemName, quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
       }
+      if (!processedItems.length) return res.status(400).json({ message: "No valid items" });
 
       const vatAmount = subtotal * VAT_RATE;
       const checkout = await storage.createCustomerPortalOrderAtomic(
@@ -7222,7 +7395,7 @@ export async function registerRoutes(
         tier,
         nextTier,
         cashbackBalance,
-        cashbackRate,
+        cashbackRate: cashbackRate / 100,
         loyaltyPointsPerEuro: policy.loyaltyEnabled ? policy.pointsPerEuro : 0,
         loyaltyEnabled: policy.loyaltyEnabled,
         cashbackEnabled: policy.cashbackEnabled,
@@ -7234,7 +7407,7 @@ export async function registerRoutes(
           silver: policy.silverCashbackPercent / 100,
           gold: policy.goldCashbackPercent / 100,
         },
-        maxCashbackOrderPercent: policy.maxCashbackOrderPercent,
+        maxCashbackOrderPercent: policy.maxCashbackOrderPercent / 100,
         history: history.map((h) => ({
           id: h.id, points: h.points, type: h.type, reason: h.reason,
           sourceType: h.sourceType, createdAt: h.createdAt,
@@ -7300,39 +7473,21 @@ export async function registerRoutes(
       const policy = await getLoyaltyPolicy();
       if (!policy.loyaltyEnabled) return res.status(400).json({ message: "Loyalty redemptions are disabled" });
       if (!policy.cashbackEnabled) return res.status(400).json({ message: "Cashback wallet is disabled" });
-      const { points } = req.body;
-      const pts = parseInt(points, 10);
-      if (!pts || pts < policy.minimumRedemptionPoints) {
+      const parsed = z.object({ points: z.number().int().positive(), redemptionKey: z.string().uuid() }).strict().parse(req.body);
+      const pts = parsed.points;
+      if (pts < policy.minimumRedemptionPoints) {
         return res.status(400).json({ message: `Minimum redemption is ${policy.minimumRedemptionPoints} points` });
       }
       if (pts % policy.redeemPointsPerEuro !== 0) {
         return res.status(400).json({ message: `Points must be redeemed in multiples of ${policy.redeemPointsPerEuro}` });
       }
 
-      const result = await db.transaction(async (tx) => {
-        await tx.execute(sql`select id from ${customers} where ${customers.id} = ${auth.customerId} for update`);
-        const [totals] = await tx.select({
-          balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)`,
-        }).from(customerLoyaltyPoints).where(eq(customerLoyaltyPoints.customerId, auth.customerId));
-        const balance = Number(totals?.balance || 0);
-        if (pts > balance) throw new Error("INSUFFICIENT_POINTS");
-        const discountEuros = pts / policy.redeemPointsPerEuro;
-        await tx.insert(customerLoyaltyPoints).values({
-          customerId: auth.customerId,
-          points: -pts,
-          type: "redeem",
-          reason: `Converted ${pts} pts to €${discountEuros.toFixed(2)} cashback`,
-          sourceType: "redemption",
-          sourceId: null,
-        });
-        await tx.update(customers)
-          .set({ cashbackBalance: sql`coalesce(${customers.cashbackBalance}, 0) + ${discountEuros.toFixed(2)}` })
-          .where(eq(customers.id, auth.customerId));
-        return { newBalance: balance - pts, discountEuros };
-      });
-      res.json({ pointsRedeemed: pts, newBalance: result.newBalance, discountEuros: result.discountEuros.toFixed(2) });
+      const result = await storage.redeemCustomerPointsAtomic(auth.customerId, pts, parsed.redemptionKey, policy);
+      res.json({ pointsRedeemed: result.pointsRedeemed, newBalance: result.newBalance, replayed: result.replayed, discountEuros: result.discountEuros.toFixed(2) });
     } catch (e: any) {
       if (e?.message === "INSUFFICIENT_POINTS") return res.status(400).json({ message: "Insufficient points balance" });
+      if (e instanceof z.ZodError) return res.status(400).json({ message: e.message });
+      if (e?.message === "REDEMPTION_KEY_CONFLICT") return res.status(409).json({ message: "redemptionKey was already used for a different amount" });
       res.status(500).json({ message: e.message });
     }
   });

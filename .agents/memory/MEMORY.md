@@ -2,3 +2,4 @@
 - [Async Chromium test completion](async-chromium-test-completion.md) — For long IndexedDB tests, wait through DevTools rather than relying on headless DOM dump timing.
 - [PWA shell cache matching](pwa-shell-cache-matching.md) — Cached build assets must match parser requests despite proxy-added Vary headers.
 - [Product and customer logos](product-customer-logos.md) — Product-level Terminal branding must not reuse the mutable customer logo asset.
+- [Rewards refund liability](rewards-refund-liability.md) — Full refunds reverse earned rewards and restore applied Cash Back; spent earnings may leave a negative liability.

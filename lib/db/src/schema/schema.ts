@@ -407,6 +407,10 @@ export const customerFeedback = pgTable("customer_feedback", {
   comment: text("comment"),
   sentiment: text("sentiment").notNull(),
   sentimentScore: numeric("sentiment_score", { precision: 3, scale: 2 }).notNull(),
+  // Records which classifier produced the stored result so clients never have
+  // to infer whether a remote model was actually used.
+  sentimentEngine: text("sentiment_engine").notNull().default("deterministic"),
+  sentimentExplanation: text("sentiment_explanation"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1162,6 +1166,28 @@ export const customerLoyaltyPoints = pgTable("customer_loyalty_points", {
     .on(table.sourceType, table.sourceId)
     .where(sql`${table.sourceType} is not null and ${table.sourceId} is not null`),
 ]);
+
+// Append-only monetary loyalty ledger.  The customer balance remains a
+// denormalized read model, while this table is the audit/source-of-truth for
+// every reservation, earn, reversal, and redemption.
+export const customerCashbackLedger = pgTable("customer_cashback_ledger", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  type: text("type").notNull(), // reserve | release | earn | redeem | reverse | adjust
+  reason: text("reason"),
+  sourceType: text("source_type"),
+  sourceId: varchar("source_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("customer_cashback_ledger_source_unique")
+    .on(table.sourceType, table.sourceId)
+    .where(sql`${table.sourceType} is not null and ${table.sourceId} is not null`),
+]);
+
+export const insertCustomerCashbackLedgerSchema = createInsertSchema(customerCashbackLedger).omit({ id: true, createdAt: true });
+export type InsertCustomerCashbackLedger = z.infer<typeof insertCustomerCashbackLedgerSchema>;
+export type CustomerCashbackLedger = typeof customerCashbackLedger.$inferSelect;
 
 export const customerOtpTokens = pgTable("customer_otp_tokens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

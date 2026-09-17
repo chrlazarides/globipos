@@ -6,8 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Search, ShoppingCart, Plus, Minus, X, Package, ScanBarcode } from "lucide-react";
+import { getPortalQueryFn, portalApiRequest, queryClient } from "@/lib/queryClient";
+import { Search, ShoppingCart, Plus, Minus, X, Package, ScanBarcode, CheckCircle2 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import type { Customer, Item, Category } from "@shared/schema";
 
 interface PortalShopProps {
@@ -24,20 +26,30 @@ export default function PortalShop({ customer }: PortalShopProps) {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [notes, setNotes] = useState("");
+  const [useCashback, setUseCashback] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [scanMode, setScanMode] = useState(false);
   const [scanError, setScanError] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanningRef = useRef(false);
+  const checkoutAttemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const { toast } = useToast();
 
-  const { data: catalog, isLoading } = useQuery<{ items: Item[]; categories: Category[] }>({
+  const { data: catalog, isLoading: catalogLoading } = useQuery<{ items: Item[]; categories: Category[] }>({
     queryKey: ["/api/portal/catalog"],
+  });
+
+  const { data: loyaltyData, isLoading: loyaltyLoading } = useQuery<any>({
+    queryKey: ["/api/portal/customer", customer.id, "loyalty"],
+    queryFn: getPortalQueryFn(`/api/portal/customer/${customer.id}/loyalty`),
   });
 
   const items = catalog?.items || [];
   const categories = catalog?.categories || [];
+  const cashbackBalance = loyaltyData?.cashbackBalance || 0;
+  const cashbackEnabled = loyaltyData?.cashbackEnabled ?? false;
+  const maxCashbackOrderPercent = loyaltyData?.maxCashbackOrderPercent || 1.0;
 
   const filtered = items.filter((item) => {
     const matchesSearch = !search || item.name.toLowerCase().includes(search.toLowerCase()) || item.sku?.toLowerCase().includes(search.toLowerCase());
@@ -75,6 +87,10 @@ export default function PortalShop({ customer }: PortalShopProps) {
   const cartTotal = cart.reduce((sum, ci) => sum + getPrice(ci.item) * ci.quantity, 0);
   const vatAmount = cartTotal * 0.19;
   const grandTotal = cartTotal + vatAmount;
+
+  const maxApplicableCashback = grandTotal * maxCashbackOrderPercent;
+  const appliedCashback = useCashback ? Math.min(cashbackBalance, maxApplicableCashback) : 0;
+  const finalTotal = Math.max(0, grandTotal - appliedCashback);
 
   const startScan = useCallback(async () => {
     setScanError("");
@@ -128,15 +144,28 @@ export default function PortalShop({ customer }: PortalShopProps) {
     if (cart.length === 0) return;
     setSubmitting(true);
     try {
-      await apiRequest("POST", "/api/portal/orders", {
-        customerId: customer.id,
+      const fingerprint = JSON.stringify({
+        items: cart.map((ci) => ({ itemId: ci.item.id, quantity: ci.quantity }))
+          .sort((a, b) => a.itemId.localeCompare(b.itemId)),
+        notes: notes.trim(),
+        useCashback,
+      });
+      if (!checkoutAttemptRef.current || checkoutAttemptRef.current.fingerprint !== fingerprint) {
+        checkoutAttemptRef.current = { fingerprint, key: crypto.randomUUID() };
+      }
+      await portalApiRequest("POST", "/api/portal/orders", {
         items: cart.map((ci) => ({ itemId: ci.item.id, quantity: ci.quantity })),
         notes,
+        checkoutKey: checkoutAttemptRef.current.key,
+        useCashback,
       });
       toast({ title: "Order placed", description: "Your order has been submitted successfully." });
       setCart([]);
       setNotes("");
+      setUseCashback(false);
+      checkoutAttemptRef.current = null;
       queryClient.invalidateQueries({ queryKey: ["/api/portal/customer", customer.id, "orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/portal/customer", customer.id, "loyalty"] });
       queryClient.invalidateQueries({ queryKey: ["/api/portal/catalog"] });
     } catch (err: any) {
       toast({ title: "Order failed", description: err.message, variant: "destructive" });
@@ -150,7 +179,7 @@ export default function PortalShop({ customer }: PortalShopProps) {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold" data-testid="text-portal-shop-title">Shop</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground" data-testid="text-portal-shop-title">Shop</h1>
         <p className="text-sm text-muted-foreground mt-1">Browse our catalog and place your order</p>
       </div>
 
@@ -220,46 +249,49 @@ export default function PortalShop({ customer }: PortalShopProps) {
             ))}
           </div>
 
-          {isLoading ? (
+          {catalogLoading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-32" />)}
             </div>
           ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-              <Package className="w-10 h-10 mb-3 opacity-40" />
-              <p className="text-sm">No products found</p>
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground border rounded-lg border-dashed bg-muted/10">
+              <Package className="w-10 h-10 mb-3 opacity-20" />
+              <p className="text-sm font-medium">No products found</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {filtered.map((item) => {
                 const qty = getCartQuantity(item.id);
                 return (
-                  <Card key={item.id} data-testid={`card-product-${item.id}`}>
+                  <Card key={item.id} className="shadow-sm hover:border-primary/50 transition-colors" data-testid={`card-product-${item.id}`}>
                     <CardContent className="p-4">
-                      <div className="flex justify-between gap-2">
+                      <div className="flex justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm truncate" data-testid={`text-product-name-${item.id}`}>{item.name}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">{item.sku} | {item.packSize}</p>
-                          {item.vintage && <p className="text-xs text-muted-foreground">Vintage: {item.vintage}</p>}
-                          <p className="text-sm font-semibold mt-1" data-testid={`text-product-price-${item.id}`}>{fmt(getPrice(item))}</p>
-                          <p className="text-xs text-muted-foreground">Stock: {item.stockQuantity}</p>
+                          <p className="font-semibold text-sm truncate" data-testid={`text-product-name-${item.id}`}>{item.name}</p>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            <Badge variant="outline" className="text-[10px] py-0">{item.sku}</Badge>
+                            <Badge variant="secondary" className="text-[10px] py-0">{item.packSize}</Badge>
+                          </div>
+                          {item.vintage && <p className="text-xs text-muted-foreground mt-1">Vintage: {item.vintage}</p>}
+                          <p className="text-base font-bold mt-2 text-foreground" data-testid={`text-product-price-${item.id}`}>{fmt(getPrice(item))}</p>
                         </div>
                         <div className="flex flex-col items-end justify-between">
                           {qty > 0 ? (
-                            <div className="flex items-center gap-1">
-                              <Button size="icon" variant="outline" onClick={() => updateQuantity(item.id, -1)} data-testid={`button-decrease-${item.id}`}>
+                            <div className="flex items-center gap-2 bg-muted p-1 rounded-md">
+                              <Button size="icon" variant="ghost" className="h-6 w-6 rounded hover:bg-background" onClick={() => updateQuantity(item.id, -1)} data-testid={`button-decrease-${item.id}`}>
                                 <Minus className="w-3 h-3" />
                               </Button>
-                              <span className="w-8 text-center text-sm font-medium" data-testid={`text-qty-${item.id}`}>{qty}</span>
-                              <Button size="icon" variant="outline" onClick={() => updateQuantity(item.id, 1)} data-testid={`button-increase-${item.id}`}>
+                              <span className="w-6 text-center text-sm font-medium" data-testid={`text-qty-${item.id}`}>{qty}</span>
+                              <Button size="icon" variant="ghost" className="h-6 w-6 rounded hover:bg-background" onClick={() => updateQuantity(item.id, 1)} data-testid={`button-increase-${item.id}`}>
                                 <Plus className="w-3 h-3" />
                               </Button>
                             </div>
                           ) : (
                             <Button size="sm" onClick={() => addToCart(item)} data-testid={`button-add-${item.id}`}>
-                              <Plus className="w-3 h-3 mr-1" /> Add
+                              <Plus className="w-4 h-4 mr-1.5" /> Add
                             </Button>
                           )}
+                          <p className="text-[10px] text-muted-foreground mt-2">Stock: {item.stockQuantity}</p>
                         </div>
                       </div>
                     </CardContent>
@@ -270,28 +302,31 @@ export default function PortalShop({ customer }: PortalShopProps) {
           )}
         </div>
 
-        <div className="w-full lg:w-80 lg:sticky lg:top-16 space-y-4">
-          <Card>
-            <CardContent className="p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <ShoppingCart className="w-4 h-4" />
-                <h3 className="font-semibold text-sm">Cart ({cart.length} items)</h3>
+        <div className="w-full lg:w-96 lg:sticky lg:top-16 space-y-4">
+          <Card className="shadow-md border-primary/10">
+            <CardContent className="p-5 space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b">
+                <ShoppingCart className="w-5 h-5 text-primary" />
+                <h3 className="font-bold text-base">Your Order ({cart.length})</h3>
               </div>
 
               {cart.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Your cart is empty</p>
+                <div className="py-8 text-center text-muted-foreground">
+                  <ShoppingCart className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                  <p className="text-sm">Your cart is empty</p>
+                </div>
               ) : (
                 <>
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                  <div className="space-y-3 max-h-64 overflow-y-auto pr-2 scrollbar-thin">
                     {cart.map((ci) => (
-                      <div key={ci.item.id} className="flex items-center justify-between gap-2 text-sm">
+                      <div key={ci.item.id} className="flex items-start justify-between gap-3 text-sm group">
                         <div className="flex-1 min-w-0">
-                          <p className="truncate font-medium">{ci.item.name}</p>
-                          <p className="text-xs text-muted-foreground">{ci.quantity} x {fmt(getPrice(ci.item))}</p>
+                          <p className="font-medium leading-tight">{ci.item.name}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">{ci.quantity} x {fmt(getPrice(ci.item))}</p>
                         </div>
-                        <div className="flex items-center gap-1">
-                          <span className="font-medium">{fmt(getPrice(ci.item) * ci.quantity)}</span>
-                          <Button size="icon" variant="ghost" onClick={() => removeFromCart(ci.item.id)} data-testid={`button-remove-${ci.item.id}`}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">{fmt(getPrice(ci.item) * ci.quantity)}</span>
+                          <Button size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => removeFromCart(ci.item.id)} data-testid={`button-remove-${ci.item.id}`}>
                             <X className="w-3 h-3" />
                           </Button>
                         </div>
@@ -299,7 +334,7 @@ export default function PortalShop({ customer }: PortalShopProps) {
                     ))}
                   </div>
 
-                  <div className="border-t pt-2 space-y-1 text-sm">
+                  <div className="border-t pt-3 space-y-2 text-sm">
                     <div className="flex justify-between gap-2">
                       <span className="text-muted-foreground">Subtotal</span>
                       <span>{fmt(cartTotal)}</span>
@@ -308,26 +343,59 @@ export default function PortalShop({ customer }: PortalShopProps) {
                       <span className="text-muted-foreground">VAT (19%)</span>
                       <span>{fmt(vatAmount)}</span>
                     </div>
-                    <div className="flex justify-between gap-2 font-semibold">
-                      <span>Total</span>
-                      <span data-testid="text-cart-total">{fmt(grandTotal)}</span>
+
+                    {cashbackEnabled && cashbackBalance > 0 && grandTotal > 0 && (
+                      <div className="py-3 mt-1 border-y border-dashed bg-emerald-50/50 dark:bg-emerald-950/20 -mx-5 px-5">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <Label htmlFor="use-cashback" className="flex items-center gap-2 cursor-pointer">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                            <span className="font-medium text-emerald-800 dark:text-emerald-200">Use Cash Back</span>
+                          </Label>
+                          <Switch
+                            id="use-cashback"
+                            checked={useCashback}
+                            onCheckedChange={setUseCashback}
+                            data-testid="switch-use-cashback"
+                          />
+                        </div>
+                        <p className="text-xs text-emerald-600/80 dark:text-emerald-400/80 pl-6">
+                          Available: {fmt(cashbackBalance)}
+                          {maxCashbackOrderPercent < 1 && ` (Max ${(maxCashbackOrderPercent * 100).toFixed(0)}% of order)`}
+                        </p>
+                        {useCashback && appliedCashback > 0 && (
+                          <div className="flex justify-between gap-2 mt-2 pl-6 font-medium text-emerald-700 dark:text-emerald-400">
+                            <span>Applied Discount</span>
+                            <span>-{fmt(appliedCashback)}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex justify-between gap-2 font-bold text-lg pt-1">
+                      <span>Total Estimate</span>
+                      <span data-testid="text-cart-total">{fmt(finalTotal)}</span>
                     </div>
+                    <p className="text-[10px] text-muted-foreground text-center">Final price confirmed at processing</p>
                   </div>
 
-                  <Input
-                    placeholder="Order notes (optional)"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    data-testid="input-order-notes"
-                  />
+                  <div className="pt-2">
+                    <Input
+                      placeholder="Add a note to your order..."
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      className="text-sm bg-muted/50"
+                      data-testid="input-order-notes"
+                    />
+                  </div>
 
                   <Button
-                    className="w-full"
+                    size="lg"
+                    className="w-full font-bold text-base"
                     disabled={submitting || cart.length === 0}
                     onClick={handleSubmit}
                     data-testid="button-place-order"
                   >
-                    {submitting ? "Placing Order..." : "Place Order"}
+                    {submitting ? "Processing..." : "Submit Order"}
                   </Button>
                 </>
               )}

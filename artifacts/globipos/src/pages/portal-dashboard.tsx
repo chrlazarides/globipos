@@ -6,7 +6,7 @@ import { CreditCard, FileText, Receipt, TrendingUp, Bell, X, Trophy } from "luci
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { usePriceLevels } from "@/hooks/use-price-levels";
-import { portalApiRequest } from "@/lib/queryClient";
+import { getPortalQueryFn, portalApiRequest } from "@/lib/queryClient";
 import type { Customer } from "@shared/schema";
 
 interface PortalDashboardProps {
@@ -60,14 +60,17 @@ export default function PortalDashboard({ customer }: PortalDashboardProps) {
   };
   const { data: statement, isLoading: loadingStatement } = useQuery<any>({
     queryKey: ["/api/portal/customer", customer.id, "statement"],
+    queryFn: getPortalQueryFn(`/api/portal/customer/${customer.id}/statement`),
   });
 
   const { data: orders, isLoading: loadingOrders } = useQuery<any[]>({
     queryKey: ["/api/portal/customer", customer.id, "orders"],
+    queryFn: getPortalQueryFn(`/api/portal/customer/${customer.id}/orders`),
   });
 
   const { data: invoices, isLoading: loadingInvoices } = useQuery<any[]>({
     queryKey: ["/api/portal/customer", customer.id, "invoices"],
+    queryFn: getPortalQueryFn(`/api/portal/customer/${customer.id}/invoices`),
   });
 
   const fmt = (v: string | number) =>
