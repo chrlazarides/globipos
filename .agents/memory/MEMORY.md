@@ -1,3 +1,4 @@
 - [Browser-safe shared contracts](browser-safe-shared-contracts.md) — Keep legacy frontend schema contracts local so browser code never bundles the database connection.
 - [Async Chromium test completion](async-chromium-test-completion.md) — For long IndexedDB tests, wait through DevTools rather than relying on headless DOM dump timing.
+- [PWA shell cache matching](pwa-shell-cache-matching.md) — Cached build assets must match parser requests despite proxy-added Vary headers.
 - [Product and customer logos](product-customer-logos.md) — Product-level Terminal branding must not reuse the mutable customer logo asset.
