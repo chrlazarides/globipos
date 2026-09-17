@@ -51,8 +51,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Pin npm for deterministic installs
+        run: npm install --global npm@10.9.3
       - name: Install dependencies deterministically
-        run: npm ci
+        run: npm ci --no-audit --no-fund
       - name: Test version and published-asset release safeguards
         run: node --test --test-concurrency=1 scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs
 
@@ -70,13 +72,15 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Pin npm for deterministic installs
+        run: npm install --global npm@10.9.3
       - name: Install dependencies
         shell: bash
         run: |
-          if ! npm ci || [ ! -x node_modules/.bin/playwright ]; then
+          if ! npm ci --no-audit --no-fund || [ ! -x node_modules/.bin/playwright ]; then
             echo "::warning::npm ci did not produce Playwright; retrying from a clean node_modules"
             rm -rf node_modules
-            npm ci
+            npm ci --no-audit --no-fund
           fi
           test -x node_modules/.bin/playwright
       - name: Install Chromium
