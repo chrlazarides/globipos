@@ -361,13 +361,15 @@ jobs:
           rm -f /tmp/globipos-release.p12
 
       - name: Upload APK to release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
-        with:
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            pos-app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find pos-app/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -print)
+          test "${#apks[@]}" -gt 0
+          gh release upload "${TAG_NAME}" "${apks[@]}" --clobber
 
   verify-release:
     name: Verify published release assets
