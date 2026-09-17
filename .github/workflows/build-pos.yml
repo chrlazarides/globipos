@@ -50,6 +50,9 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
+          cache: npm
+      - name: Install dependencies deterministically
+        run: npm ci
       - name: Test version and published-asset release safeguards
         run: node --test --test-concurrency=1 scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs
 
