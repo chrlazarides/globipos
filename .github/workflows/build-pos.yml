@@ -50,7 +50,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
-          cache: npm
       - name: Pin npm for deterministic installs
         run: npm install --global npm@10.9.3
       - name: Install dependencies deterministically
@@ -71,7 +70,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
-          cache: npm
       - name: Pin npm for deterministic installs
         run: npm install --global npm@10.9.3
       - name: Install dependencies
