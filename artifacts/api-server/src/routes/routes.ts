@@ -6158,6 +6158,7 @@ export async function registerRoutes(
       const VAT_RATE = 0.19;
       let subtotal = 0;
       const processedItems: any[] = [];
+      const stockRequirements: { itemId: string; bottles: number }[] = [];
 
       for (const oi of orderItems) {
         const item = await storage.getItem(oi.itemId);
@@ -6165,7 +6166,8 @@ export async function registerRoutes(
           res.status(400).json({ message: `Item ${oi.itemId} not found` });
           return;
         }
-        const bottlesNeeded = oi.quantity;
+        const bottlesNeeded = oi.saleUnit === "pack" && item.packSize > 1 ? oi.quantity * item.packSize : oi.quantity;
+        stockRequirements.push({ itemId: item.id, bottles: bottlesNeeded });
         if (item.stockQuantity < bottlesNeeded) {
           return res.status(400).json({ message: `Not enough stock for ${item.name}. Available: ${item.stockQuantity} bottles` });
         }
@@ -6188,8 +6190,9 @@ export async function registerRoutes(
       const loyaltyPolicy = await getLoyaltyPolicy();
       const result = await storage.createCustomerPortalOrderAtomic(
         { customerId, checkoutKey: checkoutKey || null, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), notes: notes || null, status: "pending" },
-        processedItems.map(pi => ({ ...pi, orderId: "TEMP" }))
-        , { ...loyaltyPolicy, useCashback: useCashback === true }
+        processedItems.map(pi => ({ ...pi, orderId: "TEMP" })),
+        { ...loyaltyPolicy, useCashback: useCashback === true },
+        stockRequirements,
       );
       const pendingPoints = loyaltyPolicy.loyaltyEnabled ? Math.floor(subtotal * loyaltyPolicy.pointsPerEuro) : 0;
       res.json({
@@ -6200,6 +6203,7 @@ export async function registerRoutes(
         earnedCashback: "0.00",
       });
     } catch (e: any) {
+      if (e.message === "INSUFFICIENT_STOCK") return res.status(409).json({ message: "Not enough stock. Refresh your cart and try again." });
       res.status(500).json({ message: e.message });
     }
   });
@@ -6674,7 +6678,7 @@ export async function registerRoutes(
         cashbackRates: { bronze: policy.bronzeCashbackPercent / 100, silver: policy.silverCashbackPercent / 100, gold: policy.goldCashbackPercent / 100 },
         maxCashbackOrderPercent: policy.maxCashbackOrderPercent / 100,
         tier, nextTier, loyaltyPointsPerEuro,
-        cashbackRate: policy.cashbackEnabled ? cashbackRateForTier(tier, policy) / 100 : 0,
+        cashbackRate: policy.cashbackEnabled ? cashbackRateForTier(tier, policy) : 0,
         tierThresholds: { silver: policy.silverThreshold, gold: policy.goldThreshold }, history });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -7274,6 +7278,7 @@ export async function registerRoutes(
         },
         processedItems.map((pi) => ({ ...pi, orderId: "TEMP" })),
         { ...loyaltyPolicy, useCashback },
+        processedItems.map((pi) => ({ itemId: pi.itemId, bottles: pi.quantity })),
       );
       const { order } = checkout;
       const total = Number(order.total);
@@ -7323,7 +7328,10 @@ export async function registerRoutes(
       }
 
       res.json({ ...order, proformaId: proforma?.id || null, proformaNumber: proforma?.invoiceNumber || null });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      if (e.message === "INSUFFICIENT_STOCK") return res.status(409).json({ message: "Not enough stock. Refresh your cart and try again." });
+      res.status(500).json({ message: e.message });
+    }
   });
 
   app.post("/api/customer/orders/:id/reorder", async (req, res) => {
@@ -7395,7 +7403,7 @@ export async function registerRoutes(
         tier,
         nextTier,
         cashbackBalance,
-        cashbackRate: cashbackRate / 100,
+        cashbackRate,
         loyaltyPointsPerEuro: policy.loyaltyEnabled ? policy.pointsPerEuro : 0,
         loyaltyEnabled: policy.loyaltyEnabled,
         cashbackEnabled: policy.cashbackEnabled,

@@ -8,6 +8,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import type { TerminalConfig, CashierSession } from "./types";
 import { getConfig } from "./lib/db";
 import { flushOutbox } from "./lib/sync";
+import { requestPersistentStorage } from "./lib/storage";
 import { Setup } from "./pages/Setup";
 import { Login } from "./pages/Login";
 import { POS } from "./pages/POS";
@@ -22,6 +23,7 @@ function MainRouter() {
   const [, setLocation] = useLocation();
 
   useEffect(() => {
+    void requestPersistentStorage();
     async function init() {
       try {
         const cfg = await getConfig();

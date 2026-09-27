@@ -1,5 +1,6 @@
 import type { TerminalConfig, CashierSession, Product, Category, Order, OrderLine } from "../types";
 import { hashPin } from "./utils";
+import { storageWriteError } from "./storage";
 
 const DB_NAME = "globipos_terminal";
 const DB_VERSION = 2; // Incremented for sync_cursor
@@ -51,13 +52,33 @@ async function tx<T>(storeName: string, mode: IDBTransactionMode, fn: (store: ID
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, mode);
     const store = transaction.objectStore(storeName);
+    let result: T;
+    let requestError: DOMException | null = null;
     const req = fn(store);
-    req.onsuccess = () => resolve(req.result as T);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => { result = req.result as T; };
+    req.onerror = () => { requestError = req.error; };
+    transaction.oncomplete = () => resolve(result);
+    transaction.onabort = () => reject(requestError || transaction.error);
   });
 }
 
-// Config
+function writeTransaction(db: IDBDatabase, stores: string[], write: (transaction: IDBTransaction) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(stores, "readwrite");
+    let requestError: DOMException | null = null;
+    transaction.onerror = (event) => {
+      requestError = (event.target as IDBRequest).error;
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(requestError || transaction.error);
+    try {
+      write(transaction);
+    } catch (error) {
+      transaction.abort();
+      reject(error);
+    }
+  });
+}
 export async function getConfig(): Promise<TerminalConfig | null> {
   const config = await tx<TerminalConfig | undefined>("config", "readonly", (s) => s.get("main"));
   return config || null;
@@ -145,33 +166,25 @@ export async function saveCatalogPage(
   terminalCode: string,
   nextCursor: string | null,
 ): Promise<void> {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const t = db.transaction(["categories", "products", "sync_cursor"], "readwrite");
-    
-    if (categories && isFirstPage) {
-      const catStore = t.objectStore("categories");
-      catStore.clear();
-      categories.forEach(c => catStore.put(c));
-    }
-    
-    const prodStore = t.objectStore("products");
-    if (isFirstPage) {
-      prodStore.clear();
-    }
-    products.forEach(p => prodStore.put(p));
-
-    const cursorStore = t.objectStore("sync_cursor");
-    const cursorId = `${origin}:${terminalCode}`;
-    if (nextCursor === null) {
-      cursorStore.delete(cursorId);
-    } else {
-      cursorStore.put({ id: cursorId, cursor: nextCursor });
-    }
-    
-    t.oncomplete = () => resolve();
-    t.onerror = () => reject(t.error);
-  });
+  try {
+    const db = await getDb();
+    await writeTransaction(db, ["categories", "products", "sync_cursor"], (t) => {
+      if (categories && isFirstPage) {
+        const catStore = t.objectStore("categories");
+        catStore.clear();
+        categories.forEach(c => catStore.put(c));
+      }
+      const prodStore = t.objectStore("products");
+      if (isFirstPage) prodStore.clear();
+      products.forEach(p => prodStore.put(p));
+      const cursorStore = t.objectStore("sync_cursor");
+      const cursorId = `${origin}:${terminalCode}`;
+      if (nextCursor === null) cursorStore.delete(cursorId);
+      else cursorStore.put({ id: cursorId, cursor: nextCursor });
+    });
+  } catch (error) {
+    throw storageWriteError(error, "catalog");
+  }
 }
 
 export async function getActiveProductsCount(): Promise<number> {
@@ -181,21 +194,17 @@ export async function getActiveProductsCount(): Promise<number> {
 
 // Orders
 export async function saveOrder(order: Order, lines: OrderLine[]): Promise<void> {
-  const db = await getDb();
-  return new Promise((resolve, reject) => {
-    const t = db.transaction(["orders", "order_lines", "outbox"], "readwrite");
-    const os = t.objectStore("orders");
-    const ls = t.objectStore("order_lines");
-    const ob = t.objectStore("outbox");
-    
-    os.put(order);
-    lines.forEach(l => ls.put(l));
-    
-    ob.put({ order, lines, timestamp: Date.now() });
-    
-    t.oncomplete = () => resolve();
-    t.onerror = () => reject(t.error);
-  });
+  try {
+    const db = await getDb();
+    await writeTransaction(db, ["orders", "order_lines", "outbox"], (t) => {
+      t.objectStore("orders").put(order);
+      const lineStore = t.objectStore("order_lines");
+      lines.forEach(l => lineStore.put(l));
+      t.objectStore("outbox").put({ order, lines, timestamp: Date.now() });
+    });
+  } catch (error) {
+    throw storageWriteError(error, "order");
+  }
 }
 
 export async function getOutbox(): Promise<any[]> {
@@ -233,4 +242,3 @@ export async function getAuditOutbox(): Promise<any[]> {
 export async function clearAuditItem(id: number): Promise<void> {
   await tx("audit", "readwrite", s => s.delete(id));
 }
-
