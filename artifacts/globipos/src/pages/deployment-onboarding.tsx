@@ -1,0 +1,115 @@
+import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { CheckCircle2 } from "lucide-react";
+
+type Event = {
+  id: string; kind: "setup" | "release"; step: string | null;
+  outcome: "completed" | "published" | "failed"; backOfficeVersion: string | null;
+  posVersion: string | null; codeRevision: string | null; notes: string | null;
+  recordedBy: string; createdAt: string;
+};
+
+const steps = [
+  { key: "project", label: "Separate Replit project", detail: "Create a new project from the shared code repository. Record its project ID in the deployment profile. Changes to the repository must be pulled into each customer project before republishing." },
+  { key: "database", label: "Fresh database", detail: "Inspect the new project's development database before publishing. It must contain no other customer's business data. Confirm its production database is separate." },
+  { key: "published", label: "Publish the project", detail: "Publish the API, Back Office and Terminal artifacts in the customer's own Replit project. Verify the published health check and sign-in. This checklist does not publish for you." },
+  { key: "domain", label: "Connect subdomain and HTTPS", detail: "In that project's Publishing → Domains, add the exact hostname shown here. Add Replit's A and TXT records in DNS, then run Check domains in Deployment Control. Add any e-shop hostname separately." },
+  { key: "company", label: "Company settings", detail: "Set company name, legal and tax details, logo, receipt and invoice settings, and customer-only credentials in the new project." },
+  { key: "locations", label: "Locations and stock", detail: "In the customer's Back Office, create every POS location. Import and reconcile that customer's products, prices and stock by location." },
+  { key: "terminals", label: "Terminals and cashiers", detail: "Create a unique terminal code for each device, assign it to a location, install or open Terminal, enter this customer's server URL and code, and complete first sync." },
+  { key: "verification", label: "Go-live checks", detail: "Test cashier sign-in, a sale, receipt, refund, terminal sync, backups and any enabled portal/rewards features. Only then activate the deployment profile." },
+] as const;
+
+type Deployment = {
+  id: string; clientName: string; customerDomain: string | null; eShopDomain: string | null;
+  domainStatus: string; backOfficeVersion: string | null; posVersion: string | null;
+  targetBackOfficeVersion: string | null; targetPosVersion: string | null;
+  lastHeartbeatAt: string | null; externalProjectId: string | null;
+};
+
+export function DeploymentOnboarding({ deployment, onClose }: { deployment: Deployment | null; onClose: () => void }) {
+  const { toast } = useToast();
+  const [revision, setRevision] = useState("");
+  const [backOfficeVersion, setBackOfficeVersion] = useState("");
+  const [posVersion, setPosVersion] = useState("");
+  const [notes, setNotes] = useState("");
+  const [outcome, setOutcome] = useState<"published" | "failed">("published");
+  const key = ["/api/control/deployments", deployment?.id, "events"];
+  const events = useQuery<Event[]>({
+    queryKey: key,
+    queryFn: async () => (await apiRequest("GET", `/api/control/deployments/${deployment!.id}/events`)).json(),
+    enabled: !!deployment,
+  });
+  const save = useMutation({
+    mutationFn: async (body: object) => (await apiRequest("POST", `/api/control/deployments/${deployment!.id}/events`, body)).json(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: key });
+      toast({ title: "Operator record saved" });
+      setNotes("");
+    },
+    onError: (error: Error) => toast({ title: "Could not save record", description: error.message, variant: "destructive" }),
+  });
+  const completed = new Set((events.data ?? []).filter(e => e.kind === "setup").map(e => e.step));
+  const recordRelease = () => {
+    if (!revision.trim() || !backOfficeVersion.trim() || !posVersion.trim()) {
+      toast({ title: "Revision and both versions are required", variant: "destructive" });
+      return;
+    }
+    save.mutate({ kind: "release", outcome, codeRevision: revision.trim(), backOfficeVersion: backOfficeVersion.trim(), posVersion: posVersion.trim(), notes: notes.trim() });
+  };
+
+  return <Dialog open={!!deployment} onOpenChange={open => { if (!open) onClose(); }}>
+    <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+      <DialogHeader><DialogTitle>Setup and releases — {deployment?.clientName}</DialogTitle>
+        <DialogDescription>Operator-recorded checklist and release history. Nothing here creates a project, changes a database, or publishes to Replit.</DialogDescription>
+      </DialogHeader>
+      {deployment && <>
+        <div className="rounded-lg border bg-slate-50 p-3 text-sm">
+          <p><strong>Customer hostname:</strong> <span className="font-mono">{deployment.customerDomain || "Not set"}</span></p>
+          {deployment.eShopDomain && <p><strong>Optional e-shop:</strong> <span className="font-mono">{deployment.eShopDomain}</span></p>}
+          <p><strong>Replit project ID:</strong> {deployment.externalProjectId || "Not recorded — add it under Manage"}</p>
+          <p><strong>Reported live versions:</strong> Back Office {deployment.backOfficeVersion || "unknown"} · POS {deployment.posVersion || "unknown"}{deployment.lastHeartbeatAt ? ` · last heartbeat ${new Date(deployment.lastHeartbeatAt).toLocaleString()}` : " · no heartbeat"}</p>
+          <p><strong>Requested versions:</strong> Back Office {deployment.targetBackOfficeVersion || "none"} · POS {deployment.targetPosVersion || "none"}</p>
+        </div>
+        <section className="space-y-2"><h3 className="font-semibold">New customer setup</h3>
+          {events.isLoading && <p className="text-sm text-muted-foreground">Loading setup history…</p>}
+          {events.isError && <p role="alert" className="text-sm text-red-700">Could not load setup history: {(events.error as Error).message}</p>}
+          {steps.map(step => <div key={step.key} className="rounded-md border p-3 text-sm">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 font-medium">{completed.has(step.key) && <CheckCircle2 className="h-4 w-4 text-emerald-600" />}{step.label}</span>
+              <Button size="sm" variant="outline" disabled={save.isPending || events.isLoading || events.isError || completed.has(step.key)} onClick={() => save.mutate({ kind: "setup", step: step.key })}>Record done</Button>
+            </div>
+            <p className="mt-1 text-muted-foreground">{step.detail}</p>
+          </div>)}
+        </section>
+        <section className="space-y-3 border-t pt-4"><h3 className="font-semibold">Record a manual release</h3>
+          <p className="text-sm text-muted-foreground">For each update, pull the approved shared-code revision into this customer's separate Replit project, review its schema and configuration changes, publish it, and test Back Office plus a terminal. Repeat for each customer or the selected rollout group. Record success or failure separately for each project. A queued fleet rollout is only a request, not a completed publish.</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <label className="text-sm">Code revision<Input value={revision} onChange={e => setRevision(e.target.value)} placeholder="Git commit SHA" /></label>
+            <label className="text-sm">Back Office version<Input value={backOfficeVersion} onChange={e => setBackOfficeVersion(e.target.value)} placeholder="e.g. 1.4.0" /></label>
+            <label className="text-sm">POS version<Input value={posVersion} onChange={e => setPosVersion(e.target.value)} placeholder="e.g. 1.4.0" /></label>
+          </div>
+          <label className="block text-sm">Outcome<select className="mt-1 h-10 w-full rounded-md border bg-background px-3" value={outcome} onChange={e => setOutcome(e.target.value as "published" | "failed")}><option value="published">Published and verified manually</option><option value="failed">Failed</option></select></label>
+          <label className="block text-sm">Notes (optional)<Textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="What was verified, or why did publishing fail?" maxLength={2000} /></label>
+          <Button disabled={save.isPending} onClick={recordRelease}>Save release record</Button>
+        </section>
+        <section className="space-y-2 border-t pt-4"><h3 className="font-semibold">Customer history</h3>
+          {!events.isLoading && !events.isError && !events.data?.length && <p className="text-sm text-muted-foreground">No setup or release records yet.</p>}
+          {(events.data || []).map(event => <div key={event.id} className="rounded-md border p-3 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{event.kind === "setup" ? steps.find(s => s.key === event.step)?.label || event.step : `Release ${event.outcome}`}</span><Badge variant={event.outcome === "failed" ? "destructive" : "secondary"}>{event.outcome}</Badge></div>
+            {event.kind === "release" && <p className="font-mono text-xs">Revision {event.codeRevision} · Back Office {event.backOfficeVersion} · POS {event.posVersion}</p>}
+            {event.notes && <p className="whitespace-pre-wrap">{event.notes}</p>}
+            <p className="text-xs text-muted-foreground">{new Date(event.createdAt).toLocaleString()} · operator {event.recordedBy}</p>
+          </div>)}
+        </section>
+      </>}
+    </DialogContent>
+  </Dialog>;
+}

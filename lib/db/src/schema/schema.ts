@@ -136,6 +136,22 @@ export const deploymentRollouts = pgTable("deployment_rollouts", {
   updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
+// Operator-reported setup and release history. A record never implies that
+// Replit published a project; publishing is a separate, manual action.
+export const deploymentEvents = pgTable("deployment_events", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  deploymentId: uuid("deployment_id").notNull().references(() => deploymentProfiles.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(), // setup | release
+  step: text("step"),
+  outcome: text("outcome").notNull(), // completed | published | failed
+  backOfficeVersion: text("back_office_version"),
+  posVersion: text("pos_version"),
+  codeRevision: text("code_revision"),
+  notes: text("notes"),
+  recordedBy: varchar("recorded_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [index("deployment_events_deployment_created_idx").on(table.deploymentId, table.createdAt)]);
+
 export const erpIntegrationConfigs = pgTable("erp_integration_configs", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   // Each application database is one customer deployment. This singleton

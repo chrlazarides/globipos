@@ -7,11 +7,30 @@ import { checkDomain, type DomainCheck } from "./domain-readiness";
 import { sendDomainStatusNotification } from "./email";
 import { retryCustomerAiPersistenceAlert } from "./operator-alerting";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
-import { activityLogs, deploymentDomainIncidents, deploymentProfiles, deploymentRollouts, operatorAlertFailures, type OperatorAlertRetryHistoryEntry } from "@workspace/db";
+import { activityLogs, deploymentDomainIncidents, deploymentEvents, deploymentProfiles, deploymentRollouts, operatorAlertFailures, type OperatorAlertRetryHistoryEntry } from "@workspace/db";
 
 const statusSchema = z.enum(["draft", "active", "suspended"]);
 const healthStatusSchema = z.enum(["unknown", "healthy", "warning", "offline", "error"]);
 const automationSchema = z.enum(["manual", "github", "replit"]);
+const setupSteps = [
+  "project", "database", "published", "domain", "company",
+  "locations", "terminals", "verification",
+] as const;
+const eventSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("setup"),
+    step: z.enum(setupSteps),
+    notes: z.string().trim().max(2000).optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("release"),
+    outcome: z.enum(["published", "failed"]),
+    backOfficeVersion: z.string().trim().min(1).max(128),
+    posVersion: z.string().trim().min(1).max(128),
+    codeRevision: z.string().trim().min(7).max(128),
+    notes: z.string().trim().max(2000).optional(),
+  }).strict(),
+]);
 export const CUSTOMER_DEPLOYMENT_BASE_DOMAIN = "globipos.shop";
 const RESERVED_CUSTOMER_SUBDOMAINS = new Set([
   "admin", "api", "app", "assets", "mail", "pos", "status", "support", "web", "www",
@@ -978,6 +997,46 @@ export function registerDeploymentControlRoutes(app: Express) {
 
   app.get("/api/control/rollouts", requireSuperuser, async (_req, res) => {
     res.json(await db.select().from(deploymentRollouts).orderBy(desc(deploymentRollouts.createdAt)));
+  });
+
+  app.get("/api/control/deployments/:id/events", requireSuperuser, async (req, res) => {
+    const id = z.string().uuid().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ message: "Invalid deployment ID" });
+    const [profile] = await db.select({ id: deploymentProfiles.id }).from(deploymentProfiles)
+      .where(eq(deploymentProfiles.id, id.data));
+    if (!profile) return res.status(404).json({ message: "Deployment profile not found" });
+    const events = await db.select().from(deploymentEvents)
+      .where(eq(deploymentEvents.deploymentId, id.data))
+      .orderBy(desc(deploymentEvents.createdAt), desc(deploymentEvents.id));
+    res.json(events);
+  });
+
+  app.post("/api/control/deployments/:id/events", requireSuperuser, async (req, res) => {
+    const id = z.string().uuid().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ message: "Invalid deployment ID" });
+    const parsed = eventSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const [profile] = await db.select().from(deploymentProfiles)
+      .where(eq(deploymentProfiles.id, id.data));
+    if (!profile) return res.status(404).json({ message: "Deployment profile not found" });
+    const input = parsed.data;
+    if (input.kind === "setup" && input.step === "domain" && profile.domainStatus !== "connected") {
+      return res.status(409).json({ message: "Run Check domains and resolve failures before recording this step." });
+    }
+    const [event] = await db.insert(deploymentEvents).values({
+      deploymentId: id.data,
+      kind: input.kind,
+      step: input.kind === "setup" ? input.step : null,
+      outcome: input.kind === "setup" ? "completed" : input.outcome,
+      backOfficeVersion: input.kind === "release" ? input.backOfficeVersion : null,
+      posVersion: input.kind === "release" ? input.posVersion : null,
+      codeRevision: input.kind === "release" ? input.codeRevision : null,
+      notes: input.notes || null,
+      recordedBy: req.user!.id,
+    }).returning();
+    await logControlActivity(req, "record", "deployment_event", event.id,
+      `Recorded ${input.kind === "setup" ? input.step : input.outcome} for ${profile.slug}`);
+    res.status(201).json(event);
   });
 
   app.post("/api/control/rollouts", requireSuperuser, async (req, res) => {
