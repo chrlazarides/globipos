@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 import { db } from "./db";
 import { requireSuperuser } from "./auth";
 import { checkDomain, type DomainCheck } from "./domain-readiness";
+import { applyDns, planDns, DnsSetupError } from "./godaddy-dns";
 import { sendDomainStatusNotification } from "./email";
 import { retryCustomerAiPersistenceAlert } from "./operator-alerting";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
@@ -31,6 +32,12 @@ const eventSchema = z.discriminatedUnion("kind", [
     notes: z.string().trim().max(2000).optional(),
   }).strict(),
 ]);
+const dnsSetupSchema = z.object({
+  role: z.enum(["customer", "pos", "eshop"]),
+  address: z.string().trim().min(1).max(45),
+  txtName: z.string().trim().min(1).max(253),
+  txtValue: z.string().trim().min(1).max(1024),
+}).strict();
 export const CUSTOMER_DEPLOYMENT_BASE_DOMAIN = "globipos.shop";
 const RESERVED_CUSTOMER_SUBDOMAINS = new Set([
   "admin", "api", "app", "assets", "mail", "pos", "status", "support", "web", "www",
@@ -729,6 +736,32 @@ export function registerDeploymentControlRoutes(app: Express) {
   app.get("/api/control/deployments", requireSuperuser, async (_req, res) => {
     res.json(await loadDeploymentProfilesWithIncidents());
   });
+
+  for (const mode of ["preview", "apply"] as const) {
+    app.post(`/api/control/deployments/:id/dns/${mode}`, requireSuperuser, async (req, res) => {
+      const id = z.string().uuid().safeParse(req.params.id);
+      const parsed = dnsSetupSchema.safeParse(req.body);
+      if (!id.success || !parsed.success) return res.status(400).json({ message: "Invalid DNS setup details." });
+      const token = process.env.GODADDY_PAT;
+      if (!token) return res.status(503).json({ message: "GoDaddy DNS automation is not configured on this control server." });
+      const [profile] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, id.data));
+      if (!profile) return res.status(404).json({ message: "Deployment profile not found." });
+      const hostname = parsed.data.role === "customer" ? profile.customerDomain
+        : parsed.data.role === "pos" ? profile.posDomain : profile.eShopDomain;
+      if (!hostname) return res.status(400).json({ message: "This hostname is not configured on the deployment profile." });
+      try {
+        const input = { hostname: hostname.toLowerCase(), address: parsed.data.address, txtName: parsed.data.txtName, txtValue: parsed.data.txtValue };
+        const plan = mode === "preview" ? await planDns(input, token) : await applyDns(input, token);
+        if (mode === "apply") await logControlActivity(req, "create_dns", "deployment_profile", id.data,
+          `GoDaddy DNS setup for ${hostname}: ${plan.records.map(record => `${record.type} ${record.action}`).join(", ")}`);
+        res.json(plan);
+      } catch (error) {
+        if (error instanceof DnsSetupError) return res.status(error.status).json({ message: error.message });
+        req.log.error({ error }, "GoDaddy DNS setup failed");
+        res.status(502).json({ message: "DNS setup failed. Check GoDaddy before retrying." });
+      }
+    });
+  }
 
   app.get("/api/control/deployments/:id/incidents", requireSuperuser, async (req, res) => {
     const parsed = incidentHistoryQuerySchema.safeParse(req.query);

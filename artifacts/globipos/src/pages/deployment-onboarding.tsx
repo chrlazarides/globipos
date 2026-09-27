@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -20,7 +20,7 @@ const steps = [
   { key: "project", label: "Separate Replit project", detail: "Create a new project from the shared code repository. Record its project ID in the deployment profile. Changes to the repository must be pulled into each customer project before republishing." },
   { key: "database", label: "Fresh database", detail: "Inspect the new project's development database before publishing. It must contain no other customer's business data. Confirm its production database is separate." },
   { key: "published", label: "Publish the project", detail: "Publish the API, Back Office and Terminal artifacts in the customer's own Replit project. Verify the published health check and sign-in. This checklist does not publish for you." },
-  { key: "domain", label: "Connect subdomain and HTTPS", detail: "In that project's Publishing → Domains, add the exact hostname shown here. Add Replit's A and TXT records in DNS, then run Check domains in Deployment Control. Add any e-shop hostname separately." },
+  { key: "domain", label: "Connect subdomain and HTTPS", detail: "In that project's Publishing → Domains, add the exact hostname shown here. Enter Replit's A and TXT values below to create missing GoDaddy records, then run Check domains in Deployment Control. Add any e-shop hostname separately." },
   { key: "company", label: "Company settings", detail: "Set company name, legal and tax details, logo, receipt and invoice settings, and customer-only credentials in the new project." },
   { key: "locations", label: "Locations and stock", detail: "In the customer's Back Office, create every POS location. Import and reconcile that customer's products, prices and stock by location." },
   { key: "terminals", label: "Terminals and cashiers", detail: "Create a unique terminal code for each device, assign it to a location, install or open Terminal, enter this customer's server URL and code, and complete first sync." },
@@ -28,11 +28,68 @@ const steps = [
 ] as const;
 
 type Deployment = {
-  id: string; clientName: string; customerDomain: string | null; eShopDomain: string | null;
+  id: string; clientName: string; customerDomain: string | null; posDomain?: string | null; eShopDomain: string | null;
   domainStatus: string; backOfficeVersion: string | null; posVersion: string | null;
   targetBackOfficeVersion: string | null; targetPosVersion: string | null;
   lastHeartbeatAt: string | null; externalProjectId: string | null;
 };
+
+type DnsPlan = { records: Array<{ type: "A" | "TXT"; name: string; data: string; action: "create" | "already_present" }> };
+
+function DnsSetup({ deployment }: { deployment: Deployment }) {
+  const { toast } = useToast();
+  const [role, setRole] = useState<"customer" | "pos" | "eshop">("customer");
+  const [address, setAddress] = useState("");
+  const [txtName, setTxtName] = useState("");
+  const [txtValue, setTxtValue] = useState("");
+  const [preview, setPreview] = useState<{ plan: DnsPlan; input: { role: typeof role; address: string; txtName: string; txtValue: string } } | null>(null);
+  const revision = useRef(0);
+  const hostname = role === "customer" ? deployment.customerDomain : role === "pos" ? deployment.posDomain : deployment.eShopDomain;
+  const reset = () => { revision.current++; setPreview(null); };
+  const payload = { role, address: address.trim(), txtName: txtName.trim(), txtValue };
+  const check = useMutation({
+    mutationFn: async ({ input, version }: { input: typeof payload; version: number }) => ({
+      plan: await (await apiRequest("POST", `/api/control/deployments/${deployment.id}/dns/preview`, input)).json() as DnsPlan,
+      input, version,
+    }),
+    onSuccess: result => { if (result.version === revision.current) setPreview({ plan: result.plan, input: result.input }); },
+    onError: (error: Error) => toast({ title: "DNS preview failed", description: error.message, variant: "destructive" }),
+  });
+  const apply = useMutation({
+    mutationFn: async (input: typeof payload) => (await apiRequest("POST", `/api/control/deployments/${deployment.id}/dns/apply`, input)).json() as Promise<DnsPlan>,
+    onSuccess: result => {
+      setPreview(null);
+      toast({ title: "DNS setup finished", description: result.records.some(r => r.action === "create") ? "Allow time for DNS and HTTPS, then run Check domains." : "These records already existed. Run Check domains." });
+    },
+    onError: (error: Error) => { setPreview(null); toast({ title: "DNS setup not confirmed", description: error.message, variant: "destructive" }); },
+  });
+  return <section className="space-y-3 rounded-md border p-3 text-sm">
+    <h4 className="font-semibold">Create this customer's GoDaddy DNS records</h4>
+    <p className="text-muted-foreground">First add the exact hostname in the customer's Replit project under Publishing → Domains. Copy the A address, TXT record name and TXT value Replit shows. This does not add the hostname to Replit for you, and it will never replace existing GoDaddy records.</p>
+    <label className="block">Hostname
+      <select className="mt-1 h-10 w-full rounded-md border bg-background px-3" value={role} onChange={e => { setRole(e.target.value as typeof role); setAddress(""); setTxtName(""); setTxtValue(""); reset(); }}>
+        <option value="customer">{deployment.customerDomain || "Customer hostname not set"}</option>
+        {deployment.posDomain && <option value="pos">{deployment.posDomain} (POS)</option>}
+        {deployment.eShopDomain && <option value="eshop">{deployment.eShopDomain} (e-shop)</option>}
+      </select>
+    </label>
+    <p className="font-mono text-xs">{hostname || "Set a customer hostname in the deployment profile first."}</p>
+    <div className="grid gap-2 sm:grid-cols-2">
+      <label>Replit A address<Input value={address} onChange={e => { setAddress(e.target.value); reset(); }} placeholder="Public IPv4 address from Replit" /></label>
+      <label>Replit TXT name<Input value={txtName} onChange={e => { setTxtName(e.target.value); reset(); }} placeholder={`Full name, e.g. ${hostname || "customer.globipos.shop"}`} /></label>
+    </div>
+    <label className="block">Replit TXT value<Input value={txtValue} onChange={e => { setTxtValue(e.target.value); reset(); }} placeholder="Exact verification text from Replit" /></label>
+    <Button variant="outline" disabled={!hostname || !address || !txtName || !txtValue || check.isPending || apply.isPending} onClick={() => { reset(); check.mutate({ input: payload, version: revision.current }); }}>Preview DNS changes</Button>
+    {preview && <div className="space-y-2 rounded-md border bg-slate-50 p-3">
+      <p className="font-medium">Review before creating records</p>
+      {preview.plan.records.map(record => <p key={record.type} className="break-all font-mono text-xs">{record.action === "create" ? "Create" : "Already present"} · {record.type} · {record.name}.globipos.shop → {record.data}</p>)}
+      <p className="text-xs text-muted-foreground">Existing records are never replaced. GoDaddy may take time to propagate; Replit must still verify the hostname and issue HTTPS.</p>
+      <Button disabled={apply.isPending || !preview.plan.records.some(r => r.action === "create")} onClick={() => {
+        if (window.confirm(`Create the missing DNS records for ${hostname} in GoDaddy? This changes live DNS.`)) apply.mutate(preview.input);
+      }}>{apply.isPending ? "Creating…" : "Create missing records in GoDaddy"}</Button>
+    </div>}
+  </section>;
+}
 
 export function DeploymentOnboarding({ deployment, onClose }: { deployment: Deployment | null; onClose: () => void }) {
   const { toast } = useToast();
@@ -89,6 +146,7 @@ export function DeploymentOnboarding({ deployment, onClose }: { deployment: Depl
             <p className="mt-1 text-muted-foreground">{step.detail}</p>
           </div>)}
         </section>
+        <DnsSetup key={deployment.id} deployment={deployment} />
         <section className="space-y-3 border-t pt-4"><h3 className="font-semibold">Record a manual release</h3>
           <p className="text-sm text-muted-foreground">For each update, pull the approved shared-code revision into this customer's separate Replit project, review its schema and configuration changes, publish it, and test Back Office plus a terminal. Repeat for each customer or the selected rollout group. Record success or failure separately for each project. A queued fleet rollout is only a request, not a completed publish.</p>
           <div className="grid gap-2 sm:grid-cols-3">
