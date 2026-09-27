@@ -1,10 +1,22 @@
 ---
 name: Customer deployment isolation
-description: The user's chosen architecture and operating model for GlobiPOS client installations.
+description: GlobiPOS customer isolation and central release-management direction.
 ---
 
-Each customer gets a separate published Replit project and a fresh, isolated database, while all installations follow one shared codebase. One customer can have multiple locations and POS terminals under that installation. The user chose guided setup with manual Replit Publish as the easiest-to-follow approach; central control should record each customer's versions and update outcomes without claiming that recording a rollout actually publishes it.
+The user's preferred target is now a complete separate deployment and data store per customer, ideally on a customer subdomain, with one central Back Office to choose and roll out a version to selected or all installations. The current published installation should be the first test customer/canary. A shared multi-tenant platform with path-based URLs was explored as an easier alternative, but does not meet the user's stated ideal of independently deployed customers.
 
-**Why:** The user wants isolation of customer data, a customer-specific subdomain, repeatable updates across customers, and a full history of which customer received which version. GoDaddy hosts the domain's authoritative DNS, but merely connecting the main domain to Replit does not provision each new customer's custom hostname.
+**Why:** The user wants isolation of each customer's installation and data, but does not want to publish each update manually across a chain of projects.
 
-**How to apply:** Keep project provisioning, publishing, and actual release verification explicit. Add each exact hostname in its own project's Replit Publishing settings first; only then use the Replit-provided A/TXT values for GoDaddy DNS. Keep DNS credentials exclusively in the central control installation, never in customer projects. Treat fleet rollout targets as intentions until an individual installation is updated and checked; never use a shared production database merely to support multiple customer hostnames.
+An interim central inventory may accept operator-supplied installation URLs and operator-attested release outcomes. This is a record of independently hosted installations, not automatic provisioning, publishing, or remote version enforcement. Leave the existing published installation untouched while building and reviewing that inventory.
+
+**Why:** The user explicitly chose to stop the live DNS experiment and to supply new installation URLs themselves; the hosting provider and an automated fleet deployment mechanism have not been selected.
+
+Moving customer installations off Replit is acceptable if the central Back Office can actually control provisioning and one-click version upgrades. Keep the existing published installation in place until an alternate hosting path is proven; this is permission to design for another host, not approval to migrate production now.
+
+**Why:** Replit's documented Publishing controls do not expose a supported programmatic fleet-publish API, so the existing queued rollout cannot fulfill the requested one-click upgrade.
+
+The user chose to retain existing live GlobiPOS data as the first customer's data if a shared tenant migration is pursued; with the preferred separate-deployment approach, preserve it in the first installation instead.
+
+**Why:** Existing business records must not be discarded or silently made visible to newly signed-up customers.
+
+**How to apply:** Do not replace separate installations with a shared database merely to make releases one-click. Pin each installation to a release and verify migration, health, and rollback per customer. Do not represent the existing rollout queue as automatic publishing; Replit's documented Publishing controls do not expose a supported programmatic fleet-publish API. A true one-click rollout may require a hosting platform with a deployment API. For any Replit custom hostname, add it to the exact Publishing project and use its Replit-provided A/TXT values for GoDaddy DNS; keep DNS credentials only in central control.

@@ -212,6 +212,9 @@ export default function DeploymentControlPage() {
   const [conflictNotice, setConflictNotice] = useState<ConflictNotice | null>(null);
   const [historyProfile, setHistoryProfile] = useState<Profile | null>(null);
   const [onboarding, setOnboarding] = useState<Profile | null>(null);
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [editingInstallation, setEditingInstallation] = useState<Profile | null>(null);
+  const [installation, setInstallation] = useState({ clientName: "", slug: "", backOfficeUrl: "", posServerUrl: "", externalProjectId: "" });
   const [historyFilters, setHistoryFilters] = useState({ from: "", to: "", status: "all" });
   const [historyPage, setHistoryPage] = useState(1);
   const [retryClock, setRetryClock] = useState(() => Date.now());
@@ -261,6 +264,28 @@ export default function DeploymentControlPage() {
     if (!formOpen) toast({ title: "Latest deployment state loaded", description: "Routing, readiness, or status changed during the operation. Review the profile before trying again." });
   };
   const mutation = useMutation({ mutationFn: (x: { method: string; url: string; body?: unknown }) => controlRequest<Profile>(x.method, x.url, x.body), onSuccess: () => { invalidate(); setFormOpen(false); setConflictNotice(null); toast({ title: "Deployment profile saved" }); }, onError: (e: Error, request) => { const code = e instanceof ControlApiError ? e.code : undefined; const id = request.url.match(/\/deployments\/([^/]+)/)?.[1]; if (id && code === "DEPLOYMENT_CHANGED") { void recoverConflict(code, id); return; } toast({ title: "Action failed", description: e.message, variant: "destructive" }); } });
+  const registerInstallation = useMutation({
+    mutationFn: (input: typeof installation) => {
+      const backOfficeUrl = new URL(input.backOfficeUrl.trim());
+      const posServerUrl = new URL((input.posServerUrl || input.backOfficeUrl).trim());
+      if (backOfficeUrl.protocol !== "https:" || posServerUrl.protocol !== "https:" || backOfficeUrl.username || posServerUrl.username || backOfficeUrl.password || posServerUrl.password) {
+        throw new Error("Use HTTPS installation URLs without embedded credentials.");
+      }
+      return controlRequest<Profile>(editingInstallation ? "PATCH" : "POST",
+        editingInstallation ? `/api/control/deployments/${editingInstallation.id}` : "/api/control/deployments", {
+          slug: input.slug.trim().toLowerCase(),
+          clientName: input.clientName.trim(),
+          ...(!editingInstallation ? { status: "draft" } : {}),
+          backOfficeUrl: backOfficeUrl.href,
+          posServerUrl: posServerUrl.href,
+          customerDomain: backOfficeUrl.hostname,
+          posDomain: posServerUrl.hostname === backOfficeUrl.hostname ? null : posServerUrl.hostname,
+          externalProjectId: input.externalProjectId.trim() || null,
+        });
+    },
+    onSuccess: () => { invalidate(); setRegisterOpen(false); setEditingInstallation(null); setInstallation({ clientName: "", slug: "", backOfficeUrl: "", posServerUrl: "", externalProjectId: "" }); toast({ title: "Installation inventory saved", description: "No project was created or published." }); },
+    onError: (error: Error) => toast({ title: "Could not register installation", description: error.message, variant: "destructive" }),
+  });
   const deleting = useMutation({ mutationFn: (id: string) => apiRequest("DELETE", `/api/control/deployments/${id}`), onSuccess: () => { invalidate(); setDeleteTarget(null); toast({ title: "Deployment removed" }); }, onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }) });
   const credentialMutation = useMutation({ mutationFn: async (id: string) => (await apiRequest("POST", `/api/control/deployments/${id}/rotate-credential`, {})).json(), onSuccess: (data: any, id) => { const p = profiles.find(x => x.id === id); setCredential({ client: p?.clientName || "deployment", token: data.credential }); }, onError: (e: Error) => toast({ title: "Credential rotation failed", description: e.message, variant: "destructive" }) });
   const rolloutMutation = useMutation({ mutationFn: (body: any) => apiRequest("POST", "/api/control/rollouts", body), onSuccess: () => { invalidate(); setRolloutOpen(false); setSelected([]); toast({ title: "Upgrade rollout queued" }); }, onError: (e: Error) => toast({ title: "Rollout failed", description: e.message, variant: "destructive" }) });
@@ -277,12 +302,13 @@ export default function DeploymentControlPage() {
     },
   });
 
-  const openCreate = () => { setEditing(null); setForm(emptyForm); setConflictNotice(null); setFormOpen(true); };
   const openEdit = (p: Profile) => { setEditing(p); setForm(formFromProfile(p)); setConflictNotice(null); setFormOpen(true); };
   const setField = (key: keyof FormState, value: any) => setForm(f => ({ ...f, [key]: value }));
   const setSlug = (value: string) => setForm(f => {
     const slug = value.trim().toLowerCase();
     const hostname = slug ? `${slug}.${CUSTOMER_DEPLOYMENT_BASE_DOMAIN}` : "";
+    const previousHostname = f.slug ? `${f.slug}.${CUSTOMER_DEPLOYMENT_BASE_DOMAIN}` : "";
+    if (f.customerDomain !== previousHostname) return { ...f, slug, eShopDomain: f.eShopDomain ? eShopHostname(slug) : "" };
     return {
       ...f,
       slug,
@@ -334,6 +360,22 @@ export default function DeploymentControlPage() {
   if (unavailable) return <div className="mx-auto flex min-h-[70vh] max-w-2xl items-center px-6"><Card className="w-full border-amber-200 bg-amber-50/50"><CardContent className="p-8 text-center"><ShieldAlert className="mx-auto mb-4 h-10 w-10 text-amber-700" /><h1 className="text-xl font-semibold text-slate-900">Deployment control is not available</h1><p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-slate-600">The control plane is development-only and must be explicitly enabled for this environment. This account may also need superuser access. No deployment data has been substituted.</p><Button variant="outline" className="mt-6" onClick={() => control.refetch()}><RefreshCw className="mr-2 h-4 w-4" />Check again</Button></CardContent></Card></div>;
 
   return <div className="min-h-full bg-slate-50/60 p-4 sm:p-6 lg:p-8">
+    <Dialog open={registerOpen} onOpenChange={open => { setRegisterOpen(open); if (!open) setEditingInstallation(null); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{editingInstallation ? "Edit installation details" : "Register a customer installation"}</DialogTitle>
+          <DialogDescription>Save deployment details in the inventory. This does not create, publish, or change that installation or its DNS.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <label className="block text-sm font-medium">Customer name<Input value={installation.clientName} onChange={e => setInstallation(x => ({ ...x, clientName: e.target.value }))} /></label>
+          <label className="block text-sm font-medium">Inventory slug<Input value={installation.slug} onChange={e => setInstallation(x => ({ ...x, slug: e.target.value }))} placeholder="customer-name" /></label>
+          <label className="block text-sm font-medium">Published back-office URL<Input type="url" value={installation.backOfficeUrl} onChange={e => setInstallation(x => ({ ...x, backOfficeUrl: e.target.value }))} placeholder="https://customer.globipos.shop" /></label>
+          <label className="block text-sm font-medium">Published POS server URL (if different)<Input type="url" value={installation.posServerUrl} onChange={e => setInstallation(x => ({ ...x, posServerUrl: e.target.value }))} placeholder="Defaults to the back-office URL" /></label>
+          <label className="block text-sm font-medium">Hosting project or service ID (optional)<Input value={installation.externalProjectId} onChange={e => setInstallation(x => ({ ...x, externalProjectId: e.target.value }))} /></label>
+        </div>
+        <DialogFooter><Button variant="outline" onClick={() => setRegisterOpen(false)}>Cancel</Button><Button disabled={registerInstallation.isPending || !installation.clientName.trim() || !installation.slug.trim() || !installation.backOfficeUrl.trim()} onClick={() => registerInstallation.mutate(installation)}>{registerInstallation.isPending ? "Saving…" : "Save to inventory"}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
     {conflictNotice && formOpen && <div role="alert" className="fixed inset-x-4 top-4 z-[70] mx-auto max-w-3xl rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 shadow-xl"><div className="flex gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="font-semibold">{conflictNotice.title}</p><p className="mt-1 leading-5">{conflictNotice.message}</p>{conflictNotice.preserved.length > 0 && <p className="mt-2"><strong>Unsaved edits preserved:</strong> {conflictNotice.preserved.join(", ")}.</p>}{conflictNotice.replaced.length > 0 && <p className="mt-2"><strong>Replaced with newer server values:</strong> {conflictNotice.replaced.join(", ")}.</p>}{conflictNotice.preserved.length === 0 && conflictNotice.replaced.length === 0 && <p className="mt-2">No unsaved form edits needed reconciliation.</p>}</div></div></div>}
     {editing && formOpen && <div className="fixed inset-x-4 bottom-6 z-[60] mx-auto max-w-3xl rounded-lg border bg-background p-3 shadow-xl"><div className="mb-3 grid gap-2 sm:grid-cols-2"><div className="flex min-w-0 items-center gap-2"><DomainPill status={editing.domainStatus} />{editing.domainMessage && <span title={editing.domainMessage} className="max-w-48 truncate text-xs text-slate-500">{editing.domainMessage}</span>}</div><NotificationDelivery profile={editing} /></div><div className="flex flex-wrap items-center gap-2"><span className="mr-auto text-sm font-semibold">Profile actions</span><Button variant="outline" disabled={domainMutation.isPending} onClick={() => domainMutation.mutate(editing.id)}>{domainMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Check domains</Button><Button variant="outline" onClick={() => credentialMutation.mutate(editing.id)}>Rotate credential</Button><Button variant="outline" onClick={() => exportProfile(editing)}>Download manifest</Button><Button variant="outline" onClick={() => { if (editing.status === "suspended" && !domainsFresh(editing)) { setActivationOverride({ request: { method: "PATCH", url: `/api/control/deployments/${editing.id}`, body: { status: "active" } }, clientName: editing.clientName, reason: editing.domainMessage || "Required domains do not have a recent successful check." }); } else { setFormOpen(false); if (editing.status === "suspended") mutation.mutate({ method: "PATCH", url: `/api/control/deployments/${editing.id}`, body: { status: "active" } }); else setSuspendTarget(editing); } }}>{editing.status === "suspended" ? "Reactivate deployment" : "Suspend deployment"}</Button>{editing.status === "draft" && <Button variant="destructive" onClick={() => { setFormOpen(false); setDeleteTarget(editing); }}>Delete draft</Button>}</div></div>}
     <div className="mx-auto max-w-[1500px] space-y-6">
@@ -347,7 +389,17 @@ export default function DeploymentControlPage() {
           </div>)}
         </CardContent>
       </Card>}
-      <header className="flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-teal-700"><MonitorCog className="h-4 w-4" /> GlobiPOS support cockpit</div><h1 className="text-3xl font-semibold tracking-tight text-slate-900">Deployment Control Center</h1><p className="mt-1 text-sm text-slate-500">Manage isolated customer installations from one shared codebase.</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => { control.refetch(); deployments.refetch(); }}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button><Button onClick={openCreate}><Plus className="mr-2 h-4 w-4" />New deployment</Button></div></header>
+      <header className="flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-teal-700"><MonitorCog className="h-4 w-4" /> GlobiPOS support cockpit</div><h1 className="text-3xl font-semibold tracking-tight text-slate-900">Deployment Control Center</h1><p className="mt-1 text-sm text-slate-500">Inventory independent customer installations and their reported versions. This screen does not publish them.</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => { control.refetch(); deployments.refetch(); }}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button><Button onClick={() => setRegisterOpen(true)}><Plus className="mr-2 h-4 w-4" />Register installation</Button></div></header>
+      {profiles.length > 0 && <Card>
+        <CardHeader className="border-b bg-white px-5 py-4"><CardTitle className="text-base">Installation inventory</CardTitle></CardHeader>
+        <CardContent className="divide-y p-0">{profiles.map(profile => <div key={profile.id} className="flex flex-wrap items-center gap-x-5 gap-y-2 px-5 py-3 text-sm">
+          <strong className="min-w-32 text-slate-900">{profile.clientName}</strong>
+          <a className="min-w-0 break-all text-teal-700 underline" href={profile.backOfficeUrl || undefined} target="_blank" rel="noopener noreferrer">{profile.backOfficeUrl}</a>
+          <span className="text-slate-600">Back Office: {profile.backOfficeVersion || "unknown"} · POS: {profile.posVersion || "unknown"}</span>
+          <Badge variant={profile.status === "active" ? "default" : "secondary"}>{profile.status}</Badge>
+          <div className="ml-auto flex gap-2"><Button variant="outline" size="sm" onClick={() => { setEditingInstallation(profile); setInstallation({ clientName: profile.clientName, slug: profile.slug, backOfficeUrl: profile.backOfficeUrl, posServerUrl: profile.posServerUrl, externalProjectId: profile.externalProjectId || "" }); setRegisterOpen(true); }}>Edit URL</Button><Button variant="outline" size="sm" onClick={() => setOnboarding(profile)}>Release history</Button></div>
+        </div>)}</CardContent>
+      </Card>}
       {operatorAlertFailures.length > 0 && <Card className="border-red-300 bg-red-50"><CardContent className="p-4"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" /><div className="min-w-0 flex-1"><p className="font-semibold text-red-950">Operator alerts could not be delivered</p><div className="mt-2 space-y-4">{operatorAlertFailures.map(failure => {
         const cooldownLabel = failure.nextAttemptAt ? retryCooldownLabel(failure.nextAttemptAt, retryClock) : null;
         return <div key={failure.alertKey} className="rounded-md border border-red-200 bg-white/60 p-3 text-sm text-red-900"><div className="flex flex-wrap items-center justify-between gap-3"><div><strong>Customer AI history {failure.operation}</strong> — {failure.reason}<span className="block text-xs text-red-700">{failure.occurrenceCount} occurrence{failure.occurrenceCount === 1 ? "" : "s"}; last delivery used {failure.deliveryAttempts} attempt{failure.deliveryAttempts === 1 ? "" : "s"} at {new Date(failure.lastFailedAt).toLocaleString()}</span>{cooldownLabel && <span className="mt-1 block text-xs font-medium text-amber-800">{cooldownLabel}</span>}</div><Button size="sm" variant="outline" className="border-red-300 bg-white text-red-800 hover:bg-red-100" disabled={alertRetryMutation.isPending || Boolean(cooldownLabel)} onClick={() => alertRetryMutation.mutate(failure.operation)}>{alertRetryMutation.isPending && alertRetryMutation.variables === failure.operation ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Retry delivery</Button></div>{failure.retryHistory?.length > 0 && <div className="mt-3 border-t border-red-200 pt-2"><p className="text-xs font-semibold text-red-950">Recent manual retries</p><ul className="mt-1 space-y-1">{[...failure.retryHistory].reverse().map((retry, index) => <li key={`${retry.attemptedAt}-${index}`} className="flex flex-wrap items-center gap-x-2 text-xs text-red-800"><span>{new Date(retry.attemptedAt).toLocaleString()}</span><Badge variant={retry.outcome === "delivered" ? "secondary" : "destructive"}>{retry.outcome === "delivered" ? "Delivered" : "Failed"}</Badge><span>by {retry.operator?.username || "Unknown operator"}</span></li>)}</ul></div>}</div>;
@@ -359,7 +411,7 @@ export default function DeploymentControlPage() {
       {activeDeliveryWarnings.length > 0 && <Card className="border-amber-300 bg-amber-50"><CardContent className="p-4"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" /><div><p className="font-semibold text-amber-950">{activeDeliveryWarnings.length} deployment alert{activeDeliveryWarnings.length === 1 ? " needs" : "s need"} delivery attention</p><div className="mt-2 space-y-1">{activeDeliveryWarnings.map(p => <button key={p.id} className="block text-left text-sm text-amber-900 underline-offset-2 hover:underline" onClick={() => openEdit(p)}><strong>{p.clientName}</strong> — {p.domainNotificationDeliveryMessage || "Notification could not be delivered"}</button>)}</div></div></div></CardContent></Card>}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Card><CardContent className="p-4"><div className="flex justify-between"><Users className="h-4 w-4 text-teal-700" /><span className="text-2xl font-semibold">{total}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Registered clients</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><HeartPulse className="h-4 w-4 text-emerald-700" /><span className="text-2xl font-semibold text-emerald-700">{healthy}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Healthy heartbeat</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><GitBranch className="h-4 w-4 text-amber-700" /><span className="text-2xl font-semibold text-amber-700">{drift}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Version drift</p></CardContent></Card><Card><CardContent className="p-4"><div className="flex justify-between"><Activity className="h-4 w-4 text-slate-500" /><span className="text-2xl font-semibold">{rollouts.data?.length || 0}</span></div><p className="mt-2 text-xs uppercase tracking-wide text-slate-500">Rollouts recorded</p></CardContent></Card></div>
       <Card><CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
-        <div className="flex-1"><p className="font-semibold">Customer setup and release history</p><p className="text-sm text-slate-500">Follow the manual Replit publishing checklist and record the actual result for each customer. Profiles and queued rollouts do not publish an app.</p></div>
+        <div className="flex-1"><p className="font-semibold">Customer setup and release history</p><p className="text-sm text-slate-500">Record the actual release result for each customer after verifying it on its own host. Profiles and planned rollouts do not publish an app.</p></div>
         <select aria-label="Choose customer for setup and releases" className="h-10 rounded-md border bg-background px-3 text-sm" value={onboarding?.id || ""} onChange={e => setOnboarding(profiles.find(p => p.id === e.target.value) || null)}>
           <option value="">Choose customer…</option>{profiles.map(p => <option key={p.id} value={p.id}>{p.clientName}</option>)}
         </select>

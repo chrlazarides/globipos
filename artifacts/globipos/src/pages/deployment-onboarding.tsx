@@ -17,10 +17,10 @@ type Event = {
 };
 
 const steps = [
-  { key: "project", label: "Separate Replit project", detail: "Create a new project from the shared code repository. Record its project ID in the deployment profile. Changes to the repository must be pulled into each customer project before republishing." },
-  { key: "database", label: "Fresh database", detail: "Inspect the new project's development database before publishing. It must contain no other customer's business data. Confirm its production database is separate." },
-  { key: "published", label: "Publish the project", detail: "Publish the API, Back Office and Terminal artifacts in the customer's own Replit project. Verify the published health check and sign-in. This checklist does not publish for you." },
-  { key: "domain", label: "Connect subdomain and HTTPS", detail: "In that project's Publishing → Domains, add the exact hostname shown here. Enter Replit's A and TXT values below to create missing GoDaddy records, then run Check domains in Deployment Control. Add any e-shop hostname separately." },
+  { key: "project", label: "Separate installation", detail: "Create an independent installation from the approved shared code. Record its hosting service ID and published URL in the deployment inventory." },
+  { key: "database", label: "Separate database", detail: "Verify this installation has its own production database and no other customer's business data." },
+  { key: "published", label: "Publish and verify", detail: "Publish the customer's own installation using its hosting provider; verify the health check and sign-in. This checklist does not publish for you." },
+  { key: "domain", label: "Verify hostname and HTTPS", detail: "Configure the installation's hostname and certificate with its hosting provider, then run Check domains in Deployment Control. GoDaddy DNS setup below applies only to globipos.shop hostnames." },
   { key: "company", label: "Company settings", detail: "Set company name, legal and tax details, logo, receipt and invoice settings, and customer-only credentials in the new project." },
   { key: "locations", label: "Locations and stock", detail: "In the customer's Back Office, create every POS location. Import and reconcile that customer's products, prices and stock by location." },
   { key: "terminals", label: "Terminals and cashiers", detail: "Create a unique terminal code for each device, assign it to a location, install or open Terminal, enter this customer's server URL and code, and complete first sync." },
@@ -108,6 +108,7 @@ export function DeploymentOnboarding({ deployment, onClose }: { deployment: Depl
     mutationFn: async (body: object) => (await apiRequest("POST", `/api/control/deployments/${deployment!.id}/events`, body)).json(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: key });
+      queryClient.invalidateQueries({ queryKey: ["/api/control/deployments"] });
       toast({ title: "Operator record saved" });
       setNotes("");
     },
@@ -131,8 +132,8 @@ export function DeploymentOnboarding({ deployment, onClose }: { deployment: Depl
         <div className="rounded-lg border bg-slate-50 p-3 text-sm">
           <p><strong>Customer hostname:</strong> <span className="font-mono">{deployment.customerDomain || "Not set"}</span></p>
           {deployment.eShopDomain && <p><strong>Optional e-shop:</strong> <span className="font-mono">{deployment.eShopDomain}</span></p>}
-          <p><strong>Replit project ID:</strong> {deployment.externalProjectId || "Not recorded — add it under Manage"}</p>
-          <p><strong>Reported live versions:</strong> Back Office {deployment.backOfficeVersion || "unknown"} · POS {deployment.posVersion || "unknown"}{deployment.lastHeartbeatAt ? ` · last heartbeat ${new Date(deployment.lastHeartbeatAt).toLocaleString()}` : " · no heartbeat"}</p>
+          <p><strong>Hosting project or service ID:</strong> {deployment.externalProjectId || "Not recorded — add it under Edit URL"}</p>
+          <p><strong>Last recorded versions:</strong> Back Office {deployment.backOfficeVersion || "unknown"} · POS {deployment.posVersion || "unknown"}{deployment.lastHeartbeatAt ? ` · last heartbeat ${new Date(deployment.lastHeartbeatAt).toLocaleString()}` : " · no heartbeat"}</p>
           <p><strong>Requested versions:</strong> Back Office {deployment.targetBackOfficeVersion || "none"} · POS {deployment.targetPosVersion || "none"}</p>
         </div>
         <section className="space-y-2"><h3 className="font-semibold">New customer setup</h3>
@@ -146,9 +147,9 @@ export function DeploymentOnboarding({ deployment, onClose }: { deployment: Depl
             <p className="mt-1 text-muted-foreground">{step.detail}</p>
           </div>)}
         </section>
-        <DnsSetup key={deployment.id} deployment={deployment} />
+        {deployment.customerDomain?.endsWith(".globipos.shop") && <DnsSetup key={deployment.id} deployment={deployment} />}
         <section className="space-y-3 border-t pt-4"><h3 className="font-semibold">Record a manual release</h3>
-          <p className="text-sm text-muted-foreground">For each update, pull the approved shared-code revision into this customer's separate Replit project, review its schema and configuration changes, publish it, and test Back Office plus a terminal. Repeat for each customer or the selected rollout group. Record success or failure separately for each project. A queued fleet rollout is only a request, not a completed publish.</p>
+          <p className="text-sm text-muted-foreground">After publishing and testing a customer installation, record the actual result here. A successful record updates the inventory's versions and clears matching target versions; a failed record leaves them unchanged. This is an operator attestation, not proof of an automatic publish. A queued fleet rollout is only a request.</p>
           <div className="grid gap-2 sm:grid-cols-3">
             <label className="text-sm">Code revision<Input value={revision} onChange={e => setRevision(e.target.value)} placeholder="Git commit SHA" /></label>
             <label className="text-sm">Back Office version<Input value={backOfficeVersion} onChange={e => setBackOfficeVersion(e.target.value)} placeholder="e.g. 1.4.0" /></label>

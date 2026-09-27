@@ -26,7 +26,7 @@ import {
   withDeadline,
 } from "./deployment-control";
 import { db, pool } from "./db";
-import { deploymentDomainIncidents, deploymentProfiles } from "@workspace/db";
+import { deploymentDomainIncidents, deploymentEvents, deploymentProfiles, users } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth, requireSuperuser, signToken } from "./auth";
 import { setCustomerAiPersistenceAlertClaimerForTests } from "./operator-alerting";
@@ -305,6 +305,71 @@ async function createDeployment(slug: string) {
   }).returning();
   return profile;
 }
+
+test("manual installation URL survives create and edit; release audit updates versions only on success", async t => {
+  const suffix = crypto.randomUUID();
+  const slug = `installation-${suffix}`;
+  const userId = crypto.randomUUID();
+  await db.insert(users).values({ id: userId, username: `installation-test-${suffix}`, password: "not-used", role: "superuser" });
+  const app = express();
+  app.use(express.json());
+  app.use(requireAuth);
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "development";
+  registerDeploymentControlRoutes(app);
+  process.env.NODE_ENV = previousNodeEnv;
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  let profileId: string | undefined;
+  t.after(async () => {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    if (profileId) await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, profileId));
+    await db.delete(users).where(eq(users.id, userId));
+  });
+  const token = signToken({ id: userId, username: `installation-test-${suffix}`, email: null, role: "superuser", permissions: [] });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/control/deployments`;
+  const request = (path: string, method: string, body: unknown) => fetch(`${base}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const created = await request("", "POST", {
+    slug, clientName: "Separate installation", backOfficeUrl: `https://${slug}.host.example`,
+    posServerUrl: `https://${slug}.host.example`, customerDomain: `${slug}.host.example`,
+  });
+  assert.equal(created.status, 201, await created.text());
+  const saved = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.slug, slug));
+  profileId = saved[0].id;
+  assert.equal(saved[0].backOfficeUrl, `https://${slug}.host.example`);
+  assert.equal(saved[0].customerDomain, `${slug}.host.example`);
+  const edited = await request(`/${profileId}`, "PATCH", {
+    slug, backOfficeUrl: `https://${slug}.host.example/back-office`,
+  });
+  assert.equal(edited.status, 200, await edited.text());
+  const [afterEdit] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, profileId));
+  assert.equal(afterEdit.backOfficeUrl, `https://${slug}.host.example/back-office`);
+  assert.equal(afterEdit.customerDomain, `${slug}.host.example`);
+  await db.update(deploymentProfiles).set({ targetBackOfficeVersion: "2.0.0", targetPosVersion: "2.0.0" })
+    .where(eq(deploymentProfiles.id, profileId));
+  const release = (outcome: "failed" | "published") => request(`/${profileId}/events`, "POST", {
+    kind: "release", outcome, codeRevision: "abcdef0123456789", backOfficeVersion: "2.0.0", posVersion: "2.0.0",
+  });
+  const failed = await release("failed");
+  assert.equal(failed.status, 201, await failed.text());
+  const [afterFailure] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, profileId));
+  assert.equal(afterFailure.backOfficeVersion, "unknown");
+  assert.equal(afterFailure.targetBackOfficeVersion, "2.0.0");
+  const published = await release("published");
+  assert.equal(published.status, 201, await published.text());
+  const [afterSuccess] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, profileId));
+  assert.equal(afterSuccess.backOfficeVersion, "2.0.0");
+  assert.equal(afterSuccess.posVersion, "2.0.0");
+  assert.equal(afterSuccess.targetBackOfficeVersion, null);
+  assert.equal(afterSuccess.targetPosVersion, null);
+  const events = await db.select().from(deploymentEvents).where(eq(deploymentEvents.deploymentId, profileId));
+  assert.deepEqual(events.map(event => event.outcome).sort(), ["failed", "published"]);
+  assert.ok(events.every(event => event.recordedBy === userId && event.codeRevision === "abcdef0123456789"));
+});
 
 test("database incident lifecycle keeps one open incident and closes it once", async t => {
   const slug = `incident-${crypto.randomUUID()}`;

@@ -823,12 +823,14 @@ export function registerDeploymentControlRoutes(app: Express) {
   app.post("/api/control/deployments", requireSuperuser, async (req, res) => {
     const requestedSlug = typeof req.body?.slug === "string" ? req.body.slug.trim() : "";
     const generatedHostname = requestedSlug ? customerDeploymentHostname(requestedSlug) : "";
+    const suppliedUrl = typeof req.body?.backOfficeUrl === "string" ? urlSchema.safeParse(req.body.backOfficeUrl) : null;
+    const customerHostname = suppliedUrl?.success ? new URL(suppliedUrl.data).hostname : generatedHostname;
     const parsed = profileCreateSchema.safeParse(generatedHostname ? {
       ...req.body,
-      customerDomain: generatedHostname,
-      posDomain: null,
-      backOfficeUrl: `https://${generatedHostname}`,
-      posServerUrl: `https://${generatedHostname}`,
+      customerDomain: req.body.customerDomain || customerHostname,
+      posDomain: req.body.posDomain ?? null,
+      backOfficeUrl: req.body.backOfficeUrl || `https://${generatedHostname}`,
+      posServerUrl: req.body.posServerUrl || req.body.backOfficeUrl || `https://${generatedHostname}`,
     } : req.body);
     if (!parsed.success) return validationError(res, parsed.error);
     const { overrideDomainWarning, ...requestedValues } = parsed.data;
@@ -872,15 +874,7 @@ export function registerDeploymentControlRoutes(app: Express) {
   });
 
   app.patch("/api/control/deployments/:id", requireSuperuser, async (req, res) => {
-    const requestedSlug = typeof req.body?.slug === "string" ? req.body.slug.trim() : "";
-    const generatedHostname = requestedSlug ? customerDeploymentHostname(requestedSlug) : "";
-    const parsed = profilePatchSchema.safeParse(generatedHostname ? {
-      ...req.body,
-      customerDomain: generatedHostname,
-      posDomain: null,
-      backOfficeUrl: `https://${generatedHostname}`,
-      posServerUrl: `https://${generatedHostname}`,
-    } : req.body);
+    const parsed = profilePatchSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error);
     if (Object.keys(parsed.data).length === 0) return res.status(400).json({ message: "No updates supplied" });
     const id = String(req.params.id);
@@ -1056,17 +1050,29 @@ export function registerDeploymentControlRoutes(app: Express) {
     if (input.kind === "setup" && input.step === "domain" && profile.domainStatus !== "connected") {
       return res.status(409).json({ message: "Run Check domains and resolve failures before recording this step." });
     }
-    const [event] = await db.insert(deploymentEvents).values({
-      deploymentId: id.data,
-      kind: input.kind,
-      step: input.kind === "setup" ? input.step : null,
-      outcome: input.kind === "setup" ? "completed" : input.outcome,
-      backOfficeVersion: input.kind === "release" ? input.backOfficeVersion : null,
-      posVersion: input.kind === "release" ? input.posVersion : null,
-      codeRevision: input.kind === "release" ? input.codeRevision : null,
-      notes: input.notes || null,
-      recordedBy: req.user!.id,
-    }).returning();
+    const event = await db.transaction(async tx => {
+      const [recorded] = await tx.insert(deploymentEvents).values({
+        deploymentId: id.data,
+        kind: input.kind,
+        step: input.kind === "setup" ? input.step : null,
+        outcome: input.kind === "setup" ? "completed" : input.outcome,
+        backOfficeVersion: input.kind === "release" ? input.backOfficeVersion : null,
+        posVersion: input.kind === "release" ? input.posVersion : null,
+        codeRevision: input.kind === "release" ? input.codeRevision : null,
+        notes: input.notes || null,
+        recordedBy: req.user!.id,
+      }).returning();
+      if (input.kind === "release" && input.outcome === "published") {
+        await tx.update(deploymentProfiles).set({
+          backOfficeVersion: input.backOfficeVersion,
+          posVersion: input.posVersion,
+          ...(profile.targetBackOfficeVersion === input.backOfficeVersion ? { targetBackOfficeVersion: null } : {}),
+          ...(profile.targetPosVersion === input.posVersion ? { targetPosVersion: null } : {}),
+          updatedAt: new Date(),
+        }).where(eq(deploymentProfiles.id, id.data));
+      }
+      return recorded;
+    });
     await logControlActivity(req, "record", "deployment_event", event.id,
       `Recorded ${input.kind === "setup" ? input.step : input.outcome} for ${profile.slug}`);
     res.status(201).json(event);
