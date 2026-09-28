@@ -2594,6 +2594,7 @@ export async function registerRoutes(
 
       res.json(results);
     } catch (e: any) {
+      req.log.warn({ reason: e?.message || "Unknown import error" }, "Items JSON import failed");
       res.status(400).json({ message: e.message });
     } finally {
       await releaseImportLock?.();

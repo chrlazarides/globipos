@@ -195,6 +195,7 @@ type SheetAnalysis = {
   columnMap: Record<string, string>;
   confidence: number;
   _preParsedRows?: any[];
+  _parsedRows?: Record<string, string>[];
   _preParsedInfo?: string;
 };
 
@@ -587,6 +588,25 @@ export function autoMapColumns(headers: string[], fields: FieldDef[]): Record<st
   return map;
 }
 
+/** Import the columns the user reviewed, rather than asking the server to guess the header again. */
+export function mapImportRows(
+  rows: Record<string, string>[],
+  columnMap: Record<string, string>,
+): Record<string, string>[] {
+  for (const field of ["name", "sku"]) {
+    if (!columnMap[field] || !rows.length || !Object.hasOwn(rows[0], columnMap[field])) {
+      throw new Error(`Map the ${field === "sku" ? "SKU" : "Name"} column before importing.`);
+    }
+  }
+  return rows.map((row) => {
+    const mapped: Record<string, string> = {};
+    for (const [field, header] of Object.entries(columnMap)) {
+      if (header && Object.hasOwn(row, header)) mapped[field] = row[header];
+    }
+    return mapped;
+  });
+}
+
 function getEntityIcon(entity: EntityType) {
   if (entity === "skip") return X;
   return ENTITY_CONFIG[entity].icon;
@@ -684,6 +704,7 @@ export default function ImportData() {
             detectedEntity: entity,
             columnMap,
             confidence,
+            _parsedRows: parsed.rows,
           };
         }).filter((s) => s.totalRows > 0);
 
@@ -759,11 +780,13 @@ export default function ImportData() {
 
         let res: Response;
 
-        if (sheet._preParsedRows) {
+        if (sheet.detectedEntity === "items") {
+          const rows = sheet._preParsedRows ?? mapImportRows(sheet._parsedRows || [], cleanedMap);
+          if (rows.length > 10000) throw new Error("Too many rows (max 10000)");
           res = await fetch(config.endpoint + "/json", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rows: sheet._preParsedRows, mode: updateExisting ? "upsert" : undefined }),
+            body: JSON.stringify({ rows, mode: updateExisting ? "upsert" : undefined }),
           });
         } else {
           const file = selectedFileRef.current;
