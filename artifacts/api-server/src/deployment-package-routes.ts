@@ -1,4 +1,3 @@
-import { isMultiTenantMode } from "./db";
 import type { Express, Response } from "express";
 import fs from "fs";
 import path from "path";
@@ -102,11 +101,6 @@ const shellDoubleQuotedText = (value: string) =>
   shellDisplayText(value).replace(/[\\"`$]/g, "\\$&");
 
 export function registerDeploymentPackageRoutes(app: Express) {
-  // All three package builders call pg_dump with process.env.DATABASE_URL,
-  // which always points to the original installation. A new tenant's
-  // superuser must never be able to export that database. Keep these routes
-  // absent until the package builder accepts a tenant-scoped database source.
-  if (isMultiTenantMode()) return;
 // ─── cPANEL DEPLOYMENT PACKAGE (superuser only) ─────────────────────────────
 app.get("/api/backup/cpanel-package", requireSuperuser, async (req, res) => {
   let databaseDump: Awaited<ReturnType<typeof createDatabaseDump>> | undefined;

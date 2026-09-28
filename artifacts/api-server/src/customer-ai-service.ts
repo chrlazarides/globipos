@@ -1,6 +1,5 @@
 import OpenAI from "openai";
 import { emitCustomerAiPersistenceAlert } from "./operator-alerting";
-import { getTenantId, isMultiTenantMode } from "./db";
 
 export const CUSTOMER_AI_PROVIDERS = ["auto", "replit", "xai", "deterministic"] as const;
 export type CustomerAiProvider = typeof CUSTOMER_AI_PROVIDERS[number];
@@ -38,14 +37,14 @@ export interface CustomerAiRuntimeHealth {
   lastFailureCategory: CustomerAiFailureCategory | null;
   lastFailureAt: string | null;
 }
-type HealthPersistenceOperation = "load" | "save";
-type RuntimeState = {
-  health: CustomerAiRuntimeHealth;
-  pendingWrite: Promise<void>;
-  failureRevision: number;
-  lastPersistenceSignalAt: Record<HealthPersistenceOperation, number>;
+const runtimeHealth: CustomerAiRuntimeHealth = {
+  fallbackCount: 0,
+  recommendationFallbackCount: 0,
+  feedbackFallbackCount: 0,
+  consecutiveFallbackCount: 0,
+  lastFailureCategory: null,
+  lastFailureAt: null,
 };
-const runtimeStates = new Map<string, RuntimeState>();
 export interface CustomerAiHealthPersistence {
   load(): Promise<unknown>;
   recordFallback(
@@ -60,36 +59,19 @@ const FAILURE_CATEGORIES = new Set<CustomerAiFailureCategory>([
   "configuration", "authentication", "rate_limit", "timeout", "model", "invalid_response", "provider",
 ]);
 let healthPersistence: CustomerAiHealthPersistence | null = null;
+let pendingHealthWrite = Promise.resolve();
+let failureRevision = 0;
 export const CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS = 60_000;
-
-function currentRuntimeState(): RuntimeState {
-  // The legacy deployment continues to use one process-wide state, as before.
-  const tenantId = isMultiTenantMode() ? getTenantId() : "legacy";
-  let state = runtimeStates.get(tenantId);
-  if (!state) {
-    state = {
-      health: {
-        fallbackCount: 0,
-        recommendationFallbackCount: 0,
-        feedbackFallbackCount: 0,
-        consecutiveFallbackCount: 0,
-        lastFailureCategory: null,
-        lastFailureAt: null,
-      },
-      pendingWrite: Promise.resolve(),
-      failureRevision: 0,
-      lastPersistenceSignalAt: { load: Number.NEGATIVE_INFINITY, save: Number.NEGATIVE_INFINITY },
-    };
-    runtimeStates.set(tenantId, state);
-  }
-  return state;
-}
+type HealthPersistenceOperation = "load" | "save";
+const lastHealthPersistenceSignalAt: Record<HealthPersistenceOperation, number> = {
+  load: Number.NEGATIVE_INFINITY,
+  save: Number.NEGATIVE_INFINITY,
+};
 
 function reportHealthPersistenceFailure(operation: HealthPersistenceOperation) {
-  const state = currentRuntimeState();
   const now = Date.now();
-  if (now - state.lastPersistenceSignalAt[operation] < CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS) return;
-  state.lastPersistenceSignalAt[operation] = now;
+  if (now - lastHealthPersistenceSignalAt[operation] < CUSTOMER_AI_HEALTH_PERSISTENCE_SIGNAL_COOLDOWN_MS) return;
+  lastHealthPersistenceSignalAt[operation] = now;
   console.warn(`[customer-ai] operational health persistence ${operation} failed`);
   emitCustomerAiPersistenceAlert(operation);
 }
@@ -116,7 +98,7 @@ export function sanitizeCustomerAiRuntimeHealth(value: unknown): CustomerAiRunti
 }
 
 function applyRuntimeHealth(health: CustomerAiRuntimeHealth) {
-  Object.assign(currentRuntimeState().health, health);
+  Object.assign(runtimeHealth, health);
 }
 
 function sanitizePersistedCustomerAiRuntimeHealth(value: unknown): PersistedCustomerAiRuntimeHealth {
@@ -129,19 +111,18 @@ function sanitizePersistedCustomerAiRuntimeHealth(value: unknown): PersistedCust
 
 function applyPersistedRuntimeHealth(health: PersistedCustomerAiRuntimeHealth) {
   applyRuntimeHealth(health);
-  currentRuntimeState().failureRevision = health.failureRevision;
+  failureRevision = health.failureRevision;
 }
 
 async function refreshCustomerAiRuntimeHealth(): Promise<PersistedCustomerAiRuntimeHealth | undefined> {
-  const state = currentRuntimeState();
   const persistence = healthPersistence;
   if (!persistence) return undefined;
   let loaded: PersistedCustomerAiRuntimeHealth | undefined;
-  state.pendingWrite = state.pendingWrite.catch(() => undefined).then(async () => {
+  pendingHealthWrite = pendingHealthWrite.catch(() => undefined).then(async () => {
     loaded = sanitizePersistedCustomerAiRuntimeHealth(await persistence.load());
     applyPersistedRuntimeHealth(loaded);
   }).catch(() => reportHealthPersistenceFailure("load"));
-  await state.pendingWrite;
+  await pendingHealthWrite;
   return loaded;
 }
 
@@ -161,21 +142,20 @@ function failureCategory(error: unknown): CustomerAiFailureCategory {
 
 async function recordFallback(feature: "recommendation" | "feedback", category: CustomerAiFailureCategory) {
   try {
-    const state = currentRuntimeState();
     const occurredAt = new Date();
-    state.health.fallbackCount += 1;
-    state.health[feature === "recommendation" ? "recommendationFallbackCount" : "feedbackFallbackCount"] += 1;
-    state.health.consecutiveFallbackCount += 1;
-    state.health.lastFailureCategory = category;
-    state.health.lastFailureAt = occurredAt.toISOString();
-    state.failureRevision += 1;
+    runtimeHealth.fallbackCount += 1;
+    runtimeHealth[feature === "recommendation" ? "recommendationFallbackCount" : "feedbackFallbackCount"] += 1;
+    runtimeHealth.consecutiveFallbackCount += 1;
+    runtimeHealth.lastFailureCategory = category;
+    runtimeHealth.lastFailureAt = occurredAt.toISOString();
+    failureRevision += 1;
     const persistence = healthPersistence;
     if (!persistence) return;
-    state.pendingWrite = state.pendingWrite.catch(() => undefined).then(async () => {
+    pendingHealthWrite = pendingHealthWrite.catch(() => undefined).then(async () => {
       const persisted = await persistence.recordFallback(feature, category, occurredAt);
       applyPersistedRuntimeHealth(sanitizePersistedCustomerAiRuntimeHealth(persisted));
     }).catch(() => reportHealthPersistenceFailure("save"));
-    await state.pendingWrite;
+    await pendingHealthWrite;
   } catch {
     // Operational health must never affect a customer request.
   }
@@ -183,40 +163,36 @@ async function recordFallback(feature: "recommendation" | "feedback", category: 
 
 async function recordSuccess(observedFailureRevision: number) {
   try {
-    const state = currentRuntimeState();
     const persistence = healthPersistence;
     if (!persistence) {
-      if (state.failureRevision === observedFailureRevision) state.health.consecutiveFallbackCount = 0;
+      if (failureRevision === observedFailureRevision) runtimeHealth.consecutiveFallbackCount = 0;
       return;
     }
-    state.pendingWrite = state.pendingWrite.catch(() => undefined).then(async () => {
+    pendingHealthWrite = pendingHealthWrite.catch(() => undefined).then(async () => {
       const persisted = await persistence.recordSuccess(observedFailureRevision);
       applyPersistedRuntimeHealth(sanitizePersistedCustomerAiRuntimeHealth(persisted));
     }).catch(() => {
       reportHealthPersistenceFailure("save");
-      if (state.failureRevision === observedFailureRevision) state.health.consecutiveFallbackCount = 0;
+      if (failureRevision === observedFailureRevision) runtimeHealth.consecutiveFallbackCount = 0;
     });
-    await state.pendingWrite;
+    await pendingHealthWrite;
   } catch {
     // Operational health must never affect a customer request.
   }
 }
 
 export function resetCustomerAiRuntimeHealth() {
-  const state = currentRuntimeState();
-  Object.assign(state.health, {
-    fallbackCount: 0,
-    recommendationFallbackCount: 0,
-    feedbackFallbackCount: 0,
-    consecutiveFallbackCount: 0,
-    lastFailureCategory: null,
-    lastFailureAt: null,
-  });
-  state.failureRevision = 0;
+  runtimeHealth.fallbackCount = 0;
+  runtimeHealth.recommendationFallbackCount = 0;
+  runtimeHealth.feedbackFallbackCount = 0;
+  runtimeHealth.consecutiveFallbackCount = 0;
+  runtimeHealth.lastFailureCategory = null;
+  runtimeHealth.lastFailureAt = null;
+  failureRevision = 0;
 }
 
 export async function setCustomerAiHealthPersistenceForTests(persistence?: CustomerAiHealthPersistence) {
-  await currentRuntimeState().pendingWrite;
+  await pendingHealthWrite;
   configureCustomerAiHealthPersistence(persistence || null);
 }
 
@@ -283,7 +259,7 @@ export function getCustomerAiEngine(config: CustomerAiConfig, featureEnabled = t
 export async function getCustomerAiStatus(config: CustomerAiConfig) {
   const engine = getCustomerAiEngine(config);
   await refreshCustomerAiRuntimeHealth();
-  const health = currentRuntimeState().health;
+  const health = runtimeHealth;
   return {
     ...engine,
     enabled: config.enabled,
@@ -329,7 +305,7 @@ export async function enhanceCustomerRecommendations(
     return { orderedIds: candidates.map(candidate => candidate.id), reasons: {}, engine };
   }
   try {
-    const observedFailureRevision = (await refreshCustomerAiRuntimeHealth())?.failureRevision ?? currentRuntimeState().failureRevision;
+    const observedFailureRevision = (await refreshCustomerAiRuntimeHealth())?.failureRevision ?? failureRevision;
     const completion = await guardedProviderCall(engine.activeProvider as RemoteProvider, () => client.chat.completions.create({
       model: engine.model,
       messages: [
@@ -361,7 +337,7 @@ export async function enhanceCustomerRecommendations(
     await recordFallback(
       "recommendation",
       error instanceof CustomerAiCircuitOpenError
-        ? currentRuntimeState().health.lastFailureCategory || "provider"
+        ? runtimeHealth.lastFailureCategory || "provider"
         : failureCategory(error),
     );
     console.warn("[customer-ai] recommendation enhancement failed; using deterministic ranking");
@@ -381,7 +357,7 @@ export async function classifyCustomerFeedback(
     return null;
   }
   try {
-    const observedFailureRevision = (await refreshCustomerAiRuntimeHealth())?.failureRevision ?? currentRuntimeState().failureRevision;
+    const observedFailureRevision = (await refreshCustomerAiRuntimeHealth())?.failureRevision ?? failureRevision;
     const completion = await guardedProviderCall(engine.activeProvider as RemoteProvider, () => client.chat.completions.create({
       model: engine.model,
       messages: [
@@ -404,7 +380,7 @@ export async function classifyCustomerFeedback(
     await recordFallback(
       "feedback",
       error instanceof CustomerAiCircuitOpenError
-        ? currentRuntimeState().health.lastFailureCategory || "provider"
+        ? runtimeHealth.lastFailureCategory || "provider"
         : failureCategory(error),
     );
     console.warn("[customer-ai] sentiment classification failed; using heuristic");
@@ -417,23 +393,21 @@ export const CUSTOMER_AI_CIRCUIT_FAILURE_THRESHOLD = 2;
 type RemoteProvider = Exclude<CustomerAiEngine["activeProvider"], "deterministic">;
 
 function circuitAllowsRequest(provider: RemoteProvider): boolean {
-  const key = providerCircuitKey(provider);
-  const state = providerCircuits.get(key);
+  const state = providerCircuits.get(provider);
   if (!state?.openUntil) return true;
   if (Date.now() < state.openUntil) return false;
-  providerCircuits.set(key, { consecutiveFailures: 0, openUntil: 0 });
+  providerCircuits.set(provider, { consecutiveFailures: 0, openUntil: 0 });
   return true;
 }
 
 function recordProviderSuccess(provider: RemoteProvider) {
-  providerCircuits.delete(providerCircuitKey(provider));
+  providerCircuits.delete(provider);
 }
 
 function recordProviderFailure(provider: RemoteProvider) {
-  const key = providerCircuitKey(provider);
-  const previous = providerCircuits.get(key);
+  const previous = providerCircuits.get(provider);
   const consecutiveFailures = (previous?.consecutiveFailures || 0) + 1;
-  providerCircuits.set(key, {
+  providerCircuits.set(provider, {
     consecutiveFailures,
     openUntil: consecutiveFailures >= CUSTOMER_AI_CIRCUIT_FAILURE_THRESHOLD
       ? Date.now() + CUSTOMER_AI_CIRCUIT_COOLDOWN_MS
@@ -444,19 +418,14 @@ function recordProviderFailure(provider: RemoteProvider) {
 export const CUSTOMER_AI_CIRCUIT_COOLDOWN_MS = 30_000;
 
 type CircuitState = { consecutiveFailures: number; openUntil: number };
-function providerCircuitKey(provider: RemoteProvider): string {
-  const tenantId = isMultiTenantMode() ? getTenantId() : "legacy";
-  return `${tenantId}:${provider}`;
-}
 
 export function resetCustomerAiCircuitBreakersForTests() {
   providerCircuits.clear();
 }
 
 export function resetCustomerAiHealthPersistenceSignalsForTests() {
-  const signals = currentRuntimeState().lastPersistenceSignalAt;
-  signals.load = Number.NEGATIVE_INFINITY;
-  signals.save = Number.NEGATIVE_INFINITY;
+  lastHealthPersistenceSignalAt.load = Number.NEGATIVE_INFINITY;
+  lastHealthPersistenceSignalAt.save = Number.NEGATIVE_INFINITY;
 }
 
 async function guardedProviderCall<T>(provider: RemoteProvider, call: () => Promise<T>): Promise<T> {
@@ -480,10 +449,11 @@ async function guardedProviderCall<T>(provider: RemoteProvider, call: () => Prom
   }
 }
 
-const providerCircuits = new Map<string, CircuitState>();
+const providerCircuits = new Map<RemoteProvider, CircuitState>();
 
 class CustomerAiCircuitOpenError extends Error {}
 
 export function configureCustomerAiHealthPersistence(persistence: CustomerAiHealthPersistence | null) {
   healthPersistence = persistence;
+  pendingHealthWrite = Promise.resolve();
 }

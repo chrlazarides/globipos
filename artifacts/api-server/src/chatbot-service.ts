@@ -1,6 +1,6 @@
 // @ts-nocheck
 import OpenAI from "openai";
-import { db, getTenantId, isMultiTenantMode, runWithTenant } from "./db";
+import { db } from "./db";
 import { waCartState } from "@workspace/db";
 import { eq, lt, and, isNull } from "drizzle-orm";
 
@@ -21,32 +21,20 @@ export interface WaCartItem {
 
 const waCartStore = new Map<string, WaCartItem[]>();
 
-function scopedConversationKey(convId: string): string {
-  if (!isMultiTenantMode()) return convId;
-  const tenantId = getTenantId();
-  if (!tenantId) throw new Error("WhatsApp cart access requires an active tenant");
-  return `${tenantId}\u0000${convId}`;
-}
-
-function runWithCapturedTenant<T>(tenantId: string | null | undefined, callback: () => T): T | Promise<T> {
-  return tenantId ? runWithTenant(tenantId, callback) : callback();
-}
-
 export async function getWaCart(convId: string): Promise<WaCartItem[]> {
-  return waCartStore.get(scopedConversationKey(convId)) ?? [];
+  return waCartStore.get(convId) ?? [];
 }
 
 export async function addToWaCart(convId: string, item: Omit<WaCartItem, "qty">, qty = 1) {
-  const key = scopedConversationKey(convId);
-  const cart = waCartStore.get(key) ?? [];
+  const cart = waCartStore.get(convId) ?? [];
   const existing = cart.find((c) => c.itemId === item.itemId);
   if (existing) { existing.qty += qty; } else { cart.push({ ...item, qty }); }
-  waCartStore.set(key, cart);
+  waCartStore.set(convId, cart);
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
 export async function clearWaCart(convId: string) {
-  waCartStore.delete(scopedConversationKey(convId));
+  waCartStore.delete(convId);
   // Tie browse-result validity to cart lifecycle: whenever the cart is cleared
   // (checkout, "cancel"/"clear" command, or any future server-side clear such as
   // an admin action or cart expiry), the stale product list must go with it so a
@@ -132,13 +120,12 @@ const EXPIRED_REPLY_DEDUPE_MS = 60_000;
 const waExpiredReplySentAt = new Map<string, number>();
 
 export async function getPendingItem(convId: string): Promise<WaPendingItem | undefined> {
-  const key = scopedConversationKey(convId);
-  const entry = waPendingStore.get(key);
+  const entry = waPendingStore.get(convId);
   if (!entry) return undefined;
   if (Date.now() > entry.expiresAt) {
     clearTimeout(entry.timer);
-    waPendingStore.delete(key);
-    waPendingExpired.add(key);
+    waPendingStore.delete(convId);
+    waPendingExpired.add(convId);
     persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
     return undefined;
   }
@@ -146,33 +133,28 @@ export async function getPendingItem(convId: string): Promise<WaPendingItem | un
 }
 
 export async function setPendingItem(convId: string, item: WaPendingItem) {
-  const key = scopedConversationKey(convId);
-  const tenantId = isMultiTenantMode() ? getTenantId() : null;
   // Cancel any existing timer first
-  const existing = waPendingStore.get(key);
+  const existing = waPendingStore.get(convId);
   if (existing) clearTimeout(existing.timer);
 
   const timer = setTimeout(() => {
-    runWithCapturedTenant(tenantId, () => {
-      waPendingStore.delete(key);
-      waPendingExpired.add(key);
-      persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
-    });
+    waPendingStore.delete(convId);
+    waPendingExpired.add(convId);
+    persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
   }, PENDING_TTL_MS);
 
-  waPendingStore.set(key, { item, expiresAt: Date.now() + PENDING_TTL_MS, timer });
-  waPendingExpired.delete(key); // reset expired flag on new pending item
-  waExpiredReplySentAt.delete(key); // fresh pending item — allow a future expiry reply again
+  waPendingStore.set(convId, { item, expiresAt: Date.now() + PENDING_TTL_MS, timer });
+  waPendingExpired.delete(convId); // reset expired flag on new pending item
+  waExpiredReplySentAt.delete(convId); // fresh pending item — allow a future expiry reply again
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
 export async function clearPendingItem(convId: string) {
-  const key = scopedConversationKey(convId);
-  const entry = waPendingStore.get(key);
+  const entry = waPendingStore.get(convId);
   if (entry) clearTimeout(entry.timer);
-  waPendingStore.delete(key);
-  waPendingExpired.delete(key);
-  waExpiredReplySentAt.delete(key);
+  waPendingStore.delete(convId);
+  waPendingExpired.delete(convId);
+  waExpiredReplySentAt.delete(convId);
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
@@ -183,18 +165,17 @@ export async function clearPendingItem(convId: string) {
  * "yes" messages racing each other and each triggering their own timeout reply.
  */
 export async function consumeExpiredPendingFlag(convId: string): Promise<boolean> {
-  const key = scopedConversationKey(convId);
-  if (!waPendingExpired.has(key)) return false;
+  if (!waPendingExpired.has(convId)) return false;
 
   const now = Date.now();
-  const lastSentAt = waExpiredReplySentAt.get(key);
+  const lastSentAt = waExpiredReplySentAt.get(convId);
   if (lastSentAt !== undefined && now - lastSentAt < EXPIRED_REPLY_DEDUPE_MS) {
     // Already replied for this expiry very recently — suppress the duplicate,
     // but keep the flag so a genuinely later message still doesn't get a normal reply.
     return false;
   }
 
-  waExpiredReplySentAt.set(key, now);
+  waExpiredReplySentAt.set(convId, now);
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
   return true;
 }
@@ -213,11 +194,10 @@ interface WaBrowseEntry {
 const waBrowseStore = new Map<string, WaBrowseEntry>();
 
 export async function getBrowseResults(convId: string): Promise<any[] | null> {
-  const key = scopedConversationKey(convId);
-  const entry = waBrowseStore.get(key);
+  const entry = waBrowseStore.get(convId);
   if (!entry) return null; // null = never browsed / expired — caller should prompt re-browse
   if (Date.now() > entry.expiresAt) {
-    waBrowseStore.delete(key);
+    waBrowseStore.delete(convId);
     persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
     return null;
   }
@@ -225,12 +205,12 @@ export async function getBrowseResults(convId: string): Promise<any[] | null> {
 }
 
 export async function setBrowseResults(convId: string, results: any[]) {
-  waBrowseStore.set(scopedConversationKey(convId), { results, expiresAt: Date.now() + BROWSE_TTL_MS });
+  waBrowseStore.set(convId, { results, expiresAt: Date.now() + BROWSE_TTL_MS });
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
 export async function clearBrowseResults(convId: string) {
-  waBrowseStore.delete(scopedConversationKey(convId));
+  waBrowseStore.delete(convId);
   persistWaState(convId).catch((e) => console.error("[wa-cart] persist failed:", e));
 }
 
@@ -245,12 +225,11 @@ async function writeWaStateNow(convId: string): Promise<void> {
   // Re-read current in-memory state at execution time (not enqueue time) so
   // the write always reflects the latest state, even if it was queued behind
   // an earlier pending write.
-  const key = scopedConversationKey(convId);
-  const cart = waCartStore.get(key) ?? [];
-  const pendingEntry = waPendingStore.get(key);
-  const browseEntry = waBrowseStore.get(key);
-  const pendingExpiredFlag = waPendingExpired.has(key);
-  const replySentAt = waExpiredReplySentAt.get(key);
+  const cart = waCartStore.get(convId) ?? [];
+  const pendingEntry = waPendingStore.get(convId);
+  const browseEntry = waBrowseStore.get(convId);
+  const pendingExpiredFlag = waPendingExpired.has(convId);
+  const replySentAt = waExpiredReplySentAt.get(convId);
 
   if (!cart.length && !pendingEntry && !browseEntry && !pendingExpiredFlag) {
     // Nothing worth keeping — drop the row entirely.
@@ -280,16 +259,15 @@ async function writeWaStateNow(convId: string): Promise<void> {
 }
 
 function persistWaState(convId: string): Promise<void> {
-  const key = scopedConversationKey(convId);
-  const prior = persistQueues.get(key) ?? Promise.resolve();
+  const prior = persistQueues.get(convId) ?? Promise.resolve();
   const next = prior
     .catch(() => {}) // don't let an earlier failure block later writes
     .then(() => writeWaStateNow(convId));
   persistQueues.set(
-    key,
+    convId,
     next.finally(() => {
       // Only clear the queue slot if nothing else was chained on after us.
-      if (persistQueues.get(key) === next) persistQueues.delete(key);
+      if (persistQueues.get(convId) === next) persistQueues.delete(convId);
     })
   );
   return next;
@@ -308,20 +286,18 @@ export async function loadWaStateFromDb(): Promise<void> {
     let restoredCarts = 0;
     let restoredPending = 0;
     let restoredBrowse = 0;
-    const tenantId = isMultiTenantMode() ? getTenantId() : null;
 
     for (const row of rows) {
-      const key = scopedConversationKey(row.conversationId);
       const cart = (row.cart as unknown as WaCartItem[]) ?? [];
       if (cart.length) {
-        waCartStore.set(key, cart);
+        waCartStore.set(row.conversationId, cart);
         restoredCarts++;
       }
 
       if (row.browseResults && row.browseExpiresAt) {
         const expiresAt = new Date(row.browseExpiresAt).getTime();
         if (expiresAt > now) {
-          waBrowseStore.set(key, { results: row.browseResults as any[], expiresAt });
+          waBrowseStore.set(row.conversationId, { results: row.browseResults as any[], expiresAt });
           restoredBrowse++;
         }
       }
@@ -332,25 +308,23 @@ export async function loadWaStateFromDb(): Promise<void> {
           const remaining = expiresAt - now;
           const item = row.pendingItem as unknown as WaPendingItem;
           const timer = setTimeout(() => {
-            runWithCapturedTenant(tenantId, () => {
-              waPendingStore.delete(key);
-              waPendingExpired.add(key);
-              persistWaState(row.conversationId).catch((e) => console.error("[wa-cart] persist failed:", e));
-            });
+            waPendingStore.delete(row.conversationId);
+            waPendingExpired.add(row.conversationId);
+            persistWaState(row.conversationId).catch((e) => console.error("[wa-cart] persist failed:", e));
           }, remaining);
-          waPendingStore.set(key, { item, expiresAt, timer });
+          waPendingStore.set(row.conversationId, { item, expiresAt, timer });
           restoredPending++;
         } else {
           // Expired while the server was offline — treat as a fresh expiry so
           // the customer still gets one "timed out" reply next time they write.
-          waPendingExpired.add(key);
+          waPendingExpired.add(row.conversationId);
         }
       } else if (row.pendingExpiredFlag) {
-        waPendingExpired.add(key);
+        waPendingExpired.add(row.conversationId);
       }
 
       if (row.pendingExpiredReplySentAt) {
-        waExpiredReplySentAt.set(key, new Date(row.pendingExpiredReplySentAt).getTime());
+        waExpiredReplySentAt.set(row.conversationId, new Date(row.pendingExpiredReplySentAt).getTime());
       }
     }
 
@@ -375,7 +349,7 @@ export async function pruneStaleWaCartState(): Promise<void> {
       .returning({ conversationId: waCartState.conversationId });
 
     for (const row of deleted) {
-      waCartStore.delete(scopedConversationKey(row.conversationId));
+      waCartStore.delete(row.conversationId);
     }
     if (deleted.length) {
       console.log(`[wa-cart] pruned ${deleted.length} stale abandoned cart(s)`);
@@ -386,13 +360,9 @@ export async function pruneStaleWaCartState(): Promise<void> {
 }
 
 /** Starts the periodic pruning job. Call once on server startup. */
-export function startWaCartPruning(tenantIds: Array<string | null | undefined> = [null]): void {
-  setInterval(async () => {
-    for (const tenantId of tenantIds) {
-      await runWithCapturedTenant(tenantId, () =>
-        pruneStaleWaCartState().catch((e) => console.error("[wa-cart] prune failed:", e))
-      );
-    }
+export function startWaCartPruning(): void {
+  setInterval(() => {
+    pruneStaleWaCartState().catch((e) => console.error("[wa-cart] prune failed:", e));
   }, PRUNE_INTERVAL_MS);
 }
 

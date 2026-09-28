@@ -5,14 +5,9 @@ import { requireAuth } from "./auth";
 import { logger } from "./lib/logger";
 import healthRouter from "./routes/health";
 import { createApiCorsMiddleware } from "./terminal-cors";
-import { bindTenantRequest } from "./tenant-request";
 
 const app: Express = express();
 
-// Resolve tenant context before any route or request middleware, including
-// health, public, and terminal endpoints. Host resolution ignores forwarded
-// headers even though the app trusts its deployment proxy for client IPs.
-app.use(bindTenantRequest);
 app.use(
   pinoHttp({
     logger,

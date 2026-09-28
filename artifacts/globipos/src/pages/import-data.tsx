@@ -38,7 +38,7 @@ import {
 
 type CellGrid = (string | number | null)[][];
 
-export function worksheetTo2DArray(ws: ExcelJS.Worksheet): CellGrid {
+function worksheetTo2DArray(ws: ExcelJS.Worksheet): CellGrid {
   const data: CellGrid = [];
   const colCount = ws.columnCount || 1;
   ws.eachRow({ includeEmpty: true }, (row) => {
@@ -99,7 +99,7 @@ const ENTITY_CONFIG: Record<Exclude<EntityType, "skip">, { label: string; icon: 
     icon: Package,
     fields: [
       { key: "name", label: "Name", required: true },
-      { key: "sku", label: "SKU" },
+      { key: "sku", label: "SKU", required: true },
       { key: "barcode", label: "Barcode" },
       { key: "description", label: "Description" },
       { key: "category", label: "Category" },
@@ -195,7 +195,6 @@ type SheetAnalysis = {
   columnMap: Record<string, string>;
   confidence: number;
   _preParsedRows?: any[];
-  _parsedRows?: Record<string, string>[];
   _preParsedInfo?: string;
 };
 
@@ -235,7 +234,7 @@ function colLetter(c: number): string {
   return s;
 }
 
-export function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[] } {
+function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[] } {
   if (!data.length) return { headers: [], rows: [] };
   const maxR = data.length - 1;
   const maxC = Math.max(...data.map((r) => r.length), 1) - 1;
@@ -266,12 +265,10 @@ export function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[
     let hasText = 0;
     let keywordHits = 0;
     let hasNumericOnly = 0;
-    const distinctValues = new Set<string>();
     for (let c = 0; c <= maxC; c++) {
       const v = getCellVal(r, c);
       if (v) {
         nonEmpty++;
-        distinctValues.add(v.toLowerCase());
         if (isNaN(Number(v))) {
           hasText++;
           const vLower = v.toLowerCase().replace(/[\s_\-./]/g, "");
@@ -286,9 +283,6 @@ export function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[
         }
       }
     }
-    // Supplier exports often repeat the report title across row 1. Repeated
-    // "Items" cells otherwise outscore the actual column headings below.
-    if (nonEmpty >= 2 && distinctValues.size === 1) continue;
     const score = keywordHits * 10 + nonEmpty * 2 + hasText * 3 - hasNumericOnly * 2;
     if (score > bestScore && nonEmpty >= 2 && hasText >= 1 && keywordHits >= 1) {
       bestScore = score;
@@ -561,7 +555,7 @@ const FIELD_SYNONYMS: Record<string, string[]> = {
   vintage: ["vintage", "year", "έτος", "harvest"],
 };
 
-export function autoMapColumns(headers: string[], fields: FieldDef[]): Record<string, string> {
+function autoMapColumns(headers: string[], fields: FieldDef[]): Record<string, string> {
   const map: Record<string, string> = {};
   const usedHeaders = new Set<string>();
 
@@ -588,26 +582,6 @@ export function autoMapColumns(headers: string[], fields: FieldDef[]): Record<st
   return map;
 }
 
-/** Import the columns the user reviewed, rather than asking the server to guess the header again. */
-export function mapImportRows(
-  rows: Record<string, string>[],
-  columnMap: Record<string, string>,
-): Record<string, string>[] {
-  if (!rows.length || !columnMap.name || !Object.hasOwn(rows[0], columnMap.name)) {
-    throw new Error("Map the Name column before importing.");
-  }
-  if (!["sku", "barcode"].some(field => columnMap[field] && Object.hasOwn(rows[0], columnMap[field]))) {
-    throw new Error("Map either SKU or Barcode before importing.");
-  }
-  return rows.map((row) => {
-    const mapped: Record<string, string> = {};
-    for (const [field, header] of Object.entries(columnMap)) {
-      if (header && Object.hasOwn(row, header)) mapped[field] = row[header];
-    }
-    return mapped;
-  });
-}
-
 function getEntityIcon(entity: EntityType) {
   if (entity === "skip") return X;
   return ENTITY_CONFIG[entity].icon;
@@ -627,12 +601,9 @@ export default function ImportData() {
   const [importProgress, setImportProgress] = useState(0);
   const [updateExisting, setUpdateExisting] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // The upload input unmounts as soon as analysis starts; retain the File for import.
-  const selectedFileRef = useRef<File | null>(null);
   const { toast } = useToast();
 
   const reset = () => {
-    selectedFileRef.current = null;
     setStep("upload");
     setFileName("");
     setSheets([]);
@@ -651,7 +622,6 @@ export default function ImportData() {
       return;
     }
 
-    selectedFileRef.current = selectedFile;
     setFileName(selectedFile.name);
     setStep("analyze");
 
@@ -705,12 +675,10 @@ export default function ImportData() {
             detectedEntity: entity,
             columnMap,
             confidence,
-            _parsedRows: parsed.rows,
           };
         }).filter((s) => s.totalRows > 0);
 
         if (!analyzed.length) {
-          selectedFileRef.current = null;
           toast({ title: "No data", description: "The file contains no data rows", variant: "destructive" });
           setStep("upload");
           return;
@@ -720,7 +688,6 @@ export default function ImportData() {
         setActiveSheet(analyzed[0].sheetName);
         setStep("verify");
       } catch {
-        selectedFileRef.current = null;
         toast({ title: "Error reading file", description: "Could not parse the file", variant: "destructive" });
         setStep("upload");
       }
@@ -781,19 +748,16 @@ export default function ImportData() {
 
         let res: Response;
 
-        if (sheet.detectedEntity === "items") {
-          const rows = sheet._preParsedRows ?? mapImportRows(sheet._parsedRows || [], cleanedMap);
-          if (rows.length > 10000) throw new Error("Too many rows (max 10000)");
+        if (sheet._preParsedRows) {
           res = await fetch(config.endpoint + "/json", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rows, mode: updateExisting ? "upsert" : undefined }),
+            body: JSON.stringify({ rows: sheet._preParsedRows, mode: updateExisting ? "upsert" : undefined }),
           });
         } else {
-          const file = selectedFileRef.current;
-          if (!file) throw new Error("File not available. Please select it again.");
+          if (!fileInputRef.current?.files?.[0]) throw new Error("File not available");
           const formData = new FormData();
-          formData.append("file", file);
+          formData.append("file", fileInputRef.current.files[0]);
           formData.append("columnMap", JSON.stringify(cleanedMap));
           formData.append("sheetName", sheet.sheetName);
           if (updateExisting) formData.append("mode", "upsert");
@@ -801,9 +765,6 @@ export default function ImportData() {
         }
 
         const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.message || data.error || `Import failed (${res.status})`);
-        }
 
         results.push({
           sheetName: sheet.sheetName,
@@ -892,10 +853,7 @@ export default function ImportData() {
                   <config.icon className="w-4 h-4 text-muted-foreground" />
                   <div>
                     <p className="font-medium">{config.label}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {config.fields.filter((f) => f.required).map((f) => f.label).join(", ")}
-                      {key === "items" ? " and either SKU or Barcode" : ""} required
-                    </p>
+                    <p className="text-xs text-muted-foreground">{config.fields.filter((f) => f.required).map((f) => f.label).join(", ")} required</p>
                   </div>
                 </div>
               ))}
@@ -1035,10 +993,7 @@ export default function ImportData() {
                     );
                     const mappedCount = Object.values(currentSheet.columnMap).filter((v) => v && v !== "skip").length;
                     const requiredFields = config.fields.filter((f) => f.required);
-                    const missingRequired = requiredFields.filter((f) => !currentSheet.columnMap[f.key]).map(f => f.label);
-                    if (currentSheet.detectedEntity === "items" && !currentSheet.columnMap.sku && !currentSheet.columnMap.barcode) {
-                      missingRequired.push("SKU or Barcode");
-                    }
+                    const missingRequired = requiredFields.filter((f) => !currentSheet.columnMap[f.key]);
 
                     return (
                       <>
@@ -1054,7 +1009,7 @@ export default function ImportData() {
                                 </Badge>
                                 {missingRequired.length > 0 && (
                                   <Badge variant="destructive" className="text-xs">
-                                    Missing: {missingRequired.join(", ")}
+                                    Missing: {missingRequired.map((f) => f.label).join(", ")}
                                   </Badge>
                                 )}
                               </div>
@@ -1255,11 +1210,7 @@ export default function ImportData() {
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">
-                {totalErrors > 0
-                  ? totalSuccess + totalUpdated > 0 ? "Import partially completed" : "Import failed"
-                  : "Import complete"}
-              </CardTitle>
+              <CardTitle className="text-base">Import Complete</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-6 flex-wrap">

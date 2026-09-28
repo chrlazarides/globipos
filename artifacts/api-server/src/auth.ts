@@ -1,7 +1,6 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import type { Request, Response, NextFunction } from "express";
-import { getTenantId, isMultiTenantMode } from "./db";
 
 const JWT_SECRET = process.env.SESSION_SECRET;
 if (!JWT_SECRET) {
@@ -18,7 +17,6 @@ export interface AuthUser {
   email: string | null;
   role: string;
   permissions: string[];
-  tenantId?: string;
 }
 
 declare global {
@@ -38,7 +36,7 @@ export function verifyPassword(password: string, hash: string): boolean {
 }
 
 export function signToken(user: AuthUser): string {
-  return jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role, permissions: user.permissions, tenantId: getTenantId() }, JWT_SECRET_SAFE, { expiresIn: TOKEN_EXPIRY });
+  return jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role, permissions: user.permissions }, JWT_SECRET_SAFE, { expiresIn: TOKEN_EXPIRY });
 }
 
 export function verifyToken(token: string): AuthUser | null {
@@ -46,12 +44,6 @@ export function verifyToken(token: string): AuthUser | null {
     const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
     if (payload.temp || payload.recovery2fa || payload.recoverySetup2fa) return null;
     if (!payload.id || !payload.username || !payload.role) return null;
-    const tenantId = getTenantId();
-    if (payload.tenantId !== undefined) {
-      if (payload.tenantId !== tenantId) return null;
-    } else if (isMultiTenantMode()) {
-      return null;
-    }
     return { ...payload, permissions: payload.permissions || [] } as AuthUser;
   } catch {
     return null;
@@ -61,13 +53,13 @@ export function verifyToken(token: string): AuthUser | null {
 type TempTokenPurpose = "2fa-login" | "2fa-setup";
 
 export function signTempToken(userId: string, purpose: TempTokenPurpose): string {
-  return jwt.sign({ temp: true, id: userId, purpose, tenantId: getTenantId() }, JWT_SECRET_SAFE, { expiresIn: "5m" });
+  return jwt.sign({ temp: true, id: userId, purpose }, JWT_SECRET_SAFE, { expiresIn: "5m" });
 }
 
 export function verifyTempToken(token: string, purpose: TempTokenPurpose): string | null {
   try {
     const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
-    if (!payload.temp || !payload.id || payload.purpose !== purpose || payload.tenantId !== getTenantId()) return null;
+    if (!payload.temp || !payload.id || payload.purpose !== purpose) return null;
     return payload.id as string;
   } catch {
     return null;
@@ -75,13 +67,13 @@ export function verifyTempToken(token: string, purpose: TempTokenPurpose): strin
 }
 
 export function sign2faRecoveryToken(userId: string, challengeId: string): string {
-  return jwt.sign({ recovery2fa: true, id: userId, challengeId, tenantId: getTenantId() }, JWT_SECRET_SAFE, { expiresIn: "10m" });
+  return jwt.sign({ recovery2fa: true, id: userId, challengeId }, JWT_SECRET_SAFE, { expiresIn: "10m" });
 }
 
 export function verify2faRecoveryToken(token: string): { userId: string; challengeId: string } | null {
   try {
     const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
-    if (!payload.recovery2fa || !payload.id || !payload.challengeId || payload.tenantId !== getTenantId()) return null;
+    if (!payload.recovery2fa || !payload.id || !payload.challengeId) return null;
     return { userId: payload.id as string, challengeId: payload.challengeId as string };
   } catch {
     return null;
@@ -89,13 +81,13 @@ export function verify2faRecoveryToken(token: string): { userId: string; challen
 }
 
 export function sign2faRecoverySetupToken(userId: string, grantId: string, secret: string): string {
-  return jwt.sign({ recoverySetup2fa: true, id: userId, grantId, secret, tenantId: getTenantId() }, JWT_SECRET_SAFE, { expiresIn: "5m" });
+  return jwt.sign({ recoverySetup2fa: true, id: userId, grantId, secret }, JWT_SECRET_SAFE, { expiresIn: "5m" });
 }
 
 export function verify2faRecoverySetupToken(token: string): { userId: string; grantId: string; secret: string } | null {
   try {
     const payload = jwt.verify(token, JWT_SECRET_SAFE) as any;
-    if (!payload.recoverySetup2fa || !payload.id || !payload.grantId || !payload.secret || payload.tenantId !== getTenantId()) return null;
+    if (!payload.recoverySetup2fa || !payload.id || !payload.grantId || !payload.secret) return null;
     return { userId: payload.id as string, grantId: payload.grantId as string, secret: payload.secret as string };
   } catch {
     return null;

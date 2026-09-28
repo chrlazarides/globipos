@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
-import { ArrowLeft, RefreshCw, Terminal, Globe, Info, Download, AlertTriangle } from "lucide-react";
+import { ArrowLeft, RefreshCw, Terminal, Globe, Info, Download } from "lucide-react";
 import type { TerminalConfig } from "../types";
 import { syncCatalog, syncCashiers, flushOutbox } from "../lib/sync";
 import { getOutbox, getActiveProductsCount, getCashiers } from "../lib/db";
-import { getStorageStatus, isQuotaError, isStorageLow, requestPersistentStorage, type StorageStatus } from "../lib/storage";
 import { useToast } from "@/hooks/use-toast";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 
@@ -12,19 +11,12 @@ interface SettingsProps {
   onBack: () => void;
 }
 
-function formatBytes(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export function Settings({ config, onBack }: SettingsProps) {
   const [syncing, setSyncing] = useState(false);
   const [outboxCount, setOutboxCount] = useState(0);
   const [productCount, setProductCount] = useState(0);
   const [cashierCount, setCashierCount] = useState(0);
   const [progress, setProgress] = useState(0);
-  const [storage, setStorage] = useState<StorageStatus>({});
-  const [storageWarning, setStorageWarning] = useState<string | null>(null);
-  const [sendingOrders, setSendingOrders] = useState(false);
   const { toast } = useToast();
   const { canInstall, installed, install } = usePwaInstall();
 
@@ -37,41 +29,12 @@ export function Settings({ config, onBack }: SettingsProps) {
       setCashierCount(cashiers.length);
     }
     load();
-    void getStorageStatus().then(setStorage);
   }, []);
-
-  async function refreshStorage() {
-    setStorage(await getStorageStatus());
-  }
-
-  async function handlePersist() {
-    const granted = await requestPersistentStorage();
-    await refreshStorage();
-    if (granted === false) {
-      toast({ title: "Persistent storage not granted", description: "The browser may still remove offline data. Keep pending orders synced and avoid clearing site data." });
-    }
-  }
-
-  async function handleSendOrders() {
-    setSendingOrders(true);
-    try {
-      const sent = await flushOutbox();
-      const pending = await getOutbox();
-      setOutboxCount(pending.length);
-      toast({ title: "Order sync finished", description: `Sent ${sent} orders. ${pending.length} still pending; check the connection and retry if needed.` });
-    } catch (error) {
-      toast({ variant: "destructive", title: "Could not send orders", description: error instanceof Error ? error.message : "Please retry while online." });
-    } finally {
-      setSendingOrders(false);
-      await refreshStorage();
-    }
-  }
 
   async function handleForceSync() {
     if (syncing) return;
     setSyncing(true);
     setProgress(0);
-    setStorageWarning(null);
     
     try {
       // 1. Sync cashiers
@@ -94,14 +57,12 @@ export function Settings({ config, onBack }: SettingsProps) {
         description: `Synced catalog (${pCount} items). Sent ${flushed} offline orders.`,
       });
     } catch (e: any) {
-      if (isQuotaError(e)) setStorageWarning(e.message);
       toast({
         variant: "destructive",
         title: "Sync failed",
         description: e.message || "Network error. Try again later.",
       });
     } finally {
-      await refreshStorage();
       setSyncing(false);
       setProgress(0);
     }
@@ -196,39 +157,6 @@ export function Settings({ config, onBack }: SettingsProps) {
                 <Globe className="w-4 h-4" /> Ready
               </p>
             </div>
-          </div>
-          <div className="mt-5 border-t border-border pt-4 space-y-3 text-sm">
-            <button type="button" onClick={() => void handleSendOrders()} disabled={sendingOrders || syncing || outboxCount === 0} className="rounded-lg border border-border px-3 py-2 font-medium text-foreground disabled:opacity-50" data-testid="button-send-pending-orders">
-              {sendingOrders ? "Sending orders..." : `Send pending orders (${outboxCount})`}
-            </button>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="font-semibold text-foreground">Browser storage</h3>
-              <button type="button" onClick={() => void refreshStorage()} className="text-primary hover:underline" data-testid="button-refresh-storage">Refresh estimate</button>
-            </div>
-            <p className="text-muted-foreground" data-testid="text-storage-usage">
-              {storage.usage !== undefined && storage.quota !== undefined
-                ? `${formatBytes(storage.usage)} used · ${formatBytes(Math.max(0, storage.quota - storage.usage))} estimated remaining (${formatBytes(storage.quota)} quota)`
-                : "Storage estimate unavailable in this browser."}
-            </p>
-            <p className="text-muted-foreground" data-testid="status-persistent-storage">
-              Persistent storage: {storage.persisted === true ? "Granted" : storage.persisted === false ? "Not granted" : "Unavailable"}
-            </p>
-            {storage.persisted === false && (
-              <button type="button" onClick={() => void handlePersist()} className="text-primary hover:underline" data-testid="button-request-persistent-storage">
-                Request persistent storage
-              </button>
-            )}
-            {isStorageLow(storage) && (
-              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-amber-600" role="alert" data-testid="warning-low-storage">
-                Storage is running low. Sync pending orders while online, then free device space before the next catalog sync. Do not clear site data while orders are pending.
-              </p>
-            )}
-            {storageWarning && (
-              <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-destructive" role="alert" data-testid="warning-storage-full">
-                <AlertTriangle className="mr-2 inline h-4 w-4" />{storageWarning}
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground">Estimates include this site’s browser data and may change. Persistent storage reduces eviction risk but does not increase the quota.</p>
           </div>
         </div>
 

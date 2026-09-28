@@ -50,10 +50,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
-      - name: Install dependencies deterministically
-        run: |
-          corepack pnpm@9.15.9 import
-          corepack pnpm@9.15.9 install --frozen-lockfile
       - name: Test version and published-asset release safeguards
         run: node --test --test-concurrency=1 scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs
 
@@ -70,13 +66,11 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
+          cache: npm
       - name: Install dependencies
-        run: |
-          corepack pnpm@9.15.9 import
-          corepack pnpm@9.15.9 install --frozen-lockfile
-          test -x node_modules/.bin/playwright
+        run: npm ci
       - name: Install Chromium
-        run: corepack pnpm@9.15.9 exec playwright install chromium
+        run: npx playwright install chromium
       - name: Check install action, manifest, service worker, and icons
         run: npm run test:pos-pwa
 
@@ -204,7 +198,6 @@ jobs:
 
       - name: Install macOS cross-compilation targets
         if: matrix.extra-rust-targets
-        working-directory: pos-app
         run: rustup target add $(echo '${{ matrix.extra-rust-targets }}' | tr ',' ' ')
 
       - name: Rust cache
@@ -309,8 +302,6 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
-        with:
-          packages: platform-tools
 
       - name: Install Android NDK
         run: sdkmanager "ndk;27.0.12077973"
@@ -361,15 +352,13 @@ jobs:
           rm -f /tmp/globipos-release.p12
 
       - name: Upload APK to release
-        shell: bash
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          files: |
+            pos-app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          mapfile -t apks < <(find pos-app/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -print)
-          test "${#apks[@]}" -gt 0
-          gh release upload "${TAG_NAME}" "${apks[@]}" --clobber
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   verify-release:
     name: Verify published release assets

@@ -8,7 +8,6 @@ import { BrandLogo } from "@/components/BrandLogo";
 import { calculateLine, createOrderLine, parseValidCashTender } from "@/lib/pos-calculations";
 import { createOrderNumber, effectivePrice } from "@/lib/pos-calculations";
 import { flushOutbox } from "@/lib/sync";
-import { isQuotaError } from "@/lib/storage";
 
 interface POSProps {
   config: TerminalConfig;
@@ -30,7 +29,6 @@ export function POS({ config, session, onLogout }: POSProps) {
   
   const [paying, setPaying] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
-  const [storageWarning, setStorageWarning] = useState<string | null>(null);
   
   const { toast } = useToast();
 
@@ -114,7 +112,6 @@ export function POS({ config, session, onLogout }: POSProps) {
     const finalLines = cart.map(l => ({ ...l, order_id: order.id }));
     
     try {
-      setStorageWarning(null);
       await saveOrder(order, finalLines);
       void writeAudit("sale", "order", order.id, `Sale for ${formatMoney(total)}`, session.cashier_id, session.cashier_name)
         .catch((error) => console.error("Failed to queue sale audit record", error));
@@ -128,7 +125,6 @@ export function POS({ config, session, onLogout }: POSProps) {
       setPaying(false);
       setPaymentAmount("");
     } catch (e: any) {
-      if (isQuotaError(e)) setStorageWarning(e.message);
       toast({
         variant: "destructive",
         title: "Error saving order",
@@ -182,11 +178,6 @@ export function POS({ config, session, onLogout }: POSProps) {
               </div>
             )}
           </div>
-          {storageWarning && (
-            <p role="alert" data-testid="warning-order-storage-full" className="w-full max-w-md mb-4 p-3 rounded-lg border border-destructive/40 bg-destructive/10 text-sm text-destructive">
-              <AlertCircle className="inline w-4 h-4 mr-2" />{storageWarning}
-            </p>
-          )}
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-md">
             <button 

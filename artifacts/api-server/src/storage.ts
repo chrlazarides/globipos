@@ -210,7 +210,6 @@ export interface IStorage {
       goldCashbackPercent: number;
       maxCashbackOrderPercent: number;
     },
-    stockRequirements: { itemId: string; bottles: number }[],
   ): Promise<{ order: PortalOrder; replayed: boolean }>;
   getAvailableItems(): Promise<Item[]>;
 
@@ -2573,7 +2572,6 @@ export class DatabaseStorage implements IStorage {
       goldCashbackPercent: number;
       maxCashbackOrderPercent: number;
     },
-    stockRequirements: { itemId: string; bottles: number }[],
   ) {
     return db.transaction(async (tx) => {
       const lockedCustomerResult = await tx.execute(
@@ -2588,21 +2586,6 @@ export class DatabaseStorage implements IStorage {
           eq(portalOrders.checkoutKey, data.checkoutKey),
         ));
         if (existingOrder) return { order: existingOrder, replayed: true };
-      }
-
-      const requiredByItem = new Map<string, number>();
-      for (const { itemId, bottles } of stockRequirements) {
-        if (!Number.isFinite(bottles) || bottles <= 0) throw new Error("INVALID_STOCK_QUANTITY");
-        requiredByItem.set(itemId, (requiredByItem.get(itemId) || 0) + Math.ceil(bottles));
-      }
-      // Conditional updates serialize concurrent checkouts at each stock row.
-      // The order and wallet changes below roll back if any item is unavailable.
-      for (const [itemId, bottles] of [...requiredByItem].sort(([a], [b]) => a.localeCompare(b))) {
-        const [reserved] = await tx.update(items)
-          .set({ stockQuantity: sql`${items.stockQuantity} - ${bottles}` })
-          .where(and(eq(items.id, itemId), sql`${items.stockQuantity} >= ${bottles}`))
-          .returning({ id: items.id });
-        if (!reserved) throw new Error("INSUFFICIENT_STOCK");
       }
 
       const subtotal = Number(data.subtotal);

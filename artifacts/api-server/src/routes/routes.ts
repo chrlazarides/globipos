@@ -1,7 +1,5 @@
 // @ts-nocheck
 import type { Express, Request, Response, NextFunction } from "express";
-import { worksheetHeaderRowNumber, worksheetToJson } from "../spreadsheet-rows";
-import { resolveItemImportIdentity } from "../item-import-identity";
 import { createServer, type Server } from "http";
 import { storage } from "../storage";
 import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, itemLocationStock, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@workspace/db";
@@ -16,7 +14,6 @@ import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail, sendEmailWithContent } from "../email";
 import { db } from "../db";
-import { getTenantId, getTenantIds, isMultiTenantMode, runWithTenant } from "../db";
 import { sql, and, or, eq, gte, lte, lt, gt, desc, isNull, ilike, inArray, count } from "drizzle-orm";
 import crypto from "crypto";
 import fs from "fs";
@@ -170,6 +167,25 @@ async function readExcelWorkbook(buffer: Buffer, filename: string): Promise<Exce
     await workbook.xlsx.load(buffer);
   }
   return workbook;
+}
+
+function worksheetToJson(sheet: ExcelJS.Worksheet, defval: any = ""): any[] {
+  const rows: any[] = [];
+  let headers: string[] = [];
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const values = (row.values as any[]).slice(1);
+    if (rowNumber === 1) {
+      headers = values.map((v) => (v !== null && v !== undefined ? String(v) : ""));
+    } else {
+      const obj: any = {};
+      headers.forEach((h, i) => {
+        const v = values[i];
+        obj[h] = v !== undefined && v !== null ? v : defval;
+      });
+      rows.push(obj);
+    }
+  });
+  return rows;
 }
 
 async function logActivity(userId: string | null, username: string | null, action: string, entity: string | null, entityId: string | null, description: string | null, ipAddress: string | null, userAgent: string | null) {
@@ -370,12 +386,10 @@ const CHARGE_IN_PROGRESS_WINDOW_MS = 90_000;
 export async function registerRoutes(
   httpServer: Server,
   app: Express,
-  options: { skipBackgroundJobs?: boolean; scheduleTenantJobs?: boolean } = {},
+  options: { skipBackgroundJobs?: boolean } = {},
 ): Promise<Server> {
   configureCustomerAiHealthPersistence(createCustomerAiHealthPersistence());
-  // Deployment control is an installation-wide control plane and its monitor
-  // runs without request context; do not expose or schedule it on a shared host.
-  if (!isMultiTenantMode()) registerDeploymentControlRoutes(app);
+  registerDeploymentControlRoutes(app);
   registerDeploymentPackageRoutes(app);
 
   // ── Boot-time reconciliation for card-terminal charges ──────────────────────
@@ -2290,29 +2304,17 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
-      const nameColumn = columnMap.name || "name";
-      if (!Object.hasOwn(rows[0], nameColumn)) {
-        return res.status(400).json({ message: `The mapped name column "${nameColumn}" is not in the spreadsheet header. Check the mapping and try again.` });
-      }
-      for (const field of ["sku", "barcode"]) {
-        const column = columnMap[field] || field;
-        if (columnMap[field] && !Object.hasOwn(rows[0], column)) {
-          return res.status(400).json({ message: `The mapped ${field} column "${column}" is not in the spreadsheet header. Check the mapping and try again.` });
-        }
-      }
-      if (!["sku", "barcode"].some(field => Object.hasOwn(rows[0], columnMap[field] || field))) {
-        return res.status(400).json({ message: "Map either SKU or barcode before importing items" });
-      }
-      const headerRowNumber = worksheetHeaderRowNumber(sheet);
       const upsert = req.body.mode === "upsert";
       releaseImportLock = await acquireCatalogImportLock();
       const categories = await storage.getCategories();
       const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
       const allExistingItems = await storage.getItems();
       const existingBySku = new Map<string, any[]>();
-      for (const item of allExistingItems) {
-        const key = item.sku.toLowerCase();
-        existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
+      if (upsert) {
+        for (const item of allExistingItems) {
+          const key = item.sku.toLowerCase();
+          existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
+        }
       }
       const [existingVariants, existingAliases] = await Promise.all([
         storage.getAllItemVariantsIncludingInactive(),
@@ -2326,23 +2328,12 @@ export async function registerRoutes(
           ownerKey: `item:${alias.itemId}`,
         })),
       ]);
-      const itemsById = new Map(allExistingItems.map(item => [item.id, item]));
-      const ownersByBarcode = new Map<string, Set<string>>();
-      for (const { barcode, ownerKey } of [
-        ...allExistingItems.map(item => ({ barcode: item.barcode, ownerKey: `item:${item.id}` })),
-        ...existingAliases.map(alias => ({ barcode: alias.barcode, ownerKey: `item:${alias.itemId}` })),
-        ...existingVariants.map(variant => ({ barcode: variant.barcode, ownerKey: `variant:${variant.id}` })),
-      ]) {
-        const key = String(barcode ?? "").trim().replace(/\s+/g, "");
-        if (key) ownersByBarcode.set(key, (ownersByBarcode.get(key) || new Set()).add(ownerKey));
-      }
 
       const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: BarcodeIssue[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
 
       for (let i = 0; i < rows.length; i++) {
         try {
           const row = rows[i];
-          const sourceRowNumber = i + headerRowNumber + 1;
           const getValue = (field: string) => {
             const col = columnMap[field] || field;
             const raw = row[col] !== undefined ? String(row[col]).trim() : "";
@@ -2350,14 +2341,11 @@ export async function registerRoutes(
           };
 
           const name = getValue("name");
-          if (!name) {
-            results.errors.push({ row: sourceRowNumber, message: "Name is required" });
+          const sku = getValue("sku");
+          if (!name || !sku) {
+            results.errors.push({ row: i + 2, message: "Name and SKU are required" });
             continue;
           }
-          const sourceBarcode = getValue("barcode");
-          const { sku, existing } = resolveItemImportIdentity(
-            getValue("sku"), sourceBarcode, upsert, existingBySku, ownersByBarcode, itemsById,
-          );
 
           const categoryName = getValue("category");
           let categoryId: string | null = null;
@@ -2370,11 +2358,18 @@ export async function registerRoutes(
             }
           }
 
+          const existingMatches = upsert ? existingBySku.get(sku.toLowerCase()) || [] : [];
+          if (existingMatches.length > 1) {
+            results.errors.push({ row: i + 2, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
+            continue;
+          }
+          const existing = existingMatches[0];
+          const sourceBarcode = getValue("barcode");
           const provisionalOwnerKey = existing ? `item:${existing.id}` : `import-row:${i}`;
           const barcodeAssignment = barcodeAllocator.assign(
             sourceBarcode || existing?.barcode,
             sku,
-            sourceRowNumber,
+            i + 2,
             provisionalOwnerKey,
           );
           const itemData = {
@@ -2431,9 +2426,6 @@ export async function registerRoutes(
             await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
               storage.updateItem(existing.id, updateData)
             );
-            if (sourceBarcode && barcodeAssignment.barcode === sourceBarcode.replace(/\s+/g, "")) {
-              ownersByBarcode.set(barcodeAssignment.barcode, new Set([`item:${existing.id}`]));
-            }
             results.updated++;
           } else {
             normalizeAndValidateItemDetails(itemData);
@@ -2441,15 +2433,11 @@ export async function registerRoutes(
               storage.createItem({ ...itemData, barcode })
             );
             barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
-            existingBySku.set(sku.toLowerCase(), [created]);
-            itemsById.set(created.id, created);
-            if (sourceBarcode && barcodeAssignment.barcode === sourceBarcode.replace(/\s+/g, "")) {
-              ownersByBarcode.set(barcodeAssignment.barcode, new Set([`item:${created.id}`]));
-            }
+            if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
             results.success++;
           }
         } catch (e: any) {
-          results.errors.push({ row: i + headerRowNumber + 1, message: e.message });
+          results.errors.push({ row: i + 2, message: e.message });
         }
       }
 
@@ -2478,9 +2466,11 @@ export async function registerRoutes(
       const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
       const allExistingItems = await storage.getItems();
       const existingBySku = new Map<string, any[]>();
-      for (const item of allExistingItems) {
-        const key = item.sku.toLowerCase();
-        existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
+      if (upsert) {
+        for (const item of allExistingItems) {
+          const key = item.sku.toLowerCase();
+          existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
+        }
       }
       const [existingVariants, existingAliases] = await Promise.all([
         storage.getAllItemVariantsIncludingInactive(),
@@ -2494,16 +2484,6 @@ export async function registerRoutes(
           ownerKey: `item:${alias.itemId}`,
         })),
       ]);
-      const itemsById = new Map(allExistingItems.map(item => [item.id, item]));
-      const ownersByBarcode = new Map<string, Set<string>>();
-      for (const { barcode, ownerKey } of [
-        ...allExistingItems.map(item => ({ barcode: item.barcode, ownerKey: `item:${item.id}` })),
-        ...existingAliases.map(alias => ({ barcode: alias.barcode, ownerKey: `item:${alias.itemId}` })),
-        ...existingVariants.map(variant => ({ barcode: variant.barcode, ownerKey: `variant:${variant.id}` })),
-      ]) {
-        const key = String(barcode ?? "").trim().replace(/\s+/g, "");
-        if (key) ownersByBarcode.set(key, (ownersByBarcode.get(key) || new Set()).add(ownerKey));
-      }
       const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: BarcodeIssue[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
 
       const clean = (v: any): string => {
@@ -2519,14 +2499,11 @@ export async function registerRoutes(
             continue;
           }
           const name = clean(row.name);
-          if (!name) {
-            results.errors.push({ row: i + 1, message: "Name is required" });
+          const sku = clean(row.sku);
+          if (!name || !sku) {
+            results.errors.push({ row: i + 1, message: "Name and SKU are required" });
             continue;
           }
-          const sourceBarcode = clean(row.barcode);
-          const { sku, existing } = resolveItemImportIdentity(
-            clean(row.sku), sourceBarcode, upsert, existingBySku, ownersByBarcode, itemsById,
-          );
 
           const categoryName = clean(row.category);
           let categoryId: string | null = null;
@@ -2539,6 +2516,13 @@ export async function registerRoutes(
             }
           }
 
+          const existingMatches = upsert ? existingBySku.get(sku.toLowerCase()) || [] : [];
+          if (existingMatches.length > 1) {
+            results.errors.push({ row: i + 1, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
+            continue;
+          }
+          const existing = existingMatches[0];
+          const sourceBarcode = clean(row.barcode);
           const provisionalOwnerKey = existing ? `item:${existing.id}` : `import-row:${i}`;
           const barcodeAssignment = barcodeAllocator.assign(
             sourceBarcode || existing?.barcode,
@@ -2600,9 +2584,6 @@ export async function registerRoutes(
             await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
               storage.updateItem(existing.id, updateData)
             );
-            if (sourceBarcode && barcodeAssignment.barcode === sourceBarcode.replace(/\s+/g, "")) {
-              ownersByBarcode.set(barcodeAssignment.barcode, new Set([`item:${existing.id}`]));
-            }
             results.updated++;
           } else {
             normalizeAndValidateItemDetails(itemData);
@@ -2610,11 +2591,7 @@ export async function registerRoutes(
               storage.createItem({ ...itemData, barcode })
             );
             barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
-            existingBySku.set(sku.toLowerCase(), [created]);
-            itemsById.set(created.id, created);
-            if (sourceBarcode && barcodeAssignment.barcode === sourceBarcode.replace(/\s+/g, "")) {
-              ownersByBarcode.set(barcodeAssignment.barcode, new Set([`item:${created.id}`]));
-            }
+            if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
             results.success++;
           }
         } catch (e: any) {
@@ -2624,7 +2601,6 @@ export async function registerRoutes(
 
       res.json(results);
     } catch (e: any) {
-      req.log.warn({ reason: e?.message || "Unknown import error" }, "Items JSON import failed");
       res.status(400).json({ message: e.message });
     } finally {
       await releaseImportLock?.();
@@ -6182,7 +6158,6 @@ export async function registerRoutes(
       const VAT_RATE = 0.19;
       let subtotal = 0;
       const processedItems: any[] = [];
-      const stockRequirements: { itemId: string; bottles: number }[] = [];
 
       for (const oi of orderItems) {
         const item = await storage.getItem(oi.itemId);
@@ -6190,8 +6165,7 @@ export async function registerRoutes(
           res.status(400).json({ message: `Item ${oi.itemId} not found` });
           return;
         }
-        const bottlesNeeded = oi.saleUnit === "pack" && item.packSize > 1 ? oi.quantity * item.packSize : oi.quantity;
-        stockRequirements.push({ itemId: item.id, bottles: bottlesNeeded });
+        const bottlesNeeded = oi.quantity;
         if (item.stockQuantity < bottlesNeeded) {
           return res.status(400).json({ message: `Not enough stock for ${item.name}. Available: ${item.stockQuantity} bottles` });
         }
@@ -6214,9 +6188,8 @@ export async function registerRoutes(
       const loyaltyPolicy = await getLoyaltyPolicy();
       const result = await storage.createCustomerPortalOrderAtomic(
         { customerId, checkoutKey: checkoutKey || null, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), notes: notes || null, status: "pending" },
-        processedItems.map(pi => ({ ...pi, orderId: "TEMP" })),
-        { ...loyaltyPolicy, useCashback: useCashback === true },
-        stockRequirements,
+        processedItems.map(pi => ({ ...pi, orderId: "TEMP" }))
+        , { ...loyaltyPolicy, useCashback: useCashback === true }
       );
       const pendingPoints = loyaltyPolicy.loyaltyEnabled ? Math.floor(subtotal * loyaltyPolicy.pointsPerEuro) : 0;
       res.json({
@@ -6227,7 +6200,6 @@ export async function registerRoutes(
         earnedCashback: "0.00",
       });
     } catch (e: any) {
-      if (e.message === "INSUFFICIENT_STOCK") return res.status(409).json({ message: "Not enough stock. Refresh your cart and try again." });
       res.status(500).json({ message: e.message });
     }
   });
@@ -6236,13 +6208,13 @@ export async function registerRoutes(
   const PORTAL_JWT_SECRET = (process.env.SESSION_SECRET || "fallback") + "_portal";
 
   function signPortalToken(customerId: string): string {
-    return jwt.sign({ customerId, type: "portal", tenantId: getTenantId() }, PORTAL_JWT_SECRET, { expiresIn: "7d" });
+    return jwt.sign({ customerId, type: "portal" }, PORTAL_JWT_SECRET, { expiresIn: "7d" });
   }
 
   function verifyPortalToken(token: string): { customerId: string } | null {
     try {
       const p = jwt.verify(token, PORTAL_JWT_SECRET) as any;
-      if (p.type !== "portal" || (isMultiTenantMode() && p.tenantId !== getTenantId())) return null;
+      if (p.type !== "portal") return null;
       return { customerId: p.customerId };
     } catch { return null; }
   }
@@ -6702,7 +6674,7 @@ export async function registerRoutes(
         cashbackRates: { bronze: policy.bronzeCashbackPercent / 100, silver: policy.silverCashbackPercent / 100, gold: policy.goldCashbackPercent / 100 },
         maxCashbackOrderPercent: policy.maxCashbackOrderPercent / 100,
         tier, nextTier, loyaltyPointsPerEuro,
-        cashbackRate: policy.cashbackEnabled ? cashbackRateForTier(tier, policy) : 0,
+        cashbackRate: policy.cashbackEnabled ? cashbackRateForTier(tier, policy) / 100 : 0,
         tierThresholds: { silver: policy.silverThreshold, gold: policy.goldThreshold }, history });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -6947,13 +6919,13 @@ export async function registerRoutes(
   }
 
   function signCustomerToken(customerId: string, customerCode: string): string {
-    return jwt.sign({ customerId, customerCode, type: "customer", tenantId: getTenantId() }, CUSTOMER_JWT_SECRET, { expiresIn: CUSTOMER_TOKEN_EXPIRY });
+    return jwt.sign({ customerId, customerCode, type: "customer" }, CUSTOMER_JWT_SECRET, { expiresIn: CUSTOMER_TOKEN_EXPIRY });
   }
 
   function verifyCustomerToken(token: string): { customerId: string; customerCode: string } | null {
     try {
       const payload = jwt.verify(token, CUSTOMER_JWT_SECRET) as any;
-      if (payload.type !== "customer" || (isMultiTenantMode() && payload.tenantId !== getTenantId())) return null;
+      if (payload.type !== "customer") return null;
       return { customerId: payload.customerId, customerCode: payload.customerCode };
     } catch { return null; }
   }
@@ -7302,7 +7274,6 @@ export async function registerRoutes(
         },
         processedItems.map((pi) => ({ ...pi, orderId: "TEMP" })),
         { ...loyaltyPolicy, useCashback },
-        processedItems.map((pi) => ({ itemId: pi.itemId, bottles: pi.quantity })),
       );
       const { order } = checkout;
       const total = Number(order.total);
@@ -7352,10 +7323,7 @@ export async function registerRoutes(
       }
 
       res.json({ ...order, proformaId: proforma?.id || null, proformaNumber: proforma?.invoiceNumber || null });
-    } catch (e: any) {
-      if (e.message === "INSUFFICIENT_STOCK") return res.status(409).json({ message: "Not enough stock. Refresh your cart and try again." });
-      res.status(500).json({ message: e.message });
-    }
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
   app.post("/api/customer/orders/:id/reorder", async (req, res) => {
@@ -7427,7 +7395,7 @@ export async function registerRoutes(
         tier,
         nextTier,
         cashbackBalance,
-        cashbackRate,
+        cashbackRate: cashbackRate / 100,
         loyaltyPointsPerEuro: policy.loyaltyEnabled ? policy.pointsPerEuro : 0,
         loyaltyEnabled: policy.loyaltyEnabled,
         cashbackEnabled: policy.cashbackEnabled,
@@ -11633,15 +11601,10 @@ export async function registerRoutes(
     } catch { /* non-fatal */ }
   }
   // Fire once on startup (after a short delay), then every 24 hours
-  if (!options.skipBackgroundJobs || options.scheduleTenantJobs) {
-    const runForTenants = async () => {
-      for (const tenantId of getTenantIds()) {
-        await runWithTenant(tenantId, sendOverduePushReminders);
-      }
-    };
+  if (!options.skipBackgroundJobs) {
     setTimeout(() => {
-      void runForTenants();
-      setInterval(() => { void runForTenants(); }, 24 * 60 * 60 * 1000);
+      sendOverduePushReminders();
+      setInterval(sendOverduePushReminders, 24 * 60 * 60 * 1000);
     }, 30 * 1000);
   }
 

@@ -7,7 +7,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import ExcelJS from "exceljs";
-import { excelSheetToJson } from "@/lib/spreadsheet-rows";
 
 type FieldDef = {
   key: string;
@@ -19,6 +18,25 @@ type ImportResult = {
   success: number;
   errors: { row: number; message: string }[];
 };
+
+function excelSheetToJson(sheet: ExcelJS.Worksheet, defval: any = ""): any[] {
+  const rows: any[] = [];
+  let headers: string[] = [];
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const values = (row.values as any[]).slice(1);
+    if (rowNumber === 1) {
+      headers = values.map((v) => (v !== null && v !== undefined ? String(v) : ""));
+    } else {
+      const obj: any = {};
+      headers.forEach((h, i) => {
+        const v = values[i];
+        obj[h] = v !== undefined && v !== null ? v : defval;
+      });
+      rows.push(obj);
+    }
+  });
+  return rows;
+}
 
 function parseCSVText(text: string): any[] {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());

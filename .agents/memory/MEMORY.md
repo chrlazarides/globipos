@@ -3,7 +3,3 @@
 - [PWA shell cache matching](pwa-shell-cache-matching.md) — Cached build assets must match parser requests despite proxy-added Vary headers.
 - [Product and customer logos](product-customer-logos.md) — Product-level Terminal branding must not reuse the mutable customer logo asset.
 - [Rewards refund liability](rewards-refund-liability.md) — Full refunds reverse earned rewards and restore applied Cash Back; spent earnings may leave a negative liability.
-- [Customer release direction](customer-deployment-isolation.md) — Latest Deployment Control request uses one shared published release; records are manual and queues do not publish.
-- [POS release runner quirks](pos-release-runner-quirks.md) — Preserve the CI workarounds for npm deadlocks, pinned Rust targets, Android SDK setup, and immutable releases.
-- [Drizzle post-merge prompts](drizzle-post-merge-prompts.md) — Non-interactive schema push can report a TTY error yet exit successfully; verify output and avoid forced data loss.
-- [Spreadsheet import parity](spreadsheet-import-parity.md) — The import must use the reviewed rows; independently parsing the workbook again caused repeated-title header failures.
