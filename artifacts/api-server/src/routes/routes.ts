@@ -1,6 +1,7 @@
 // @ts-nocheck
 import type { Express, Request, Response, NextFunction } from "express";
 import { worksheetHeaderRowNumber, worksheetToJson } from "../spreadsheet-rows";
+import { resolveItemImportIdentity } from "../item-import-identity";
 import { createServer, type Server } from "http";
 import { storage } from "../storage";
 import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, itemLocationStock, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@workspace/db";
@@ -2289,11 +2290,18 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
-      for (const field of ["name", "sku"]) {
+      const nameColumn = columnMap.name || "name";
+      if (!Object.hasOwn(rows[0], nameColumn)) {
+        return res.status(400).json({ message: `The mapped name column "${nameColumn}" is not in the spreadsheet header. Check the mapping and try again.` });
+      }
+      for (const field of ["sku", "barcode"]) {
         const column = columnMap[field] || field;
-        if (!Object.hasOwn(rows[0], column)) {
+        if (columnMap[field] && !Object.hasOwn(rows[0], column)) {
           return res.status(400).json({ message: `The mapped ${field} column "${column}" is not in the spreadsheet header. Check the mapping and try again.` });
         }
+      }
+      if (!["sku", "barcode"].some(field => Object.hasOwn(rows[0], columnMap[field] || field))) {
+        return res.status(400).json({ message: "Map either SKU or barcode before importing items" });
       }
       const headerRowNumber = worksheetHeaderRowNumber(sheet);
       const upsert = req.body.mode === "upsert";
@@ -2302,11 +2310,9 @@ export async function registerRoutes(
       const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
       const allExistingItems = await storage.getItems();
       const existingBySku = new Map<string, any[]>();
-      if (upsert) {
-        for (const item of allExistingItems) {
-          const key = item.sku.toLowerCase();
-          existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
-        }
+      for (const item of allExistingItems) {
+        const key = item.sku.toLowerCase();
+        existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
       }
       const [existingVariants, existingAliases] = await Promise.all([
         storage.getAllItemVariantsIncludingInactive(),
@@ -2320,6 +2326,16 @@ export async function registerRoutes(
           ownerKey: `item:${alias.itemId}`,
         })),
       ]);
+      const itemsById = new Map(allExistingItems.map(item => [item.id, item]));
+      const ownersByBarcode = new Map<string, Set<string>>();
+      for (const { barcode, ownerKey } of [
+        ...allExistingItems.map(item => ({ barcode: item.barcode, ownerKey: `item:${item.id}` })),
+        ...existingAliases.map(alias => ({ barcode: alias.barcode, ownerKey: `item:${alias.itemId}` })),
+        ...existingVariants.map(variant => ({ barcode: variant.barcode, ownerKey: `variant:${variant.id}` })),
+      ]) {
+        const key = String(barcode ?? "").trim().replace(/\s+/g, "");
+        if (key) ownersByBarcode.set(key, (ownersByBarcode.get(key) || new Set()).add(ownerKey));
+      }
 
       const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: BarcodeIssue[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
 
@@ -2334,11 +2350,14 @@ export async function registerRoutes(
           };
 
           const name = getValue("name");
-          const sku = getValue("sku");
-          if (!name || !sku) {
-            results.errors.push({ row: sourceRowNumber, message: "Name and SKU are required" });
+          if (!name) {
+            results.errors.push({ row: sourceRowNumber, message: "Name is required" });
             continue;
           }
+          const sourceBarcode = getValue("barcode");
+          const { sku, existing } = resolveItemImportIdentity(
+            getValue("sku"), sourceBarcode, upsert, existingBySku, ownersByBarcode, itemsById,
+          );
 
           const categoryName = getValue("category");
           let categoryId: string | null = null;
@@ -2351,13 +2370,6 @@ export async function registerRoutes(
             }
           }
 
-          const existingMatches = upsert ? existingBySku.get(sku.toLowerCase()) || [] : [];
-          if (existingMatches.length > 1) {
-            results.errors.push({ row: sourceRowNumber, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
-            continue;
-          }
-          const existing = existingMatches[0];
-          const sourceBarcode = getValue("barcode");
           const provisionalOwnerKey = existing ? `item:${existing.id}` : `import-row:${i}`;
           const barcodeAssignment = barcodeAllocator.assign(
             sourceBarcode || existing?.barcode,
@@ -2419,6 +2431,9 @@ export async function registerRoutes(
             await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
               storage.updateItem(existing.id, updateData)
             );
+            if (sourceBarcode && barcodeAssignment.barcode === sourceBarcode.replace(/\s+/g, "")) {
+              ownersByBarcode.set(barcodeAssignment.barcode, new Set([`item:${existing.id}`]));
+            }
             results.updated++;
           } else {
             normalizeAndValidateItemDetails(itemData);
@@ -2426,7 +2441,11 @@ export async function registerRoutes(
               storage.createItem({ ...itemData, barcode })
             );
             barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
-            if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
+            existingBySku.set(sku.toLowerCase(), [created]);
+            itemsById.set(created.id, created);
+            if (sourceBarcode && barcodeAssignment.barcode === sourceBarcode.replace(/\s+/g, "")) {
+              ownersByBarcode.set(barcodeAssignment.barcode, new Set([`item:${created.id}`]));
+            }
             results.success++;
           }
         } catch (e: any) {
@@ -2459,11 +2478,9 @@ export async function registerRoutes(
       const catMap = new Map(categories.map(c => [c.name.toLowerCase(), c.id]));
       const allExistingItems = await storage.getItems();
       const existingBySku = new Map<string, any[]>();
-      if (upsert) {
-        for (const item of allExistingItems) {
-          const key = item.sku.toLowerCase();
-          existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
-        }
+      for (const item of allExistingItems) {
+        const key = item.sku.toLowerCase();
+        existingBySku.set(key, [...(existingBySku.get(key) || []), item]);
       }
       const [existingVariants, existingAliases] = await Promise.all([
         storage.getAllItemVariantsIncludingInactive(),
@@ -2477,6 +2494,16 @@ export async function registerRoutes(
           ownerKey: `item:${alias.itemId}`,
         })),
       ]);
+      const itemsById = new Map(allExistingItems.map(item => [item.id, item]));
+      const ownersByBarcode = new Map<string, Set<string>>();
+      for (const { barcode, ownerKey } of [
+        ...allExistingItems.map(item => ({ barcode: item.barcode, ownerKey: `item:${item.id}` })),
+        ...existingAliases.map(alias => ({ barcode: alias.barcode, ownerKey: `item:${alias.itemId}` })),
+        ...existingVariants.map(variant => ({ barcode: variant.barcode, ownerKey: `variant:${variant.id}` })),
+      ]) {
+        const key = String(barcode ?? "").trim().replace(/\s+/g, "");
+        if (key) ownersByBarcode.set(key, (ownersByBarcode.get(key) || new Set()).add(ownerKey));
+      }
       const results: { success: number; updated: number; errors: { row: number; message: string }[]; barcodeIssues: BarcodeIssue[] } = { success: 0, updated: 0, errors: [], barcodeIssues: [] };
 
       const clean = (v: any): string => {
@@ -2492,11 +2519,14 @@ export async function registerRoutes(
             continue;
           }
           const name = clean(row.name);
-          const sku = clean(row.sku);
-          if (!name || !sku) {
-            results.errors.push({ row: i + 1, message: "Name and SKU are required" });
+          if (!name) {
+            results.errors.push({ row: i + 1, message: "Name is required" });
             continue;
           }
+          const sourceBarcode = clean(row.barcode);
+          const { sku, existing } = resolveItemImportIdentity(
+            clean(row.sku), sourceBarcode, upsert, existingBySku, ownersByBarcode, itemsById,
+          );
 
           const categoryName = clean(row.category);
           let categoryId: string | null = null;
@@ -2509,13 +2539,6 @@ export async function registerRoutes(
             }
           }
 
-          const existingMatches = upsert ? existingBySku.get(sku.toLowerCase()) || [] : [];
-          if (existingMatches.length > 1) {
-            results.errors.push({ row: i + 1, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
-            continue;
-          }
-          const existing = existingMatches[0];
-          const sourceBarcode = clean(row.barcode);
           const provisionalOwnerKey = existing ? `item:${existing.id}` : `import-row:${i}`;
           const barcodeAssignment = barcodeAllocator.assign(
             sourceBarcode || existing?.barcode,
@@ -2577,6 +2600,9 @@ export async function registerRoutes(
             await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
               storage.updateItem(existing.id, updateData)
             );
+            if (sourceBarcode && barcodeAssignment.barcode === sourceBarcode.replace(/\s+/g, "")) {
+              ownersByBarcode.set(barcodeAssignment.barcode, new Set([`item:${existing.id}`]));
+            }
             results.updated++;
           } else {
             normalizeAndValidateItemDetails(itemData);
@@ -2584,7 +2610,11 @@ export async function registerRoutes(
               storage.createItem({ ...itemData, barcode })
             );
             barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
-            if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
+            existingBySku.set(sku.toLowerCase(), [created]);
+            itemsById.set(created.id, created);
+            if (sourceBarcode && barcodeAssignment.barcode === sourceBarcode.replace(/\s+/g, "")) {
+              ownersByBarcode.set(barcodeAssignment.barcode, new Set([`item:${created.id}`]));
+            }
             results.success++;
           }
         } catch (e: any) {

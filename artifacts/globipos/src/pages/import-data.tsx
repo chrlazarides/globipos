@@ -99,7 +99,7 @@ const ENTITY_CONFIG: Record<Exclude<EntityType, "skip">, { label: string; icon: 
     icon: Package,
     fields: [
       { key: "name", label: "Name", required: true },
-      { key: "sku", label: "SKU", required: true },
+      { key: "sku", label: "SKU" },
       { key: "barcode", label: "Barcode" },
       { key: "description", label: "Description" },
       { key: "category", label: "Category" },
@@ -593,10 +593,11 @@ export function mapImportRows(
   rows: Record<string, string>[],
   columnMap: Record<string, string>,
 ): Record<string, string>[] {
-  for (const field of ["name", "sku"]) {
-    if (!columnMap[field] || !rows.length || !Object.hasOwn(rows[0], columnMap[field])) {
-      throw new Error(`Map the ${field === "sku" ? "SKU" : "Name"} column before importing.`);
-    }
+  if (!rows.length || !columnMap.name || !Object.hasOwn(rows[0], columnMap.name)) {
+    throw new Error("Map the Name column before importing.");
+  }
+  if (!["sku", "barcode"].some(field => columnMap[field] && Object.hasOwn(rows[0], columnMap[field]))) {
+    throw new Error("Map either SKU or Barcode before importing.");
   }
   return rows.map((row) => {
     const mapped: Record<string, string> = {};
@@ -891,7 +892,10 @@ export default function ImportData() {
                   <config.icon className="w-4 h-4 text-muted-foreground" />
                   <div>
                     <p className="font-medium">{config.label}</p>
-                    <p className="text-xs text-muted-foreground">{config.fields.filter((f) => f.required).map((f) => f.label).join(", ")} required</p>
+                    <p className="text-xs text-muted-foreground">
+                      {config.fields.filter((f) => f.required).map((f) => f.label).join(", ")}
+                      {key === "items" ? " and either SKU or Barcode" : ""} required
+                    </p>
                   </div>
                 </div>
               ))}
@@ -1031,7 +1035,10 @@ export default function ImportData() {
                     );
                     const mappedCount = Object.values(currentSheet.columnMap).filter((v) => v && v !== "skip").length;
                     const requiredFields = config.fields.filter((f) => f.required);
-                    const missingRequired = requiredFields.filter((f) => !currentSheet.columnMap[f.key]);
+                    const missingRequired = requiredFields.filter((f) => !currentSheet.columnMap[f.key]).map(f => f.label);
+                    if (currentSheet.detectedEntity === "items" && !currentSheet.columnMap.sku && !currentSheet.columnMap.barcode) {
+                      missingRequired.push("SKU or Barcode");
+                    }
 
                     return (
                       <>
@@ -1047,7 +1054,7 @@ export default function ImportData() {
                                 </Badge>
                                 {missingRequired.length > 0 && (
                                   <Badge variant="destructive" className="text-xs">
-                                    Missing: {missingRequired.map((f) => f.label).join(", ")}
+                                    Missing: {missingRequired.join(", ")}
                                   </Badge>
                                 )}
                               </div>

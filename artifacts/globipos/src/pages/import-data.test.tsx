@@ -41,3 +41,14 @@ test("items import sends the reviewed rows with the selected field mapping", () 
   }]);
   assert.throws(() => mapImportRows(parsed.rows, { name: "Not a column", sku: "Code" }), /Map the Name column/);
 });
+
+test("barcode-only items do not need a mapped SKU column", () => {
+  assert.deepEqual(
+    mapImportRows([{ Product: "Toy", EAN: "008421374113" }], { name: "Product", barcode: "EAN" }),
+    [{ name: "Toy", barcode: "008421374113" }],
+  );
+  assert.throws(
+    () => mapImportRows([{ Product: "Toy" }], { name: "Product" }),
+    /Map either SKU or Barcode/,
+  );
+});
