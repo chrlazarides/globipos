@@ -3,7 +3,7 @@ name: Customer deployment isolation
 description: GlobiPOS customer isolation and central release-management direction.
 ---
 
-The user's preferred target is now a complete separate deployment and data store per customer, ideally on a customer subdomain, with one central Back Office to choose and roll out a version to selected or all installations. The current published installation should be the first test customer/canary. A shared multi-tenant platform with path-based URLs was explored as an easier alternative, but does not meet the user's stated ideal of independently deployed customers.
+Earlier, the user preferred a complete separate deployment and data store per customer, ideally on a customer subdomain. A later request explicitly calls for Deployment Control to present a **single shared published release** with one version/history and per-customer signup, configuration, health, and flags. The older separate-installation preference should not override this newer request.
 
 **Why:** The user wants isolation of each customer's installation and data, but does not want to publish each update manually across a chain of projects.
 
@@ -19,4 +19,4 @@ The user chose to retain existing live GlobiPOS data as the first customer's dat
 
 **Why:** Existing business records must not be discarded or silently made visible to newly signed-up customers.
 
-**How to apply:** Do not replace separate installations with a shared database merely to make releases one-click. Pin each installation to a release and verify migration, health, and rollback per customer. Do not represent the existing rollout queue as automatic publishing; Replit's documented Publishing controls do not expose a supported programmatic fleet-publish API. A true one-click rollout may require a hosting platform with a deployment API. For any Replit custom hostname, add it to the exact Publishing project and use its Replit-provided A/TXT values for GoDaddy DNS; keep DNS credentials only in central control.
+**How to apply:** In Deployment Control, show one shared release history, with per-customer operational status. Do not represent a planning queue or operator-recorded version as an automatic publish or as independently measured production evidence. If a future task revisits separate deployments, resolve that product decision before changing release semantics. For Replit custom hostnames, use the Publishing project's exact A/TXT values; keep DNS credentials in central control.

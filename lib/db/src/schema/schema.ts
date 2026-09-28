@@ -136,6 +136,19 @@ export const deploymentRollouts = pgTable("deployment_rollouts", {
   updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
+// Operator-attested history for the one shared published application.
+// Recording a result does not trigger publishing.
+export const sharedReleaseEvents = pgTable("shared_release_events", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  outcome: text("outcome").notNull(), // published | failed
+  backOfficeVersion: text("back_office_version").notNull(),
+  posVersion: text("pos_version").notNull(),
+  codeRevision: text("code_revision").notNull(),
+  notes: text("notes"),
+  recordedBy: varchar("recorded_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [index("shared_release_events_created_idx").on(table.createdAt)]);
+
 // Operator-reported setup and release history. A record never implies that
 // Replit published a project; publishing is a separate, manual action.
 export const deploymentEvents = pgTable("deployment_events", {

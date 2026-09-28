@@ -26,7 +26,7 @@ import {
   withDeadline,
 } from "./deployment-control";
 import { db, pool } from "./db";
-import { deploymentDomainIncidents, deploymentEvents, deploymentProfiles, users } from "@workspace/db";
+import { deploymentDomainIncidents, deploymentEvents, deploymentProfiles, sharedReleaseEvents, users } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth, requireSuperuser, signToken } from "./auth";
 import { setCustomerAiPersistenceAlertClaimerForTests } from "./operator-alerting";
@@ -306,7 +306,7 @@ async function createDeployment(slug: string) {
   return profile;
 }
 
-test("manual installation URL survives create and edit; release audit updates versions only on success", async t => {
+test("shared release history is centralized; per-customer release events cannot change versions", async t => {
   const suffix = crypto.randomUUID();
   const slug = `installation-${suffix}`;
   const userId = crypto.randomUUID();
@@ -321,8 +321,10 @@ test("manual installation URL survives create and edit; release audit updates ve
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>(resolve => server.once("listening", resolve));
   let profileId: string | undefined;
+  const releaseIds: string[] = [];
   t.after(async () => {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    for (const id of releaseIds) await db.delete(sharedReleaseEvents).where(eq(sharedReleaseEvents.id, id));
     if (profileId) await db.delete(deploymentProfiles).where(eq(deploymentProfiles.id, profileId));
     await db.delete(users).where(eq(users.id, userId));
   });
@@ -349,26 +351,44 @@ test("manual installation URL survives create and edit; release audit updates ve
   const [afterEdit] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, profileId));
   assert.equal(afterEdit.backOfficeUrl, `https://${slug}.host.example/back-office`);
   assert.equal(afterEdit.customerDomain, `${slug}.host.example`);
+  const setup = await request(`/${profileId}/events`, "POST", { kind: "setup", step: "project" });
+  assert.equal(setup.status, 201, await setup.text());
+  const profiles = await loadDeploymentProfilesWithIncidents();
+  assert.ok(profiles.find(profile => profile.id === profileId)?.setupCompleted.includes("project"));
   await db.update(deploymentProfiles).set({ targetBackOfficeVersion: "2.0.0", targetPosVersion: "2.0.0" })
     .where(eq(deploymentProfiles.id, profileId));
-  const release = (outcome: "failed" | "published") => request(`/${profileId}/events`, "POST", {
-    kind: "release", outcome, codeRevision: "abcdef0123456789", backOfficeVersion: "2.0.0", posVersion: "2.0.0",
-  });
+  const release = (outcome: "failed" | "published", path = "/shared-releases") => fetch(
+    `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/control${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...(path !== "/shared-releases" ? { kind: "release" } : {}), outcome, codeRevision: "abcdef0123456789", backOfficeVersion: "2.0.0", posVersion: "2.0.0" }),
+    },
+  );
+  const legacy = await release("published", `/deployments/${profileId}/events`);
+  assert.equal(legacy.status, 400);
   const failed = await release("failed");
-  assert.equal(failed.status, 201, await failed.text());
+  assert.equal(failed.status, 201, await failed.clone().text());
+  releaseIds.push((await failed.json()).id);
   const [afterFailure] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, profileId));
   assert.equal(afterFailure.backOfficeVersion, "unknown");
   assert.equal(afterFailure.targetBackOfficeVersion, "2.0.0");
   const published = await release("published");
-  assert.equal(published.status, 201, await published.text());
+  assert.equal(published.status, 201, await published.clone().text());
+  releaseIds.push((await published.json()).id);
   const [afterSuccess] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, profileId));
-  assert.equal(afterSuccess.backOfficeVersion, "2.0.0");
-  assert.equal(afterSuccess.posVersion, "2.0.0");
-  assert.equal(afterSuccess.targetBackOfficeVersion, null);
-  assert.equal(afterSuccess.targetPosVersion, null);
+  assert.equal(afterSuccess.backOfficeVersion, "unknown");
+  assert.equal(afterSuccess.targetBackOfficeVersion, "2.0.0");
   const events = await db.select().from(deploymentEvents).where(eq(deploymentEvents.deploymentId, profileId));
-  assert.deepEqual(events.map(event => event.outcome).sort(), ["failed", "published"]);
-  assert.ok(events.every(event => event.recordedBy === userId && event.codeRevision === "abcdef0123456789"));
+  assert.deepEqual(events.map(event => event.kind), ["setup"]);
+  const currentResponse = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/control/shared-releases`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(currentResponse.status, 200);
+  const history = await currentResponse.json();
+  assert.equal(history.source, "operator_recorded");
+  assert.equal(history.current.codeRevision, "abcdef0123456789");
+  assert.ok(history.history.some((event: { id: string }) => event.id === releaseIds[0]));
+  assert.ok(history.history.some((event: { id: string }) => event.id === releaseIds[1]));
 });
 
 test("database incident lifecycle keeps one open incident and closes it once", async t => {

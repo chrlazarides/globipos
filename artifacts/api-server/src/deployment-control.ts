@@ -8,7 +8,7 @@ import { applyDns, planDns, DnsSetupError } from "./godaddy-dns";
 import { sendDomainStatusNotification } from "./email";
 import { retryCustomerAiPersistenceAlert } from "./operator-alerting";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
-import { activityLogs, deploymentDomainIncidents, deploymentEvents, deploymentProfiles, deploymentRollouts, operatorAlertFailures, type OperatorAlertRetryHistoryEntry } from "@workspace/db";
+import { activityLogs, deploymentDomainIncidents, deploymentEvents, deploymentProfiles, deploymentRollouts, operatorAlertFailures, sharedReleaseEvents, type OperatorAlertRetryHistoryEntry } from "@workspace/db";
 
 const statusSchema = z.enum(["draft", "active", "suspended"]);
 const healthStatusSchema = z.enum(["unknown", "healthy", "warning", "offline", "error"]);
@@ -17,21 +17,18 @@ const setupSteps = [
   "project", "database", "published", "domain", "company",
   "locations", "terminals", "verification",
 ] as const;
-const eventSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("setup"),
-    step: z.enum(setupSteps),
-    notes: z.string().trim().max(2000).optional(),
-  }).strict(),
-  z.object({
-    kind: z.literal("release"),
-    outcome: z.enum(["published", "failed"]),
-    backOfficeVersion: z.string().trim().min(1).max(128),
-    posVersion: z.string().trim().min(1).max(128),
-    codeRevision: z.string().trim().min(7).max(128),
-    notes: z.string().trim().max(2000).optional(),
-  }).strict(),
-]);
+const eventSchema = z.object({
+  kind: z.literal("setup"),
+  step: z.enum(setupSteps),
+  notes: z.string().trim().max(2000).optional(),
+}).strict();
+const sharedReleaseSchema = z.object({
+  outcome: z.enum(["published", "failed"]),
+  backOfficeVersion: z.string().trim().min(1).max(128),
+  posVersion: z.string().trim().min(1).max(128),
+  codeRevision: z.string().trim().min(7).max(128),
+  notes: z.string().trim().max(2000).optional(),
+}).strict();
 const dnsSetupSchema = z.object({
   role: z.enum(["customer", "pos", "eshop"]),
   address: z.string().trim().min(1).max(45),
@@ -737,6 +734,33 @@ export function registerDeploymentControlRoutes(app: Express) {
     res.json(await loadDeploymentProfilesWithIncidents());
   });
 
+  app.get("/api/control/shared-releases", requireSuperuser, async (_req, res) => {
+    const [events, current] = await Promise.all([
+      db.select().from(sharedReleaseEvents)
+        .orderBy(desc(sharedReleaseEvents.createdAt), desc(sharedReleaseEvents.id)).limit(50),
+      db.select().from(sharedReleaseEvents).where(eq(sharedReleaseEvents.outcome, "published"))
+        .orderBy(desc(sharedReleaseEvents.createdAt), desc(sharedReleaseEvents.id)).limit(1),
+    ]);
+    res.json({
+      current: current[0] ?? null,
+      history: events,
+      source: "operator_recorded",
+    });
+  });
+
+  app.post("/api/control/shared-releases", requireSuperuser, async (req, res) => {
+    const parsed = sharedReleaseSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const [event] = await db.insert(sharedReleaseEvents).values({
+      ...parsed.data,
+      notes: parsed.data.notes || null,
+      recordedBy: req.user!.id,
+    }).returning();
+    await logControlActivity(req, "record", "shared_release", event.id,
+      `Recorded shared release ${event.outcome} at revision ${event.codeRevision}`);
+    res.status(201).json(event);
+  });
+
   for (const mode of ["preview", "apply"] as const) {
     app.post(`/api/control/deployments/:id/dns/${mode}`, requireSuperuser, async (req, res) => {
       const id = z.string().uuid().safeParse(req.params.id);
@@ -1047,34 +1071,22 @@ export function registerDeploymentControlRoutes(app: Express) {
       .where(eq(deploymentProfiles.id, id.data));
     if (!profile) return res.status(404).json({ message: "Deployment profile not found" });
     const input = parsed.data;
-    if (input.kind === "setup" && input.step === "domain" && profile.domainStatus !== "connected") {
+    if (input.step === "domain" && profile.domainStatus !== "connected") {
       return res.status(409).json({ message: "Run Check domains and resolve failures before recording this step." });
     }
-    const event = await db.transaction(async tx => {
-      const [recorded] = await tx.insert(deploymentEvents).values({
+    const [event] = await db.insert(deploymentEvents).values({
         deploymentId: id.data,
-        kind: input.kind,
-        step: input.kind === "setup" ? input.step : null,
-        outcome: input.kind === "setup" ? "completed" : input.outcome,
-        backOfficeVersion: input.kind === "release" ? input.backOfficeVersion : null,
-        posVersion: input.kind === "release" ? input.posVersion : null,
-        codeRevision: input.kind === "release" ? input.codeRevision : null,
+        kind: "setup",
+        step: input.step,
+        outcome: "completed",
+        backOfficeVersion: null,
+        posVersion: null,
+        codeRevision: null,
         notes: input.notes || null,
         recordedBy: req.user!.id,
       }).returning();
-      if (input.kind === "release" && input.outcome === "published") {
-        await tx.update(deploymentProfiles).set({
-          backOfficeVersion: input.backOfficeVersion,
-          posVersion: input.posVersion,
-          ...(profile.targetBackOfficeVersion === input.backOfficeVersion ? { targetBackOfficeVersion: null } : {}),
-          ...(profile.targetPosVersion === input.posVersion ? { targetPosVersion: null } : {}),
-          updatedAt: new Date(),
-        }).where(eq(deploymentProfiles.id, id.data));
-      }
-      return recorded;
-    });
     await logControlActivity(req, "record", "deployment_event", event.id,
-      `Recorded ${input.kind === "setup" ? input.step : input.outcome} for ${profile.slug}`);
+      `Recorded ${input.step} for ${profile.slug}`);
     res.status(201).json(event);
   });
 
@@ -1101,8 +1113,8 @@ export function registerDeploymentControlRoutes(app: Express) {
       initiatedBy: req.user!.id,
       notes: parsed.data.notes ?? null,
     }).returning();
-    await logControlActivity(req, "create", "deployment_rollout", rollout.id, `Created queued rollout for ${deploymentIds.length} active deployment(s)`);
-    res.status(201).json({ ...rollout, automation: { status: "queued", message: "Automation dispatch is not attached; this rollout remains queued." } });
+    await logControlActivity(req, "create", "deployment_rollout", rollout.id, `Recorded release request for ${deploymentIds.length} active customer(s); no publish dispatched`);
+    res.status(201).json({ ...rollout, automation: { status: "not_attached", message: "This request is a planning record only. Nothing was published or dispatched." } });
   });
 
   app.post("/api/control/heartbeat", async (req, res) => {
@@ -1134,7 +1146,7 @@ export function appendDomainNotificationDelivery(
 export async function loadDeploymentProfilesWithIncidents(
   database: Pick<typeof db, "select"> = db,
 ) {
-  const [profiles, incidents] = await Promise.all([
+  const [profiles, incidents, setupEvents] = await Promise.all([
     database.select().from(deploymentProfiles).orderBy(deploymentProfiles.clientName),
     database.select().from(deploymentDomainIncidents).where(sql`
       ${deploymentDomainIncidents.id} IN (
@@ -1147,7 +1159,16 @@ export async function loadDeploymentProfilesWithIncidents(
         WHERE incident_rank <= 5
       )
     `).orderBy(desc(deploymentDomainIncidents.startedAt)),
+    database.select({ deploymentId: deploymentEvents.deploymentId, step: deploymentEvents.step })
+      .from(deploymentEvents).where(eq(deploymentEvents.kind, "setup")),
   ]);
+  const setupByCustomer = new Map<string, Set<string>>();
+  for (const event of setupEvents) {
+    if (!event.step) continue;
+    const steps = setupByCustomer.get(event.deploymentId) ?? new Set<string>();
+    steps.add(event.step);
+    setupByCustomer.set(event.deploymentId, steps);
+  }
   const recentByDeployment = new Map<string, typeof incidents>();
   for (const incident of incidents) {
     const recent = recentByDeployment.get(incident.deploymentId) ?? [];
@@ -1159,6 +1180,7 @@ export async function loadDeploymentProfilesWithIncidents(
   return profiles.map((profile: typeof deploymentProfiles.$inferSelect) => ({
     ...safeProfile(profile),
     domainIncidents: recentByDeployment.get(profile.id) ?? [],
+    setupCompleted: [...(setupByCustomer.get(profile.id) ?? [])],
   }));
 }
 
