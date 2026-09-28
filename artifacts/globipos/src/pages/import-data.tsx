@@ -601,9 +601,12 @@ export default function ImportData() {
   const [importProgress, setImportProgress] = useState(0);
   const [updateExisting, setUpdateExisting] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // The upload input unmounts as soon as analysis starts; retain the File for import.
+  const selectedFileRef = useRef<File | null>(null);
   const { toast } = useToast();
 
   const reset = () => {
+    selectedFileRef.current = null;
     setStep("upload");
     setFileName("");
     setSheets([]);
@@ -622,6 +625,7 @@ export default function ImportData() {
       return;
     }
 
+    selectedFileRef.current = selectedFile;
     setFileName(selectedFile.name);
     setStep("analyze");
 
@@ -679,6 +683,7 @@ export default function ImportData() {
         }).filter((s) => s.totalRows > 0);
 
         if (!analyzed.length) {
+          selectedFileRef.current = null;
           toast({ title: "No data", description: "The file contains no data rows", variant: "destructive" });
           setStep("upload");
           return;
@@ -688,6 +693,7 @@ export default function ImportData() {
         setActiveSheet(analyzed[0].sheetName);
         setStep("verify");
       } catch {
+        selectedFileRef.current = null;
         toast({ title: "Error reading file", description: "Could not parse the file", variant: "destructive" });
         setStep("upload");
       }
@@ -755,9 +761,10 @@ export default function ImportData() {
             body: JSON.stringify({ rows: sheet._preParsedRows, mode: updateExisting ? "upsert" : undefined }),
           });
         } else {
-          if (!fileInputRef.current?.files?.[0]) throw new Error("File not available");
+          const file = selectedFileRef.current;
+          if (!file) throw new Error("File not available. Please select it again.");
           const formData = new FormData();
-          formData.append("file", fileInputRef.current.files[0]);
+          formData.append("file", file);
           formData.append("columnMap", JSON.stringify(cleanedMap));
           formData.append("sheetName", sheet.sheetName);
           if (updateExisting) formData.append("mode", "upsert");
@@ -765,6 +772,9 @@ export default function ImportData() {
         }
 
         const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || data.error || `Import failed (${res.status})`);
+        }
 
         results.push({
           sheetName: sheet.sheetName,
@@ -1210,7 +1220,11 @@ export default function ImportData() {
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Import Complete</CardTitle>
+              <CardTitle className="text-base">
+                {totalErrors > 0
+                  ? totalSuccess + totalUpdated > 0 ? "Import partially completed" : "Import failed"
+                  : "Import complete"}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-6 flex-wrap">
