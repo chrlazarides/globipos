@@ -38,7 +38,7 @@ import {
 
 type CellGrid = (string | number | null)[][];
 
-function worksheetTo2DArray(ws: ExcelJS.Worksheet): CellGrid {
+export function worksheetTo2DArray(ws: ExcelJS.Worksheet): CellGrid {
   const data: CellGrid = [];
   const colCount = ws.columnCount || 1;
   ws.eachRow({ includeEmpty: true }, (row) => {
@@ -234,7 +234,7 @@ function colLetter(c: number): string {
   return s;
 }
 
-function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[] } {
+export function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[] } {
   if (!data.length) return { headers: [], rows: [] };
   const maxR = data.length - 1;
   const maxC = Math.max(...data.map((r) => r.length), 1) - 1;
@@ -265,10 +265,12 @@ function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[] } {
     let hasText = 0;
     let keywordHits = 0;
     let hasNumericOnly = 0;
+    const distinctValues = new Set<string>();
     for (let c = 0; c <= maxC; c++) {
       const v = getCellVal(r, c);
       if (v) {
         nonEmpty++;
+        distinctValues.add(v.toLowerCase());
         if (isNaN(Number(v))) {
           hasText++;
           const vLower = v.toLowerCase().replace(/[\s_\-./]/g, "");
@@ -283,6 +285,9 @@ function smartSheetParse(data: CellGrid): { headers: string[]; rows: any[] } {
         }
       }
     }
+    // Supplier exports often repeat the report title across row 1. Repeated
+    // "Items" cells otherwise outscore the actual column headings below.
+    if (nonEmpty >= 2 && distinctValues.size === 1) continue;
     const score = keywordHits * 10 + nonEmpty * 2 + hasText * 3 - hasNumericOnly * 2;
     if (score > bestScore && nonEmpty >= 2 && hasText >= 1 && keywordHits >= 1) {
       bestScore = score;
@@ -555,7 +560,7 @@ const FIELD_SYNONYMS: Record<string, string[]> = {
   vintage: ["vintage", "year", "έτος", "harvest"],
 };
 
-function autoMapColumns(headers: string[], fields: FieldDef[]): Record<string, string> {
+export function autoMapColumns(headers: string[], fields: FieldDef[]): Record<string, string> {
   const map: Record<string, string> = {};
   const usedHeaders = new Set<string>();
 
