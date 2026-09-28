@@ -1,0 +1,105 @@
+CREATE TABLE "goods_received_voucher_scan_events" (
+	"id" varchar PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"grv_id" varchar NOT NULL,
+	"event_key" text NOT NULL,
+	"line_id" varchar NOT NULL,
+	"matched_by" text NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE TABLE "pos_release_caches" (
+	"id" varchar PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"repo_url" text NOT NULL,
+	"releases" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"verified_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "pos_release_caches_repo_url_unique" UNIQUE("repo_url")
+);
+CREATE TABLE "deployment_events" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"deployment_id" uuid NOT NULL,
+	"kind" text NOT NULL,
+	"step" text,
+	"outcome" text NOT NULL,
+	"back_office_version" text,
+	"pos_version" text,
+	"code_revision" text,
+	"notes" text,
+	"recorded_by" varchar NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE TABLE "shared_release_events" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"outcome" text NOT NULL,
+	"back_office_version" text NOT NULL,
+	"pos_version" text NOT NULL,
+	"code_revision" text NOT NULL,
+	"notes" text,
+	"recorded_by" varchar NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL
+);
+ALTER TABLE "agoranomia_label_prints" DROP CONSTRAINT "agoranomia_label_prints_discount_provenance_check";
+ALTER TABLE "customer_ai_health" DROP CONSTRAINT "customer_ai_health_category_check";
+ALTER TABLE "customer_ai_health" DROP CONSTRAINT "customer_ai_health_counts_check";
+ALTER TABLE "customer_ai_health" DROP CONSTRAINT "customer_ai_health_scope_check";
+ALTER TABLE "deployment_rollouts" DROP CONSTRAINT "deployment_rollouts_scope_check";
+ALTER TABLE "deployment_rollouts" DROP CONSTRAINT "deployment_rollouts_status_check";
+ALTER TABLE "label_profiles" DROP CONSTRAINT "label_profiles_kind_check";
+ALTER TABLE "items" DROP CONSTRAINT "items_item_type_check";
+ALTER TABLE "items" DROP CONSTRAINT "items_shelf_label_discount_check";
+ALTER TABLE "items" DROP CONSTRAINT "items_shelf_label_unit_check";
+ALTER TABLE "items" DROP CONSTRAINT "items_shelf_label_uom_config_check";
+ALTER TABLE "customer_feedback" DROP CONSTRAINT "customer_feedback_rating_check";
+ALTER TABLE "customer_feedback" DROP CONSTRAINT "customer_feedback_sentiment_score_check";
+ALTER TABLE "deployment_profiles" DROP CONSTRAINT "deployment_profiles_automation_provider_check";
+ALTER TABLE "deployment_profiles" DROP CONSTRAINT "deployment_profiles_health_status_check";
+ALTER TABLE "deployment_profiles" DROP CONSTRAINT "deployment_profiles_status_check";
+ALTER TABLE "customer_notifications" DROP CONSTRAINT "customer_notifications_customer_id_fkey";
+ALTER TABLE "customer_preferences" DROP CONSTRAINT "customer_preferences_customer_id_fkey";
+ALTER TABLE "erp_record_mappings" DROP CONSTRAINT "erp_record_mappings_config_id_fkey";
+ALTER TABLE "erp_stock_reconciliations" DROP CONSTRAINT "erp_stock_reconciliations_config_id_fkey";
+ALTER TABLE "erp_sync_audits" DROP CONSTRAINT "erp_sync_audits_config_id_fkey";
+ALTER TABLE "erp_sync_cursors" DROP CONSTRAINT "erp_sync_cursors_config_id_fkey";
+ALTER TABLE "erp_sync_runs" DROP CONSTRAINT "erp_sync_runs_config_id_fkey";
+ALTER TABLE "expiration_batches" DROP CONSTRAINT "expiration_batches_item_id_fkey";
+ALTER TABLE "expiration_batches" DROP CONSTRAINT "expiration_batches_location_id_fkey";
+ALTER TABLE "item_shelf_price_history" DROP CONSTRAINT "item_shelf_price_history_item_id_fkey";
+ALTER TABLE "item_barcodes" DROP CONSTRAINT "item_barcodes_item_id_fkey";
+ALTER TABLE "items" DROP CONSTRAINT "items_family_id_fkey";
+ALTER TABLE "customer_feedback" DROP CONSTRAINT "customer_feedback_customer_id_fkey";
+ALTER TABLE "customer_feedback" DROP CONSTRAINT "customer_feedback_order_id_fkey";
+ALTER TABLE "deployment_domain_incidents" DROP CONSTRAINT "deployment_domain_incidents_deployment_id_fkey";
+ALTER TABLE "customer_cashback_ledger" DROP CONSTRAINT "customer_cashback_ledger_customer_id_fkey";
+DROP INDEX "agoranomia_label_prints_item_printed_idx";
+DROP INDEX "operator_alert_failures_unresolved";
+DROP INDEX "label_profiles_one_default_per_kind";
+DROP INDEX "customer_notifications_customer_created_idx";
+DROP INDEX "idx_expiration_batches_exp";
+DROP INDEX "idx_expiration_batches_item";
+DROP INDEX "item_barcodes_item_id_idx";
+DROP INDEX "customer_feedback_customer_created_idx";
+DROP INDEX "deployment_domain_incidents_one_open";
+DROP INDEX "deployment_domain_incidents_recent";
+ALTER TABLE "portal_order_items" ALTER COLUMN "quantity" SET DATA TYPE numeric(12, 3);
+ALTER TABLE "deployment_domain_incidents" ADD COLUMN "role" text DEFAULT 'main' NOT NULL;
+ALTER TABLE "deployment_events" ADD CONSTRAINT "deployment_events_deployment_id_deployment_profiles_id_fk" FOREIGN KEY ("deployment_id") REFERENCES "public"."deployment_profiles"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "deployment_events" ADD CONSTRAINT "deployment_events_recorded_by_users_id_fk" FOREIGN KEY ("recorded_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "shared_release_events" ADD CONSTRAINT "shared_release_events_recorded_by_users_id_fk" FOREIGN KEY ("recorded_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;
+CREATE UNIQUE INDEX "goods_received_voucher_scan_events_grv_event_unique" ON "goods_received_voucher_scan_events" USING btree ("grv_id","event_key");
+CREATE INDEX "deployment_events_deployment_created_idx" ON "deployment_events" USING btree ("deployment_id","created_at");
+CREATE INDEX "shared_release_events_created_idx" ON "shared_release_events" USING btree ("created_at");
+ALTER TABLE "customer_notifications" ADD CONSTRAINT "customer_notifications_customer_id_customers_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "customer_preferences" ADD CONSTRAINT "customer_preferences_customer_id_customers_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "erp_record_mappings" ADD CONSTRAINT "erp_record_mappings_config_id_erp_integration_configs_id_fk" FOREIGN KEY ("config_id") REFERENCES "public"."erp_integration_configs"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "erp_stock_reconciliations" ADD CONSTRAINT "erp_stock_reconciliations_config_id_erp_integration_configs_id_" FOREIGN KEY ("config_id") REFERENCES "public"."erp_integration_configs"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "erp_sync_audits" ADD CONSTRAINT "erp_sync_audits_config_id_erp_integration_configs_id_fk" FOREIGN KEY ("config_id") REFERENCES "public"."erp_integration_configs"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "erp_sync_cursors" ADD CONSTRAINT "erp_sync_cursors_config_id_erp_integration_configs_id_fk" FOREIGN KEY ("config_id") REFERENCES "public"."erp_integration_configs"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "erp_sync_runs" ADD CONSTRAINT "erp_sync_runs_config_id_erp_integration_configs_id_fk" FOREIGN KEY ("config_id") REFERENCES "public"."erp_integration_configs"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "expiration_batches" ADD CONSTRAINT "expiration_batches_item_id_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "expiration_batches" ADD CONSTRAINT "expiration_batches_location_id_pos_locations_id_fk" FOREIGN KEY ("location_id") REFERENCES "public"."pos_locations"("id") ON DELETE set null ON UPDATE no action;
+ALTER TABLE "item_shelf_price_history" ADD CONSTRAINT "item_shelf_price_history_item_id_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "item_barcodes" ADD CONSTRAINT "item_barcodes_item_id_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "items" ADD CONSTRAINT "items_family_id_product_families_id_fk" FOREIGN KEY ("family_id") REFERENCES "public"."product_families"("id") ON DELETE set null ON UPDATE no action;
+ALTER TABLE "customer_feedback" ADD CONSTRAINT "customer_feedback_customer_id_customers_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "customer_feedback" ADD CONSTRAINT "customer_feedback_order_id_portal_orders_id_fk" FOREIGN KEY ("order_id") REFERENCES "public"."portal_orders"("id") ON DELETE set null ON UPDATE no action;
+ALTER TABLE "deployment_domain_incidents" ADD CONSTRAINT "deployment_domain_incidents_deployment_id_deployment_profiles_i" FOREIGN KEY ("deployment_id") REFERENCES "public"."deployment_profiles"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "customer_cashback_ledger" ADD CONSTRAINT "customer_cashback_ledger_customer_id_customers_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE cascade ON UPDATE no action;
+CREATE UNIQUE INDEX "deployment_domain_incidents_one_open_per_role" ON "deployment_domain_incidents" USING btree ("deployment_id","role") WHERE (recovered_at IS NULL);
