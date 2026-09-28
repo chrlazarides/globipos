@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import sharp from "sharp";
 import { Client } from "@replit/object-storage";
-import { pool } from "./db";
+import { getOriginalTenantId, getTenantId, isMultiTenantMode, pool } from "./db";
 
 export const ITEM_IMAGE_MAX_BYTES = 12 * 1024 * 1024;
 export const ITEM_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
@@ -69,7 +69,18 @@ async function deleteObject(objectName: string) {
 }
 
 export function itemImageObjectName(itemId: string, version: string, size: ItemImageSize) {
-  return `item-images/${itemId}/${version}/${size}.webp`;
+  if (!isMultiTenantMode()) return `item-images/${itemId}/${version}/${size}.webp`;
+  const tenantId = getTenantId();
+  if (!tenantId) throw new Error("Cannot address item images without an active tenant");
+  return `tenants/${encodeURIComponent(tenantId)}/item-images/${itemId}/${version}/${size}.webp`;
+}
+
+function originalImageObjectName(itemId: string, version: string, size: ItemImageSize): string | null {
+  // The legacy key belongs solely to the explicitly identified original
+  // installation. No other tenant may read or delete unprefixed objects.
+  return getOriginalTenantId() === getTenantId()
+    ? `item-images/${itemId}/${version}/${size}.webp`
+    : null;
 }
 
 export async function createItemImageSet(source: Buffer): Promise<ItemImageSet> {
@@ -107,11 +118,18 @@ export async function uploadItemImageSet(itemId: string, imageSet: ItemImageSet)
 }
 
 export async function downloadItemImage(itemId: string, version: string, size: ItemImageSize) {
-  return downloadObject(itemImageObjectName(itemId, version, size));
+  const currentKey = itemImageObjectName(itemId, version, size);
+  const bytes = await downloadObject(currentKey);
+  if (bytes || !isMultiTenantMode()) return bytes;
+  const legacyKey = originalImageObjectName(itemId, version, size);
+  return legacyKey ? downloadObject(legacyKey) : null;
 }
 
 export async function deleteItemImageSet(itemId: string, version: string) {
-  await Promise.all((["thumbnail", "card", "full"] as const).map(size =>
-    deleteObject(itemImageObjectName(itemId, version, size)).catch(() => undefined)
-  ));
+  await Promise.all((["thumbnail", "card", "full"] as const).flatMap(size => {
+    const currentKey = itemImageObjectName(itemId, version, size);
+    const legacyKey = isMultiTenantMode() ? originalImageObjectName(itemId, version, size) : null;
+    return [currentKey, legacyKey].filter((key): key is string => Boolean(key))
+      .map(key => deleteObject(key).catch(() => undefined));
+  }));
 }

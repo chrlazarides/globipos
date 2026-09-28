@@ -1,3 +1,6 @@
+// This is the installation schema. In shared-process mode each customer owns a
+// separate PostgreSQL database with this same schema; these tables are NOT
+// safe to co-host multiple customers in one database. See docs/tenant-isolation.md.
 import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, uuid, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";

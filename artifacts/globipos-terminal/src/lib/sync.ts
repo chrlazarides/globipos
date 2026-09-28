@@ -28,9 +28,8 @@ export async function registerTerminal(serverUrl: string, terminalCode: string):
     initial_sync_complete: false,
   };
   
-  if (Array.isArray(data.cashiers)) await saveCashiers(data.cashiers.map(mapCashier));
-  
   await setConfig(config);
+  if (Array.isArray(data.cashiers)) await saveCashiers(data.cashiers.map(mapCashier));
   return config;
 }
 

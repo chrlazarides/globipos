@@ -1,6 +1,7 @@
 import type { TerminalConfig, CashierSession, Product, Category, Order, OrderLine } from "../types";
 import { hashPin } from "./utils";
 import { storageWriteError } from "./storage";
+import { isSameTerminalIdentity } from "./terminal-identity";
 
 const DB_NAME = "globipos_terminal";
 const DB_VERSION = 2; // Incremented for sync_cursor
@@ -85,7 +86,47 @@ export async function getConfig(): Promise<TerminalConfig | null> {
 }
 
 export async function setConfig(config: TerminalConfig): Promise<void> {
-  await tx("config", "readwrite", (s) => s.put({ ...config, id: "main" }));
+  const db = await getDb();
+  await new Promise<void>((resolve, reject) => {
+    const stores = ["config", "cashiers", "products", "categories", "orders", "order_lines", "outbox", "sync_cursor", "audit"];
+    const transaction = db.transaction(stores, "readwrite");
+    let failure: Error | null = null;
+    const configStore = transaction.objectStore("config");
+    const configRequest = configStore.get("main");
+
+    configRequest.onsuccess = () => {
+      const previous = configRequest.result as TerminalConfig | undefined;
+      const identityChanged = !previous || !isSameTerminalIdentity(previous, config);
+      const outboxStore = transaction.objectStore("outbox");
+      const outboxCount = outboxStore.count();
+
+      outboxCount.onsuccess = () => {
+        if (identityChanged && outboxCount.result > 0) {
+          failure = new Error("Cannot change terminal server or code while offline orders are pending. Reconnect to the current server and send pending orders first.");
+          transaction.abort();
+          return;
+        }
+
+        if (identityChanged) {
+          for (const storeName of ["cashiers", "products", "categories", "orders", "order_lines", "outbox", "sync_cursor", "audit"]) {
+            transaction.objectStore(storeName).clear();
+          }
+        }
+        configStore.put({ ...config, id: "main" });
+      };
+      outboxCount.onerror = () => {
+        failure = outboxCount.error ?? new Error("Could not verify pending offline orders");
+        transaction.abort();
+      };
+    };
+    configRequest.onerror = () => {
+      failure = configRequest.error ?? new Error("Could not read terminal configuration");
+      transaction.abort();
+    };
+
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(failure ?? transaction.error ?? new Error("Could not update terminal configuration"));
+  });
 }
 
 // Cashiers

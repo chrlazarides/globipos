@@ -7,6 +7,18 @@ Earlier, the user preferred a complete separate deployment and data store per cu
 
 **Why:** The user wants isolation of each customer's installation and data, but does not want to publish each update manually across a chain of projects.
 
+If one API process temporarily serves several customer hosts, keep one fully separate database per installation rather than adding host-based routing over the unscoped legacy tables. Never silently assign the existing database to a second business.
+
+**Why:** The installation schema predates tenant ownership; a hostname alone cannot enforce ownership across direct IDs, exports, POS sync, and background queries. Separate databases maintain a hard boundary without relying on every query remembering a filter.
+
+**How to apply:** Preserve independent deployments as the preferred topology; treat shared-process database-per-installation mode as explicit, provisioned infrastructure with tenant-bound request and job context, not as an automatic signup shortcut.
+
+Even when all ORM calls use a tenant-bound pool, external database utilities can bypass it by reading a process-wide connection URL. Keep package exports and other out-of-process dump paths unavailable in shared-process mode unless they select the verified tenant database explicitly.
+
+**Why:** A tenant's superuser can legitimately reach an export endpoint while its dump command silently reads the original installation; route authorization alone cannot constrain a separate process.
+
+**How to apply:** Include out-of-process backups, restores, archives, and provider configuration in every tenant isolation audit; exercise real registered endpoints with separate test databases, not only simulated CRUD handlers.
+
 An interim central inventory may accept operator-supplied installation URLs and operator-attested release outcomes. This is a record of independently hosted installations, not automatic provisioning, publishing, or remote version enforcement. Leave the existing published installation untouched while building and reviewing that inventory.
 
 **Why:** The user explicitly chose to stop the live DNS experiment and to supply new installation URLs themselves; the hosting provider and an automated fleet deployment mechanism have not been selected.

@@ -84,5 +84,5 @@ export function createCustomerAiHealthPersistence(
 }
 
 export function createCustomerAiHealthPersistenceForClient(client: PoolClient) {
-  return createCustomerAiHealthPersistence(drizzle(client, { schema: { customerAiHealth } }) as CustomerAiHealthDatabase);
+  return createCustomerAiHealthPersistence(drizzle(client as any, { schema: { customerAiHealth } }) as CustomerAiHealthDatabase);
 }

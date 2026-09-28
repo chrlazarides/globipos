@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { Express, Request, Response, NextFunction } from "express";
+import { worksheetHeaderRowNumber, worksheetToJson } from "../spreadsheet-rows";
 import { createServer, type Server } from "http";
 import { storage } from "../storage";
 import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, itemLocationStock, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@workspace/db";
@@ -14,6 +15,7 @@ import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail, sendEmailWithContent } from "../email";
 import { db } from "../db";
+import { getTenantId, getTenantIds, isMultiTenantMode, runWithTenant } from "../db";
 import { sql, and, or, eq, gte, lte, lt, gt, desc, isNull, ilike, inArray, count } from "drizzle-orm";
 import crypto from "crypto";
 import fs from "fs";
@@ -167,25 +169,6 @@ async function readExcelWorkbook(buffer: Buffer, filename: string): Promise<Exce
     await workbook.xlsx.load(buffer);
   }
   return workbook;
-}
-
-function worksheetToJson(sheet: ExcelJS.Worksheet, defval: any = ""): any[] {
-  const rows: any[] = [];
-  let headers: string[] = [];
-  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-    const values = (row.values as any[]).slice(1);
-    if (rowNumber === 1) {
-      headers = values.map((v) => (v !== null && v !== undefined ? String(v) : ""));
-    } else {
-      const obj: any = {};
-      headers.forEach((h, i) => {
-        const v = values[i];
-        obj[h] = v !== undefined && v !== null ? v : defval;
-      });
-      rows.push(obj);
-    }
-  });
-  return rows;
 }
 
 async function logActivity(userId: string | null, username: string | null, action: string, entity: string | null, entityId: string | null, description: string | null, ipAddress: string | null, userAgent: string | null) {
@@ -386,10 +369,12 @@ const CHARGE_IN_PROGRESS_WINDOW_MS = 90_000;
 export async function registerRoutes(
   httpServer: Server,
   app: Express,
-  options: { skipBackgroundJobs?: boolean } = {},
+  options: { skipBackgroundJobs?: boolean; scheduleTenantJobs?: boolean } = {},
 ): Promise<Server> {
   configureCustomerAiHealthPersistence(createCustomerAiHealthPersistence());
-  registerDeploymentControlRoutes(app);
+  // Deployment control is an installation-wide control plane and its monitor
+  // runs without request context; do not expose or schedule it on a shared host.
+  if (!isMultiTenantMode()) registerDeploymentControlRoutes(app);
   registerDeploymentPackageRoutes(app);
 
   // ── Boot-time reconciliation for card-terminal charges ──────────────────────
@@ -2304,6 +2289,13 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      for (const field of ["name", "sku"]) {
+        const column = columnMap[field] || field;
+        if (!Object.hasOwn(rows[0], column)) {
+          return res.status(400).json({ message: `The mapped ${field} column "${column}" is not in the spreadsheet header. Check the mapping and try again.` });
+        }
+      }
+      const headerRowNumber = worksheetHeaderRowNumber(sheet);
       const upsert = req.body.mode === "upsert";
       releaseImportLock = await acquireCatalogImportLock();
       const categories = await storage.getCategories();
@@ -2334,6 +2326,7 @@ export async function registerRoutes(
       for (let i = 0; i < rows.length; i++) {
         try {
           const row = rows[i];
+          const sourceRowNumber = i + headerRowNumber + 1;
           const getValue = (field: string) => {
             const col = columnMap[field] || field;
             const raw = row[col] !== undefined ? String(row[col]).trim() : "";
@@ -2343,7 +2336,7 @@ export async function registerRoutes(
           const name = getValue("name");
           const sku = getValue("sku");
           if (!name || !sku) {
-            results.errors.push({ row: i + 2, message: "Name and SKU are required" });
+            results.errors.push({ row: sourceRowNumber, message: "Name and SKU are required" });
             continue;
           }
 
@@ -2360,7 +2353,7 @@ export async function registerRoutes(
 
           const existingMatches = upsert ? existingBySku.get(sku.toLowerCase()) || [] : [];
           if (existingMatches.length > 1) {
-            results.errors.push({ row: i + 2, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
+            results.errors.push({ row: sourceRowNumber, message: `SKU "${sku}" matches multiple existing products when compared case-insensitively` });
             continue;
           }
           const existing = existingMatches[0];
@@ -2369,7 +2362,7 @@ export async function registerRoutes(
           const barcodeAssignment = barcodeAllocator.assign(
             sourceBarcode || existing?.barcode,
             sku,
-            i + 2,
+            sourceRowNumber,
             provisionalOwnerKey,
           );
           const itemData = {
@@ -2437,7 +2430,7 @@ export async function registerRoutes(
             results.success++;
           }
         } catch (e: any) {
-          results.errors.push({ row: i + 2, message: e.message });
+          results.errors.push({ row: i + headerRowNumber + 1, message: e.message });
         }
       }
 
@@ -6212,13 +6205,13 @@ export async function registerRoutes(
   const PORTAL_JWT_SECRET = (process.env.SESSION_SECRET || "fallback") + "_portal";
 
   function signPortalToken(customerId: string): string {
-    return jwt.sign({ customerId, type: "portal" }, PORTAL_JWT_SECRET, { expiresIn: "7d" });
+    return jwt.sign({ customerId, type: "portal", tenantId: getTenantId() }, PORTAL_JWT_SECRET, { expiresIn: "7d" });
   }
 
   function verifyPortalToken(token: string): { customerId: string } | null {
     try {
       const p = jwt.verify(token, PORTAL_JWT_SECRET) as any;
-      if (p.type !== "portal") return null;
+      if (p.type !== "portal" || (isMultiTenantMode() && p.tenantId !== getTenantId())) return null;
       return { customerId: p.customerId };
     } catch { return null; }
   }
@@ -6923,13 +6916,13 @@ export async function registerRoutes(
   }
 
   function signCustomerToken(customerId: string, customerCode: string): string {
-    return jwt.sign({ customerId, customerCode, type: "customer" }, CUSTOMER_JWT_SECRET, { expiresIn: CUSTOMER_TOKEN_EXPIRY });
+    return jwt.sign({ customerId, customerCode, type: "customer", tenantId: getTenantId() }, CUSTOMER_JWT_SECRET, { expiresIn: CUSTOMER_TOKEN_EXPIRY });
   }
 
   function verifyCustomerToken(token: string): { customerId: string; customerCode: string } | null {
     try {
       const payload = jwt.verify(token, CUSTOMER_JWT_SECRET) as any;
-      if (payload.type !== "customer") return null;
+      if (payload.type !== "customer" || (isMultiTenantMode() && payload.tenantId !== getTenantId())) return null;
       return { customerId: payload.customerId, customerCode: payload.customerCode };
     } catch { return null; }
   }
@@ -11609,10 +11602,15 @@ export async function registerRoutes(
     } catch { /* non-fatal */ }
   }
   // Fire once on startup (after a short delay), then every 24 hours
-  if (!options.skipBackgroundJobs) {
+  if (!options.skipBackgroundJobs || options.scheduleTenantJobs) {
+    const runForTenants = async () => {
+      for (const tenantId of getTenantIds()) {
+        await runWithTenant(tenantId, sendOverduePushReminders);
+      }
+    };
     setTimeout(() => {
-      sendOverduePushReminders();
-      setInterval(sendOverduePushReminders, 24 * 60 * 60 * 1000);
+      void runForTenants();
+      setInterval(() => { void runForTenants(); }, 24 * 60 * 60 * 1000);
     }, 30 * 1000);
   }
 
