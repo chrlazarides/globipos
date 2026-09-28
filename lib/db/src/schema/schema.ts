@@ -2,8 +2,18 @@
 // separate PostgreSQL database with this same schema; these tables are NOT
 // safe to co-host multiple customers in one database. See docs/tenant-isolation.md.
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, uuid, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, uuid, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex, index, customType } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
+
+// Legacy fallback store. Keep it in the schema so a non-interactive push never
+// mistakes this populated table for a rename of a newly added business table.
+const legacyImageBytes = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
+export const itemImageObjects = pgTable("item_image_objects", {
+  objectName: text("object_name").primaryKey(),
+  contentType: text("content_type").notNull().default("image/webp"),
+  bytes: legacyImageBytes("bytes").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
 import { z } from "zod/v4";
 import { relations } from "drizzle-orm";
 
@@ -41,7 +51,7 @@ export const activityLogs = pgTable("activity_logs", {
 
 export const deploymentProfiles = pgTable("deployment_profiles", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  slug: text("slug").notNull().unique(),
+  slug: text("slug").notNull().unique("deployment_profiles_slug_key"),
   clientName: text("client_name").notNull(),
   status: text("status").notNull().default("draft"),
   backOfficeUrl: text("back_office_url").notNull(),
@@ -172,7 +182,7 @@ export const erpIntegrationConfigs = pgTable("erp_integration_configs", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   // Each application database is one customer deployment. This singleton
   // scope prevents the running app from addressing another deployment.
-  scope: text("scope").notNull().default("local").unique(),
+  scope: text("scope").notNull().default("local").unique("erp_integration_configs_scope_key"),
   provider: text("provider").notNull(), // softone | sap-b1
   enabled: boolean("enabled").notNull().default(false),
   policies: jsonb("policies").notNull().default({}),
@@ -227,7 +237,7 @@ export const categories = pgTable("categories", {
 
 export const productFamilies = pgTable("product_families", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  code: text("code").unique(),
+  code: text("code").unique("product_families_code_key"),
   name: text("name").notNull(),
   active: boolean("active").default(true).notNull(),
   updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
@@ -342,7 +352,7 @@ export const sizes = pgTable("sizes", {
 export const itemBarcodes = pgTable("item_barcodes", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
-  barcode: text("barcode").notNull().unique(), // EAN-13 (13 digits) or other format
+  barcode: text("barcode").notNull().unique("item_barcodes_barcode_key"), // EAN-13 (13 digits) or other format
   country: text("country"),                    // e.g. "UK", "Germany", "Greece"
   note: text("note"),                          // optional free-text label
   isPrimary: boolean("is_primary").notNull().default(false),
@@ -383,7 +393,7 @@ export const inventoryInLines = pgTable("inventory_in_lines", {
 // reselect the same option ranges for every new model/item.
 export const variantTemplates = pgTable("variant_templates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: text("name").notNull().unique(),
+  name: text("name").notNull().unique("variant_templates_name_key"),
   colorIds: text("color_ids").array().notNull().default(sql`'{}'::text[]`),
   sizeIds: text("size_ids").array().notNull().default(sql`'{}'::text[]`),
   qualities: text("qualities").array(), // e.g. ["Standard","Premium"], null = no quality/grade axis
@@ -417,7 +427,7 @@ export const customers = pgTable("customers", {
 // separate from the commercial customer record so they are strictly opt-in.
 export const customerPreferences = pgTable("customer_preferences", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  customerId: varchar("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }).unique(),
+  customerId: varchar("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }).unique("customer_preferences_customer_id_key"),
   dietaryPreferences: text("dietary_preferences").array().notNull().default(sql`'{}'::text[]`),
   dislikedIngredients: text("disliked_ingredients").array().notNull().default(sql`'{}'::text[]`),
   preferredCategories: text("preferred_categories").array().notNull().default(sql`'{}'::text[]`),
@@ -545,7 +555,7 @@ export const seasonalOfferItems = pgTable("seasonal_offer_items", {
 export const invoices = pgTable("invoices", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   invoiceNumber: text("invoice_number").notNull().unique(),
-  erpExternalRef: text("erp_external_ref").unique(),
+  erpExternalRef: text("erp_external_ref"),
   type: text("type").notNull().default("invoice"),
   customerId: varchar("customer_id").notNull(),
   date: date("date").notNull(),
@@ -561,7 +571,7 @@ export const invoices = pgTable("invoices", {
   linkedInvoiceId: varchar("linked_invoice_id"),
   portalOrderId: varchar("portal_order_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, table => [uniqueIndex("invoices_erp_external_ref_unique").on(table.erpExternalRef)]);
 
 export const invoiceItems = pgTable("invoice_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1500,7 +1510,7 @@ export type StockTransferItem = typeof stockTransferItems.$inferSelect;
 // label was last printed (Cyprus consumer-protection unit pricing compliance).
 export const labelProfiles = pgTable("label_profiles", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: text("name").notNull().unique(),
+  name: text("name").notNull().unique("label_profiles_name_key"),
   kind: text("kind").notNull(), // barcode | shelf
   config: jsonb("config").$type<Record<string, unknown>>().notNull(),
   isDefault: boolean("is_default").notNull().default(false),
@@ -1691,7 +1701,7 @@ export const erpStockReconciliations = pgTable("erp_stock_reconciliations", {
   targetQuantity: integer("target_quantity").notNull(),
   observedQuantity: integer("observed_quantity").notNull(),
   observedRevision: text("observed_revision").notNull(),
-  correlationKey: text("correlation_key").notNull().unique(),
+  correlationKey: text("correlation_key").notNull().unique("erp_stock_reconciliations_correlation_key_key"),
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   finishedAt: timestamp("finished_at"),
