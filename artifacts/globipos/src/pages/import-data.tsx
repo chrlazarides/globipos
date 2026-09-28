@@ -579,6 +579,14 @@ function autoMapColumns(headers: string[], fields: FieldDef[]): Record<string, s
       usedHeaders.add(match);
     }
   }
+  // These supplier sheets use "Code" for the EAN/UPC and "Factory code" for
+  // an optional manufacturer reference. Keep the complete Code column as SKU
+  // and barcode (some rows have no factory code).
+  if (fields.some((field) => field.key === "barcode") &&
+      headers.includes("Code") && headers.includes("Factory code") && !map.barcode &&
+      map.sku === "Code") {
+    map.barcode = "Code";
+  }
   return map;
 }
 
@@ -601,9 +609,12 @@ export default function ImportData() {
   const [importProgress, setImportProgress] = useState(0);
   const [updateExisting, setUpdateExisting] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectedFileRef = useRef<File | null>(null);
   const { toast } = useToast();
 
   const reset = () => {
+    selectedFileRef.current = null;
+    if (fileInputRef.current) fileInputRef.current.value = "";
     setStep("upload");
     setFileName("");
     setSheets([]);
@@ -618,10 +629,12 @@ export default function ImportData() {
 
     const ext = selectedFile.name.split(".").pop()?.toLowerCase();
     if (!["xlsx", "xls", "csv"].includes(ext || "")) {
+      selectedFileRef.current = null;
       toast({ title: "Invalid file", description: "Please upload an Excel (.xlsx, .xls) or CSV file", variant: "destructive" });
       return;
     }
 
+    selectedFileRef.current = selectedFile;
     setFileName(selectedFile.name);
     setStep("analyze");
 
@@ -679,6 +692,7 @@ export default function ImportData() {
         }).filter((s) => s.totalRows > 0);
 
         if (!analyzed.length) {
+          selectedFileRef.current = null;
           toast({ title: "No data", description: "The file contains no data rows", variant: "destructive" });
           setStep("upload");
           return;
@@ -688,6 +702,7 @@ export default function ImportData() {
         setActiveSheet(analyzed[0].sheetName);
         setStep("verify");
       } catch {
+        selectedFileRef.current = null;
         toast({ title: "Error reading file", description: "Could not parse the file", variant: "destructive" });
         setStep("upload");
       }
@@ -732,6 +747,12 @@ export default function ImportData() {
     );
 
   const handleImport = async () => {
+    const selectedFile = selectedFileRef.current;
+    if (!selectedFile) {
+      toast({ title: "File not available", description: "Select the file again before importing.", variant: "destructive" });
+      reset();
+      return;
+    }
     setStep("importing");
     setImportProgress(0);
     const results: SheetResult[] = [];
@@ -755,9 +776,8 @@ export default function ImportData() {
             body: JSON.stringify({ rows: sheet._preParsedRows, mode: updateExisting ? "upsert" : undefined }),
           });
         } else {
-          if (!fileInputRef.current?.files?.[0]) throw new Error("File not available");
           const formData = new FormData();
-          formData.append("file", fileInputRef.current.files[0]);
+          formData.append("file", selectedFile);
           formData.append("columnMap", JSON.stringify(cleanedMap));
           formData.append("sheetName", sheet.sheetName);
           if (updateExisting) formData.append("mode", "upsert");
@@ -765,6 +785,7 @@ export default function ImportData() {
         }
 
         const data = await res.json();
+        if (!res.ok) throw new Error(data.message || `Import failed (${res.status})`);
 
         results.push({
           sheetName: sheet.sheetName,

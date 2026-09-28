@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { worksheetToJson } from "../excel-import-rows";
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "../storage";
@@ -167,25 +168,6 @@ async function readExcelWorkbook(buffer: Buffer, filename: string): Promise<Exce
     await workbook.xlsx.load(buffer);
   }
   return workbook;
-}
-
-function worksheetToJson(sheet: ExcelJS.Worksheet, defval: any = ""): any[] {
-  const rows: any[] = [];
-  let headers: string[] = [];
-  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-    const values = (row.values as any[]).slice(1);
-    if (rowNumber === 1) {
-      headers = values.map((v) => (v !== null && v !== undefined ? String(v) : ""));
-    } else {
-      const obj: any = {};
-      headers.forEach((h, i) => {
-        const v = values[i];
-        obj[h] = v !== undefined && v !== null ? v : defval;
-      });
-      rows.push(obj);
-    }
-  });
-  return rows;
 }
 
 async function logActivity(userId: string | null, username: string | null, action: string, entity: string | null, entityId: string | null, description: string | null, ipAddress: string | null, userAgent: string | null) {
