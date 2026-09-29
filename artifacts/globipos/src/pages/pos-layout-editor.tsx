@@ -33,10 +33,10 @@ const PRESET_COLORS = [
 ];
 
 // ── Action groups ──────────────────────────────────────────────────────────────
-interface ActionDef { code: string; label: string; icon: any; description?: string }
-interface ActionGroup { group: string; icon: any; color: string; actions: ActionDef[] }
+export interface ActionDef { code: string; label: string; icon: any; description?: string }
+export interface ActionGroup { group: string; icon: any; color: string; actions: ActionDef[] }
 
-const ACTION_GROUPS: ActionGroup[] = [
+export const ACTION_GROUPS: ActionGroup[] = [
   {
     group: "Payments", icon: CreditCard, color: "text-green-600",
     actions: [
@@ -156,7 +156,7 @@ const ACTION_GROUPS: ActionGroup[] = [
   },
 ];
 
-const ALL_ACTIONS = ACTION_GROUPS.flatMap(g => g.actions);
+export const ALL_ACTIONS = ACTION_GROUPS.flatMap(g => g.actions);
 
 // Stable empty-array references for query defaults — using a fresh `[]` literal as a
 // destructuring default creates a NEW array every render while the query is still

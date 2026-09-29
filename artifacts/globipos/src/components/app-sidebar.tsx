@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus, ArrowLeftRight, CalendarClock, MonitorCog, Plug, MessageSquareHeart } from "lucide-react";
+import { Wine, LayoutDashboard, Package, Users, FileText, Tag, BarChart3, Gift, Settings, Truck, ShoppingCart, CreditCard, Upload, Mail, WifiOff, Download, Smartphone, BookOpen, Receipt, Wallet, PieChart, ShieldCheck, Activity, LogOut, UserCircle, Banknote, ClipboardList, Layers, GitBranch, MapPin, Monitor, LayoutGrid, ShoppingBag, Radio, MessageCircle, HelpCircle, Bell, BellOff, RotateCcw, Clock, Palette, Grid3x3, Shirt, PackagePlus, ArrowLeftRight, CalendarClock, MonitorCog, Plug, MessageSquareHeart, Zap } from "lucide-react";
 import { useWhatsAppAlert } from "@/hooks/use-whatsapp-alert";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { LogoImg } from "@/components/logo-img";
@@ -92,6 +92,7 @@ const posNav = [
   { title: "Locations", url: "/pos/locations", icon: MapPin, module: "_admin" },
   { title: "Terminals", url: "/pos/terminals", icon: Monitor, module: "_admin" },
   { title: "Layouts", url: "/pos/layouts", icon: LayoutGrid, module: "_admin" },
+  { title: "POS Functions", url: "/pos/functions", icon: Zap, module: "_admin" },
   { title: "POS Orders", url: "/pos/orders", icon: ShoppingBag, module: "_admin" },
   { title: "Promotions", url: "/pos/promotions", icon: Tag, module: "_admin" },
   { title: "Returns", url: "/pos/returns", icon: RotateCcw, module: "_admin" },

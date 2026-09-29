@@ -55,6 +55,7 @@ import IntegrationsPage from "@/pages/integrations";
 import PosLocations from "@/pages/pos-locations";
 import PosTerminals from "@/pages/pos-terminals";
 import PosLayouts from "@/pages/pos-layouts";
+import PosFunctions from "@/pages/pos-functions";
 import PosOrders from "@/pages/pos-orders";
 import PosRegister from "@/pages/pos-register";
 import PosSyncMonitor from "@/pages/pos-sync-monitor";
@@ -184,6 +185,7 @@ function AdminRouter() {
       {isPosAdmin(user) && <Route path="/pos/locations" component={PosLocations} />}
       {isPosAdmin(user) && <Route path="/pos/terminals" component={PosTerminals} />}
       {isPosAdmin(user) && <Route path="/pos/layouts" component={PosLayouts} />}
+      {isPosAdmin(user) && <Route path="/pos/functions" component={PosFunctions} />}
       {isPosAdmin(user) && <Route path="/pos/orders" component={PosOrders} />}
       {isPosStaff(user) && <Route path="/pos/register" component={PosRegister} />}
       {isPosAdmin(user) && <Route path="/pos/promotions" component={PosPromotions} />}
