@@ -757,7 +757,7 @@ export default function PosSimulate() {
         if (!customer) { showFeedback("Attach a customer first (needs loyalty points)", false); return; }
         showFeedback(`${customer.name} — paying with points/gift balance (simulation)`, true); break;
       default:
-        showFeedback(`${code} — executed (simulation)`, true);
+        showFeedback(`${code} — no simulator behavior is implemented for this function`, false);
     }
   }, [cart, selectedLine, customer, heldCart, saleHistory, showFeedback, clearCart, voidLine, addGenericItem, netCartTotal]);
 

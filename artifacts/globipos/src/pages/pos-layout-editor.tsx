@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useRoute, useLocation } from "wouter";
+import { useRoute, useLocation, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -23,6 +23,7 @@ import {
   Square, Plus, Minus as MinusIcon, Info, GripVertical,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton } from "@shared/schema";
+import { configuredGroups, readCustomFunctions, type PosSetting } from "@/lib/pos-function-config";
 
 // ── Color palette ──────────────────────────────────────────────────────────────
 const PRESET_COLORS = [
@@ -336,16 +337,16 @@ function GridButton({
 }
 
 // ── ActionGroupPicker ──────────────────────────────────────────────────────────
-function ActionGroupPicker({ value, onChange }: { value: string; onChange: (code: string) => void }) {
+function ActionGroupPicker({ value, onChange, groups }: { value: string; onChange: (code: string) => void; groups: ActionGroup[] }) {
   const normalizedValue = value?.toUpperCase() ?? "";
   const [openGroup, setOpenGroup] = useState<string | null>(() => {
-    const g = ACTION_GROUPS.find(g => g.actions.some(a => a.code === normalizedValue));
-    return g?.group ?? ACTION_GROUPS[0].group;
+    const g = groups.find(g => g.actions.some(a => a.code === normalizedValue));
+    return g?.group ?? groups[0].group;
   });
 
   return (
     <div className="border rounded-lg overflow-hidden">
-      {ACTION_GROUPS.map(group => {
+      {groups.map(group => {
         const GroupIcon = group.icon;
         const isOpen = openGroup === group.group;
         const selectedInGroup = group.actions.find(a => a.code === normalizedValue);
@@ -541,6 +542,10 @@ function ButtonDialog({
   currentLayoutId: string;
 }) {
   const { toast } = useToast();
+  const { data: functionSettings } = useQuery<PosSetting[]>({
+    queryKey: ["/api/settings"], staleTime: 0, refetchOnWindowFocus: true, refetchOnMount: "always",
+  });
+  const actionGroups = configuredGroups(ACTION_GROUPS, readCustomFunctions(functionSettings ?? [], ALL_ACTIONS));
   const [draft, setDraft] = useState<SlotData>({ shape: "rect", colspan: 1, rowspan: 1, ...slot });
   const [itemSearch, setItemSearch] = useState("");
   const [categoryEditor, setCategoryEditor] = useState<"new" | "edit" | null>(null);
@@ -564,10 +569,10 @@ function ButtonDialog({
   }, [draft.categoryId]);
   useEffect(() => {
     if (draft.buttonType === "action" && draft.actionCode) {
-      const act = ALL_ACTIONS.find(a => a.code === draft.actionCode?.toUpperCase());
+      const act = actionGroups.flatMap(group => group.actions).find(a => a.code === draft.actionCode?.toUpperCase());
       if (act) set({ label: act.label });
     }
-  }, [draft.actionCode]);
+  }, [draft.actionCode, functionSettings]);
   useEffect(() => {
     if (draft.buttonType === "sublayout" && draft.sublayoutId) {
       const ly = allLayouts.find(l => l.id === draft.sublayoutId);
@@ -717,8 +722,11 @@ function ButtonDialog({
 
                 {/* Action */}
                 <TabsContent value="action" className="mt-3">
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    Need another function? <Link href="/pos/functions" target="_blank" rel="noopener noreferrer" className="font-medium text-primary underline">Create it in POS Functions (new tab)</Link>, then return to this layout.
+                  </p>
                   <ScrollArea className="h-64">
-                    <ActionGroupPicker value={draft.actionCode ?? ""} onChange={code => set({ actionCode: code })} />
+                    <ActionGroupPicker value={draft.actionCode ?? ""} onChange={code => set({ actionCode: code })} groups={actionGroups} />
                   </ScrollArea>
                 </TabsContent>
 
