@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { PosFunctionRules } from "@/components/pos-function-rules";
+import { PosFunctionSimulator } from "@/components/pos-function-simulator";
 
 const quickSaleActions = new Set(["PAY_CASH", "PAY_CARD", "VOID_SALE"]);
 const MAX_STEPS = 20;
@@ -346,6 +347,10 @@ export default function PosFunctions() {
                   />
                 )}
               </fieldset>
+              {settings.isSuccess && (
+                <PosFunctionSimulator key={selected.code} code={selected.code} definition={draft}
+                  actions={actions} settings={savedSettings} unsaved={dirty} />
+              )}
               {selected.code === "PAY_VOUCHER" && <p className="rounded-md border p-3 text-sm text-muted-foreground">For vouchers, specify gift balance vs coupon, code validation, partial use, expiry and refund rules.</p>}
               {settings.isError && <p role="alert" className="text-sm text-destructive">Could not load settings. Refresh before editing.</p>}
               <div className="flex flex-wrap justify-end gap-2">
