@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { ArrowDown, ArrowLeft, ArrowUp, Check, Loader2, Plus, RefreshCw, Search, Trash2, Zap } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, Loader2, Plus, RefreshCw, Search, Trash2, Zap } from "lucide-react";
 import { ACTION_GROUPS, ALL_ACTIONS } from "./pos-layout-editor";
 import {
-  configuredGroups, customFunctionKey, definitionKey, readCustomFunctions, readDefinition,
+  cloneFunctionDefinition, configuredGroups, customFunctionKey, definitionKey, readCustomFunctions, readDefinition,
   validFunctionCode, voucherExampleRules, wouldCreateFunctionCycle,
   type FunctionDefinition, type PosSetting,
 } from "@/lib/pos-function-config";
@@ -42,7 +42,7 @@ export default function PosFunctions() {
   });
   const savedSettings = settings.data ?? [];
   const custom = useMemo(() => readCustomFunctions(savedSettings, ALL_ACTIONS), [settings.data]);
-  const groups = useMemo(() => configuredGroups(ACTION_GROUPS, custom), [custom]);
+  const groups = useMemo(() => configuredGroups(ACTION_GROUPS, custom, savedSettings), [custom, settings.data]);
   const actions = useMemo(() => groups.flatMap(group => group.actions), [groups]);
   const [selectedCode, setSelectedCode] = useState(ALL_ACTIONS[0].code);
   const [draft, setDraft] = useState<Draft>({ behavior: "", mode: "single", steps: [], rules: [], label: "", description: "" });
@@ -54,6 +54,8 @@ export default function PosFunctions() {
   const [newLabel, setNewLabel] = useState("");
   const [newPurpose, setNewPurpose] = useState("");
   const [newBehavior, setNewBehavior] = useState("");
+  const [cloneTemplate, setCloneTemplate] = useState<FunctionDefinition | null>(null);
+  const [cloneSource, setCloneSource] = useState("");
 
   const selected = actions.find(action => action.code === selectedCode) || ALL_ACTIONS[0];
   const isCustom = custom.some(action => action.code === selected.code);
@@ -82,13 +84,27 @@ export default function PosFunctions() {
     setStepCode("");
   }
 
+  function beginCreation(clone = false) {
+    if (!leaveUnsaved()) return;
+    const source = cloneFunctionDefinition(stored);
+    setDraft({ ...stored, label: selected.label, description: selected.description || "" });
+    setDirty(false);
+    setCloneTemplate(clone ? source : null);
+    setCloneSource(clone ? selected.label : "");
+    setNewCode("CUSTOM_");
+    setNewLabel(clone ? `${selected.label} Copy`.slice(0, 80) : "");
+    setNewPurpose(clone ? selected.description || "" : "");
+    setNewBehavior(clone ? source.behavior : "");
+    setCreating(true);
+  }
+
   const save = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (approved: boolean) => {
       const behavior = draft.behavior.trim();
       const label = draft.label.trim();
       if (!behavior) throw new Error("Enter a behavior before saving.");
-      if (isCustom && (!label || label.length > 80 || draft.description.length > 200)) {
-        throw new Error("Custom functions need a name (up to 80 characters) and a purpose of up to 200 characters.");
+      if (!label || label.length > 80 || (isCustom && draft.description.length > 200)) {
+        throw new Error("Enter a function name of up to 80 characters and a purpose of up to 200 characters.");
       }
       if (draft.mode === "macro" &&
           (!draft.steps.length || draft.steps.length > MAX_STEPS ||
@@ -104,7 +120,8 @@ export default function PosFunctions() {
       }
       const definition: FunctionDefinition = {
         behavior, mode: draft.mode, steps: draft.mode === "macro" ? draft.steps : [],
-        rules: draft.mode === "conditional" ? draft.rules : [],
+        rules: draft.mode === "conditional" ? draft.rules : [], approved,
+        label: isCustom ? undefined : label,
       };
       if (wouldCreateFunctionCycle(selected.code, definition, actions, savedSettings)) {
         throw new Error("This setup calls itself through a macro or conditional rule. Remove the loop.");
@@ -112,7 +129,7 @@ export default function PosFunctions() {
       const entries = [{
         key: definitionKey(selected.code),
         value: JSON.stringify(definition),
-        label: selected.label,
+        label,
         group: "POS Functions",
       }];
       if (isCustom) entries.push({
@@ -123,10 +140,11 @@ export default function PosFunctions() {
       });
       await apiRequest("PUT", "/api/settings", { settings: entries });
     },
-    onSuccess: async () => {
-      setDirty(false);
+    onSuccess: async (_data, approved) => {
       await queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
-      toast({ title: "Function setup saved", description: "Behavior, steps and conditions are saved as specifications; they do not execute on the POS yet." });
+      setDirty(false);
+      toast({ title: approved ? "Function setup approved" : "Function draft saved",
+        description: "Approval records this setup for the function list; it does not by itself activate checkout or printing behavior." });
     },
     onError: (error: Error) => toast({ title: "Could not save function", description: error.message, variant: "destructive" }),
   });
@@ -138,13 +156,23 @@ export default function PosFunctions() {
       const description = newPurpose.trim();
       const behavior = newBehavior.trim();
       if (!validFunctionCode(code)) throw new Error("Use CUSTOM_ followed by letters, numbers or underscores, starting with a letter.");
-      if (actions.some(action => action.code === code)) throw new Error("That function code already exists.");
+      const latest = await settings.refetch();
+      if (latest.isError || !latest.data) throw new Error("Could not verify the current function list. Refresh and try again.");
+      if ([...ALL_ACTIONS, ...readCustomFunctions(latest.data, ALL_ACTIONS)].some(action => action.code === code)) {
+        throw new Error("That function code already exists.");
+      }
       if (!label || !description || !behavior) throw new Error("Enter a name, purpose and behavior.");
       if (label.length > 80 || description.length > 200 || behavior.length > 2000) throw new Error("The name, purpose or behavior is too long.");
+      const definition: FunctionDefinition = cloneTemplate
+        ? cloneFunctionDefinition(cloneTemplate, behavior)
+        : { behavior, mode: "single", steps: [], rules: [], approved: false };
+      if (wouldCreateFunctionCycle(code, definition, [...actions, { code, label, description, icon: Zap }], savedSettings)) {
+        throw new Error("The copied setup would create a recursive function call.");
+      }
       await apiRequest("PUT", "/api/settings", {
         settings: [
           { key: customFunctionKey(code), value: JSON.stringify({ code, label, description }), label, group: "POS Functions" },
-          { key: definitionKey(code), value: JSON.stringify({ behavior, mode: "single", steps: [], rules: [] }), label, group: "POS Functions" },
+          { key: definitionKey(code), value: JSON.stringify(definition), label, group: "POS Functions" },
         ],
       });
       return code;
@@ -154,9 +182,11 @@ export default function PosFunctions() {
       setSelectedCode(code);
       setDirty(false);
       setCreating(false);
+      setCloneTemplate(null); setCloneSource("");
       setNewCode("CUSTOM_"); setNewLabel(""); setNewPurpose(""); setNewBehavior("");
       setSearch("");
-      toast({ title: "Function created", description: "You can now add it to a POS layout. It will not run until its checkout handler is implemented." });
+      toast({ title: cloneTemplate ? "Function cloned as a draft" : "Function created as a draft",
+        description: "Review its specific behavior, then use Save & approve when ready. Approval does not implement checkout behavior." });
     },
     onError: (error: Error) => toast({ title: "Could not create function", description: error.message, variant: "destructive" }),
   });
@@ -169,16 +199,17 @@ export default function PosFunctions() {
     }),
   })).filter(group => group.actions.length);
   const definedCount = actions.filter(action => savedSettings.some(setting => setting.key === definitionKey(action.code) && setting.value)).length;
+  const approvedCount = actions.filter(action => readDefinition(savedSettings, action.code, "").approved).length;
 
   return (
     <div className="space-y-6 p-4 md:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <PageHeader title="POS Functions" description="List, edit and create function behaviors, macros and conditional rules." />
+        <PageHeader title="POS Functions" description="Edit, rename, clone and approve function behavior setups." />
         <Button asChild variant="outline" size="sm"><Link href="/pos/layouts"><ArrowLeft className="mr-2 h-4 w-4" />POS layouts</Link></Button>
       </div>
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
-        <strong>Setup only — not live checkout logic.</strong> New functions appear in the layout editor, but custom functions, conditional rules and saved macro steps
-        do not run at checkout. Quick Sale currently handles cash, card and void sale; the browser Terminal has a separate implementation.
+        <strong>Approval is for the saved setup, not a checkout release.</strong> A badge confirms an admin saved the function as approved.
+        It does not prove the behavior runs on a Terminal, issue vouchers or change payments. Test on a layout before rollout.
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(320px,430px)_minmax(0,1fr)]">
@@ -188,13 +219,13 @@ export default function PosFunctions() {
               <CardTitle className="text-base">All functions</CardTitle>
               <Badge variant="secondary">{actions.length} listed</Badge>
             </div>
-            <p className="text-xs text-muted-foreground">{definedCount} saved definitions · {custom.length} custom functions</p>
+            <p className="text-xs text-muted-foreground">{approvedCount} approved · {definedCount} saved definitions · {custom.length} custom functions</p>
             <div className="flex gap-2">
               <div className="relative min-w-0 flex-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input aria-label="Search POS functions" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search functions or behavior…" className="pl-9" />
               </div>
-              <Button size="sm" onClick={() => { if (leaveUnsaved()) setCreating(true); }} disabled={save.isPending || create.isPending}>
+              <Button size="sm" onClick={() => beginCreation()} disabled={save.isPending || create.isPending || !settings.isSuccess}>
                 <Plus className="mr-1 h-4 w-4" />New
               </Button>
               <Button variant="outline" size="icon" aria-label="Refresh function list" title="Refresh function list" onClick={() => settings.refetch()} disabled={settings.isFetching}>
@@ -230,8 +261,9 @@ export default function PosFunctions() {
                             {definition.mode === "conditional" && definition.rules.length > 0 &&
                               <span className="mt-0.5 block line-clamp-2 text-xs text-muted-foreground" title={summarizeRules(definition.rules)}>{summarizeRules(definition.rules)}</span>}
                           </span>
-                          {savedSettings.some(setting => setting.key === definitionKey(action.code) && setting.value) &&
-                            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600" aria-label="Definition saved" />}
+                          <Badge variant={definition.approved ? "default" : "outline"} className="mt-0.5 shrink-0 text-[10px]">
+                            {definition.approved ? "Approved" : savedSettings.some(setting => setting.key === definitionKey(action.code) && setting.value) ? "Draft" : "Not set"}
+                          </Badge>
                         </button>
                       );
                     })}
@@ -245,9 +277,13 @@ export default function PosFunctions() {
 
         {creating ? (
           <Card className="min-w-0 self-start">
-            <CardHeader><CardTitle>Create a function</CardTitle></CardHeader>
+            <CardHeader><CardTitle>{cloneTemplate ? `Clone ${cloneSource}` : "Create a function"}</CardTitle></CardHeader>
             <CardContent className="space-y-4">
-              <p className="text-sm text-muted-foreground">Create its name and behavior here. Then select it to set up macro steps or conditions.</p>
+              <p className="text-sm text-muted-foreground">
+                {cloneTemplate
+                  ? `The new function copies the saved ${cloneTemplate.mode} setup and rules, but gets its own code and starts as a draft. Review it before approval.`
+                  : "Create a draft with its own name and behavior. Then set up any macro steps or conditions and approve it."}
+              </p>
               <div><label htmlFor="new-function-name" className="text-sm font-medium">Name</label>
                 <Input id="new-function-name" maxLength={80} value={newLabel} onChange={event => setNewLabel(event.target.value)} placeholder="e.g. Redeem Staff Meal" /></div>
               <div><label htmlFor="new-function-code" className="text-sm font-medium">Function code</label>
@@ -258,9 +294,9 @@ export default function PosFunctions() {
               <div><label htmlFor="new-function-behavior" className="text-sm font-medium">Behavior</label>
                 <Textarea id="new-function-behavior" maxLength={2000} rows={5} value={newBehavior} onChange={event => setNewBehavior(event.target.value)} placeholder="What should happen when pressed?" /></div>
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setCreating(false)}>Cancel</Button>
+                <Button variant="outline" onClick={() => { setCreating(false); setCloneTemplate(null); setCloneSource(""); }}>Cancel</Button>
                 <Button disabled={settings.isLoading || settings.isError || create.isPending || !newCode || !newLabel.trim() || !newPurpose.trim() || !newBehavior.trim()} onClick={() => create.mutate()}>
-                  {create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Create function
+                  {create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{cloneTemplate ? "Create clone" : "Create function"}
                 </Button>
               </div>
             </CardContent>
@@ -270,25 +306,32 @@ export default function PosFunctions() {
             <CardHeader>
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div><CardTitle>{selected.label}</CardTitle><p className="mt-1 font-mono text-xs text-muted-foreground">{selected.code}</p></div>
-                <Badge variant={quickSaleActions.has(selected.code) ? "secondary" : "outline"}>
-                  {quickSaleActions.has(selected.code) ? "Quick Sale action exists" : "Not wired in Quick Sale"}
-                </Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={stored.approved ? "default" : "outline"}>{stored.approved ? "Approved setup" : "Not approved"}</Badge>
+                  <Badge variant={quickSaleActions.has(selected.code) ? "secondary" : "outline"}>
+                    {quickSaleActions.has(selected.code) ? "Quick Sale action exists" : "Not wired in Quick Sale"}
+                  </Badge>
+                  <Button size="sm" variant="outline" disabled={save.isPending || create.isPending || !settings.isSuccess}
+                    onClick={() => beginCreation(true)}><Copy className="mr-1 h-4 w-4" />Clone</Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-5">
-              {isCustom ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div><label htmlFor="edit-function-name" className="text-sm font-medium">Function name</label>
-                    <Input id="edit-function-name" maxLength={80} value={draft.label} onChange={event => update({ label: event.target.value })} /></div>
-                  <div><label htmlFor="edit-function-purpose" className="text-sm font-medium">Short purpose</label>
-                    <Input id="edit-function-purpose" maxLength={200} value={draft.description} onChange={event => update({ description: event.target.value })} /></div>
+              <div className={isCustom ? "grid gap-3 sm:grid-cols-2" : "space-y-2"}>
+                <div><label htmlFor="edit-function-name" className="text-sm font-medium">Function name</label>
+                  <Input id="edit-function-name" maxLength={80} value={draft.label} onChange={event => update({ label: event.target.value })} />
+                  {!isCustom && <p className="mt-1 text-xs text-muted-foreground">The function code stays the same. Buttons already placed on layouts keep their own labels until edited there.</p>}
                 </div>
-              ) : (
+                {isCustom && <div><label htmlFor="edit-function-purpose" className="text-sm font-medium">Short purpose</label>
+                  <Input id="edit-function-purpose" maxLength={200} value={draft.description} onChange={event => update({ description: event.target.value })} /></div>}
+              </div>
+              {!isCustom && (
                 <div className="rounded-md bg-muted/60 p-4">
                   <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Built-in purpose</h2>
                   <p className="mt-1 text-sm">{selected.description}</p>
                 </div>
               )}
+              {dirty && stored.approved && <p className="text-xs text-amber-800">These edits are not approved. Saving a draft removes approval; Save &amp; approve replaces the approved setup.</p>}
               <div>
                 <label htmlFor="function-behavior" className="text-sm font-semibold">Behavior</label>
                 <p className="mt-1 text-sm text-muted-foreground">Describe required input, permissions, offline rules and expected result.</p>
@@ -360,12 +403,19 @@ export default function PosFunctions() {
               {selected.code === "PAY_VOUCHER" && <p className="rounded-md border p-3 text-sm text-muted-foreground">For vouchers, specify gift balance vs coupon, code validation, partial use, expiry and refund rules.</p>}
               {settings.isError && <p role="alert" className="text-sm text-destructive">Could not load settings. Refresh before editing.</p>}
               <div className="flex flex-wrap justify-end gap-2">
-                <Button variant="outline" disabled={save.isPending} onClick={() => {
+                <Button variant="outline" disabled={save.isPending || !dirty} onClick={() => {
                   setDraft({ ...stored, label: selected.label, description: selected.description || "" }); setDirty(false);
                 }}>Discard edits</Button>
-                <Button onClick={() => save.mutate()} disabled={!dirty || !draft.behavior.trim() || save.isPending || settings.isLoading || settings.isError}
+                {stored.approved && !dirty && <Button variant="outline" onClick={() => save.mutate(false)} disabled={save.isPending || !settings.isSuccess}>
+                  Remove approval
+                </Button>}
+                <Button variant="outline" onClick={() => save.mutate(false)} disabled={!dirty || !draft.behavior.trim() || !draft.label.trim() || save.isPending || !settings.isSuccess}
                   data-testid="button-save-pos-function">
-                  {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}Save setup
+                  Save draft
+                </Button>
+                <Button onClick={() => save.mutate(true)} disabled={(!dirty && !!stored.approved) || !draft.behavior.trim() || !draft.label.trim() || save.isPending || !settings.isSuccess}
+                  data-testid="button-approve-pos-function">
+                  {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}Save &amp; approve
                 </Button>
               </div>
             </CardContent>

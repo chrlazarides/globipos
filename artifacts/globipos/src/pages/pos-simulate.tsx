@@ -16,8 +16,8 @@ import {
   Layers, Calculator, Loader2, Receipt, Clock, Barcode, ReceiptText,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton, Item, ItemVariant, Customer, PosPromotion } from "@shared/schema";
-import { ALL_ACTIONS } from "./pos-layout-editor";
-import { readCustomFunctions, type PosSetting } from "@/lib/pos-function-config";
+import { ACTION_GROUPS, ALL_ACTIONS } from "./pos-layout-editor";
+import { configuredGroups, readCustomFunctions, type PosSetting } from "@/lib/pos-function-config";
 import { simulateLayoutAction, type SimulationResult } from "@/lib/pos-function-simulator";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -440,7 +440,8 @@ export default function PosSimulate() {
     queryKey: ["/api/settings"], staleTime: 0, refetchOnMount: "always",
   });
   const functionActions = useMemo(
-    () => [...ALL_ACTIONS, ...readCustomFunctions(functionSettings.data ?? [], ALL_ACTIONS)],
+    () => configuredGroups(ACTION_GROUPS, readCustomFunctions(functionSettings.data ?? [], ALL_ACTIONS), functionSettings.data ?? [])
+      .flatMap(group => group.actions),
     [functionSettings.data],
   );
 

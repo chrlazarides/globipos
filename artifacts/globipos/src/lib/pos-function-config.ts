@@ -15,6 +15,8 @@ export type FunctionDefinition = {
   mode: "single" | "macro" | "conditional";
   steps: string[];
   rules: ConditionRule[];
+  label?: string;
+  approved?: boolean;
 };
 export type CustomFunction = { code: string; label: string; description: string };
 
@@ -38,6 +40,14 @@ export const voucherExampleRules = (): ConditionRule[] => [
 ];
 // Reserve a namespace so new codes cannot accidentally invoke a legacy POS handler.
 export const validFunctionCode = (code: string) => /^CUSTOM_[A-Z][A-Z0-9_]{0,32}$/.test(code);
+
+export function cloneFunctionDefinition(source: FunctionDefinition, behavior = source.behavior): FunctionDefinition {
+  return {
+    behavior, mode: source.mode, steps: [...source.steps],
+    rules: source.rules.map(rule => ({ ...rule })),
+    approved: false,
+  };
+}
 
 export function readCustomFunctions(settings: PosSetting[], builtIns: ActionDef[]): ActionDef[] {
   const builtInCodes = new Set(builtIns.map(action => action.code));
@@ -72,7 +82,12 @@ export function readDefinition(settings: PosSetting[], code: string, fallback: s
         ["receipt_total", "absolute_receipt_total", "manual"].includes(rule.amountSource) &&
         typeof rule.functionCode === "string" && typeof rule.note === "string"
       ) ? data.rules as ConditionRule[] : [];
-      return { behavior: data.behavior, mode: data.mode, steps: data.steps, rules };
+      return {
+        behavior: data.behavior, mode: data.mode, steps: data.steps, rules,
+        label: typeof data.label === "string" && data.label.trim() && data.label.length <= 80
+          ? data.label.trim() : undefined,
+        approved: data.approved === true,
+      };
     }
   } catch {
     // Older definitions were stored as plain text.
@@ -80,10 +95,17 @@ export function readDefinition(settings: PosSetting[], code: string, fallback: s
   return { behavior: value, mode: "single", steps: [], rules: [] };
 }
 
-export function configuredGroups(groups: ActionGroup[], custom: ActionDef[]): ActionGroup[] {
+export function configuredGroups(groups: ActionGroup[], custom: ActionDef[], settings: PosSetting[] = []): ActionGroup[] {
+  const renamed = groups.map(group => ({
+    ...group,
+    actions: group.actions.map(action => ({
+      ...action,
+      label: readDefinition(settings, action.code, action.description || "").label || action.label,
+    })),
+  }));
   return custom.length
-    ? [...groups, { group: "Custom Functions", icon: Zap, color: "text-violet-600", actions: custom }]
-    : groups;
+    ? [...renamed, { group: "Custom Functions", icon: Zap, color: "text-violet-600", actions: custom }]
+    : renamed;
 }
 
 export function wouldCreateFunctionCycle(

@@ -545,7 +545,7 @@ function ButtonDialog({
   const { data: functionSettings } = useQuery<PosSetting[]>({
     queryKey: ["/api/settings"], staleTime: 0, refetchOnWindowFocus: true, refetchOnMount: "always",
   });
-  const actionGroups = configuredGroups(ACTION_GROUPS, readCustomFunctions(functionSettings ?? [], ALL_ACTIONS));
+  const actionGroups = configuredGroups(ACTION_GROUPS, readCustomFunctions(functionSettings ?? [], ALL_ACTIONS), functionSettings ?? []);
   const [draft, setDraft] = useState<SlotData>({ shape: "rect", colspan: 1, rowspan: 1, ...slot });
   const [itemSearch, setItemSearch] = useState("");
   const [categoryEditor, setCategoryEditor] = useState<"new" | "edit" | null>(null);

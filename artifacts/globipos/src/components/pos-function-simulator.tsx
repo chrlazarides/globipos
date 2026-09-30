@@ -44,7 +44,8 @@ export function PosFunctionSimulator({
     setInputError("");
     setResult(simulatePosFunction(code, definition, {
       receiptTotal: total, transactionType: type, manualAmount: manual,
-    }, actions, settings));
+    }, actions.map(action => action.code === code
+      ? { ...action, label: definition.label?.trim() || action.label } : action), settings));
   }
 
   return (
