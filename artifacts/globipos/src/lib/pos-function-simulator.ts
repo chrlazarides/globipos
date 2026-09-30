@@ -12,6 +12,20 @@ export type SimulationResult = { lines: SimulationLine[]; hasOutcome: boolean; h
 const euro = (amount: number) => new Intl.NumberFormat("en-CY", { style: "currency", currency: "EUR" }).format(amount);
 const MAX_VISITS = 100;
 
+/** Null means the existing built-in layout simulator should handle this button. */
+export function simulateLayoutAction(
+  code: string, scenario: SimulationScenario, actions: ActionDef[], settings: PosSetting[],
+): SimulationResult | null {
+  const action = actions.find(item => item.code === code);
+  if (!action) return {
+    lines: [{ kind: "warning", text: `Function ${code} is not available in the saved function catalog.`, depth: 0 }],
+    hasOutcome: false, hasWarning: true,
+  };
+  const definition = readDefinition(settings, code, action.description || "");
+  if (definition.mode === "single" && !code.startsWith("CUSTOM_")) return null;
+  return simulatePosFunction(code, definition, scenario, actions, settings);
+}
+
 export function simulatePosFunction(
   code: string,
   currentDefinition: FunctionDefinition,

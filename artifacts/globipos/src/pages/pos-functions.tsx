@@ -348,8 +348,14 @@ export default function PosFunctions() {
                 )}
               </fieldset>
               {settings.isSuccess && (
-                <PosFunctionSimulator key={selected.code} code={selected.code} definition={draft}
-                  actions={actions} settings={savedSettings} unsaved={dirty} />
+                <>
+                  <PosFunctionSimulator key={selected.code} code={selected.code} definition={draft}
+                    actions={actions} settings={savedSettings} unsaved={dirty} />
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-sm">
+                    <span>To test the saved function on a real layout with items and a receipt, open a layout simulation.</span>
+                    <Button asChild variant="outline" size="sm"><Link href="/pos/layouts">Choose layout to simulate</Link></Button>
+                  </div>
+                </>
               )}
               {selected.code === "PAY_VOUCHER" && <p className="rounded-md border p-3 text-sm text-muted-foreground">For vouchers, specify gift balance vs coupon, code validation, partial use, expiry and refund rules.</p>}
               {settings.isError && <p role="alert" className="text-sm text-destructive">Could not load settings. Refresh before editing.</p>}

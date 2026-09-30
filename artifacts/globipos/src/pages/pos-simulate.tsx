@@ -16,6 +16,9 @@ import {
   Layers, Calculator, Loader2, Receipt, Clock, Barcode, ReceiptText,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton, Item, ItemVariant, Customer, PosPromotion } from "@shared/schema";
+import { ALL_ACTIONS } from "./pos-layout-editor";
+import { readCustomFunctions, type PosSetting } from "@/lib/pos-function-config";
+import { simulateLayoutAction, type SimulationResult } from "@/lib/pos-function-simulator";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -433,9 +436,21 @@ export default function PosSimulate() {
   });
   const { data: customers = EMPTY_CUSTOMERS } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: promotions = EMPTY_PROMOS } = useQuery<PosPromotion[]>({ queryKey: ["/api/pos/promotions"] });
+  const functionSettings = useQuery<PosSetting[]>({
+    queryKey: ["/api/settings"], staleTime: 0, refetchOnMount: "always",
+  });
+  const functionActions = useMemo(
+    () => [...ALL_ACTIONS, ...readCustomFunctions(functionSettings.data ?? [], ALL_ACTIONS)],
+    [functionSettings.data],
+  );
 
   // ── UI State ───────────────────────────────────────────────────────────────
   const [deviceView, setDeviceView] = useState<DeviceView>("desktop");
+  const [transactionType, setTransactionType] = useState<"sale" | "return">("sale");
+  const [manualAmount, setManualAmount] = useState("");
+  const [functionPreview, setFunctionPreview] = useState<{
+    code: string; label: string; result: SimulationResult; receiptTotal: number; transactionType: "sale" | "return";
+  } | null>(null);
   const [layoutStack, setLayoutStack] = useState<string[]>([rootLayoutId]);
   const currentLayoutId = layoutStack[layoutStack.length - 1] ?? rootLayoutId;
 
@@ -568,6 +583,10 @@ export default function PosSimulate() {
   );
 
   const handleAction = useCallback((code: string, lineIdx?: number) => {
+    if (transactionType === "return" && ["PAY_CASH", "PAY_CARD", "PAY_ACCOUNT", "PAY_CHEQUE", "PAY_CREDIT"].includes(code)) {
+      showFeedback("Return payments are not implemented in this simulator. No payment was recorded.", false);
+      return;
+    }
     switch (code) {
       case "PAY_CASH":
         if (!cart.length) { showFeedback("Cart is empty", false); return; }
@@ -592,7 +611,7 @@ export default function PosSimulate() {
         break;
       case "NEW_SALE":
         if (cart.length && !confirm("Clear the current sale?")) return;
-        clearCart(); showFeedback("New sale started", true);
+        clearCart(); setTransactionType("sale"); showFeedback("New sale started", true);
         break;
       case "VOID_SALE":
         if (!cart.length) { showFeedback("Nothing to void", false); return; }
@@ -673,7 +692,9 @@ export default function PosSimulate() {
       case "ITEM_SEARCH": case "BARCODE_SCAN": case "PLU":
         setBarcodeValue(""); setPriceCheckMode(false); setDialog("barcode"); break;
       case "REFUND":
-        showFeedback("Refund — select items from a prior sale (simulation)", true); break;
+        setTransactionType("return");
+        showFeedback("Return test mode — add the returned items, then press a function button. No refund is recorded.", true);
+        break;
       case "NOTES": setDialog("notes"); break;
       case "SHOW_ALL_ITEMS": setCategoryFilter(null); showFeedback("Showing all items", true); break;
       case "JOURNAL_TIP":
@@ -739,7 +760,9 @@ export default function PosSimulate() {
         if (!confirm(`Cancel entire bill (€${fmt(netCartTotal(cart))})? Manager password required.`)) return;
         clearCart(); showFeedback("👤 Bill cancelled (manager override)", true); break;
       case "CREDIT_NOTE": // PC31
-        showFeedback("📄 Credit note mode — select items to return (simulation)", true); break;
+        setTransactionType("return");
+        showFeedback("Credit-note test mode — add the returned items. No credit note is issued.", true);
+        break;
       case "SELL_GIFT_VOUCHER": // PC32
         addGenericItem("Gift Voucher", 0, 0);
         showFeedback("🎁 Gift voucher line added — enter amount via Price Override", true); break;
@@ -759,7 +782,25 @@ export default function PosSimulate() {
       default:
         showFeedback(`${code} — no simulator behavior is implemented for this function`, false);
     }
-  }, [cart, selectedLine, customer, heldCart, saleHistory, showFeedback, clearCart, voidLine, addGenericItem, netCartTotal]);
+  }, [cart, selectedLine, customer, heldCart, saleHistory, showFeedback, clearCart, voidLine, addGenericItem, netCartTotal, transactionType]);
+
+  const simulateButton = useCallback((code: string, label: string) => {
+    if (!functionSettings.isSuccess) {
+      showFeedback("Function settings are unavailable. Wait for them to load or refresh before testing buttons.", false);
+      return;
+    }
+    const receiptTotal = netCartTotal(cart) * (transactionType === "return" ? -1 : 1);
+    const amount = manualAmount.trim() ? Number(manualAmount.trim().replace(",", ".")) : undefined;
+    const result = simulateLayoutAction(
+      code, { receiptTotal, transactionType, manualAmount: amount }, functionActions, functionSettings.data,
+    );
+    if (!result) {
+      setFunctionPreview(null);
+      handleAction(code);
+      return;
+    }
+    setFunctionPreview({ code, label, result, receiptTotal, transactionType });
+  }, [functionSettings.isSuccess, functionSettings.data, netCartTotal, cart, transactionType, manualAmount, functionActions, handleAction, showFeedback]);
 
   // ── Button click dispatcher ────────────────────────────────────────────────
   const handleButtonClick = useCallback((btn: PosLayoutButton) => {
@@ -772,13 +813,13 @@ export default function PosSimulate() {
       setCategoryFilter(btn.categoryId ?? null);
       setDialog("category");
     } else if (type === "action" && btn.actionCode) {
-      handleAction(btn.actionCode);
+      simulateButton(btn.actionCode, btn.label || btn.actionCode);
     } else if (type === "sublayout") {
       const sub = (btn as any).sublayoutId;
       if (sub) setLayoutStack(p => [...p, sub]);
       else showFeedback("Sub-layout not configured", false);
     }
-  }, [items, addItemOrPickVariant, handleAction, showFeedback]);
+  }, [items, addItemOrPickVariant, simulateButton, showFeedback]);
 
   // ── Current layout buttons ─────────────────────────────────────────────────
   const currentLayout = allLayouts.find(l => l.id === currentLayoutId) ?? rootLayout;
@@ -998,6 +1039,18 @@ export default function PosSimulate() {
         </div>
 
         {/* Sim controls */}
+        <label className="flex items-center gap-2 text-xs font-medium">
+          Test transaction
+          <select className="h-8 rounded-md border bg-background px-2 text-xs" value={transactionType}
+            onChange={event => {
+              setTransactionType(event.target.value as "sale" | "return");
+              setFunctionPreview(null);
+            }} data-testid="select-sim-transaction">
+            <option value="sale">Sale</option>
+            <option value="return">Return (negative receipt)</option>
+          </select>
+        </label>
+        {functionSettings.isError && <span role="alert" className="text-xs text-destructive">Function settings unavailable — buttons are paused.</span>}
         <Button variant="outline" size="sm" className="shrink-0 text-xs h-8"
           onClick={() => { setBarcodeValue(""); setPriceCheckMode(false); setDialog("barcode"); }}
           data-testid="btn-sim-scan">
@@ -1011,7 +1064,9 @@ export default function PosSimulate() {
           onClick={() => setDialog("receipt_design")} data-testid="btn-sim-receipt-design">
           <ReceiptText className="w-3 h-3 mr-1" /> Receipt Design
         </Button>
-        <Button variant="outline" size="sm" onClick={clearCart} className="shrink-0 text-xs h-8"
+        <Button variant="outline" size="sm" onClick={() => {
+          clearCart(); setTransactionType("sale"); setFunctionPreview(null); setManualAmount("");
+        }} className="shrink-0 text-xs h-8"
           data-testid="btn-sim-clear">
           <RotateCcw className="w-3 h-3 mr-1" /> Reset
         </Button>
@@ -1119,7 +1174,7 @@ export default function PosSimulate() {
                       </button>
                     </div>
                     <p className="w-14 text-right text-xs font-bold shrink-0">
-                      €{fmt(lineTotal(line))}
+                      {transactionType === "return" ? "−" : ""}€{fmt(lineTotal(line))}
                     </p>
                     <button className="text-slate-600 hover:text-red-400 transition-colors"
                       onClick={e => { e.stopPropagation(); voidLine(idx); }}>
@@ -1150,7 +1205,7 @@ export default function PosSimulate() {
           <div className="border-t border-slate-800 px-3 py-2 space-y-1 flex-shrink-0">
             <div className="flex justify-between text-[11px] text-slate-400">
               <span>Subtotal (excl. VAT)</span>
-              <span>€{fmt(subtotalBeforePromos - vatAmt)}</span>
+              <span>{transactionType === "return" ? "−" : ""}€{fmt(subtotalBeforePromos - vatAmt)}</span>
             </div>
             {promoDiscount > 0 && (
               <div className="flex justify-between text-[11px] text-emerald-400 font-medium">
@@ -1160,23 +1215,28 @@ export default function PosSimulate() {
             )}
             <div className="flex justify-between text-[11px] text-slate-400">
               <span>VAT</span>
-              <span>€{fmt(vatAmt)}</span>
+              <span>{transactionType === "return" ? "−" : ""}€{fmt(vatAmt)}</span>
             </div>
             <div className="flex justify-between text-base font-bold">
-              <span>TOTAL</span>
-              <span className="text-green-400">€{fmt(total)}</span>
+              <span>{transactionType === "return" ? "RETURN TOTAL" : "TOTAL"}</span>
+              <span className={transactionType === "return" ? "text-amber-300" : "text-green-400"} data-testid="sim-receipt-total">
+                {transactionType === "return" ? "−" : ""}€{fmt(total)}
+              </span>
             </div>
+            {transactionType === "return" && <p className="text-[10px] text-amber-300">Test context only — no refund or return is recorded.</p>}
             <div className="grid grid-cols-3 gap-1.5 mt-2">
               <Button size="sm" className="h-9 text-xs bg-green-700 hover:bg-green-600 text-white"
-                onClick={() => handleAction("PAY_CASH")} data-testid="btn-pay-cash-shortcut">
+                disabled={transactionType === "return"}
+                onClick={() => simulateButton("PAY_CASH", "Pay Cash")} data-testid="btn-pay-cash-shortcut">
                 <Banknote className="w-3 h-3 mr-1" />Cash
               </Button>
               <Button size="sm" className="h-9 text-xs bg-blue-700 hover:bg-blue-600 text-white"
-                onClick={() => handleAction("PAY_CARD")} data-testid="btn-pay-card-shortcut">
+                disabled={transactionType === "return"}
+                onClick={() => simulateButton("PAY_CARD", "Pay Card")} data-testid="btn-pay-card-shortcut">
                 <CreditCard className="w-3 h-3 mr-1" />Card
               </Button>
               <Button size="sm" variant="outline" className="h-9 text-xs border-slate-700 text-slate-300 hover:text-white"
-                onClick={() => handleAction("VOID_SALE")} data-testid="btn-void-shortcut">
+                onClick={() => simulateButton("VOID_SALE", "Void Sale")} data-testid="btn-void-shortcut">
                 <RotateCcw className="w-3 h-3 mr-1" />Void
               </Button>
             </div>
@@ -1261,6 +1321,51 @@ export default function PosSimulate() {
       {/* ════════════════════════════════════════════════════════════════════
           DIALOGS
       ════════════════════════════════════════════════════════════════════ */}
+
+      {/* Saved function behavior, evaluated against this layout's current receipt. */}
+      <Dialog open={!!functionPreview} onOpenChange={open => { if (!open) setFunctionPreview(null); }}>
+        <DialogContent className="max-w-lg" data-testid="layout-function-preview">
+          <DialogHeader>
+            <DialogTitle>Test result: {functionPreview?.label}</DialogTitle>
+          </DialogHeader>
+          {functionPreview && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Saved function setup · {functionPreview.transactionType === "return" ? "Return" : "Sale"} receipt:
+                {" "}{functionPreview.receiptTotal < 0 ? "−" : ""}€{fmt(Math.abs(functionPreview.receiptTotal))}
+              </p>
+              <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border p-3" role="status" aria-live="polite">
+                <strong className="text-sm">
+                  {functionPreview.result.hasWarning
+                    ? functionPreview.result.hasOutcome ? "Proposed outcome with warnings" : "No complete outcome"
+                    : functionPreview.result.hasOutcome ? "Proposed outcome" : "No outcome"}
+                </strong>
+                <ol className="space-y-1.5">
+                  {functionPreview.result.lines.map((line, index) => (
+                    <li key={index}
+                      className={`text-sm ${line.kind === "outcome" ? "font-semibold text-emerald-700" : line.kind === "warning" ? "text-amber-800" : "text-muted-foreground"}`}
+                      style={{ paddingLeft: `${Math.min(line.depth, 5) * 12}px` }}>
+                      {line.text}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+              <label className="block text-sm">Operator amount (€), for rules requiring manual input
+                <Input inputMode="decimal" className="mt-1" placeholder="Optional" value={manualAmount}
+                  onChange={event => setManualAmount(event.target.value)} />
+              </label>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setFunctionPreview(null)}>Close</Button>
+                <Button onClick={() => simulateButton(functionPreview.code, functionPreview.label)}>Run again</Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                This traces the saved setup on the current layout. It does not execute macro steps, print, issue vouchers,
+                validate payments or change checkout data. Single built-in buttons use this simulator's existing behavior.
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Cash payment */}
       <Dialog open={dialog === "cash"} onOpenChange={o => !o && setDialog(null)}>
@@ -1783,7 +1888,8 @@ export default function PosSimulate() {
           </p>
           {(() => {
             const src = cart.length ? cart : saleHistory[saleHistory.length - 1]?.items ?? [];
-            const srcTotal = cart.length ? total : saleHistory[saleHistory.length - 1]?.total ?? 0;
+            const previewReturn = cart.length > 0 && transactionType === "return";
+            const srcTotal = cart.length ? total * (previewReturn ? -1 : 1) : saleHistory[saleHistory.length - 1]?.total ?? 0;
             const srcSubtotal = cartSubtotal(src);
             const srcVat = cartVat(src);
             const rc = receiptConfig;
@@ -1804,18 +1910,19 @@ export default function PosSimulate() {
                 <p className="border-t my-1" />
                 {src.map(l => line(
                   `${l.label.substring(0, 22)} x${Number.isInteger(l.qty) ? l.qty : l.qty.toFixed(3)}`,
-                  receiptKind === "gift" ? "" : `€${fmt(lineTotal(l))}`
+                  receiptKind === "gift" ? "" : `${previewReturn ? "−" : ""}€${fmt(lineTotal(l))}`
                 ))}
                 {src.length === 0 && <p className="text-center text-gray-400">(no items)</p>}
                 <p className="border-t my-1" />
                 {receiptKind !== "gift" && (
                   <>
-                    {rc.show_subtotal && line("Subtotal", `€${fmt(srcSubtotal)}`)}
-                    {rc.show_vat && line("VAT", `€${fmt(srcVat)}`)}
-                    <p className="flex justify-between font-bold text-sm"><span>TOTAL</span><span>€{fmt(srcTotal)}</span></p>
+                    {rc.show_subtotal && line("Subtotal", `${previewReturn ? "−" : ""}€${fmt(srcSubtotal)}`)}
+                    {rc.show_vat && line("VAT", `${previewReturn ? "−" : ""}€${fmt(srcVat)}`)}
+                    <p className="flex justify-between font-bold text-sm"><span>{previewReturn ? "RETURN TOTAL" : "TOTAL"}</span><span>{srcTotal < 0 ? "−" : ""}€{fmt(Math.abs(srcTotal))}</span></p>
                     <p className="border-t my-1" />
-                    {rc.show_payment_method && <p>Payment: CASH (simulation)</p>}
-                    {rc.show_tendered_change && line("Tendered", `€${fmt(srcTotal)}`) }
+                    {previewReturn && <p>RETURN TEST ONLY — not a processed refund</p>}
+                    {!previewReturn && rc.show_payment_method && <p>Payment: CASH (simulation)</p>}
+                    {!previewReturn && rc.show_tendered_change && line("Tendered", `€${fmt(srcTotal)}`) }
                     {rc.show_card_ref && <p className="text-gray-500">Card Ref: — (card payments only)</p>}
                   </>
                 )}

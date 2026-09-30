@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ActionDef } from "@/pages/pos-layout-editor";
 import { definitionKey, voucherExampleRules, type FunctionDefinition, type PosSetting } from "./pos-function-config";
-import { simulatePosFunction } from "./pos-function-simulator";
+import { simulateLayoutAction, simulatePosFunction } from "./pos-function-simulator";
 
 const actions: ActionDef[] = [
   { code: "PAY_VOUCHER", label: "Voucher", icon: null },
@@ -64,4 +64,28 @@ test("macro traces a referenced function and detects circular calls", () => {
   const loop = run({ ...voucher, rules: [{ ...voucher.rules[1], result: "run_function", functionCode: "PAY_VOUCHER" }] }, 10, "sale");
   assert.equal(loop.hasOutcome, false);
   assert.match(loop.lines.at(-1)!.text, /calls itself/);
+});
+
+test("full-layout button uses saved conditions while an ordinary built-in keeps its existing handler", () => {
+  const sale = simulateLayoutAction("PAY_VOUCHER", { receiptTotal: 25, transactionType: "sale" }, actions, settings);
+  const refund = simulateLayoutAction("PAY_VOUCHER", { receiptTotal: -25, transactionType: "return" }, actions, settings);
+  assert.match(sale!.lines.find(line => line.kind === "outcome")!.text, /gift voucher amount of €25\.00/);
+  assert.match(refund!.lines.find(line => line.kind === "outcome")!.text, /credit-note voucher for €25\.00/);
+  const defaultBuiltIn = simulateLayoutAction("PAY_VOUCHER", { receiptTotal: 25, transactionType: "sale" }, actions, []);
+  assert.equal(defaultBuiltIn, null);
+  assert.equal(simulateLayoutAction("MISSING", { receiptTotal: 25, transactionType: "sale" }, actions, settings)?.hasWarning, true);
+});
+
+test("a saved layout macro follows referenced saved rules without changing checkout data", () => {
+  const macro: FunctionDefinition = {
+    behavior: "Voucher workflow", mode: "macro", steps: ["PAY_VOUCHER"], rules: [],
+  };
+  const configured = [
+    ...settings, { key: definitionKey("CUSTOM_EXAMPLE"), value: JSON.stringify(macro) },
+  ];
+  const preview = simulateLayoutAction(
+    "CUSTOM_EXAMPLE", { receiptTotal: -19, transactionType: "return" }, actions, configured,
+  );
+  assert.match(preview!.lines.find(line => line.kind === "info" && line.text.includes("Step"))!.text, /Step 1 of 1/);
+  assert.match(preview!.lines.find(line => line.kind === "outcome")!.text, /credit-note voucher for €19\.00/);
 });
