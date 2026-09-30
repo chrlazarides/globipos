@@ -3,6 +3,7 @@ import { worksheetToJson } from "../excel-import-rows";
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "../storage";
+import { approvedExternalTools } from "../pos-external-tools";
 import { insertCategorySchema, insertColorSchema, insertSizeSchema, insertItemSchema, insertItemVariantSchema, insertVariantTemplateSchema, insertItemBarcodeSchema, insertInventoryInLineSchema, insertCustomerSchema, insertPriceContractSchema, insertSeasonalOfferSchema, insertInvoiceSchema, insertInvoiceItemSchema, insertPaymentSchema, insertPortalOrderSchema, insertPortalOrderItemSchema, insertSupplierSchema, insertPurchaseInvoiceSchema, insertPurchaseInvoiceItemSchema, insertSupplierPaymentSchema, insertUserSchema, insertPosLocationSchema, insertPosTerminalSchema, insertPosLayoutSetSchema, insertPosInboxSchema, insertPosShiftSchema, insertPosAuditLogSchema, categories, items, itemBarcodes, itemLocationStock, customers, invoices, invoiceItems, payments, priceContracts, priceContractRules, priceContractItems, seasonalOffers, seasonalOfferItems, suppliers, purchaseInvoices, purchaseInvoiceItems, supplierPayments, portalOrders, portalOrderItems, emailLogs, expenses, accounts, journalEntries, journalEntryLines, systemSettings, users, activityLogs, accountingSnapshots, versionSnapshots, posShifts, posOrders, posPromotions, posContainerDeposits, posReturnOrders, posReturnOrderLines, customerOtpTokens, customerLoyaltyPoints, customerPushSubscriptions, chatConversations, chatMessages, faqEntries, staffPushSubscriptions, insertSignageMediaSchema, insertSignagePlaylistSchema, insertSignagePlaylistItemSchema, insertSignageScreenSchema, insertStockTakeSessionSchema, insertStockTakeLineSchema, insertStockTransferSchema, insertStockTransferItemSchema, insertAgoranomiaLabelPrintSchema, insertGoodsReceivedVoucherSchema, insertGoodsReceivedVoucherItemSchema, insertItemLocationStockSchema, expirationBatches, insertExpirationBatchSchema, posReleaseCaches } from "@workspace/db";
 import { customerPreferences, customerFeedback, customerNotifications, customerCashbackLedger } from "@workspace/db";
 import { productFamilies, insertProductFamilySchema } from "@workspace/db";
@@ -11241,10 +11242,11 @@ export async function registerRoutes(
     try {
       const terminal = (req as any).terminal;
       const fallback = { columns: 4, colsTablet: 3, colsMobile: 2, colsLarge: 6, colsTV: 8, buttonRadius: "rounded", colorTheme: "standard" };
-      if (!terminal.layoutSetId) return res.json({ ...fallback, buttons: [] });
+      if (!terminal.layoutSetId) return res.json({ ...fallback, buttons: [], externalTools: {} });
       const ls = await storage.getPosLayoutSet(terminal.layoutSetId);
-      if (!ls) return res.json({ ...fallback, buttons: [] });
+      if (!ls) return res.json({ ...fallback, buttons: [], externalTools: {} });
       const buttons = await storage.getPosLayoutButtons(terminal.layoutSetId);
+      const settings = await storage.getSettings();
       res.json({
         columns:      ls.columns     ?? 4,
         colsTablet:   ls.colsTablet  ?? 3,
@@ -11254,6 +11256,7 @@ export async function registerRoutes(
         buttonRadius: (ls as any).buttonRadius ?? "rounded",
         colorTheme:   (ls as any).colorTheme   ?? "standard",
         buttons,
+        externalTools: approvedExternalTools(buttons, settings),
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

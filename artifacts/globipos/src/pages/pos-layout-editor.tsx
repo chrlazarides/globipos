@@ -19,11 +19,12 @@ import {
   Calculator, Printer, BookOpen, ShieldAlert, Clock,
   ChevronUp, ChevronDown, AlignLeft, Wallet, Minus,
   DoorOpen, FileText, BarChart2, TrendingDown,
-  Smartphone, Tablet, Monitor, Tv, Layers, Circle,
+  Smartphone, Tablet, Monitor, Tv, Layers, Circle, Globe, ExternalLink,
   Square, Plus, Minus as MinusIcon, Info, GripVertical,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton } from "@shared/schema";
-import { configuredGroups, readCustomFunctions, type PosSetting } from "@/lib/pos-function-config";
+import { configuredGroups, definitionKey, readCustomFunctions, readDefinition, type PosSetting } from "@/lib/pos-function-config";
+import { PosFunctionStatus } from "@/components/pos-function-status";
 
 // ── Color palette ──────────────────────────────────────────────────────────────
 const PRESET_COLORS = [
@@ -144,6 +145,13 @@ export const ACTION_GROUPS: ActionGroup[] = [
       { code: "SHOW_ALL_ITEMS",   label: "Show All Items",       icon: LayoutGrid,   description: "Clear category filter" },
       { code: "NUMPAD",           label: "Numeric Keypad",       icon: Calculator,   description: "Open the numeric input pad" },
       { code: "NOTES",            label: "Add Order Note",       icon: AlignLeft,    description: "Attach a free-text note to the order" },
+    ],
+  },
+  {
+    group: "External Tools", icon: Globe, color: "text-sky-600",
+    actions: [
+      { code: "OPEN_BROWSER", label: "Browser in Journal", icon: Globe, description: "Show an approved website in the POS journal panel" },
+      { code: "RUN_EXTERNAL_PROGRAM", label: "External Program", icon: ExternalLink, description: "Open a configured web app or registered device application" },
     ],
   },
   {
@@ -337,7 +345,7 @@ function GridButton({
 }
 
 // ── ActionGroupPicker ──────────────────────────────────────────────────────────
-function ActionGroupPicker({ value, onChange, groups }: { value: string; onChange: (code: string) => void; groups: ActionGroup[] }) {
+function ActionGroupPicker({ value, onChange, groups, settings }: { value: string; onChange: (code: string) => void; groups: ActionGroup[]; settings: PosSetting[] }) {
   const normalizedValue = value?.toUpperCase() ?? "";
   const [openGroup, setOpenGroup] = useState<string | null>(() => {
     const g = groups.find(g => g.actions.some(a => a.code === normalizedValue));
@@ -380,9 +388,14 @@ function ActionGroupPicker({ value, onChange, groups }: { value: string; onChang
                       className={`w-full flex items-start gap-3 px-4 py-2.5 text-left transition-colors ${isSel ? "bg-primary/10 text-primary" : "hover:bg-muted/50"}`}
                     >
                       <ActionIcon className={`w-4 h-4 flex-shrink-0 mt-0.5 ${isSel ? "text-primary" : "text-muted-foreground"}`} />
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium leading-none">{action.label}</p>
                         {action.description && <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{action.description}</p>}
+                        <div className="mt-1"><PosFunctionStatus
+                          definition={readDefinition(settings, action.code, action.description || "")}
+                          standard={ALL_ACTIONS.some(item => item.code === action.code)}
+                          saved={settings.some(setting => setting.key === definitionKey(action.code) && setting.value)}
+                          compact /></div>
                       </div>
                       {isSel && <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0 ml-auto mt-0.5" />}
                     </button>
@@ -726,7 +739,7 @@ function ButtonDialog({
                     Need another function? <Link href="/pos/functions" target="_blank" rel="noopener noreferrer" className="font-medium text-primary underline">Create it in POS Functions (new tab)</Link>, then return to this layout.
                   </p>
                   <ScrollArea className="h-64">
-                    <ActionGroupPicker value={draft.actionCode ?? ""} onChange={code => set({ actionCode: code })} groups={actionGroups} />
+                    <ActionGroupPicker value={draft.actionCode ?? ""} onChange={code => set({ actionCode: code })} groups={actionGroups} settings={functionSettings ?? []} />
                   </ScrollArea>
                 </TabsContent>
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { LogOut, Settings, Trash2, Search, ArrowRight, X, AlertCircle } from "lucide-react";
+import { LogOut, Settings, Trash2, Search, ArrowRight, X, AlertCircle, Globe, ExternalLink, RefreshCw } from "lucide-react";
 import { Link } from "wouter";
 import type { TerminalConfig, CashierSession, Category, Product, OrderLine, Order } from "../types";
 import { getCategories, getProducts, saveOrder, writeAudit } from "../lib/db";
@@ -19,6 +19,22 @@ function formatMoney(amount: number) {
   return new Intl.NumberFormat("en-CY", { style: "currency", currency: "EUR" }).format(amount);
 }
 
+type ExternalLaunch = { type: "web" | "app" | "server"; target: string };
+type ExternalButton = { position: number; label: string; actionCode: string; launch: ExternalLaunch };
+
+function validLaunch(value: unknown): value is ExternalLaunch {
+  if (!value || typeof value !== "object") return false;
+  const launch = value as Record<string, unknown>;
+  if (typeof launch.target !== "string" || !launch.target.trim() || launch.target.length > 2048) return false;
+  try {
+    const url = new URL(launch.target);
+    if (url.username || url.password) return false;
+    if (launch.type === "web" || launch.type === "server") return ["http:", "https:"].includes(url.protocol);
+    return launch.type === "app" && /^[a-z][a-z0-9+.-]*:$/.test(url.protocol) &&
+      !["http:", "https:", "file:", "javascript:", "data:", "blob:", "ftp:", "shell:", "cmd:", "powershell:"].includes(url.protocol);
+  } catch { return false; }
+}
+
 export function POS({ config, session, onLogout }: POSProps) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -26,6 +42,11 @@ export function POS({ config, session, onLogout }: POSProps) {
   
   const [cart, setCart] = useState<OrderLine[]>([]);
   const [search, setSearch] = useState("");
+  const [externalButtons, setExternalButtons] = useState<ExternalButton[]>([]);
+  const [externalPanel, setExternalPanel] = useState<ExternalButton | null>(null);
+  const [layoutError, setLayoutError] = useState("");
+  const [layoutRefresh, setLayoutRefresh] = useState(0);
+  const [launchingCode, setLaunchingCode] = useState<string | null>(null);
   
   const [paying, setPaying] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -44,6 +65,79 @@ export function POS({ config, session, onLogout }: POSProps) {
     }
     load();
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let inFlight = false;
+    async function loadLayout() {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const response = await fetch(`${config.server_url}/api/pos/sync/layout-config`, {
+          headers: { "X-Terminal-Code": config.terminal_code }, signal: controller.signal, cache: "no-store",
+        });
+        if (!response.ok) throw new Error(`Layout sync failed (${response.status})`);
+        const data = await response.json();
+        if (!Array.isArray(data.buttons) || !data.externalTools || typeof data.externalTools !== "object") {
+          throw new Error("Invalid layout response");
+        }
+        const buttons: ExternalButton[] = data.buttons.flatMap((button: any) => {
+          const code = typeof button.actionCode === "string" ? button.actionCode.toUpperCase() : "";
+          const launch = data.externalTools[code];
+          return button.buttonType === "action" && validLaunch(launch) ?
+            [{ position: button.position, label: button.label || code, actionCode: code, launch }] : [];
+        });
+        if (!controller.signal.aborted) {
+          setExternalButtons(buttons.sort((a, b) => a.position - b.position));
+          setExternalPanel(current => current && buttons.some(button =>
+            button.position === current.position && button.actionCode === current.actionCode &&
+            button.launch.type === current.launch.type && button.launch.target === current.launch.target) ? current : null);
+          setLayoutError("");
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setExternalButtons([]);
+          setExternalPanel(null);
+          setLayoutError(error instanceof Error ? error.message : "Layout unavailable");
+        }
+      } finally {
+        inFlight = false;
+      }
+    }
+    void loadLayout();
+    const refreshInterval = window.setInterval(() => void loadLayout(), 30_000);
+    return () => { controller.abort(); window.clearInterval(refreshInterval); };
+  }, [config.server_url, config.terminal_code, layoutRefresh]);
+
+  async function openExternal(button: ExternalButton) {
+    if (launchingCode) return;
+    setLaunchingCode(button.actionCode);
+    try {
+      // Always check the server again at click time; a previously approved target may have been revoked.
+      const response = await fetch(`${config.server_url}/api/pos/sync/layout-config`, {
+        headers: { "X-Terminal-Code": config.terminal_code }, cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Could not verify the approved target.");
+      const data = await response.json();
+      const target = data?.externalTools?.[button.actionCode];
+      if (!Array.isArray(data?.buttons) || !validLaunch(target) ||
+          target.type !== button.launch.type || target.target !== button.launch.target ||
+          !data.buttons.some((entry: any) =>
+            entry.buttonType === "action" && entry.actionCode?.toUpperCase() === button.actionCode &&
+            entry.position === button.position)) {
+        throw new Error("This button or external target is no longer approved. Refresh the layout.");
+      }
+      setExternalPanel(button);
+      setLayoutError("");
+    } catch (error) {
+      setExternalButtons([]);
+      setExternalPanel(null);
+      setLayoutError(error instanceof Error ? error.message : "Could not verify the approved target.");
+      toast({ title: "External button unavailable", description: "The assigned button and target must both be approved. Refresh after an admin reviews them.", variant: "destructive" });
+    } finally {
+      setLaunchingCode(null);
+    }
+  }
 
   const displayedProducts = products.filter(p => {
     if (!p.active) return false;
@@ -226,7 +320,33 @@ export function POS({ config, session, onLogout }: POSProps) {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Panel: Ticket */}
         <div className="w-96 flex flex-col bg-card border-r border-border shrink-0">
-          <div className="flex-1 overflow-y-auto p-2">
+          {externalPanel && (
+            <div className="flex flex-col min-h-0 flex-1 border-b" data-testid="terminal-external-journal">
+              <div className="flex items-center gap-2 px-3 py-2 border-b text-sm">
+                <Globe className="h-4 w-4" /><strong className="truncate flex-1">{externalPanel.label}</strong>
+                <button aria-label="Close external panel" onClick={() => setExternalPanel(null)}><X className="h-4 w-4" /></button>
+              </div>
+              {externalPanel.launch.type === "app" ? (
+                <div className="space-y-3 p-4 text-sm">
+                  <p>The app opens outside the journal if this POS device has a handler registered for its link.</p>
+                  <a href={externalPanel.launch.target} className="inline-flex gap-2 rounded bg-primary px-3 py-2 text-primary-foreground">
+                    <ExternalLink className="h-4 w-4" />Launch app
+                  </a>
+                </div>
+              ) : (
+                <>
+                  <iframe key={externalPanel.launch.target} title={externalPanel.label} src={externalPanel.launch.target}
+                    sandbox={new URL(externalPanel.launch.target).origin === window.location.origin
+                      ? "allow-forms allow-scripts allow-popups"
+                      : "allow-forms allow-scripts allow-same-origin allow-popups"}
+                    referrerPolicy="no-referrer" className="min-h-[200px] flex-1 w-full bg-white" />
+                  <a href={externalPanel.launch.target} target="_blank" rel="noopener noreferrer"
+                    className="px-3 py-2 text-xs underline">Open in new tab if this site blocks embedding</a>
+                </>
+              )}
+            </div>
+          )}
+          <div className={`${externalPanel ? "max-h-40" : "flex-1"} min-h-0 overflow-y-auto p-2`}>
             {cart.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
                 <p>No items in cart</p>
@@ -277,6 +397,20 @@ export function POS({ config, session, onLogout }: POSProps) {
 
         {/* Right Panel: Catalog */}
         <div className="flex-1 flex flex-col min-w-0 bg-background">
+          <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b bg-card">
+            <span className="text-xs font-medium text-muted-foreground">Layout tools</span>
+            {externalButtons.map(button => (
+              <button key={`${button.position}-${button.actionCode}`} type="button"
+                onClick={() => void openExternal(button)} disabled={launchingCode !== null}
+                className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
+                data-testid={`terminal-external-${button.actionCode}`}>{button.label}</button>
+            ))}
+            {!externalButtons.length && <span className="text-xs text-muted-foreground">
+              {layoutError ? "Layout tools unavailable" : "No approved external buttons assigned"}
+            </span>}
+            <button type="button" className="ml-auto p-1" aria-label="Refresh layout tools" title={layoutError || "Refresh layout tools"}
+              onClick={() => setLayoutRefresh(value => value + 1)}><RefreshCw className="h-4 w-4" /></button>
+          </div>
           <div className="p-3 border-b border-border bg-card flex items-center gap-3">
             <div className="relative flex-1 max-w-sm">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />

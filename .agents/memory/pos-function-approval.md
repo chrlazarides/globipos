@@ -7,4 +7,4 @@ Keep a function's stable code when changing its display name. Approval belongs t
 
 **Why:** Layouts and legacy handlers reference function codes. Changing a built-in code or treating an admin-approved specification as a deployed payment or printing handler could break layouts or falsely imply safe checkout behavior.
 
-**How to apply:** Preserve codes and separate display labels from button IDs. Make approval explicit and show its scope clearly. Any future use of approval as a live execution gate needs separate server-side and Terminal verification.
+**How to apply:** Preserve codes and separate display labels from button IDs. Make approval explicit and show its scope clearly. Explicitly implemented external-tool launches may use approved destinations; do not infer that payment, printing, refund or general macro behavior became live. Any future use of approval as a broader execution gate needs separate server-side and Terminal verification.

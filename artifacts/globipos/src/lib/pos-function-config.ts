@@ -10,14 +10,41 @@ export type ConditionRule = {
   functionCode: string;
   note: string;
 };
+export type MacroCondition = Pick<ConditionRule, "transactionType" | "receiptSign">;
 export type FunctionDefinition = {
   behavior: string;
   mode: "single" | "macro" | "conditional";
   steps: string[];
+  stepConditions?: (MacroCondition | null)[];
   rules: ConditionRule[];
   label?: string;
   approved?: boolean;
+  launch?: ExternalLaunch;
+  launchApproval?: ExternalLaunch;
 };
+export type ExternalLaunch = { type: "web" | "app" | "server"; target: string };
+
+export function isExternalTargetApproved(definition: FunctionDefinition): boolean {
+  return !!definition.launch && validExternalLaunch(definition.launch) &&
+    definition.launchApproval?.type === definition.launch.type &&
+    definition.launchApproval.target === definition.launch.target;
+}
+
+export function validExternalLaunch(launch: ExternalLaunch): boolean {
+  if (launch.target.length > 2048 || !launch.target.trim()) return false;
+  try {
+    const url = new URL(launch.target);
+    if (url.username || url.password) return false;
+    if (launch.type === "web" || launch.type === "server") {
+      return url.protocol === "https:" || url.protocol === "http:";
+    }
+    return launch.type === "app" &&
+      /^[a-z][a-z0-9+.-]*:$/.test(url.protocol) &&
+      !["http:", "https:", "file:", "javascript:", "data:", "blob:", "ftp:", "shell:", "cmd:", "powershell:"].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
 export type CustomFunction = { code: string; label: string; description: string };
 
 export const definitionKey = (code: string) => `pos_function_definition_${code.toLowerCase()}`;
@@ -44,7 +71,11 @@ export const validFunctionCode = (code: string) => /^CUSTOM_[A-Z][A-Z0-9_]{0,32}
 export function cloneFunctionDefinition(source: FunctionDefinition, behavior = source.behavior): FunctionDefinition {
   return {
     behavior, mode: source.mode, steps: [...source.steps],
+    stepConditions: source.stepConditions?.map(condition => condition ? { ...condition } : null),
     rules: source.rules.map(rule => ({ ...rule })),
+    launch: source.launch ? { ...source.launch } : undefined,
+    // A clone needs its own explicit target approval even when it copies a URL.
+    launchApproval: undefined,
     approved: false,
   };
 }
@@ -84,9 +115,22 @@ export function readDefinition(settings: PosSetting[], code: string, fallback: s
       ) ? data.rules as ConditionRule[] : [];
       return {
         behavior: data.behavior, mode: data.mode, steps: data.steps, rules,
+        stepConditions: Array.isArray(data.stepConditions)
+          ? data.steps.map((_: string, index: number) => {
+              const condition = data.stepConditions[index];
+              return condition && ["any", "sale", "return"].includes(condition.transactionType) &&
+                ["any", "positive", "negative", "zero"].includes(condition.receiptSign)
+                ? { transactionType: condition.transactionType, receiptSign: condition.receiptSign } : null;
+            }) : undefined,
         label: typeof data.label === "string" && data.label.trim() && data.label.length <= 80
           ? data.label.trim() : undefined,
         approved: data.approved === true,
+        launch: data.launch && ["web", "app", "server"].includes(data.launch.type) &&
+          typeof data.launch.target === "string" && validExternalLaunch(data.launch)
+          ? { type: data.launch.type, target: data.launch.target } : undefined,
+        launchApproval: data.launchApproval && ["web", "app", "server"].includes(data.launchApproval.type) &&
+          typeof data.launchApproval.target === "string" && validExternalLaunch(data.launchApproval)
+          ? { type: data.launchApproval.type, target: data.launchApproval.target } : undefined,
       };
     }
   } catch {

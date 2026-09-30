@@ -4,9 +4,9 @@ import { Link } from "wouter";
 import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, Loader2, Plus, RefreshCw, Search, Trash2, Zap } from "lucide-react";
 import { ACTION_GROUPS, ALL_ACTIONS } from "./pos-layout-editor";
 import {
-  cloneFunctionDefinition, configuredGroups, customFunctionKey, definitionKey, readCustomFunctions, readDefinition,
-  validFunctionCode, voucherExampleRules, wouldCreateFunctionCycle,
-  type FunctionDefinition, type PosSetting,
+  cloneFunctionDefinition, configuredGroups, customFunctionKey, definitionKey, isExternalTargetApproved, readCustomFunctions, readDefinition,
+  validExternalLaunch, validFunctionCode, voucherExampleRules, wouldCreateFunctionCycle,
+  type ExternalLaunch, type FunctionDefinition, type MacroCondition, type PosSetting,
 } from "@/lib/pos-function-config";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { PosFunctionRules } from "@/components/pos-function-rules";
 import { PosFunctionSimulator } from "@/components/pos-function-simulator";
+import { PosFunctionStatus } from "@/components/pos-function-status";
 
 const quickSaleActions = new Set(["PAY_CASH", "PAY_CARD", "VOID_SALE"]);
 const MAX_STEPS = 20;
@@ -70,6 +71,12 @@ export default function PosFunctions() {
     setDirty(true);
   }
 
+  function updateStepCondition(index: number, patch: Partial<MacroCondition>) {
+    const conditions = draft.steps.map((_, i) => draft.stepConditions?.[i] ?? null);
+    conditions[index] = { transactionType: "any", receiptSign: "any", ...conditions[index], ...patch };
+    update({ stepConditions: conditions });
+  }
+
   function leaveUnsaved(): boolean {
     return !dirty || window.confirm("Discard your unsaved function changes?");
   }
@@ -99,17 +106,41 @@ export default function PosFunctions() {
   }
 
   const save = useMutation({
-    mutationFn: async (approved: boolean) => {
+    mutationFn: async (intent: "draft" | "approve" | "approve-target" | "revoke-target") => {
+      const approved = intent === "approve";
       const behavior = draft.behavior.trim();
       const label = draft.label.trim();
       if (!behavior) throw new Error("Enter a behavior before saving.");
       if (!label || label.length > 80 || (isCustom && draft.description.length > 200)) {
         throw new Error("Enter a function name of up to 80 characters and a purpose of up to 200 characters.");
       }
+      if (draft.launch && !validExternalLaunch(draft.launch)) {
+        throw new Error("Enter a valid URL or registered app link. Web destinations need http(s); apps need their own URI scheme.");
+      }
+      if (draft.launch && draft.mode !== "single") {
+        throw new Error("An external destination needs Single function setup type.");
+      }
+      if (approved && ["OPEN_BROWSER", "RUN_EXTERNAL_PROGRAM"].includes(selected.code) && !draft.launch) {
+        throw new Error("Configure an external destination before approving this button.");
+      }
+      if (intent === "approve-target" && !draft.launch) {
+        throw new Error("Enter a valid external destination before approving the target.");
+      }
+      if (approved && draft.launch && !isExternalTargetApproved(draft)) {
+        throw new Error("Approve this exact external target separately before approving the function.");
+      }
+      if (selected.code === "OPEN_BROWSER" && draft.launch && draft.launch.type === "app") {
+        throw new Error("Browser in Journal needs a web address, not an app link.");
+      }
       if (draft.mode === "macro" &&
           (!draft.steps.length || draft.steps.length > MAX_STEPS ||
            draft.steps.some(code => !actions.some(action => action.code === code)))) {
         throw new Error("Add between 1 and 20 valid macro steps.");
+      }
+      if (draft.mode === "macro" && draft.stepConditions?.some(condition => condition &&
+          (!["any", "sale", "return"].includes(condition.transactionType) ||
+           !["any", "positive", "negative", "zero"].includes(condition.receiptSign)))) {
+        throw new Error("Each macro step must use a valid sale/return and receipt-total condition.");
       }
       if (draft.mode === "conditional" &&
           (!draft.rules.length || draft.rules.length > MAX_STEPS ||
@@ -121,7 +152,12 @@ export default function PosFunctions() {
       const definition: FunctionDefinition = {
         behavior, mode: draft.mode, steps: draft.mode === "macro" ? draft.steps : [],
         rules: draft.mode === "conditional" ? draft.rules : [], approved,
+        stepConditions: draft.mode === "macro" ? draft.steps.map((_, index) => draft.stepConditions?.[index] ?? null) : undefined,
         label: isCustom ? undefined : label,
+        launch: draft.launch,
+        launchApproval: intent === "approve-target" && draft.launch ? { ...draft.launch }
+          : intent === "revoke-target" ? undefined
+          : isExternalTargetApproved(draft) ? { ...draft.launch! } : undefined,
       };
       if (wouldCreateFunctionCycle(selected.code, definition, actions, savedSettings)) {
         throw new Error("This setup calls itself through a macro or conditional rule. Remove the loop.");
@@ -140,11 +176,17 @@ export default function PosFunctions() {
       });
       await apiRequest("PUT", "/api/settings", { settings: entries });
     },
-    onSuccess: async (_data, approved) => {
+    onSuccess: async (_data, intent) => {
       await queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
       setDirty(false);
-      toast({ title: approved ? "Function setup approved" : "Function draft saved",
-        description: "Approval records this setup for the function list; it does not by itself activate checkout or printing behavior." });
+      toast({
+        title: intent === "approve-target" ? "External target approved" :
+          intent === "revoke-target" ? "External target approval removed" :
+          intent === "approve" ? "Function setup approved" : "Function draft saved",
+        description: intent === "approve-target"
+          ? "The function remains a draft. Review it, then use Save & approve to make the external button available on its assigned layout."
+          : "An external button runs only when both its function setup and exact destination are approved.",
+      });
     },
     onError: (error: Error) => toast({ title: "Could not save function", description: error.message, variant: "destructive" }),
   });
@@ -199,7 +241,10 @@ export default function PosFunctions() {
     }),
   })).filter(group => group.actions.length);
   const definedCount = actions.filter(action => savedSettings.some(setting => setting.key === definitionKey(action.code) && setting.value)).length;
-  const approvedCount = actions.filter(action => readDefinition(savedSettings, action.code, "").approved).length;
+  const approvedCount = actions.filter(action => {
+    const definition = readDefinition(savedSettings, action.code, "");
+    return definition.approved && (!definition.launch || isExternalTargetApproved(definition));
+  }).length;
 
   return (
     <div className="space-y-6 p-4 md:p-6">
@@ -208,8 +253,8 @@ export default function PosFunctions() {
         <Button asChild variant="outline" size="sm"><Link href="/pos/layouts"><ArrowLeft className="mr-2 h-4 w-4" />POS layouts</Link></Button>
       </div>
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
-        <strong>Approval is for the saved setup, not a checkout release.</strong> A badge confirms an admin saved the function as approved.
-        It does not prove the behavior runs on a Terminal, issue vouchers or change payments. Test on a layout before rollout.
+        <strong>External buttons need two approvals.</strong> An approved function with an independently approved target can launch on its assigned Terminal layout.
+        Other written behavior does not automatically become a live payment, voucher or macro handler. Test on a layout before rollout.
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(320px,430px)_minmax(0,1fr)]">
@@ -219,7 +264,8 @@ export default function PosFunctions() {
               <CardTitle className="text-base">All functions</CardTitle>
               <Badge variant="secondary">{actions.length} listed</Badge>
             </div>
-            <p className="text-xs text-muted-foreground">{approvedCount} approved · {definedCount} saved definitions · {custom.length} custom functions</p>
+            <p className="text-xs text-muted-foreground">{ALL_ACTIONS.length} standard · {approvedCount} approved (including external targets) · {definedCount} saved definitions · {custom.length} custom functions</p>
+            <p className="text-xs text-muted-foreground">Green identifies a standard catalog function or an approved setup. It does not certify that every behavior runs live. External targets need separate approval.</p>
             <div className="flex gap-2">
               <div className="relative min-w-0 flex-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -261,9 +307,10 @@ export default function PosFunctions() {
                             {definition.mode === "conditional" && definition.rules.length > 0 &&
                               <span className="mt-0.5 block line-clamp-2 text-xs text-muted-foreground" title={summarizeRules(definition.rules)}>{summarizeRules(definition.rules)}</span>}
                           </span>
-                          <Badge variant={definition.approved ? "default" : "outline"} className="mt-0.5 shrink-0 text-[10px]">
-                            {definition.approved ? "Approved" : savedSettings.some(setting => setting.key === definitionKey(action.code) && setting.value) ? "Draft" : "Not set"}
-                          </Badge>
+                           <PosFunctionStatus definition={definition}
+                             standard={ALL_ACTIONS.some(item => item.code === action.code)}
+                             saved={savedSettings.some(setting => setting.key === definitionKey(action.code) && setting.value)}
+                             compact />
                         </button>
                       );
                     })}
@@ -307,7 +354,8 @@ export default function PosFunctions() {
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div><CardTitle>{selected.label}</CardTitle><p className="mt-1 font-mono text-xs text-muted-foreground">{selected.code}</p></div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={stored.approved ? "default" : "outline"}>{stored.approved ? "Approved setup" : "Not approved"}</Badge>
+                  <PosFunctionStatus definition={stored} standard={!isCustom}
+                    saved={savedSettings.some(setting => setting.key === definitionKey(selected.code) && setting.value)} />
                   <Badge variant={quickSaleActions.has(selected.code) ? "secondary" : "outline"}>
                     {quickSaleActions.has(selected.code) ? "Quick Sale action exists" : "Not wired in Quick Sale"}
                   </Badge>
@@ -340,6 +388,52 @@ export default function PosFunctions() {
                   className="mt-3 resize-y" placeholder="Describe the behavior…" data-testid="input-pos-function-behavior" />
                 <p className="mt-1 text-right text-xs text-muted-foreground">{draft.behavior.length}/2000</p>
               </div>
+              <div className="space-y-3 rounded-md border p-4">
+                <h2 className="text-sm font-semibold">External destination</h2>
+                <p className="text-xs text-muted-foreground">
+                   An assigned button can launch only after both its function setup and its exact destination are approved.
+                  Server-hosted programs need a web address; POS buttons never execute arbitrary commands.
+                </p>
+                <select aria-label="External destination type" className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                  value={draft.launch?.type ?? (["OPEN_BROWSER", "RUN_EXTERNAL_PROGRAM"].includes(selected.code) ? "web" : "none")}
+                  onChange={event => update({ launch: event.target.value === "none" ? undefined :
+                    { type: event.target.value as ExternalLaunch["type"], target: draft.launch?.target ?? "" } })}>
+                  {!["OPEN_BROWSER", "RUN_EXTERNAL_PROGRAM"].includes(selected.code) && <option value="none">No external destination</option>}
+                  <option value="web">Website in journal</option>
+                  <option value="server">Server-hosted web program in journal</option>
+                  {selected.code !== "OPEN_BROWSER" && <option value="app">Installed app (registered URI link)</option>}
+                </select>
+                {(draft.launch || ["OPEN_BROWSER", "RUN_EXTERNAL_PROGRAM"].includes(selected.code)) && (
+                  <div>
+                    <label htmlFor="external-target" className="text-sm font-medium">
+                      {draft.launch?.type === "app" ? "Registered app link" : "Website URL"}
+                    </label>
+                    <Input id="external-target" maxLength={2048} value={draft.launch?.target ?? ""}
+                      onChange={event => update({ launch: {
+                        type: draft.launch?.type ?? "web", target: event.target.value,
+                      } })} placeholder={draft.launch?.type === "app" ? "myapp://open" : "https://example.com/app"} />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {draft.launch?.type === "app"
+                        ? "The application and its URI handler must already be installed on the POS device. It opens outside the journal."
+                        : "The site must allow embedding in a frame. If it blocks embedding, staff can open it in a separate tab."}
+                    </p>
+                  </div>
+                )}
+                 {draft.launch && (
+                   <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+                     <span className={`text-xs ${isExternalTargetApproved(draft) ? "text-green-700" : "text-amber-700"}`}>
+                       {isExternalTargetApproved(draft) ? "This exact external target is approved." : "Target not approved. This button cannot launch it."}
+                     </span>
+                     {isExternalTargetApproved(draft) ? (
+                       <Button variant="outline" size="sm" disabled={save.isPending || !settings.isSuccess}
+                         onClick={() => save.mutate("revoke-target")}>Remove target approval</Button>
+                     ) : (
+                       <Button variant="outline" size="sm" disabled={save.isPending || !settings.isSuccess || !validExternalLaunch(draft.launch) || draft.mode !== "single"}
+                         onClick={() => save.mutate("approve-target")}>Approve target &amp; save draft</Button>
+                     )}
+                   </div>
+                 )}
+              </div>
               <fieldset className="space-y-3 rounded-md border p-4">
                 <legend className="px-1 text-sm font-semibold">Setup type</legend>
                 <div className="flex flex-wrap gap-4 text-sm">
@@ -349,18 +443,42 @@ export default function PosFunctions() {
                 </div>
                 {draft.mode === "macro" && (
                   <div className="space-y-3">
-                    <p className="text-xs text-muted-foreground">Choose existing functions in order. Steps are saved as a setup plan; they do not run at checkout.</p>
+                    <p className="text-xs text-muted-foreground">Each step presses a function button in order when its conditions match. The simulator traces the keypresses; they do not run at live checkout.</p>
                     <ol className="space-y-2">
                       {draft.steps.map((code, index) => (
-                        <li key={`${index}-${code}`} className="flex items-center gap-2 rounded-md border px-2 py-1 text-sm">
+                        <li key={`${index}-${code}`} className="rounded-md border px-2 py-2 text-sm">
+                          <div className="flex items-center gap-2">
                           <span className="min-w-0 flex-1 truncate">{index + 1}. {actions.find(action => action.code === code)?.label || `Missing function: ${code}`}</span>
                           <Button aria-label={`Move step ${index + 1} up`} size="icon" variant="ghost" disabled={!index} onClick={() => {
-                            const next = [...draft.steps]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; update({ steps: next });
+                            const next = [...draft.steps]; [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                            const conditions = draft.steps.map((_, i) => draft.stepConditions?.[i] ?? null);
+                            [conditions[index - 1], conditions[index]] = [conditions[index], conditions[index - 1]];
+                            update({ steps: next, stepConditions: conditions });
                           }}><ArrowUp className="h-4 w-4" /></Button>
                           <Button aria-label={`Move step ${index + 1} down`} size="icon" variant="ghost" disabled={index === draft.steps.length - 1} onClick={() => {
-                            const next = [...draft.steps]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; update({ steps: next });
+                            const next = [...draft.steps]; [next[index + 1], next[index]] = [next[index], next[index + 1]];
+                            const conditions = draft.steps.map((_, i) => draft.stepConditions?.[i] ?? null);
+                            [conditions[index + 1], conditions[index]] = [conditions[index], conditions[index + 1]];
+                            update({ steps: next, stepConditions: conditions });
                           }}><ArrowDown className="h-4 w-4" /></Button>
-                          <Button aria-label={`Remove step ${index + 1}`} size="icon" variant="ghost" onClick={() => update({ steps: draft.steps.filter((_, i) => i !== index) })}><Trash2 className="h-4 w-4" /></Button>
+                          <Button aria-label={`Remove step ${index + 1}`} size="icon" variant="ghost" onClick={() => update({
+                            steps: draft.steps.filter((_, i) => i !== index),
+                            stepConditions: draft.steps.flatMap((_, i) => i === index ? [] : [draft.stepConditions?.[i] ?? null]),
+                          })}><Trash2 className="h-4 w-4" /></Button>
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <select aria-label={`Step ${index + 1} transaction condition`} className="h-8 rounded border bg-background px-2 text-xs"
+                              value={draft.stepConditions?.[index]?.transactionType ?? "any"}
+                              onChange={event => updateStepCondition(index, { transactionType: event.target.value as MacroCondition["transactionType"] })}>
+                              <option value="any">Any sale or return</option><option value="sale">Sale only</option><option value="return">Return only</option>
+                            </select>
+                            <select aria-label={`Step ${index + 1} receipt condition`} className="h-8 rounded border bg-background px-2 text-xs"
+                              value={draft.stepConditions?.[index]?.receiptSign ?? "any"}
+                              onChange={event => updateStepCondition(index, { receiptSign: event.target.value as MacroCondition["receiptSign"] })}>
+                              <option value="any">Any total</option><option value="positive">Positive total</option>
+                              <option value="negative">Negative total</option><option value="zero">Zero total</option>
+                            </select>
+                          </div>
                         </li>
                       ))}
                     </ol>
@@ -373,7 +491,10 @@ export default function PosFunctions() {
                             <option key={action.code} value={action.code}>{action.label} ({action.code})</option>)}
                         </optgroup>)}
                       </select>
-                      <Button variant="outline" disabled={!stepCode || draft.steps.length >= MAX_STEPS} onClick={() => { update({ steps: [...draft.steps, stepCode] }); setStepCode(""); }}>
+                      <Button variant="outline" disabled={!stepCode || draft.steps.length >= MAX_STEPS} onClick={() => {
+                        update({ steps: [...draft.steps, stepCode], stepConditions: [...draft.steps.map((_, i) => draft.stepConditions?.[i] ?? null), null] });
+                        setStepCode("");
+                      }}>
                         <Plus className="mr-1 h-4 w-4" />Add step
                       </Button>
                     </div>
@@ -406,14 +527,14 @@ export default function PosFunctions() {
                 <Button variant="outline" disabled={save.isPending || !dirty} onClick={() => {
                   setDraft({ ...stored, label: selected.label, description: selected.description || "" }); setDirty(false);
                 }}>Discard edits</Button>
-                {stored.approved && !dirty && <Button variant="outline" onClick={() => save.mutate(false)} disabled={save.isPending || !settings.isSuccess}>
+                 {stored.approved && !dirty && <Button variant="outline" onClick={() => save.mutate("draft")} disabled={save.isPending || !settings.isSuccess}>
                   Remove approval
                 </Button>}
-                <Button variant="outline" onClick={() => save.mutate(false)} disabled={!dirty || !draft.behavior.trim() || !draft.label.trim() || save.isPending || !settings.isSuccess}
+                 <Button variant="outline" onClick={() => save.mutate("draft")} disabled={!dirty || !draft.behavior.trim() || !draft.label.trim() || save.isPending || !settings.isSuccess}
                   data-testid="button-save-pos-function">
                   Save draft
                 </Button>
-                <Button onClick={() => save.mutate(true)} disabled={(!dirty && !!stored.approved) || !draft.behavior.trim() || !draft.label.trim() || save.isPending || !settings.isSuccess}
+                 <Button onClick={() => save.mutate("approve")} disabled={(!dirty && !!stored.approved) || !draft.behavior.trim() || !draft.label.trim() || save.isPending || !settings.isSuccess}
                   data-testid="button-approve-pos-function">
                   {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}Save &amp; approve
                 </Button>

@@ -13,11 +13,11 @@ import {
   Trash2, Plus, Minus, CreditCard, Banknote, Users, Search,
   RotateCcw, AlertTriangle, CheckCircle2, Printer, BarChart2,
   TrendingDown, DoorOpen, X, ChevronLeft, Zap, Tag, Package,
-  Layers, Calculator, Loader2, Receipt, Clock, Barcode, ReceiptText,
+  Layers, Calculator, Loader2, Receipt, Clock, Barcode, ReceiptText, Globe, ExternalLink,
 } from "lucide-react";
 import type { PosLayoutSet, PosLayoutButton, Item, ItemVariant, Customer, PosPromotion } from "@shared/schema";
 import { ACTION_GROUPS, ALL_ACTIONS } from "./pos-layout-editor";
-import { configuredGroups, readCustomFunctions, type PosSetting } from "@/lib/pos-function-config";
+import { configuredGroups, isExternalTargetApproved, readCustomFunctions, readDefinition, type ExternalLaunch, type PosSetting } from "@/lib/pos-function-config";
 import { simulateLayoutAction, type SimulationResult } from "@/lib/pos-function-simulator";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -452,6 +452,7 @@ export default function PosSimulate() {
   const [functionPreview, setFunctionPreview] = useState<{
     code: string; label: string; result: SimulationResult; receiptTotal: number; transactionType: "sale" | "return";
   } | null>(null);
+  const [externalPanel, setExternalPanel] = useState<{ label: string; launch: ExternalLaunch } | null>(null);
   const [layoutStack, setLayoutStack] = useState<string[]>([rootLayoutId]);
   const currentLayoutId = layoutStack[layoutStack.length - 1] ?? rootLayoutId;
 
@@ -790,6 +791,17 @@ export default function PosSimulate() {
       showFeedback("Function settings are unavailable. Wait for them to load or refresh before testing buttons.", false);
       return;
     }
+    const configured = readDefinition(functionSettings.data, code, "");
+    if (configured.launch || code === "OPEN_BROWSER" || code === "RUN_EXTERNAL_PROGRAM") {
+      if (!configured.approved || configured.mode !== "single" || !configured.launch || !isExternalTargetApproved(configured) ||
+          (code === "OPEN_BROWSER" && configured.launch.type === "app")) {
+        showFeedback(`${label} needs both function approval and separate target approval in POS Functions.`, false);
+        return;
+      }
+      setFunctionPreview(null);
+      setExternalPanel({ label, launch: configured.launch });
+      return;
+    }
     const receiptTotal = netCartTotal(cart) * (transactionType === "return" ? -1 : 1);
     const amount = manualAmount.trim() ? Number(manualAmount.trim().replace(",", ".")) : undefined;
     const result = simulateLayoutAction(
@@ -1118,9 +1130,35 @@ export default function PosSimulate() {
               <span className="truncate">{orderNote}</span>
             </div>
           )}
+          {externalPanel && (
+            <div className="flex flex-1 min-h-0 flex-col border-b border-slate-700" data-testid="sim-external-journal">
+              <div className="flex items-center gap-2 px-3 py-2 text-xs bg-slate-900">
+                <Globe className="h-4 w-4" /><strong className="truncate flex-1">{externalPanel.label}</strong>
+                <button aria-label="Close external panel" onClick={() => setExternalPanel(null)}><X className="h-4 w-4" /></button>
+              </div>
+              {externalPanel.launch.type === "app" ? (
+                <div className="space-y-3 p-4 text-xs text-slate-300">
+                  <p>Installed apps open outside the browser journal. This device must have a handler registered for the link.</p>
+                  <a href={externalPanel.launch.target} className="inline-flex items-center gap-1 rounded bg-slate-700 px-3 py-2 text-white">
+                    <ExternalLink className="h-4 w-4" /> Launch app
+                  </a>
+                </div>
+              ) : (
+                <>
+                  <iframe key={externalPanel.launch.target} title={externalPanel.label} src={externalPanel.launch.target}
+                    sandbox={new URL(externalPanel.launch.target).origin === window.location.origin
+                      ? "allow-forms allow-scripts allow-popups"
+                      : "allow-forms allow-scripts allow-same-origin allow-popups"}
+                    referrerPolicy="no-referrer" className="min-h-[200px] flex-1 w-full bg-white" />
+                  <a href={externalPanel.launch.target} target="_blank" rel="noopener noreferrer"
+                    className="px-3 py-2 text-xs underline text-sky-300">Open in new tab if this site blocks embedding</a>
+                </>
+              )}
+            </div>
+          )}
 
           {/* Cart lines */}
-          <ScrollArea className="flex-1">
+          <ScrollArea className={externalPanel ? "min-h-28 max-h-40 flex-none" : "flex-1"}>
             {cart.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-40 text-slate-600">
                 <ShoppingCart className="w-8 h-8 mb-2" />

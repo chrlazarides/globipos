@@ -63,12 +63,27 @@ export function simulatePosFunction(
     const nextPath = new Set(path);
     nextPath.add(functionCode);
     if (definition.mode === "single") {
+      if (definition.launch) {
+        add("outcome", `Would ${definition.launch.type === "app" ? "open the registered app" : "show the website in the journal"}: ${definition.launch.target}. No launch is performed by this trace.`, depth + 1);
+        return;
+      }
       add("warning", `Definition only: ${definition.behavior || "No behavior specified"}. No simulated action is available.`, depth + 1);
       return;
     }
     if (definition.mode === "macro") {
       if (!definition.steps.length) add("warning", "Macro has no steps.", depth + 1);
       definition.steps.forEach((step, index) => {
+        const condition = definition.stepConditions?.[index];
+        if (condition && !(
+          (condition.transactionType === "any" || condition.transactionType === scenario.transactionType) &&
+          (condition.receiptSign === "any" ||
+            (condition.receiptSign === "negative" && scenario.receiptTotal < 0) ||
+            (condition.receiptSign === "positive" && scenario.receiptTotal > 0) ||
+            (condition.receiptSign === "zero" && scenario.receiptTotal === 0))
+        )) {
+          add("info", `Step ${index + 1} of ${definition.steps.length} skipped (condition not met).`, depth + 1);
+          return;
+        }
         add("info", `Step ${index + 1} of ${definition.steps.length}`, depth + 1);
         walk(step, depth + 2, nextPath);
       });

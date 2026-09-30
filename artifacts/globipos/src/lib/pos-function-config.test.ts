@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { ActionDef, ActionGroup } from "@/pages/pos-layout-editor";
 import {
   cloneFunctionDefinition, configuredGroups, customFunctionKey, definitionKey,
-  readCustomFunctions, readDefinition, voucherExampleRules, type FunctionDefinition,
+  isExternalTargetApproved, readCustomFunctions, readDefinition, validExternalLaunch, voucherExampleRules, type FunctionDefinition,
 } from "./pos-function-config";
 
 const base: ActionDef = { code: "PAY_VOUCHER", label: "Redeem Voucher", description: "Accept a voucher", icon: null };
@@ -40,6 +40,36 @@ test("clones keep their own behavior and rules, but never inherit approval or th
   clone.rules[0].note = "Independent copy";
   assert.notEqual(definition.rules[0].note, clone.rules[0].note);
   assert.equal(definition.approved, true);
+});
+
+test("conditional keypresses and approved launch details round-trip and clone independently", () => {
+  const source: FunctionDefinition = {
+    behavior: "Press voucher only for returns", mode: "macro", steps: ["PAY_VOUCHER"], rules: [],
+    stepConditions: [{ transactionType: "return", receiptSign: "negative" }], approved: true,
+  };
+  const loaded = readDefinition([{ key: definitionKey("CUSTOM_RETURN"), value: JSON.stringify(source) }], "CUSTOM_RETURN", "");
+  const clone = cloneFunctionDefinition(loaded);
+  assert.deepEqual(clone.stepConditions, source.stepConditions);
+  assert.equal(clone.approved, false);
+  clone.stepConditions![0]!.receiptSign = "any";
+  assert.equal(loaded.stepConditions![0]!.receiptSign, "negative");
+  assert.equal(validExternalLaunch({ type: "web", target: "https://example.com/app" }), true);
+  assert.equal(validExternalLaunch({ type: "app", target: "cashdesk://launch" }), true);
+  assert.equal(validExternalLaunch({ type: "web", target: "javascript:alert(1)" }), false);
+  assert.equal(validExternalLaunch({ type: "app", target: "file:///tmp/test" }), false);
+});
+
+test("a target needs its own exact approval and clones do not inherit it", () => {
+  const source: FunctionDefinition = {
+    behavior: "Open tool", mode: "single", steps: [], rules: [], approved: true,
+    launch: { type: "server", target: "https://tools.example.com" },
+    launchApproval: { type: "server", target: "https://tools.example.com" },
+  };
+  const saved = readDefinition([{ key: definitionKey("CUSTOM_TOOL"), value: JSON.stringify(source) }], "CUSTOM_TOOL", "");
+  assert.equal(isExternalTargetApproved(saved), true);
+  assert.equal(isExternalTargetApproved({ ...saved, launch: { type: "server", target: "https://other.example.com" } }), false);
+  assert.equal(isExternalTargetApproved(cloneFunctionDefinition(saved)), false);
+  assert.equal(isExternalTargetApproved({ ...saved, launchApproval: undefined }), false);
 });
 
 test("a newly saved custom function appears under its own name", () => {

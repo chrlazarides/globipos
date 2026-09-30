@@ -89,3 +89,20 @@ test("a saved layout macro follows referenced saved rules without changing check
   assert.match(preview!.lines.find(line => line.kind === "info" && line.text.includes("Step"))!.text, /Step 1 of 1/);
   assert.match(preview!.lines.find(line => line.kind === "outcome")!.text, /credit-note voucher for €19\.00/);
 });
+
+test("macro presses only the buttons whose sale/return and receipt conditions match", () => {
+  const macro: FunctionDefinition = {
+    behavior: "Conditional voucher keypresses", mode: "macro",
+    steps: ["PAY_VOUCHER", "PAY_VOUCHER"], rules: [],
+    stepConditions: [
+      { transactionType: "sale", receiptSign: "positive" },
+      { transactionType: "return", receiptSign: "negative" },
+    ],
+  };
+  const sale = simulatePosFunction("CUSTOM_EXAMPLE", macro, { receiptTotal: 10, transactionType: "sale" }, actions, settings);
+  const refund = simulatePosFunction("CUSTOM_EXAMPLE", macro, { receiptTotal: -10, transactionType: "return" }, actions, settings);
+  assert.equal(sale.lines.filter(line => line.kind === "outcome").length, 1);
+  assert.equal(refund.lines.filter(line => line.kind === "outcome").length, 1);
+  assert.match(sale.lines.find(line => line.text.includes("skipped"))!.text, /Step 2/);
+  assert.match(refund.lines.find(line => line.text.includes("skipped"))!.text, /Step 1/);
+});

@@ -6,3 +6,4 @@
 - [Duplicate workflow port owners](workflow-duplicate-port-owners.md) — A failed restart may leave an older healthy server owning the port; inspect the listener before changing config.
 - [Layout simulation boundary](layout-simulation-boundary.md) — Use the test cart for saved-rule traces, but don't report proposed financial outcomes as completed operations.
 - [POS function approval boundary](pos-function-approval.md) — Stable function codes survive renames; approved setup status is not checkout activation.
+- [POS external launch boundary](pos-external-tools.md) — External targets need separate exact-match approval; URL and app links never imply arbitrary command execution.
