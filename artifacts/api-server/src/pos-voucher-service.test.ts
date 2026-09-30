@@ -4,6 +4,7 @@ import test from "node:test";
 import { and, eq, inArray } from "drizzle-orm";
 import {
   db,
+  itemLocationStock,
   items,
   posCashiers,
   posGiftVoucherLedger,
@@ -91,7 +92,13 @@ test("gift voucher transactions are atomic, single-use, idempotent and limited t
     price2: "36.00",
     price3: "45.00",
     vatRate: "20.00",
+    stockQuantity: 20,
   }).returning();
+  await db.insert(itemLocationStock).values({
+    itemId: item.id,
+    locationId: location.id,
+    quantity: 20,
+  });
 
   const auth: VoucherCashierInput = {
     terminal,

@@ -48,7 +48,8 @@ export function POS({ config, session, onLogout }: POSProps) {
   const [voucherButtons, setVoucherButtons] = useState<VoucherButton[]>([]);
   const [voucherMode, setVoucherMode] = useState<"issue" | "redeem" | null>(null);
   const [itemSearchAssigned, setItemSearchAssigned] = useState(false);
-  const [showMultiLocationSearch, setShowMultiLocationSearch] = useState(false);
+  const [stockInAssigned, setStockInAssigned] = useState(false);
+  const [stockDialogMode, setStockDialogMode] = useState<"lookup" | "stockIn" | null>(null);
   const [externalPanel, setExternalPanel] = useState<ExternalButton | null>(null);
   const [layoutError, setLayoutError] = useState("");
   const [layoutRefresh, setLayoutRefresh] = useState(0);
@@ -108,6 +109,8 @@ export function POS({ config, session, onLogout }: POSProps) {
           setVoucherButtons(voucherLayoutButtons.sort((a, b) => a.position - b.position));
           setItemSearchAssigned(data.buttons.some((button: any) =>
             button.buttonType === "action" && button.actionCode?.toUpperCase() === "ITEM_SEARCH"));
+          setStockInAssigned(data.buttons.some((button: any) =>
+            button.buttonType === "action" && button.actionCode?.toUpperCase() === "STOCK_IN"));
           setExternalPanel(current => current && buttons.some(button =>
             button.position === current.position && button.actionCode === current.actionCode &&
             button.launch.type === current.launch.type && button.launch.target === current.launch.target) ? current : null);
@@ -118,6 +121,7 @@ export function POS({ config, session, onLogout }: POSProps) {
           setExternalButtons([]);
           setVoucherButtons([]);
           setItemSearchAssigned(false);
+          setStockInAssigned(false);
           setExternalPanel(null);
           setLayoutError(error instanceof Error ? error.message : "Layout unavailable");
         }
@@ -369,8 +373,8 @@ export function POS({ config, session, onLogout }: POSProps) {
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      {showMultiLocationSearch && <MultiLocationSearch config={config} session={session}
-        onClose={() => setShowMultiLocationSearch(false)} />}
+      {stockDialogMode && <MultiLocationSearch config={config} session={session} initialMode={stockDialogMode}
+        onClose={() => setStockDialogMode(null)} />}
       {voucherMode && <VoucherDialog mode={voucherMode} config={config} session={session} cart={cart} total={total}
         onClose={() => setVoucherMode(null)}
         onRedeemed={orderNumber => {
@@ -493,10 +497,13 @@ export function POS({ config, session, onLogout }: POSProps) {
                 className="rounded border border-emerald-400 bg-emerald-950/40 px-3 py-2 text-xs font-medium text-emerald-200 hover:bg-emerald-900/50"
                 data-testid={`terminal-voucher-${button.actionCode}`}>{button.label}</button>
             ))}
-            {itemSearchAssigned && <button type="button" onClick={() => setShowMultiLocationSearch(true)}
+            {itemSearchAssigned && <button type="button" onClick={() => setStockDialogMode("lookup")}
               className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
               data-testid="terminal-item-search">Search Items · all shops</button>}
-            {!externalButtons.length && !voucherButtons.length && !itemSearchAssigned && <span className="text-xs text-muted-foreground">
+            {stockInAssigned && <button type="button" onClick={() => setStockDialogMode("stockIn")}
+              className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
+              data-testid="terminal-stock-in">Stock In</button>}
+            {!externalButtons.length && !voucherButtons.length && !itemSearchAssigned && !stockInAssigned && <span className="text-xs text-muted-foreground">
               {layoutError ? "Layout tools unavailable" : "No approved tools assigned"}
             </span>}
             <button type="button" className="ml-auto p-1" aria-label="Refresh layout tools" title={layoutError || "Refresh layout tools"}
@@ -513,7 +520,7 @@ export function POS({ config, session, onLogout }: POSProps) {
                 className="w-full bg-input text-foreground text-sm rounded-lg pl-9 pr-4 py-2 outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
-            <button type="button" onClick={() => setShowMultiLocationSearch(true)}
+            <button type="button" onClick={() => setStockDialogMode("lookup")}
               className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-input"
               data-testid="terminal-other-shops">Other shops &amp; reserve</button>
           </div>

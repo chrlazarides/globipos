@@ -35,9 +35,11 @@ type Props = {
   config: TerminalConfig;
   session: CashierSession;
   onClose: () => void;
+  initialMode?: "lookup" | "stockIn";
 };
 
-export function MultiLocationSearch({ config, session, onClose }: Props) {
+export function MultiLocationSearch({ config, session, onClose, initialMode = "lookup" }: Props) {
+  const [mode, setMode] = useState<"lookup" | "stockIn">(initialMode);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<StockItem[]>([]);
   const [selected, setSelected] = useState<StockItem | null>(null);
@@ -52,6 +54,8 @@ export function MultiLocationSearch({ config, session, onClose }: Props) {
   const [notice, setNotice] = useState("");
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [reservationKey, setReservationKey] = useState(() => crypto.randomUUID());
+  const [stockInKey, setStockInKey] = useState(() => crypto.randomUUID());
+  const [stockInQuantity, setStockInQuantity] = useState("1");
 
   const headers = {
     "X-Terminal-Code": config.terminal_code,
@@ -112,6 +116,7 @@ export function MultiLocationSearch({ config, session, onClose }: Props) {
 
   function chooseItem(item: StockItem) {
     setReservationKey(crypto.randomUUID());
+    setStockInKey(crypto.randomUUID());
     setSelected(item);
     setVariantId(item.variants?.[0]?.id ?? "");
     setSource(null);
@@ -179,21 +184,58 @@ export function MultiLocationSearch({ config, session, onClose }: Props) {
     } finally { setPending(false); }
   }
 
+  async function stockIn() {
+    if (!selected || pending) return;
+    const units = Number(stockInQuantity);
+    if (!Number.isInteger(units) || units <= 0 || units > 10000) {
+      setError("Enter a whole quantity from 1 to 10,000.");
+      return;
+    }
+    if (!config.voucher_device_key) {
+      setError("Pair this Terminal in Settings with its device key before recording stock.");
+      return;
+    }
+    if (!/^\d{4,8}$/.test(pin)) { setError("Enter your cashier PIN."); return; }
+    setPending(true); setError(""); setNotice("");
+    try {
+      const data = await request("/api/pos/stock/stock-in", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          itemId: selected.id,
+          variantId: selected.variants?.length ? variantId : null,
+          quantity: units,
+          cashierId: session.cashier_id,
+          pin,
+          idempotencyKey: stockInKey,
+        }),
+      });
+      if (!data?.operationId) throw new Error("Stock entry response was incomplete. Retry with the same details.");
+      setNotice(`Recorded ${units} received at ${config.location_name}. On hand now: ${data.onHand}.`);
+      setStockInKey(crypto.randomUUID());
+      setPin("");
+      setQuery(current => current + " ");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not record stock. Retry with the same details.");
+    } finally { setPending(false); }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3">
       <section role="dialog" aria-modal="true" aria-label="Search items across shops"
         className="flex max-h-[92vh] w-full max-w-3xl flex-col rounded-xl border border-border bg-card text-foreground shadow-2xl">
         <header className="flex items-center justify-between border-b border-border px-5 py-4">
           <div>
-            <h2 className="text-lg font-bold">Search items · all shops</h2>
-            <p className="text-xs text-muted-foreground">Available means stock on hand minus active reservations. Transfers do not move stock until completed.</p>
+            <h2 className="text-lg font-bold">{mode === "stockIn" ? "Stock In · quick entry" : "Search items · all shops"}</h2>
+            <p className="text-xs text-muted-foreground">{mode === "stockIn"
+              ? `Record stock physically received at ${config.location_name}.`
+              : "Available means stock on hand minus active reservations. Transfers do not move stock until completed."}</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close item search" className="rounded p-2 hover:bg-input"><X className="h-5 w-5" /></button>
         </header>
         <div className="overflow-y-auto p-5">
           <label className="relative block">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-            <input autoFocus value={query} onChange={event => { setQuery(event.target.value); setSource(null); setReservationKey(crypto.randomUUID()); }}
+            <input autoFocus value={query} onChange={event => { setQuery(event.target.value); setSource(null); setReservationKey(crypto.randomUUID()); setStockInKey(crypto.randomUUID()); }}
               placeholder="Search name, SKU or barcode…" className="w-full rounded-lg bg-input py-2 pl-10 pr-3"
               aria-label="Search items in all shops" />
           </label>
@@ -217,13 +259,13 @@ export function MultiLocationSearch({ config, session, onClose }: Props) {
                   <h3 className="font-semibold">{selected.name}</h3>
                   {selected.variants?.length ? (
                     <label className="mt-3 block text-sm">Size / variant
-                      <select value={variantId} onChange={event => { setVariantId(event.target.value); setSource(null); setReservationKey(crypto.randomUUID()); }}
+                      <select value={variantId} onChange={event => { setVariantId(event.target.value); setSource(null); setReservationKey(crypto.randomUUID()); setStockInKey(crypto.randomUUID()); }}
                         className="mt-1 w-full rounded-lg bg-input p-2">
                         {selected.variants.map(variant => <option key={variant.id} value={variant.id}>{variant.label} {variant.sku ? `· ${variant.sku}` : ""}</option>)}
                       </select>
                     </label>
                   ) : null}
-                  <div className="mt-3 max-h-48 space-y-1 overflow-y-auto">
+                  {mode === "lookup" && <div className="mt-3 max-h-48 space-y-1 overflow-y-auto">
                     {stockRows.map(row => {
                       const local = row.locationId === config.location_id;
                       return <button key={`${row.locationId}-${row.variantId ?? ""}`} type="button"
@@ -234,8 +276,8 @@ export function MultiLocationSearch({ config, session, onClose }: Props) {
                       </button>;
                     })}
                     {!stockRows.length && <p className="text-sm text-muted-foreground">No location stock for this selection.</p>}
-                  </div>
-                  {source && <div className="mt-4 space-y-3 border-t border-border pt-4">
+                  </div>}
+                  {mode === "lookup" && source && <div className="mt-4 space-y-3 border-t border-border pt-4">
                     <p className="text-sm font-semibold">Reserve from {source.locationName} → {config.location_name}</p>
                     <div className="flex gap-2">
                       <label className="min-w-0 flex-1 text-xs">Customer name
@@ -253,6 +295,19 @@ export function MultiLocationSearch({ config, session, onClose }: Props) {
                       {pending ? "Reserving…" : "Reserve for transfer"}
                     </button>
                   </div>}
+                  {mode === "stockIn" && <div className="mt-4 space-y-3 border-t border-border pt-4">
+                    <p className="text-sm">Current on hand here: {stockRows.find(row => row.locationId === config.location_id)?.onHand ?? 0}</p>
+                    <label className="block text-sm">Quantity physically received
+                      <input type="number" min="1" max="10000" step="1" value={stockInQuantity}
+                        onChange={event => { setStockInQuantity(event.target.value); setStockInKey(crypto.randomUUID()); }}
+                        className="mt-1 w-full rounded-lg bg-input p-2" />
+                    </label>
+                    <button type="button" disabled={pending || !!selected.variants?.length && !variantId}
+                      onClick={() => void stockIn()}
+                      className="w-full rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-50">
+                      {pending ? "Recording…" : `Stock In to ${config.location_name}`}
+                    </button>
+                  </div>}
                 </>
               )}
             </div>
@@ -262,7 +317,7 @@ export function MultiLocationSearch({ config, session, onClose }: Props) {
               value={pin} onChange={event => setPin(event.target.value)}
               className="mt-1 w-full max-w-56 rounded-lg bg-input p-2" />
           </label>
-          {!!reservations.length && <div className="mt-5 border-t border-border pt-4">
+          {mode === "lookup" && !!reservations.length && <div className="mt-5 border-t border-border pt-4">
             <h3 className="mb-2 text-sm font-semibold">Incoming reservations for this shop</h3>
             <div className="max-h-36 space-y-2 overflow-y-auto">
               {reservations.filter(reservation => reservation.status === "reserved").map(reservation => (

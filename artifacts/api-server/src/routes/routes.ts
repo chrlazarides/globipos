@@ -36,6 +36,7 @@ import { isValidIanaTimeZone } from "../quiet-hours";
 import { registerDeploymentControlRoutes } from "../deployment-control";
 import { registerDeploymentPackageRoutes } from "../deployment-package-routes";
 import { createItemImageSet, deleteItemImageSet, downloadItemImage, ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_MIME_TYPES, type ItemImageSize, uploadItemImageSet } from "../item-images";
+import { PosStockInError, receivePosStock, setImportedLocationStock, validateImportStockLocation } from "../pos-stock-in-service";
 
 import { createPosBuildsResolver } from "../pos-builds";
 import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "../customer-ai-service";
@@ -2313,6 +2314,8 @@ export async function registerRoutes(
       if (!rows.length) return res.status(400).json({ message: "File is empty" });
 
       const columnMap = req.body.columnMap ? JSON.parse(req.body.columnMap) : {};
+      const selectedLocationId = typeof req.body.selectedLocationId === "string" ? req.body.selectedLocationId.trim() : "";
+      if (selectedLocationId) await validateImportStockLocation(selectedLocationId);
       const upsert = req.body.mode === "upsert";
       releaseImportLock = await acquireCatalogImportLock();
       const categories = await storage.getCategories();
@@ -2413,7 +2416,14 @@ export async function registerRoutes(
             active: true,
           };
 
+          if (!selectedLocationId && getValue("stockQuantity")) {
+            throw new Error("Choose a stock location before importing quantities, or leave the stock column unmapped.");
+          }
+          let importedItemId: string;
           if (existing) {
+            if (selectedLocationId && getValue("stockQuantity") && existing.hasVariants) {
+              throw new Error("This item has size/colour variants. Use variant Stock In instead of importing a parent-item quantity.");
+            }
             const updateData: Record<string, any> = { name };
             updateData.barcode = itemData.barcode;
             if (getValue("description")) updateData.description = itemData.description;
@@ -2426,7 +2436,7 @@ export async function registerRoutes(
             for (const p of ["price1", "price2", "price3", "price4", "price5", "costPrice"] as const) {
               if (getValue(p)) updateData[p] = (itemData as any)[p];
             }
-            if (getValue("stockQuantity")) updateData.stockQuantity = itemData.stockQuantity;
+            if (getValue("stockQuantity") && !selectedLocationId) updateData.stockQuantity = itemData.stockQuantity;
             if (getValue("reorderLevel")) updateData.reorderLevel = itemData.reorderLevel;
             for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
               if (getValue(f)) updateData[f] = (itemData as any)[f];
@@ -2435,16 +2445,21 @@ export async function registerRoutes(
             await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
               storage.updateItem(existing.id, updateData)
             );
-            results.updated++;
+            importedItemId = existing.id;
           } else {
             normalizeAndValidateItemDetails(itemData);
             const created = await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, (barcode) =>
               storage.createItem({ ...itemData, barcode })
             );
+            importedItemId = created.id;
             barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
             if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
-            results.success++;
           }
+          if (selectedLocationId && getValue("stockQuantity")) {
+            await setImportedLocationStock(importedItemId, selectedLocationId, itemData.stockQuantity);
+          }
+          if (existing) results.updated++;
+          else results.success++;
         } catch (e: any) {
           results.errors.push({ row: i + 2, message: e.message });
         }
@@ -2469,6 +2484,8 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Too many rows (max 10000)" });
       }
 
+      const selectedLocationId = typeof req.body.selectedLocationId === "string" ? req.body.selectedLocationId.trim() : "";
+      if (selectedLocationId) await validateImportStockLocation(selectedLocationId);
       const upsert = req.body.mode === "upsert";
       releaseImportLock = await acquireCatalogImportLock();
       const categories = await storage.getCategories();
@@ -2571,7 +2588,14 @@ export async function registerRoutes(
             active: true,
           };
 
+          if (!selectedLocationId && clean(row.stockQuantity)) {
+            throw new Error("Choose a stock location before importing quantities, or omit stockQuantity.");
+          }
+          let importedItemId: string;
           if (existing) {
+            if (selectedLocationId && clean(row.stockQuantity) && existing.hasVariants) {
+              throw new Error("This item has size/colour variants. Use variant Stock In instead of importing a parent-item quantity.");
+            }
             const updateData: Record<string, any> = { name };
             updateData.barcode = itemData.barcode;
             if (clean(row.description)) updateData.description = itemData.description;
@@ -2584,7 +2608,7 @@ export async function registerRoutes(
             for (const p of ["price1", "price2", "price3", "price4", "price5", "costPrice"] as const) {
               if (clean((row as any)[p])) updateData[p] = (itemData as any)[p];
             }
-            if (clean(row.stockQuantity)) updateData.stockQuantity = itemData.stockQuantity;
+            if (clean(row.stockQuantity) && !selectedLocationId) updateData.stockQuantity = itemData.stockQuantity;
             if (clean(row.reorderLevel)) updateData.reorderLevel = itemData.reorderLevel;
             for (const f of ["volume", "alcoholPercentage", "brand", "origin", "vintage"] as const) {
               if (clean((row as any)[f])) updateData[f] = (itemData as any)[f];
@@ -2593,16 +2617,21 @@ export async function registerRoutes(
             await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, () =>
               storage.updateItem(existing.id, updateData)
             );
-            results.updated++;
+            importedItemId = existing.id;
           } else {
             normalizeAndValidateItemDetails(itemData);
             const created = await persistBarcodeAssignment(barcodeAssignment, results.barcodeIssues, (barcode) =>
               storage.createItem({ ...itemData, barcode })
             );
+            importedItemId = created.id;
             barcodeAllocator.rebindOwner(provisionalOwnerKey, `item:${created.id}`);
             if (upsert) existingBySku.set(sku.toLowerCase(), [created]);
-            results.success++;
           }
+          if (selectedLocationId && clean(row.stockQuantity)) {
+            await setImportedLocationStock(importedItemId, selectedLocationId, itemData.stockQuantity);
+          }
+          if (existing) results.updated++;
+          else results.success++;
         } catch (e: any) {
           results.errors.push({ row: i + 1, message: e.message });
         }
@@ -11754,6 +11783,49 @@ export async function registerRoutes(
       res.json(await getReservationSearchResults(q));
     } catch (e: any) {
       res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/pos/stock/stock-in", requireTerminal, async (req, res) => {
+    const schema = z.object({
+      itemId: z.string().trim().min(1).max(128),
+      variantId: z.string().trim().min(1).max(128).optional().nullable(),
+      quantity: z.number().int().min(1).max(1_000_000),
+      cashierId: z.string().trim().min(1).max(128),
+      pin: z.string().regex(/^\d{4,8}$/),
+      idempotencyKey: z.string().trim().min(8).max(128).regex(/^[A-Za-z0-9._:-]+$/),
+    }).strict();
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid stock-in details.", errors: parsed.error.flatten() });
+    }
+    try {
+      if (!requirePairedTerminalDevice(req, res)) return;
+      res.setHeader("Cache-Control", "no-store, private");
+      const terminal = (req as any).terminal;
+      const assignedButtons = terminal.layoutSetId
+        ? await storage.getPosLayoutButtons(terminal.layoutSetId) : [];
+      if (!assignedButtons.some((button: any) =>
+        button.buttonType === "action" && button.actionCode?.trim().toUpperCase() === "STOCK_IN")) {
+        return res.status(403).json({ message: "Stock In is not assigned to this Terminal layout." });
+      }
+      const cashier = await verifyTerminalCashier(req, res, parsed.data.cashierId, parsed.data.pin);
+      if (!cashier) return;
+      const result = await receivePosStock({
+        itemId: parsed.data.itemId,
+        variantId: parsed.data.variantId || null,
+        quantity: parsed.data.quantity,
+        locationId: terminal.locationId,
+        terminalId: terminal.id,
+        cashierId: cashier.id,
+        idempotencyKey: parsed.data.idempotencyKey,
+      });
+      res.json(result);
+    } catch (error: any) {
+      res.status(error instanceof PosStockInError ? error.status : 500).json({
+        ...(error instanceof PosStockInError ? { code: error.code } : {}),
+        message: error instanceof PosStockInError ? error.message : "Stock-in could not be completed.",
+      });
     }
   });
 

@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { db } from "./db";
 import {
+  chooseSingleLocationForLinesInTransaction,
+  POOLED_ONLINE_LOCATION_ID,
   completePosOrderStockInTransaction,
   completeInventoryTransfer,
   consumeLocationStockInTransaction,
@@ -1194,7 +1196,14 @@ export class DatabaseStorage implements IStorage {
           const quantity = Number(line.quantity) * (line.saleUnit === "pack" ? Number(item?.packSize || 1) : 1);
           stockLines.push({ itemId: line.itemId, variantId: line.variantId || null, quantity });
         }
-        if (stockLines.length) await consumeLocationStockInTransaction(tx, inventoryLocationId, stockLines);
+        if (stockLines.length) {
+          if (inventoryLocationId === POOLED_ONLINE_LOCATION_ID) {
+            inventoryLocationId = await chooseSingleLocationForLinesInTransaction(tx, stockLines);
+          }
+          await consumeLocationStockInTransaction(tx, inventoryLocationId, stockLines);
+        } else if (inventoryLocationId === POOLED_ONLINE_LOCATION_ID) {
+          inventoryLocationId = undefined;
+        }
       }
       const [inv] = await tx.insert(invoices).values({
         ...data,

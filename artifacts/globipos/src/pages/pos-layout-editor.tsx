@@ -95,6 +95,12 @@ export const ACTION_GROUPS: ActionGroup[] = [
     ],
   },
   {
+    group: "Inventory", icon: Package, color: "text-emerald-600",
+    actions: [
+      { code: "STOCK_IN", label: "Stock In", icon: Package, description: "Receive stock into this terminal's location" },
+    ],
+  },
+  {
     group: "Cash Drawer & Journal", icon: DoorOpen, color: "text-orange-600",
     actions: [
       { code: "OPEN_DRAWER",      label: "Open Drawer",          icon: DoorOpen,     description: "Pop open the cash drawer" },

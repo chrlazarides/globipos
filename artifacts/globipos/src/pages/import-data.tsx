@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
 import ExcelJS from "exceljs";
 import {
   BARCODE_ISSUE_REASON_LABELS,
@@ -608,9 +609,13 @@ export default function ImportData() {
   const [importResults, setImportResults] = useState<SheetResult[]>([]);
   const [importProgress, setImportProgress] = useState(0);
   const [updateExisting, setUpdateExisting] = useState(true);
+  const [selectedLocationId, setSelectedLocationId] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectedFileRef = useRef<File | null>(null);
   const { toast } = useToast();
+  const { data: importLocations = [] } = useQuery<{ id: string; name: string; active?: boolean }[]>({
+    queryKey: ["/api/pos/locations"],
+  });
 
   const reset = () => {
     selectedFileRef.current = null;
@@ -621,6 +626,7 @@ export default function ImportData() {
     setActiveSheet("");
     setImportResults([]);
     setImportProgress(0);
+    setSelectedLocationId("");
   };
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -745,12 +751,22 @@ export default function ImportData() {
       IMPORT_ORDER[a.detectedEntity as Exclude<EntityType, "skip">] -
       IMPORT_ORDER[b.detectedEntity as Exclude<EntityType, "skip">]
     );
+  const hasStockRowsWithoutLocation = sheetsToImport.some((sheet) => {
+    if (sheet.detectedEntity !== "items") return false;
+    // Normal sheets retain only preview rows in the browser; if the stock
+    // column is mapped, a later row may contain stock even when the preview does not.
+    return !!sheet.columnMap.stockQuantity;
+  });
 
   const handleImport = async () => {
     const selectedFile = selectedFileRef.current;
     if (!selectedFile) {
       toast({ title: "File not available", description: "Select the file again before importing.", variant: "destructive" });
       reset();
+      return;
+    }
+    if (hasStockRowsWithoutLocation && !selectedLocationId) {
+      toast({ title: "Stock location required", description: "Choose the location where imported stock quantities should be assigned.", variant: "destructive" });
       return;
     }
     setStep("importing");
@@ -770,10 +786,17 @@ export default function ImportData() {
         let res: Response;
 
         if (sheet._preParsedRows) {
+          const jsonBody: Record<string, unknown> = {
+            rows: sheet._preParsedRows,
+            mode: updateExisting ? "upsert" : undefined,
+          };
+          if (sheet.detectedEntity === "items" && selectedLocationId) {
+            jsonBody.selectedLocationId = selectedLocationId;
+          }
           res = await fetch(config.endpoint + "/json", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rows: sheet._preParsedRows, mode: updateExisting ? "upsert" : undefined }),
+            body: JSON.stringify(jsonBody),
           });
         } else {
           const formData = new FormData();
@@ -781,6 +804,9 @@ export default function ImportData() {
           formData.append("columnMap", JSON.stringify(cleanedMap));
           formData.append("sheetName", sheet.sheetName);
           if (updateExisting) formData.append("mode", "upsert");
+          if (sheet.detectedEntity === "items" && selectedLocationId) {
+            formData.append("selectedLocationId", selectedLocationId);
+          }
           res = await fetch(config.endpoint, { method: "POST", body: formData });
         }
 
@@ -917,13 +943,27 @@ export default function ImportData() {
                     />
                     Update existing records (match by code / SKU)
                   </label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm whitespace-nowrap">Stock location</span>
+                    <Select value={selectedLocationId || "__unset__"} onValueChange={(value) => setSelectedLocationId(value === "__unset__" ? "" : value)}>
+                      <SelectTrigger className="w-48 h-9" data-testid="select-import-stock-location">
+                        <SelectValue placeholder="Choose location" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__unset__">Choose location</SelectItem>
+                        {importLocations.filter((location) => location.active !== false).map((location) => (
+                          <SelectItem key={location.id} value={location.id}>{location.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <Button variant="outline" onClick={reset} data-testid="button-import-change-file">
                     <RefreshCw className="w-4 h-4 mr-2" />
                     Change File
                   </Button>
                   <Button
                     onClick={handleImport}
-                    disabled={sheetsToImport.length === 0}
+                    disabled={sheetsToImport.length === 0 || (hasStockRowsWithoutLocation && !selectedLocationId)}
                     data-testid="button-confirm-import"
                   >
                     <Check className="w-4 h-4 mr-2" />

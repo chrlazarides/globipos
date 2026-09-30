@@ -31,6 +31,8 @@ export type InventoryLine = {
   quantity: number;
 };
 
+export const POOLED_ONLINE_LOCATION_ID = "__available_shops__";
+
 type StockKey = { itemId: string; variantId: string | null; quantity: number };
 
 function normalizeLines(lines: InventoryLine[]): StockKey[] {
@@ -55,7 +57,8 @@ async function lockInventoryEntities(tx: any, lines: StockKey[]): Promise<void> 
   const itemIds = [...new Set(lines.map((line) => line.itemId))].sort();
   if (!itemIds.length) return;
   const lockedItems = await tx.execute(sql`
-    SELECT id FROM items WHERE id = ANY(${itemIds}::text[]) ORDER BY id FOR UPDATE
+    SELECT id FROM items WHERE id IN (${sql.join(itemIds.map((id) => sql`${id}`), sql`, `)})
+    ORDER BY id FOR UPDATE
   `);
   if (lockedItems.rows.length !== itemIds.length) {
     throw new InventoryError("One or more items no longer exist.", 409, "ITEM_NOT_FOUND");
@@ -64,7 +67,9 @@ async function lockInventoryEntities(tx: any, lines: StockKey[]): Promise<void> 
   const variantIds = [...new Set(lines.map((line) => line.variantId).filter(Boolean) as string[])].sort();
   if (variantIds.length) {
     const lockedVariants = await tx.execute(sql`
-      SELECT id FROM item_variants WHERE id = ANY(${variantIds}::text[]) ORDER BY id FOR UPDATE
+      SELECT id FROM item_variants
+      WHERE id IN (${sql.join(variantIds.map((id) => sql`${id}`), sql`, `)})
+      ORDER BY id FOR UPDATE
     `);
     if (lockedVariants.rows.length !== variantIds.length) {
       throw new InventoryError("One or more selected variants no longer exist.", 409, "VARIANT_NOT_FOUND");
@@ -106,7 +111,7 @@ async function getActiveReservations(
   excludeReservationIds: string[] = [],
 ): Promise<number> {
   const excluded = excludeReservationIds.length
-    ? sql`AND id <> ALL(${excludeReservationIds}::text[])`
+    ? sql`AND id NOT IN (${sql.join(excludeReservationIds.map((id) => sql`${id}`), sql`, `)})`
     : sql``;
   const result = await tx.execute(sql`
     SELECT COALESCE(SUM(quantity), 0)::int AS quantity
@@ -219,6 +224,27 @@ export async function consumeLocationStockInTransaction(
   }
 }
 
+export async function chooseSingleLocationForLinesInTransaction(tx: any, rawLines: InventoryLine[]): Promise<string> {
+  const lines = normalizeLines(rawLines);
+  if (!lines.length) throw new InventoryError("An invoice needs stock lines.", 400, "EMPTY_LINES");
+  await lockInventoryEntities(tx, lines);
+  const locations = await tx.select({ id: posLocations.id })
+    .from(posLocations).where(eq(posLocations.active, true)).orderBy(posLocations.id);
+  for (const location of locations) {
+    let canFulfill = true;
+    for (const line of lines) {
+      const stock = await getLocationStock(tx, line, location.id);
+      const held = await getActiveReservations(tx, line, location.id);
+      if (!stock || Number(stock.quantity) - held < line.quantity) {
+        canFulfill = false;
+        break;
+      }
+    }
+    if (canFulfill) return location.id;
+  }
+  throw new InventoryError("No single shop has all unreserved items for this invoice. Select a stock location or transfer the items first.", 409, "INSUFFICIENT_AVAILABLE_STOCK");
+}
+
 async function holdInTransaction(
   tx: any,
   options: {
@@ -268,10 +294,16 @@ async function holdInTransaction(
   const [item] = await tx.select({ id: items.id, name: items.name, active: items.active, hasVariants: items.hasVariants })
     .from(items).where(eq(items.id, line.itemId)).limit(1);
   if (!item?.active) throw new InventoryError("Item is inactive or missing.", 409, "ITEM_UNAVAILABLE");
+  let transferVariant: { active: boolean; sku: string | null; barcode: string | null; option1Value: string | null; option2Value: string | null; option3Value: string | null } | undefined;
   if (line.variantId) {
-    const [variant] = await tx.select({ id: itemVariants.id, active: itemVariants.active })
+    const [variant] = await tx.select({
+      id: itemVariants.id, active: itemVariants.active, sku: itemVariants.sku,
+      barcode: itemVariants.barcode, option1Value: itemVariants.option1Value,
+      option2Value: itemVariants.option2Value, option3Value: itemVariants.option3Value,
+    })
       .from(itemVariants).where(and(eq(itemVariants.id, line.variantId), eq(itemVariants.itemId, line.itemId))).limit(1);
     if (!variant?.active) throw new InventoryError("Variant is inactive or does not belong to this item.", 400, "VARIANT_MISMATCH");
+    transferVariant = variant;
   } else if (item.hasVariants) {
     throw new InventoryError("A variant must be selected for this item.", 400, "VARIANT_REQUIRED");
   }
@@ -318,7 +350,9 @@ async function holdInTransaction(
       transferId,
       itemId: line.itemId,
       variantId: line.variantId,
-      itemName: item.name,
+      itemName: [item.name, transferVariant && [transferVariant.option1Value, transferVariant.option2Value, transferVariant.option3Value].filter(Boolean).join(" / ")].filter(Boolean).join(" · "),
+      sku: transferVariant?.sku || null,
+      barcode: transferVariant?.barcode || null,
       quantity: line.quantity,
     });
   }
@@ -366,6 +400,42 @@ export async function createOrderReservationInTransaction(
   },
 ): Promise<void> {
   for (const line of normalizeLines(options.lines)) {
+    if (options.locationId === POOLED_ONLINE_LOCATION_ID) {
+      // Lock the item before choosing locations. Every hold and sale takes this
+      // lock, so concurrent checkouts cannot both allocate the last unit.
+      await lockInventoryEntities(tx, [line]);
+      const availableSources = await tx.execute(sql`
+        SELECT ils.location_id, ils.quantity
+        FROM item_location_stock ils
+        JOIN pos_locations location ON location.id = ils.location_id AND location.active = true
+        WHERE ils.item_id = ${line.itemId}
+          AND ils.variant_id IS NOT DISTINCT FROM ${line.variantId}
+        ORDER BY ils.location_id
+        FOR UPDATE OF ils
+      `);
+      let remaining = line.quantity;
+      for (const source of availableSources.rows as { location_id: string; quantity: number }[]) {
+        const held = await getActiveReservations(tx, line, source.location_id);
+        const available = Math.max(0, Number(source.quantity) - held);
+        if (!available) continue;
+        const quantity = Math.min(remaining, available);
+        await holdInTransaction(tx, {
+          ...options,
+          itemId: line.itemId,
+          variantId: line.variantId,
+          quantity,
+          sourceLocationId: source.location_id,
+          destinationLocationId: source.location_id,
+          idempotencyKey: `${options.idempotencyKey}:${line.itemId}:${line.variantId || "item"}:${source.location_id}`,
+        });
+        remaining -= quantity;
+        if (remaining === 0) break;
+      }
+      if (remaining > 0) {
+        throw new InventoryError("Not enough unreserved stock across shops for this online order.", 409, "INSUFFICIENT_AVAILABLE_STOCK");
+      }
+      continue;
+    }
     await holdInTransaction(tx, {
       ...line,
       sourceLocationId: options.locationId,
@@ -403,11 +473,19 @@ export async function fulfillReservationsForSourceInTransaction(
     eq(inventoryReservations.status, "reserved"),
   )).orderBy(inventoryReservations.itemId, inventoryReservations.variantId);
   if (!reservations.length) return;
-  await consumeLocationStockInTransaction(tx, reservations[0].sourceLocationId, reservations.map((reservation: any) => ({
-    itemId: reservation.itemId,
-    variantId: reservation.variantId,
-    quantity: reservation.quantity,
-  })), { excludeReservationIds: reservations.map((reservation: any) => reservation.id) });
+  const byLocation = new Map<string, typeof reservations>();
+  for (const reservation of reservations) {
+    const group = byLocation.get(reservation.sourceLocationId) || [];
+    group.push(reservation);
+    byLocation.set(reservation.sourceLocationId, group);
+  }
+  for (const [locationId, group] of [...byLocation].sort(([a], [b]) => a.localeCompare(b))) {
+    await consumeLocationStockInTransaction(tx, locationId, group.map((reservation: any) => ({
+      itemId: reservation.itemId,
+      variantId: reservation.variantId,
+      quantity: reservation.quantity,
+    })), { excludeReservationIds: group.map((reservation: any) => reservation.id) });
+  }
   await tx.update(inventoryReservations)
     .set({ status: "fulfilled", updatedAt: new Date() })
     .where(inArray(inventoryReservations.id, reservations.map((reservation: any) => reservation.id)));
@@ -720,6 +798,34 @@ export async function getReservationsForDestination(destinationLocationId: strin
 }
 
 export async function getAvailableAtLocation(locationId: string) {
+  if (locationId === POOLED_ONLINE_LOCATION_ID) {
+    const rows = await db.execute(sql`
+      SELECT stock.item_id AS "itemId", stock.variant_id AS "variantId",
+        stock.on_hand AS "onHand", COALESCE(holds.reserved, 0)::int AS reserved
+      FROM (
+        SELECT ils.item_id, ils.variant_id, SUM(ils.quantity)::int AS on_hand
+        FROM item_location_stock ils
+        JOIN pos_locations location ON location.id = ils.location_id AND location.active = true
+        GROUP BY ils.item_id, ils.variant_id
+      ) stock
+      JOIN items i ON i.id = stock.item_id AND i.active = true
+      LEFT JOIN (
+        SELECT r.item_id, r.variant_id, SUM(r.quantity)::int AS reserved
+        FROM inventory_reservations r
+        JOIN pos_locations location ON location.id = r.source_location_id AND location.active = true
+        WHERE r.status = 'reserved'
+        GROUP BY r.item_id, r.variant_id
+      ) holds ON holds.item_id = stock.item_id
+        AND holds.variant_id IS NOT DISTINCT FROM stock.variant_id
+    `);
+    return (rows.rows as any[]).map((row) => ({
+      itemId: row.itemId,
+      variantId: row.variantId,
+      onHand: Number(row.onHand),
+      reserved: Number(row.reserved),
+      available: Math.max(0, Number(row.onHand) - Number(row.reserved)),
+    }));
+  }
   const rows = await db.execute(sql`
     WITH stock AS (
       SELECT item_id, variant_id, location_id,
@@ -760,12 +866,17 @@ export async function getOnlineFulfillmentLocation() {
     eq(posLocations.active, true),
     eq(posLocations.isDefaultReceiving, true),
   )).limit(2);
-  if (locations.length !== 1) {
+  if (locations.length > 1) {
     throw new InventoryError(
-      "Online ordering is unavailable: configure exactly one active default receiving location for inventory fulfillment.",
+      "Online ordering is unavailable: configure at most one active default receiving location.",
       503,
       "ONLINE_FULFILLMENT_LOCATION_UNCONFIGURED",
     );
   }
-  return locations[0];
+  if (locations.length === 1) return locations[0];
+  const [active] = await db.select().from(posLocations).where(eq(posLocations.active, true)).limit(1);
+  if (!active) throw new InventoryError("Online ordering requires an active stock location.", 503, "ONLINE_FULFILLMENT_LOCATION_UNCONFIGURED");
+  // Until the merchant chooses a single fulfillment shop, allocate each ordered
+  // item to a shop with unreserved stock instead of assigning all orders to one.
+  return { ...active, id: POOLED_ONLINE_LOCATION_ID, name: "Available shops" };
 }
