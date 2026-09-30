@@ -1,14 +1,14 @@
 import { useState, useEffect } from "react";
 import { LogOut, Settings, Trash2, Search, ArrowRight, X, AlertCircle, Globe, ExternalLink, RefreshCw } from "lucide-react";
 import { Link } from "wouter";
-import type { TerminalConfig, CashierSession, Category, Product, OrderLine, Order } from "../types";
-import { getCategories, getProducts, saveOrder, writeAudit } from "../lib/db";
+import type { TerminalConfig, CashierSession, Category, Product, OrderLine } from "../types";
+import { getCategories, getProducts, writeAudit } from "../lib/db";
 import { useToast } from "@/hooks/use-toast";
 import { BrandLogo } from "@/components/BrandLogo";
 import { calculateLine, createOrderLine, parseValidCashTender } from "@/lib/pos-calculations";
-import { createOrderNumber, effectivePrice } from "@/lib/pos-calculations";
-import { flushOutbox } from "@/lib/sync";
+import { effectivePrice } from "@/lib/pos-calculations";
 import { VoucherDialog } from "../components/VoucherDialog";
+import { MultiLocationSearch } from "../components/MultiLocationSearch";
 
 interface POSProps {
   config: TerminalConfig;
@@ -47,6 +47,8 @@ export function POS({ config, session, onLogout }: POSProps) {
   const [externalButtons, setExternalButtons] = useState<ExternalButton[]>([]);
   const [voucherButtons, setVoucherButtons] = useState<VoucherButton[]>([]);
   const [voucherMode, setVoucherMode] = useState<"issue" | "redeem" | null>(null);
+  const [itemSearchAssigned, setItemSearchAssigned] = useState(false);
+  const [showMultiLocationSearch, setShowMultiLocationSearch] = useState(false);
   const [externalPanel, setExternalPanel] = useState<ExternalButton | null>(null);
   const [layoutError, setLayoutError] = useState("");
   const [layoutRefresh, setLayoutRefresh] = useState(0);
@@ -54,6 +56,10 @@ export function POS({ config, session, onLogout }: POSProps) {
   
   const [paying, setPaying] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
+  const [checkoutPin, setCheckoutPin] = useState("");
+  const [checkoutId, setCheckoutId] = useState(() => crypto.randomUUID());
+  const [checkoutPending, setCheckoutPending] = useState(false);
+  const [checkoutUncertain, setCheckoutUncertain] = useState(false);
   
   const { toast } = useToast();
 
@@ -100,6 +106,8 @@ export function POS({ config, session, onLogout }: POSProps) {
         if (!controller.signal.aborted) {
           setExternalButtons(buttons.sort((a, b) => a.position - b.position));
           setVoucherButtons(voucherLayoutButtons.sort((a, b) => a.position - b.position));
+          setItemSearchAssigned(data.buttons.some((button: any) =>
+            button.buttonType === "action" && button.actionCode?.toUpperCase() === "ITEM_SEARCH"));
           setExternalPanel(current => current && buttons.some(button =>
             button.position === current.position && button.actionCode === current.actionCode &&
             button.launch.type === current.launch.type && button.launch.target === current.launch.target) ? current : null);
@@ -109,6 +117,7 @@ export function POS({ config, session, onLogout }: POSProps) {
         if (!controller.signal.aborted) {
           setExternalButtons([]);
           setVoucherButtons([]);
+          setItemSearchAssigned(false);
           setExternalPanel(null);
           setLayoutError(error instanceof Error ? error.message : "Layout unavailable");
         }
@@ -191,6 +200,7 @@ export function POS({ config, session, onLogout }: POSProps) {
   const total = subtotal; // Assuming VAT included in line_total for simplicity here
 
   function addToCart(product: Product) {
+    setCheckoutId(crypto.randomUUID());
     setCart(prev => {
       const existing = prev.find(l => l.product_id === product.id);
       if (existing) {
@@ -204,10 +214,12 @@ export function POS({ config, session, onLogout }: POSProps) {
   }
 
   function removeLine(id: string) {
+    setCheckoutId(crypto.randomUUID());
     setCart(prev => prev.filter(l => l.id !== id));
   }
 
   function changeQty(id: string, delta: number) {
+    setCheckoutId(crypto.randomUUID());
     setCart(prev => prev.map(l => {
       if (l.id === id) {
         const newQty = Math.max(1, l.qty + delta);
@@ -219,53 +231,59 @@ export function POS({ config, session, onLogout }: POSProps) {
 
   async function completePayment(method: string) {
     const cashTender = parseValidCashTender(paymentAmount, total);
-    if (method === "cash" && cashTender === null) {
+    if (checkoutPending || method !== "cash" || cashTender === null) {
       toast({ variant: "destructive", title: "Enter enough cash to cover the total" });
       return;
     }
-    const order: Order = {
-      id: crypto.randomUUID(),
-      order_number: createOrderNumber(config.terminal_code, Date.now(), crypto.randomUUID()),
-      status: "completed",
-      cashier_id: session.cashier_id,
-      cashier_name: session.cashier_name,
-      price_level: config.price_level,
-      order_discount_pct: 0,
-      order_discount_fixed: 0,
-      surcharge_pct: 0,
-      surcharge_amount: 0,
-      subtotal,
-      discount_amount: 0,
-      vat_amount: cart.reduce((sum, line) => sum + line.vat_amount, 0),
-      total,
-      payment_method: method,
-      amount_tendered: cashTender ?? total,
-      change_due: Math.max(0, (cashTender ?? total) - total),
-      created_at: new Date().toISOString(),
-    };
-    
-    // Associate lines
-    const finalLines = cart.map(l => ({ ...l, order_id: order.id }));
-    
+    if (!navigator.onLine) {
+      toast({ variant: "destructive", title: "Online checkout required", description: "Reconnect before completing a sale. Reserved stock cannot be checked offline." });
+      return;
+    }
+    if (!config.voucher_device_key) {
+      toast({ variant: "destructive", title: "Pair this Terminal first", description: "An administrator must generate its device key. Save the key in Terminal Settings before selling stock." });
+      return;
+    }
+    if (!/^\d{4,8}$/.test(checkoutPin)) {
+      toast({ variant: "destructive", title: "Enter your cashier PIN" });
+      return;
+    }
+    setCheckoutPending(true);
     try {
-      await saveOrder(order, finalLines);
-      void writeAudit("sale", "order", order.id, `Sale for ${formatMoney(total)}`, session.cashier_id, session.cashier_name)
+      const response = await fetch(`${config.server_url}/api/pos/sync/cash-sale`, {
+        method: "POST", cache: "no-store",
+        headers: { "Content-Type": "application/json", "X-Terminal-Code": config.terminal_code,
+          "X-Voucher-Device-Key": config.voucher_device_key },
+        body: JSON.stringify({
+          orderId: checkoutId,
+          lines: cart.map(line => ({ itemId: line.product_id, quantity: line.qty })),
+          cashierId: session.cashier_id, pin: checkoutPin,
+          expectedTotalCents: Math.round(total * 100), cashTenderCents: Math.round(cashTender * 100),
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.message || `Checkout failed (${response.status})`);
+      if (!data || typeof data.orderNumber !== "string") throw new Error("Checkout was accepted but the receipt was incomplete. Retry the same sale.");
+      void writeAudit("sale", "order", data.orderNumber, `Online cash sale for ${formatMoney(total)}`, session.cashier_id, session.cashier_name)
         .catch((error) => console.error("Failed to queue sale audit record", error));
-      if (navigator.onLine) void flushOutbox();
-      
       toast({
         title: "Payment successful",
-        description: `Order ${order.order_number} saved to outbox.`,
+        description: `Order ${data.orderNumber} completed online.`,
       });
       setCart([]);
       setPaying(false);
       setPaymentAmount("");
+      setCheckoutPin("");
+      setCheckoutUncertain(false);
+      setCheckoutId(crypto.randomUUID());
     } catch (e: any) {
+      if (e instanceof TypeError || /receipt was incomplete/.test(e?.message ?? "")) setCheckoutUncertain(true);
       toast({
         variant: "destructive",
-        title: "Error saving order",
-        description: e.message,
+        title: "Sale not confirmed",
+        description: `${e.message || "Connection failed."} Keep this sale open and retry with the same details; do not collect payment twice.`,
       });
+    } finally {
+      setCheckoutPending(false);
     }
   }
 
@@ -275,7 +293,9 @@ export function POS({ config, session, onLogout }: POSProps) {
     return (
       <div className="fixed inset-0 z-50 bg-background flex flex-col">
         <header className="h-16 bg-card border-b border-border flex items-center px-6">
-          <button onClick={() => setPaying(false)} className="mr-4 p-2 bg-input rounded-full text-foreground hover:bg-input/80">
+          <button onClick={() => setPaying(false)} disabled={checkoutPending || checkoutUncertain}
+            title={checkoutUncertain ? "Retry this sale before leaving; its server status is unknown" : "Back to cart"}
+            className="mr-4 p-2 bg-input rounded-full text-foreground hover:bg-input/80 disabled:opacity-40">
             <X className="w-6 h-6" />
           </button>
           <h1 className="text-xl font-bold">Payment</h1>
@@ -295,12 +315,14 @@ export function POS({ config, session, onLogout }: POSProps) {
                 min="0"
                 step="0.01"
                 value={paymentAmount}
-                onChange={e => setPaymentAmount(e.target.value)}
+                onChange={e => { if (!checkoutUncertain) setPaymentAmount(e.target.value); }}
+                readOnly={checkoutUncertain}
                 placeholder={total.toString()}
                 className="flex-1 bg-input text-foreground text-2xl p-4 rounded-xl outline-none focus:ring-2 focus:ring-primary"
               />
               <button 
-                onClick={() => setPaymentAmount(total.toString())}
+                onClick={() => { if (!checkoutUncertain) setPaymentAmount(total.toString()); }}
+                disabled={checkoutUncertain}
                 className="bg-secondary text-secondary-foreground px-4 py-4 rounded-xl font-semibold"
               >
                 Exact
@@ -313,15 +335,23 @@ export function POS({ config, session, onLogout }: POSProps) {
                 <p className="text-2xl text-green-400 font-bold">{formatMoney(parseFloat(paymentAmount) - total)}</p>
               </div>
             )}
+            <label className="mt-4 block text-sm">Cashier PIN for online stock check
+              <input type="password" inputMode="numeric" autoComplete="off" minLength={4} maxLength={8}
+                value={checkoutPin} onChange={event => setCheckoutPin(event.target.value)}
+                className="mt-1 w-full rounded-lg bg-input p-3" />
+            </label>
+            {checkoutUncertain && <p role="alert" className="mt-3 rounded-lg bg-amber-500/15 p-3 text-sm text-amber-300">
+              The server may have completed this sale. Retry with the same order ID; the server will return the original receipt rather than charge twice.
+            </p>}
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-md">
             <button 
               onClick={() => completePayment("cash")}
-              disabled={cashTender === null}
+              disabled={cashTender === null || checkoutPending || !/^\d{4,8}$/.test(checkoutPin)}
               className="py-5 bg-primary text-primary-foreground text-lg font-bold rounded-xl active:scale-95 transition-transform disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Cash
+              {checkoutPending ? "Checking stock…" : checkoutUncertain ? "Retry same sale" : "Cash · online"}
             </button>
             <button 
               disabled
@@ -339,6 +369,8 @@ export function POS({ config, session, onLogout }: POSProps) {
 
   return (
     <div className="flex flex-col h-screen bg-background">
+      {showMultiLocationSearch && <MultiLocationSearch config={config} session={session}
+        onClose={() => setShowMultiLocationSearch(false)} />}
       {voucherMode && <VoucherDialog mode={voucherMode} config={config} session={session} cart={cart} total={total}
         onClose={() => setVoucherMode(null)}
         onRedeemed={orderNumber => {
@@ -461,7 +493,10 @@ export function POS({ config, session, onLogout }: POSProps) {
                 className="rounded border border-emerald-400 bg-emerald-950/40 px-3 py-2 text-xs font-medium text-emerald-200 hover:bg-emerald-900/50"
                 data-testid={`terminal-voucher-${button.actionCode}`}>{button.label}</button>
             ))}
-            {!externalButtons.length && !voucherButtons.length && <span className="text-xs text-muted-foreground">
+            {itemSearchAssigned && <button type="button" onClick={() => setShowMultiLocationSearch(true)}
+              className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
+              data-testid="terminal-item-search">Search Items · all shops</button>}
+            {!externalButtons.length && !voucherButtons.length && !itemSearchAssigned && <span className="text-xs text-muted-foreground">
               {layoutError ? "Layout tools unavailable" : "No approved tools assigned"}
             </span>}
             <button type="button" className="ml-auto p-1" aria-label="Refresh layout tools" title={layoutError || "Refresh layout tools"}
@@ -478,6 +513,9 @@ export function POS({ config, session, onLogout }: POSProps) {
                 className="w-full bg-input text-foreground text-sm rounded-lg pl-9 pr-4 py-2 outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
+            <button type="button" onClick={() => setShowMultiLocationSearch(true)}
+              className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-input"
+              data-testid="terminal-other-shops">Other shops &amp; reserve</button>
           </div>
           
           {!search && (

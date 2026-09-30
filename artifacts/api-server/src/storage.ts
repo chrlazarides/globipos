@@ -1,5 +1,15 @@
 // @ts-nocheck
 import { db } from "./db";
+import {
+  completePosOrderStockInTransaction,
+  completeInventoryTransfer,
+  consumeLocationStockInTransaction,
+  createOrderReservationInTransaction,
+  fulfillReservationsForSourceInTransaction,
+  getOnlineFulfillmentLocation,
+  releaseReservationsForSourceInTransaction,
+  setLocationStockSafely,
+} from "./inventory-reservations";
 import { eq, and, gte, lte, lt, gt, desc, sql, ilike, or, inArray, isNull, isNotNull } from "drizzle-orm";
 import { generateVariantBarcode, synthesizeDescriptiveCode, synthesizeQrCode, synthesizeSequentialCode } from "./barcode-utils";
 import {
@@ -210,6 +220,7 @@ export interface IStorage {
       goldCashbackPercent: number;
       maxCashbackOrderPercent: number;
     },
+    inventoryLocationId: string,
   ): Promise<{ order: PortalOrder; replayed: boolean }>;
   getAvailableItems(): Promise<Item[]>;
 
@@ -321,6 +332,7 @@ export interface IStorage {
   getPosOrders(locationId?: string, terminalId?: string): Promise<PosOrder[]>;
   getPosOrder(id: string): Promise<PosOrder | undefined>;
   getPosOrderByNumber(orderNumber: string): Promise<(PosOrder & { lines: PosOrderLine[] }) | undefined>;
+  commitExistingPosOrderInventory(id: string): Promise<void>;
   createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder>;
   updatePosOrderCardRef(id: string, cardTerminalRef: string): Promise<void>;
   completeCardPosOrder(id: string, cardTerminalRef: string, amountTendered: string): Promise<void>;
@@ -465,27 +477,10 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
   async setLocationStock(itemId: string, variantId: string | null, locationId: string, quantity: number) {
-    const conditions = [eq(itemLocationStock.itemId, itemId), eq(itemLocationStock.locationId, locationId)];
-    conditions.push(variantId ? eq(itemLocationStock.variantId, variantId) : isNull(itemLocationStock.variantId));
-    const [existing] = await db.select().from(itemLocationStock).where(and(...conditions));
-    if (existing) {
-      const [row] = await db.update(itemLocationStock).set({ quantity }).where(eq(itemLocationStock.id, existing.id)).returning();
-      return row;
-    }
-    const [row] = await db.insert(itemLocationStock).values({ itemId, variantId: variantId || null, locationId, quantity }).returning();
-    return row;
+    return setLocationStockSafely(itemId, variantId || null, locationId, quantity);
   }
   async adjustLocationStock(itemId: string, variantId: string | null, locationId: string, delta: number) {
-    const conditions = [eq(itemLocationStock.itemId, itemId), eq(itemLocationStock.locationId, locationId)];
-    conditions.push(variantId ? eq(itemLocationStock.variantId, variantId) : isNull(itemLocationStock.variantId));
-    const [existing] = await db.select().from(itemLocationStock).where(and(...conditions));
-    if (existing) {
-      const newQty = existing.quantity + delta;
-      const [row] = await db.update(itemLocationStock).set({ quantity: newQty }).where(eq(itemLocationStock.id, existing.id)).returning();
-      return row;
-    }
-    const [row] = await db.insert(itemLocationStock).values({ itemId, variantId: variantId || null, locationId, quantity: delta }).returning();
-    return row;
+    return setLocationStockSafely(itemId, variantId || null, locationId, delta, true);
   }
 
   async getItems() {
@@ -557,8 +552,18 @@ export class DatabaseStorage implements IStorage {
   }
   async updateItem(id: string, data: Partial<InsertItem>) {
     return db.transaction(async (tx) => {
-      const [existing] = await tx.select().from(items).where(eq(items.id, id));
+      const [existing] = await tx.select().from(items).where(eq(items.id, id)).for("update");
       if (!existing) return undefined;
+      if (data.stockQuantity !== undefined) {
+        const holds = await tx.execute(sql`
+          SELECT COALESCE(SUM(quantity), 0)::int AS quantity
+          FROM inventory_reservations
+          WHERE item_id = ${id} AND variant_id IS NULL AND status = 'reserved'
+        `);
+        if (Number(data.stockQuantity) < Number(holds.rows[0]?.quantity || 0)) {
+          throw new Error("Item stock cannot be reduced below quantities reserved for transfer or online orders.");
+        }
+      }
       const oldPrice = Number(existing.price1);
       const newPrice = data.price1 === undefined ? oldPrice : Number(data.price1);
       if (!existing.shelfLabelDiscountEnabled && data.shelfLabelDiscountEnabled === true) {
@@ -619,11 +624,34 @@ export class DatabaseStorage implements IStorage {
     return v;
   }
   async updateItemVariant(id: string, data: Partial<InsertItemVariant>) {
-    const [v] = await db.update(itemVariants).set(data).where(eq(itemVariants.id, id)).returning();
-    return v;
+    return db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(itemVariants).where(eq(itemVariants.id, id)).for("update");
+      if (!existing) return undefined;
+      if (data.stockQuantity !== undefined) {
+        const holds = await tx.execute(sql`
+          SELECT COALESCE(SUM(quantity), 0)::int AS quantity
+          FROM inventory_reservations
+          WHERE item_id = ${existing.itemId} AND variant_id = ${id} AND status = 'reserved'
+        `);
+        if (Number(data.stockQuantity) < Number(holds.rows[0]?.quantity || 0)) {
+          throw new Error("Variant stock cannot be reduced below quantities reserved for transfer or online orders.");
+        }
+      }
+      const [updated] = await tx.update(itemVariants).set(data).where(eq(itemVariants.id, id)).returning();
+      return updated;
+    });
   }
   async deleteItemVariant(id: string) {
-    await db.delete(itemVariants).where(eq(itemVariants.id, id));
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM item_variants WHERE id = ${id} FOR UPDATE`);
+      const holds = await tx.execute(sql`
+        SELECT 1 FROM inventory_reservations
+        WHERE variant_id = ${id} AND status = 'reserved'
+        LIMIT 1
+      `);
+      if (holds.rows.length) throw new Error("Variant cannot be deleted while stock is reserved for transfer or online orders.");
+      await tx.delete(itemVariants).where(eq(itemVariants.id, id));
+    });
   }
 
   async bulkUpsertVariantMatrix(
@@ -1151,13 +1179,33 @@ export class DatabaseStorage implements IStorage {
     return `${prefix}-${String(num).padStart(5, "0")}`;
   }
 
-  async createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[], overrideNumber?: string) {
+  async createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[], overrideNumber?: string, inventoryLocationId?: string) {
     const invoiceNumber = overrideNumber || await this.getNextInvoiceNumber(data.type as string);
-    const [inv] = await db.insert(invoices).values({ ...data, invoiceNumber }).returning();
-    if (lineItems.length > 0) {
-      await db.insert(invoiceItems).values(lineItems.map((li) => ({ ...li, invoiceId: inv.id })));
-    }
-    return inv;
+    return db.transaction(async (tx) => {
+      const isPostedSale = data.type === "invoice" && data.status !== "draft";
+      if (isPostedSale) {
+        if (!inventoryLocationId) {
+          throw new Error("A configured inventory fulfillment location is required to post a stock invoice.");
+        }
+        const stockLines = [];
+        for (const line of lineItems) {
+          if (!line.itemId) continue;
+          const [item] = await tx.select({ packSize: items.packSize }).from(items).where(eq(items.id, line.itemId)).limit(1);
+          const quantity = Number(line.quantity) * (line.saleUnit === "pack" ? Number(item?.packSize || 1) : 1);
+          stockLines.push({ itemId: line.itemId, variantId: line.variantId || null, quantity });
+        }
+        if (stockLines.length) await consumeLocationStockInTransaction(tx, inventoryLocationId, stockLines);
+      }
+      const [inv] = await tx.insert(invoices).values({
+        ...data,
+        ...(inventoryLocationId ? { inventoryLocationId } : {}),
+        invoiceNumber,
+      }).returning();
+      if (lineItems.length > 0) {
+        await tx.insert(invoiceItems).values(lineItems.map((li) => ({ ...li, invoiceId: inv.id })));
+      }
+      return inv;
+    });
   }
 
   async updateInvoice(id: string, data: Partial<InsertInvoice>, lineItems?: InsertInvoiceItem[]) {
@@ -2439,6 +2487,13 @@ export class DatabaseStorage implements IStorage {
       if (!order) return undefined;
       if (order.status === status) return order;
       assertPortalOrderTransition(order.status, status);
+      if (status === "completed") {
+        await fulfillReservationsForSourceInTransaction(tx, "portal_order", id);
+        await fulfillReservationsForSourceInTransaction(tx, "reorder", id);
+      } else if (status === "rejected" || status === "cancelled") {
+        await releaseReservationsForSourceInTransaction(tx, "portal_order", id);
+        await releaseReservationsForSourceInTransaction(tx, "reorder", id);
+      }
       const cashback = Number(order.cashbackApplied || 0);
       if (status === "completed") {
         const [balanceRow] = await tx.select({ balance: sql<number>`coalesce(sum(${customerLoyaltyPoints.points}),0)` })
@@ -2542,11 +2597,28 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createPortalOrder(data: InsertPortalOrder, lineItems: InsertPortalOrderItem[]) {
-    const [order] = await db.insert(portalOrders).values(data).returning();
-    if (lineItems.length > 0) {
-      await db.insert(portalOrderItems).values(lineItems.map(li => ({ ...li, orderId: order.id })));
-    }
-    return order;
+    const fulfillmentLocation = await getOnlineFulfillmentLocation();
+    return db.transaction(async (tx) => {
+      const [order] = await tx.insert(portalOrders).values(data).returning();
+      if (lineItems.length > 0) {
+        await tx.insert(portalOrderItems).values(lineItems.map(li => ({ ...li, orderId: order.id })));
+        const [customer] = await tx.select({ name: customers.name }).from(customers)
+          .where(eq(customers.id, data.customerId)).limit(1);
+        await createOrderReservationInTransaction(tx, {
+          lines: lineItems.map((line) => ({
+            itemId: line.itemId,
+            variantId: line.variantId || null,
+            quantity: Number(line.quantity),
+          })),
+          locationId: fulfillmentLocation.id,
+          sourceType: "reorder",
+          sourceId: order.id,
+          customerName: customer?.name || "Online customer",
+          idempotencyKey: `portal-order:${order.id}`,
+        });
+      }
+      return order;
+    });
   }
 
   async getCustomerPortalOrderByCheckoutKey(customerId: string, checkoutKey: string) {
@@ -2572,12 +2644,13 @@ export class DatabaseStorage implements IStorage {
       goldCashbackPercent: number;
       maxCashbackOrderPercent: number;
     },
+    inventoryLocationId: string,
   ) {
     return db.transaction(async (tx) => {
       const lockedCustomerResult = await tx.execute(
-        sql`select id, cashback_balance from ${customers} where ${customers.id} = ${data.customerId} for update`,
+        sql`select id, name, cashback_balance from ${customers} where ${customers.id} = ${data.customerId} for update`,
       );
-      const lockedCustomer = lockedCustomerResult.rows[0] as { id: string; cashback_balance: string | null } | undefined;
+      const lockedCustomer = lockedCustomerResult.rows[0] as { id: string; name: string; cashback_balance: string | null } | undefined;
       if (!lockedCustomer) throw new Error("CUSTOMER_NOT_FOUND");
 
       if (data.checkoutKey) {
@@ -2606,6 +2679,18 @@ export class DatabaseStorage implements IStorage {
       }).returning();
       if (lineItems.length) {
         await tx.insert(portalOrderItems).values(lineItems.map((item) => ({ ...item, orderId: order.id })));
+        await createOrderReservationInTransaction(tx, {
+          lines: lineItems.map((line) => ({
+            itemId: line.itemId,
+            variantId: line.variantId || null,
+            quantity: Number(line.quantity),
+          })),
+          locationId: inventoryLocationId,
+          sourceType: "portal_order",
+          sourceId: order.id,
+          customerName: lockedCustomer.name,
+          idempotencyKey: `portal-checkout:${data.checkoutKey || order.id}`,
+        });
       }
 
       // Pending orders only reserve wallet funds. Points and earned cashback
@@ -3645,6 +3730,16 @@ export class DatabaseStorage implements IStorage {
     const lines = await db.select().from(posOrderLines).where(eq(posOrderLines.orderId, order.id));
     return { ...order, lines };
   }
+  async commitExistingPosOrderInventory(id: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      const [order] = await tx.select().from(posOrders).where(eq(posOrders.id, id)).for("update");
+      if (!order) throw new Error("POS order not found");
+      if (order.inventoryCommitted) return;
+      if (order.status !== "completed") throw new Error("Only completed POS orders can commit inventory.");
+      await completePosOrderStockInTransaction(tx, id);
+      await tx.update(posOrders).set({ inventoryCommitted: true }).where(eq(posOrders.id, id));
+    });
+  }
   async createPosOrder(data: InsertPosOrder, lines: InsertPosOrderLine[]): Promise<PosOrder> {
     if (
       data.paymentMethod?.startsWith("card") &&
@@ -3657,6 +3752,28 @@ export class DatabaseStorage implements IStorage {
       const [order] = await transaction.insert(posOrders).values(data).returning();
       if (lines.length) {
         await transaction.insert(posOrderLines).values(lines.map(l => ({ ...l, orderId: order.id })));
+      }
+      const stockLines = lines.filter((line: any) => line.itemId).map((line: any) => ({
+        itemId: line.itemId,
+        variantId: line.variantId || null,
+        quantity: Number(line.quantity),
+      }));
+      if (stockLines.length) {
+        if ((data.status ?? "completed") === "completed") {
+          await consumeLocationStockInTransaction(transaction, data.locationId, stockLines);
+          await transaction.update(posOrders).set({ inventoryCommitted: true }).where(eq(posOrders.id, order.id));
+        } else if ((data.status ?? "completed") === "held") {
+          await createOrderReservationInTransaction(transaction, {
+            lines: stockLines,
+            locationId: data.locationId,
+            sourceType: "pos_order",
+            sourceId: order.id,
+            customerName: data.cashierName || "POS cashier",
+            idempotencyKey: `pos-order:${data.orderNumber}`,
+          });
+        }
+      } else if ((data.status ?? "completed") === "completed") {
+        await transaction.update(posOrders).set({ inventoryCommitted: true }).where(eq(posOrders.id, order.id));
       }
       return order;
     });
@@ -3671,7 +3788,17 @@ export class DatabaseStorage implements IStorage {
         throw new Error("Cannot complete a card order without a card terminal reference");
       }
     }
-    await db.update(posOrders).set({ status }).where(eq(posOrders.id, id));
+    await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(posOrders).where(eq(posOrders.id, id)).for("update");
+      if (!existing) return;
+      if (status === "completed" && existing.status === "held") {
+        await completePosOrderStockInTransaction(tx, id);
+        await tx.update(posOrders).set({ inventoryCommitted: true }).where(eq(posOrders.id, id));
+      } else if (status === "voided" && existing.status === "held") {
+        await releaseReservationsForSourceInTransaction(tx, "pos_order", id);
+      }
+      await tx.update(posOrders).set({ status }).where(eq(posOrders.id, id));
+    });
   }
   async updatePosOrderCardRef(id: string, cardTerminalRef: string): Promise<void> {
     if (!cardTerminalRef.trim()) {
@@ -3684,23 +3811,31 @@ export class DatabaseStorage implements IStorage {
     if (!normalizedRef) {
       throw new Error("Cannot complete a card order without a card terminal reference");
     }
-    const [completed] = await db.update(posOrders).set({
-      status: "completed",
-      cardTerminalRef: normalizedRef,
-      amountTendered,
-      changeDue: "0",
-      receiptPrinted: true,
-    }).where(and(
-      eq(posOrders.id, id),
-      ilike(posOrders.paymentMethod, "card%"),
-      eq(posOrders.status, "held"),
-    )).returning({ id: posOrders.id });
-    if (!completed) {
-      throw new Error("Card order must exist, use card payment, and be held before completion");
-    }
+    await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(posOrders).where(eq(posOrders.id, id)).for("update");
+      if (!existing || !existing.paymentMethod.startsWith("card") || existing.status !== "held") {
+        throw new Error("Card order must exist, use card payment, and be held before completion");
+      }
+      await completePosOrderStockInTransaction(tx, id);
+      await tx.update(posOrders).set({
+        status: "completed",
+        inventoryCommitted: true,
+        cardTerminalRef: normalizedRef,
+        amountTendered,
+        changeDue: "0",
+        receiptPrinted: true,
+      }).where(eq(posOrders.id, id));
+    });
   }
   async voidPosOrder(id: string): Promise<void> {
-    await db.update(posOrders).set({ status: "voided" }).where(eq(posOrders.id, id));
+    await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(posOrders).where(eq(posOrders.id, id)).for("update");
+      if (!existing) return;
+      if (existing.status === "held") {
+        await releaseReservationsForSourceInTransaction(tx, "pos_order", id);
+      }
+      await tx.update(posOrders).set({ status: "voided" }).where(eq(posOrders.id, id));
+    });
   }
 
   // Atomically claims the "in-flight" slot for a card charge attempt by persisting
@@ -3907,15 +4042,26 @@ export class DatabaseStorage implements IStorage {
   }
   async submitStockTakeSession(id: string) {
     const { stockTakeSessions, stockTakeLines } = await import("@shared/schema");
-    const lines = await db.select().from(stockTakeLines).where(eq(stockTakeLines.sessionId, id));
-    for (const line of lines) {
-      await db.update(items).set({ stockQuantity: line.countedQuantity }).where(eq(items.id, line.itemId));
-    }
-    const [session] = await db.update(stockTakeSessions)
-      .set({ status: "submitted", submittedAt: new Date() })
-      .where(eq(stockTakeSessions.id, id))
-      .returning();
-    return session;
+    return db.transaction(async (tx) => {
+      const lines = await tx.select().from(stockTakeLines).where(eq(stockTakeLines.sessionId, id));
+      for (const line of lines) {
+        await tx.execute(sql`SELECT id FROM items WHERE id = ${line.itemId} FOR UPDATE`);
+        const holds = await tx.execute(sql`
+          SELECT COALESCE(SUM(quantity), 0)::int AS quantity
+          FROM inventory_reservations
+          WHERE item_id = ${line.itemId} AND variant_id IS NULL AND status = 'reserved'
+        `);
+        if (line.countedQuantity < Number(holds.rows[0]?.quantity || 0)) {
+          throw new Error(`Counted quantity for ${line.itemId} is below units reserved for transfer or online orders.`);
+        }
+        await tx.update(items).set({ stockQuantity: line.countedQuantity }).where(eq(items.id, line.itemId));
+      }
+      const [session] = await tx.update(stockTakeSessions)
+        .set({ status: "submitted", submittedAt: new Date() })
+        .where(eq(stockTakeSessions.id, id))
+        .returning();
+      return session;
+    });
   }
 
   // ─── PDA: Stock Transfers ────────────────────────────────────────────────────
@@ -3949,61 +4095,7 @@ export class DatabaseStorage implements IStorage {
     return transfer;
   }
   async completeStockTransfer(id: string) {
-    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
-    const [existing] = await db.select().from(stockTransfers).where(eq(stockTransfers.id, id));
-    if (!existing) return undefined;
-    if (existing.status === "completed") return existing;
-
-    const transferItems = await db.select().from(stockTransferItems).where(eq(stockTransferItems.transferId, id));
-    const isWarehouse = (label: string) => /warehouse/i.test(label);
-    const fromIsWarehouse = isWarehouse(existing.fromLocation);
-    const toIsWarehouse = isWarehouse(existing.toLocation);
-
-    // Since GlobiPOS tracks a single stockQuantity per item (no per-location split),
-    // moving OUT of the tracked warehouse decrements it, and moving IN increments it.
-    // Movements between two non-warehouse locations are logged but don't change
-    // items.stockQuantity, since neither side is the tracked pool.
-    if (fromIsWarehouse && !toIsWarehouse) {
-      for (const line of transferItems) {
-        const item = await this.getItem(line.itemId);
-        if (!item) continue;
-        if (item.stockQuantity < line.quantity) {
-          throw new Error(`Insufficient warehouse stock for ${line.itemName}: have ${item.stockQuantity}, need ${line.quantity}`);
-        }
-      }
-      for (const line of transferItems) {
-        const item = await this.getItem(line.itemId);
-        if (!item) continue;
-        await db.update(items).set({ stockQuantity: item.stockQuantity - line.quantity }).where(eq(items.id, line.itemId));
-      }
-    } else if (toIsWarehouse && !fromIsWarehouse) {
-      for (const line of transferItems) {
-        const item = await this.getItem(line.itemId);
-        if (!item) continue;
-        await db.update(items).set({ stockQuantity: item.stockQuantity + line.quantity }).where(eq(items.id, line.itemId));
-      }
-    }
-
-    // Per-location stock pools: move quantity out of fromLocation and into
-    // toLocation regardless of the warehouse heuristic above, so per-location
-    // visibility (e.g. textile stores) reflects every transfer.
-    const allLocations = await db.select().from(posLocations);
-    const fromLoc = allLocations.find(l => l.name.toLowerCase() === existing.fromLocation.toLowerCase());
-    const toLoc = allLocations.find(l => l.name.toLowerCase() === existing.toLocation.toLowerCase());
-    for (const line of transferItems) {
-      if (fromLoc) {
-        await this.adjustLocationStock(line.itemId, (line as any).variantId || null, fromLoc.id, -line.quantity);
-      }
-      if (toLoc) {
-        await this.adjustLocationStock(line.itemId, (line as any).variantId || null, toLoc.id, line.quantity);
-      }
-    }
-
-    const [transfer] = await db.update(stockTransfers)
-      .set({ status: "completed", completedAt: new Date() })
-      .where(eq(stockTransfers.id, id))
-      .returning();
-    return transfer;
+    return completeInventoryTransfer(id);
   }
 
   // ─── PDA: Agoranomia label compliance ────────────────────────────────────────

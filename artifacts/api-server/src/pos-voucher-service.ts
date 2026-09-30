@@ -18,6 +18,7 @@ import {
   systemSettings,
   type PosTerminal,
 } from "@workspace/db";
+import { consumeLocationStockInTransaction } from "./inventory-reservations";
 
 export const POS_GIFT_VOUCHER_MAX_SALE_CENTS = 100_000;
 const MAX_ORDER_TOTAL_CENTS = 10_000_000;
@@ -878,6 +879,10 @@ export async function redeemGiftVoucher(
     if (totalCents !== input.expectedTotalCents) {
       throw new PosVoucherError(409, `Basket price changed; the server total is ${totalCents} cents`);
     }
+    await consumeLocationStockInTransaction(tx, input.terminal.locationId, saleLines.map((line) => ({
+      itemId: line.itemId,
+      quantity: line.quantity,
+    })));
     const [voucher] = await tx.select().from(posGiftVouchers)
       .where(eq(posGiftVouchers.serialHash, voucherSerialHash))
       .for("update");
@@ -909,6 +914,7 @@ export async function redeemGiftVoucher(
       changeDue: centsToMoney(changeDueCents),
       status: "completed",
       receiptPrinted: false,
+      inventoryCommitted: true,
       syncedAt: new Date(),
       notes: `Voucher ${voucher.serialSuffix} redemption; original serial consumed`,
     }).returning();

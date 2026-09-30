@@ -448,6 +448,7 @@ export const portalOrderItems = pgTable("portal_order_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   orderId: varchar("order_id").notNull(),
   itemId: varchar("item_id").notNull(),
+  variantId: varchar("variant_id"),
   itemName: text("item_name").notNull(),
   quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
   unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
@@ -526,6 +527,7 @@ export const invoices = pgTable("invoices", {
   status: text("status").notNull().default("draft"),
   notes: text("notes"),
   deliveryLocation: text("delivery_location"),
+  inventoryLocationId: varchar("inventory_location_id").references(() => posLocations.id, { onDelete: "set null" }),
   linkedInvoiceId: varchar("linked_invoice_id"),
   portalOrderId: varchar("portal_order_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -948,6 +950,7 @@ export const posOrders = pgTable("pos_orders", {
   chargeAttemptedAt: timestamp("charge_attempted_at"),
   notes: text("notes"),
   receiptPrinted: boolean("receipt_printed").notNull().default(false),
+  inventoryCommitted: boolean("inventory_committed").notNull().default(false),
   syncedAt: timestamp("synced_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -1518,11 +1521,40 @@ export const stockTransferItems = pgTable("stock_transfer_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   transferId: varchar("transfer_id").notNull(),
   itemId: varchar("item_id").notNull(),
+  variantId: varchar("variant_id").references(() => itemVariants.id, { onDelete: "set null" }),
   itemName: text("item_name").notNull(),
   sku: text("sku"),
   barcode: text("barcode"),
   quantity: integer("quantity").notNull().default(1),
 });
+
+// A reservation holds stock in its source location without changing on-hand
+// quantity. Sales subtract active reservations from availability; completing a
+// linked transfer consumes the hold and moves the units atomically.
+export const inventoryReservations = pgTable("inventory_reservations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  variantId: varchar("variant_id").references(() => itemVariants.id, { onDelete: "cascade" }),
+  sourceLocationId: varchar("source_location_id").notNull().references(() => posLocations.id, { onDelete: "restrict" }),
+  destinationLocationId: varchar("destination_location_id").notNull().references(() => posLocations.id, { onDelete: "restrict" }),
+  quantity: integer("quantity").notNull(),
+  customerName: text("customer_name").notNull(),
+  requestedByCashierId: varchar("requested_by_cashier_id").references(() => posCashiers.id, { onDelete: "set null" }),
+  transferId: varchar("transfer_id").references(() => stockTransfers.id, { onDelete: "set null" }),
+  sourceType: text("source_type").notNull().default("transfer"), // transfer | portal_order | reorder
+  sourceId: varchar("source_id"),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  status: text("status").notNull().default("reserved"), // reserved | transferred | fulfilled | cancelled
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("inventory_reservations_stock_lookup_idx").on(table.itemId, table.variantId, table.sourceLocationId, table.status),
+  index("inventory_reservations_source_idx").on(table.sourceType, table.sourceId, table.status),
+]);
+
+export const insertInventoryReservationSchema = createInsertSchema(inventoryReservations).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertInventoryReservation = z.infer<typeof insertInventoryReservationSchema>;
+export type InventoryReservation = typeof inventoryReservations.$inferSelect;
 
 export const insertStockTakeSessionSchema = createInsertSchema(stockTakeSessions).omit({ id: true, createdAt: true, submittedAt: true });
 export type InsertStockTakeSession = z.infer<typeof insertStockTakeSessionSchema>;

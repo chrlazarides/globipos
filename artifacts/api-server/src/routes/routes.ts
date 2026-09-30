@@ -42,6 +42,18 @@ import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhance
 import { createCustomerAiHealthPersistence } from "../customer-ai-health-persistence";
 import { registerErpIntegrationRoutes } from "../erp-integration";
 import { approvedAssignedVoucherActions, registerPosVoucherRoutes } from "../pos-voucher-routes";
+import { matchesVoucherDeviceKey } from "../pos-voucher-service";
+import {
+  InventoryError,
+  cancelInventoryTransfer,
+  cancelTransferReservation,
+  createTransferReservation,
+  getAvailableAtLocation,
+  getOnlineFulfillmentLocation,
+  getReservationSearchResults,
+  getReservationsForDestination,
+  releaseReservationsForSourceInTransaction,
+} from "../inventory-reservations";
 
 function getLogoDataUrl(): string {
   const candidates = [
@@ -530,7 +542,9 @@ export async function registerRoutes(
       // No 2FA configured — force setup before completing login
       const tempToken = signTempToken(user.id, "2fa-setup");
       return res.json({ requires2faSetup: true, tempToken });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
   });
 
   // ─── 2FA: Verify TOTP during login ──────────────────────────────────────────
@@ -583,7 +597,9 @@ export async function registerRoutes(
 
       const token = await completeLogin(res, user, ip, ua, timestamp);
       res.json({ id: user.id, username: user.username, email: user.email, role: user.role, token });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
   });
 
   app.post("/api/auth/2fa/recovery/request", async (req: Request, res: Response) => {
@@ -639,7 +655,9 @@ export async function registerRoutes(
       }
       logActivity(user.id, user.username, "request", "user", user.id, "Requested email-verified 2FA recovery", null, null);
       res.json({ recoveryToken, message: "Recovery code sent to your account email." });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
   });
 
   app.post("/api/auth/2fa/recovery/confirm", async (req: Request, res: Response) => {
@@ -685,7 +703,9 @@ export async function registerRoutes(
         qrDataUrl,
         secret: replacementSecret,
       });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
   });
 
   app.post("/api/auth/2fa/recovery/complete", async (req: Request, res: Response) => {
@@ -3232,29 +3252,20 @@ export async function registerRoutes(
         }
       }
 
-      if (data.type === "invoice" && data.status !== "draft") {
-        for (const li of parsedItems) {
-          if (li.itemId) {
-            const item = await storage.getItem(li.itemId);
-            if (item) {
-              const bottlesToSubtract = (li.saleUnit === "pack" && item.packSize > 1) ? li.quantity * item.packSize : li.quantity;
-              const variant = (li as any).variantId ? await storage.getItemVariant((li as any).variantId) : null;
-              const available = variant ? variant.stockQuantity : item.stockQuantity;
-              if (available < bottlesToSubtract) {
-                return res.status(400).json({ message: `Not enough stock for ${item.name || 'item'}. Available: ${available} bottles, needed: ${bottlesToSubtract}` });
-              }
-            }
-          }
+      let inventoryLocationId = data.inventoryLocationId || undefined;
+      if (data.type === "invoice" && data.status !== "draft" && !inventoryLocationId) {
+        try {
+          inventoryLocationId = (await getOnlineFulfillmentLocation()).id;
+        } catch (error: any) {
+          return res.status(error instanceof InventoryError ? error.status : 503).json({
+            code: error.code || "INVENTORY_LOCATION_UNAVAILABLE",
+            message: error.message,
+          });
         }
       }
+      const inv = await storage.createInvoice(data, parsedItems, customNumber || undefined, inventoryLocationId);
 
-      const inv = await storage.createInvoice(data, parsedItems, customNumber || undefined);
-
-      if (data.type === "invoice" && data.status !== "draft") {
-        for (const li of parsedItems) {
-          if (li.itemId) await adjustSaleLineStock(li as any, -1);
-        }
-      } else if (data.type === "credit_note") {
+      if (data.type === "credit_note") {
         for (const li of parsedItems) {
           if (li.itemId) await adjustSaleLineStock(li as any, 1);
         }
@@ -6154,16 +6165,20 @@ export async function registerRoutes(
           res.status(400).json({ message: `Item ${oi.itemId} not found` });
           return;
         }
-        const bottlesNeeded = oi.quantity;
-        if (item.stockQuantity < bottlesNeeded) {
-          return res.status(400).json({ message: `Not enough stock for ${item.name}. Available: ${item.stockQuantity} bottles` });
+        const variant = oi.variantId ? await storage.getItemVariant(oi.variantId) : undefined;
+        if (item.hasVariants && !variant) {
+          return res.status(400).json({ message: `${item.name} requires a variant selection` });
+        }
+        if (variant && (!variant.active || variant.itemId !== item.id)) {
+          return res.status(400).json({ message: "Selected variant is inactive or does not belong to its item" });
         }
         const priceKey = `price${customer.priceLevel}` as keyof typeof item;
-        const unitPrice = parseFloat(String(item[priceKey] || item.price1));
+        const unitPrice = parseFloat(String(variant?.[priceKey as keyof typeof variant] || item[priceKey] || item.price1));
         const lineTotal = unitPrice * oi.quantity;
         subtotal += lineTotal;
         processedItems.push({
           itemId: item.id,
+          variantId: variant?.id || null,
           itemName: item.name,
           quantity: oi.quantity,
           unitPrice: unitPrice.toFixed(2),
@@ -6175,10 +6190,12 @@ export async function registerRoutes(
       const total = subtotal + vatAmount;
 
       const loyaltyPolicy = await getLoyaltyPolicy();
+      const fulfillmentLocation = await getOnlineFulfillmentLocation();
       const result = await storage.createCustomerPortalOrderAtomic(
         { customerId, checkoutKey: checkoutKey || null, subtotal: subtotal.toFixed(2), vatAmount: vatAmount.toFixed(2), notes: notes || null, status: "pending" },
         processedItems.map(pi => ({ ...pi, orderId: "TEMP" }))
-        , { ...loyaltyPolicy, useCashback: useCashback === true }
+        , { ...loyaltyPolicy, useCashback: useCashback === true },
+        fulfillmentLocation.id,
       );
       const pendingPoints = loyaltyPolicy.loyaltyEnabled ? Math.floor(subtotal * loyaltyPolicy.pointsPerEuro) : 0;
       res.json({
@@ -6189,7 +6206,10 @@ export async function registerRoutes(
         earnedCashback: "0.00",
       });
     } catch (e: any) {
-      res.status(500).json({ message: e.message });
+      res.status(e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
     }
   });
 
@@ -6261,7 +6281,10 @@ export async function registerRoutes(
       }).returning();
       res.status(201).json(feedback);
     } catch (e: any) {
-      res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message });
+      res.status(e instanceof z.ZodError ? 400 : e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
     }
   });
 
@@ -6341,7 +6364,7 @@ export async function registerRoutes(
       const [[customer], [preferences], catalog, categoryRows, priorLines, aiSettings] = await Promise.all([
         db.select().from(customers).where(eq(customers.id, customerId)).limit(1),
         db.select().from(customerPreferences).where(eq(customerPreferences.customerId, customerId)).limit(1),
-        db.select().from(items).where(and(eq(items.active, true), gt(items.stockQuantity, 0))),
+        db.select().from(items).where(eq(items.active, true)),
         db.select().from(categories).where(eq(categories.active, true)),
         db.select({ itemId: portalOrderItems.itemId, quantity: portalOrderItems.quantity })
           .from(portalOrderItems)
@@ -6350,6 +6373,20 @@ export async function registerRoutes(
         storage.getSettings(),
       ]);
       if (!customer) return res.status(404).json({ message: "Customer not found" });
+      const fulfillmentLocation = await getOnlineFulfillmentLocation();
+      const stockRows = await getAvailableAtLocation(fulfillmentLocation.id);
+      const availableStockByItem = new Map<string, number>();
+      const availableStockByVariant = new Map<string, number>();
+      for (const stock of stockRows) {
+        if (stock.variantId) availableStockByVariant.set(stock.itemId, (availableStockByVariant.get(stock.itemId) || 0) + stock.available);
+        else availableStockByItem.set(stock.itemId, stock.available);
+      }
+      const availableCatalog = catalog.map((item: any) => ({
+        ...item,
+        stockQuantity: item.hasVariants
+          ? availableStockByVariant.get(item.id) || 0
+          : availableStockByItem.get(item.id) || 0,
+      })).filter((item: any) => item.stockQuantity > 0);
 
       const profile = preferences || preferenceDefaults;
       const normalize = (value: string | null | undefined) => (value || "").toLocaleLowerCase();
@@ -6360,11 +6397,11 @@ export async function registerRoutes(
       const purchasedQty = new Map<string, number>();
       for (const line of priorLines) purchasedQty.set(line.itemId, (purchasedQty.get(line.itemId) || 0) + Number(line.quantity || 0));
       const priceKey = `price${Math.min(5, Math.max(1, customer.priceLevel || 1))}` as keyof typeof items.$inferSelect;
-      const prices = catalog.map(item => Number(item[priceKey] || item.price1 || 0)).filter(Number.isFinite);
+      const prices = availableCatalog.map(item => Number(item[priceKey] || item.price1 || 0)).filter(Number.isFinite);
       const medianPrice = prices.sort((a, b) => a - b)[Math.floor(prices.length / 2)] || 0;
       const budget = normalize(profile.budgetPreference);
 
-      const ranked = catalog
+      const ranked = availableCatalog
         .filter(item => {
           const searchable = normalize(`${item.name} ${item.description || ""} ${item.brand || ""}`);
           // Free-text product copy is not an authoritative dietary/allergen
@@ -6453,7 +6490,10 @@ export async function registerRoutes(
       );
       res.json({ items: enhancedRanked, profileComplete, generatedAt: new Date().toISOString(), engine: enhancement.engine });
     } catch (e: any) {
-      res.status(e instanceof z.ZodError ? 400 : 500).json({ message: e.message });
+      res.status(e instanceof z.ZodError ? 400 : e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
     }
   });
 
@@ -6703,11 +6743,22 @@ export async function registerRoutes(
       for (const oi of (original.items || [])) {
         const item = await storage.getItem(oi.itemId);
         if (!item) continue;
+        const variant = oi.variantId ? await storage.getItemVariant(oi.variantId) : undefined;
+        if (oi.variantId && (!variant?.active || variant.itemId !== item.id)) continue;
         const priceKey = `price${customer.priceLevel}` as keyof typeof item;
-        const unitPrice = parseFloat(String(item[priceKey] || item.price1));
+        const unitPrice = parseFloat(String(variant?.price1 || item[priceKey] || item.price1));
         const lineTotal = unitPrice * oi.quantity;
         subtotal += lineTotal;
-        processedItems.push({ itemId: item.id, itemName: item.name, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+        processedItems.push({
+          itemId: item.id,
+          variantId: variant?.id || null,
+          itemName: variant
+            ? `${item.name} (${[variant.option1Value, variant.option2Value, variant.option3Value].filter(Boolean).join(" / ")})`
+            : item.name,
+          quantity: oi.quantity,
+          unitPrice: unitPrice.toFixed(2),
+          total: lineTotal.toFixed(2),
+        });
       }
       if (!processedItems.length) return res.status(400).json({ message: "No valid items to reorder" });
       const vatAmount = subtotal * VAT_RATE;
@@ -6717,7 +6768,12 @@ export async function registerRoutes(
         processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
       );
       res.json(newOrder);
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
   });
 
   // ─── Admin: Portal / WhatsApp Order Queue ───────────────────────────────────
@@ -7048,7 +7104,24 @@ export async function registerRoutes(
       const customer = await storage.getCustomer(auth.customerId);
       if (!customer) return res.status(404).json({ message: "Not found" });
 
-      let allItems = await storage.getAvailableItems();
+      const fulfillmentLocation = await getOnlineFulfillmentLocation();
+      const locationStock = await getAvailableAtLocation(fulfillmentLocation.id);
+      const availableByKey = new Map(locationStock.map((row: any) => [
+        `${row.itemId}\u0000${row.variantId || ""}`,
+        row.available,
+      ]));
+      let allItems = await db.select().from(items).where(eq(items.active, true)).orderBy(items.name);
+      const visibleItems = [];
+      for (const item of allItems as any[]) {
+        let available = availableByKey.get(`${item.id}\u0000`) || 0;
+        if (item.hasVariants) {
+          const variants = await storage.getItemVariants(item.id);
+          available = variants.reduce((sum: number, variant: any) =>
+            sum + (availableByKey.get(`${item.id}\u0000${variant.id}`) || 0), 0);
+        }
+        if (available > 0) visibleItems.push({ ...item, stockQuantity: available });
+      }
+      allItems = visibleItems;
       if (search) allItems = allItems.filter((i: any) =>
         i.name.toLowerCase().includes(search.toLowerCase()) ||
         i.sku?.toLowerCase().includes(search.toLowerCase()) ||
@@ -7064,7 +7137,12 @@ export async function registerRoutes(
 
       const cats = await storage.getCategories();
       res.json({ items: paged, total: allItems.length, page: +page, categories: cats });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
   });
 
   app.get("/api/customer/catalog/:id", async (req, res) => {
@@ -7074,9 +7152,25 @@ export async function registerRoutes(
       const customer = await storage.getCustomer(auth.customerId);
       const item = await storage.getItem((req.params.id as string));
       if (!item) return res.status(404).json({ message: "Not found" });
+      const fulfillmentLocation = await getOnlineFulfillmentLocation();
+      const locationStock = await getAvailableAtLocation(fulfillmentLocation.id);
+      let available = locationStock.find((row: any) => row.itemId === item.id && !row.variantId)?.available || 0;
+      if (item.hasVariants) {
+        available = locationStock.filter((row: any) => row.itemId === item.id && row.variantId)
+          .reduce((sum: number, row: any) => sum + row.available, 0);
+      }
       const pl = customer?.priceLevel || 1;
-      res.json({ ...item, customerPrice: parseFloat(String((item as any)[`price${pl}`] || item.price1)) });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+      res.json({
+        ...item,
+        stockQuantity: available,
+        customerPrice: parseFloat(String((item as any)[`price${pl}`] || item.price1)),
+      });
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
   });
 
   app.get("/api/customer/barcode/:barcode", async (req, res) => {
@@ -7084,18 +7178,32 @@ export async function registerRoutes(
     if (!auth) return;
     try {
       const customer = await storage.getCustomer(auth.customerId);
-      const allItems = await storage.getAvailableItems();
+      const fulfillmentLocation = await getOnlineFulfillmentLocation();
+      const locationStock = await getAvailableAtLocation(fulfillmentLocation.id);
+      const allItems = await db.select().from(items).where(eq(items.active, true));
+      const onlineVisibleItems = new Map<string, { item: any; available: number }>();
+      for (const item of allItems as any[]) {
+        let available = locationStock.find((row: any) => row.itemId === item.id && !row.variantId)?.available || 0;
+        if (item.hasVariants) {
+          const variants = await storage.getItemVariants(item.id);
+          available = variants.reduce((sum: number, variant: any) =>
+            sum + (locationStock.find((row: any) => row.itemId === item.id && row.variantId === variant.id)?.available || 0), 0);
+        }
+        if (available > 0) onlineVisibleItems.set(item.id, { item, available });
+      }
       const barcode = req.params.barcode as string;
       const exactVariant = await storage.getItemVariantByBarcode(barcode);
       if (exactVariant) {
         const parent = await storage.getItem(exactVariant.itemId);
-        if (!parent || !parent.active || exactVariant.stockQuantity <= 0) {
+        const available = locationStock.find((row: any) => row.itemId === exactVariant.itemId && row.variantId === exactVariant.id)?.available || 0;
+        if (!parent || !parent.active || available <= 0) {
           return res.status(404).json({ message: "Item not found for this barcode" });
         }
         const merged = mergeVariantIntoItem(parent, exactVariant);
         const pl = customer?.priceLevel || 1;
         return res.json({
           ...merged,
+          stockQuantity: available,
           customerPrice: parseFloat(String((merged as any)[`price${pl}`] || merged.price1)),
           scaleBarcode: null,
         });
@@ -7103,10 +7211,13 @@ export async function registerRoutes(
       const scaleBarcode = parseScaleBarcode(barcode);
       const pluVariant = scaleBarcode ? await storage.getItemVariantByBarcode(scaleBarcode.plu) : undefined;
       const variantParent = pluVariant ? await storage.getItem(pluVariant.itemId) : undefined;
-      const item = (variantParent && variantParent.active && pluVariant!.stockQuantity > 0
+      const variantAvailable = pluVariant
+        ? locationStock.find((row: any) => row.itemId === pluVariant.itemId && row.variantId === pluVariant.id)?.available || 0
+        : 0;
+      const item = (variantParent && variantParent.active && variantAvailable > 0
         ? mergeVariantIntoItem(variantParent, pluVariant)
-        : allItems.find((i: any) => i.barcode === scaleBarcode?.plu))
-        || allItems.find((i: any) => i.barcode === barcode);
+        : [...onlineVisibleItems.values()].map((value) => value.item).find((i: any) => i.barcode === scaleBarcode?.plu))
+        || [...onlineVisibleItems.values()].map((value) => value.item).find((i: any) => i.barcode === barcode);
       if (!item) return res.status(404).json({ message: "Item not found for this barcode" });
       if (scaleBarcode?.type === "price") {
         const registeredItem = await storage.getItemByAnyBarcode(barcode);
@@ -7116,12 +7227,21 @@ export async function registerRoutes(
       }
       const pl = customer?.priceLevel || 1;
       const normalPrice = parseFloat(String((item as any)[`price${pl}`] || (item as any).price1));
+      const available = pluVariant
+        ? variantAvailable
+        : onlineVisibleItems.get(item.id)?.available || 0;
       res.json({
         ...(item as any),
+        stockQuantity: available,
         customerPrice: scaleBarcode?.type === "price" && scaleBarcode.value > 0 ? scaleBarcode.value : normalPrice,
         scaleBarcode,
       });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
   });
 
   app.get("/api/customer/invoices", async (req, res) => {
@@ -7247,11 +7367,27 @@ export async function registerRoutes(
         const lineTotal = unitPrice * quantity;
         subtotal += lineTotal;
         const itemName = item.name.trim() || item.sku?.trim() || `Item ${item.id}`;
-        processedItems.push({ itemId: item.id, itemName, quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+        processedItems.push({
+          itemId: item.id,
+          variantId: resolvedVariant?.id || null,
+          itemName,
+          quantity,
+          unitPrice: unitPrice.toFixed(2),
+          total: lineTotal.toFixed(2),
+        });
       }
       if (!processedItems.length) return res.status(400).json({ message: "No valid items" });
 
       const vatAmount = subtotal * VAT_RATE;
+      let fulfillmentLocation;
+      try {
+        fulfillmentLocation = await getOnlineFulfillmentLocation();
+      } catch (error: any) {
+        return res.status(error instanceof InventoryError ? error.status : 503).json({
+          code: error.code || "INVENTORY_LOCATION_UNAVAILABLE",
+          message: error.message,
+        });
+      }
       const checkout = await storage.createCustomerPortalOrderAtomic(
         {
           customerId: auth.customerId,
@@ -7263,6 +7399,7 @@ export async function registerRoutes(
         },
         processedItems.map((pi) => ({ ...pi, orderId: "TEMP" })),
         { ...loyaltyPolicy, useCashback },
+        fulfillmentLocation.id,
       );
       const { order } = checkout;
       const total = Number(order.total);
@@ -7312,7 +7449,12 @@ export async function registerRoutes(
       }
 
       res.json({ ...order, proformaId: proforma?.id || null, proformaNumber: proforma?.invoiceNumber || null });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
   });
 
   app.post("/api/customer/orders/:id/reorder", async (req, res) => {
@@ -7323,7 +7465,11 @@ export async function registerRoutes(
       const original = orders.find((o: any) => o.id === (req.params.id as string));
       if (!original) return res.status(404).json({ message: "Order not found" });
 
-      const orderItems = (original.items || []).map((i: any) => ({ itemId: i.itemId, quantity: i.quantity }));
+      const orderItems = (original.items || []).map((i: any) => ({
+        itemId: i.itemId,
+        variantId: i.variantId || null,
+        quantity: i.quantity,
+      }));
       if (!orderItems.length) return res.status(400).json({ message: "Original order has no items" });
 
       const customer = await storage.getCustomer(auth.customerId);
@@ -7335,11 +7481,22 @@ export async function registerRoutes(
       for (const oi of orderItems) {
         const item = await storage.getItem(oi.itemId);
         if (!item) continue;
+        const variant = oi.variantId ? await storage.getItemVariant(oi.variantId) : undefined;
+        if (oi.variantId && (!variant?.active || variant.itemId !== item.id)) continue;
         const pl = customer.priceLevel || 1;
-        const unitPrice = parseFloat(String((item as any)[`price${pl}`] || item.price1));
+        const unitPrice = parseFloat(String(variant?.price1 || (item as any)[`price${pl}`] || item.price1));
         const lineTotal = unitPrice * oi.quantity;
         subtotal += lineTotal;
-        processedItems.push({ itemId: item.id, itemName: item.name, quantity: oi.quantity, unitPrice: unitPrice.toFixed(2), total: lineTotal.toFixed(2) });
+        processedItems.push({
+          itemId: item.id,
+          variantId: oi.variantId || null,
+          itemName: variant
+            ? `${item.name} (${[variant.option1Value, variant.option2Value, variant.option3Value].filter(Boolean).join(" / ")})`
+            : item.name,
+          quantity: oi.quantity,
+          unitPrice: unitPrice.toFixed(2),
+          total: lineTotal.toFixed(2),
+        });
       }
       const vatAmount = subtotal * VAT_RATE;
       const total = subtotal + vatAmount;
@@ -7348,7 +7505,12 @@ export async function registerRoutes(
         processedItems.map((pi) => ({ ...pi, orderId: "TEMP" }))
       );
       res.json(newOrder);
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
   });
 
   app.get("/api/customer/loyalty", async (req, res) => {
@@ -9748,30 +9910,44 @@ export async function registerRoutes(
         syncedAt: new Date(),
       } as any, saleLines);
       res.status(201).json(order);
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
   });
 
   app.post("/api/pos/register/orders/:id/cancel-held", requireStaff, async (req, res) => {
     try {
       const cutoff = new Date(Date.now() - CHARGE_IN_PROGRESS_WINDOW_MS);
-      const [cancelled] = await db.update(posOrders)
-        .set({ status: "voided", idempotencyKey: null, chargeAttemptedAt: null })
-        .where(and(
-          eq(posOrders.id, req.params.id as string),
-          eq(posOrders.status, "held"),
-          ilike(posOrders.paymentMethod, "card%"),
-          eq(posOrders.cashierId, req.user!.id),
-          eq(posOrders.terminalId, String(req.body?.terminalId || "")),
-          isNull(posOrders.cardTerminalRef),
-          or(
-            isNull(posOrders.idempotencyKey),
-            lt(posOrders.chargeAttemptedAt, cutoff),
-          ),
-        ))
-        .returning({ id: posOrders.id });
+      const cancelled = await db.transaction(async (tx) => {
+        const [row] = await tx.update(posOrders)
+          .set({ status: "voided", idempotencyKey: null, chargeAttemptedAt: null })
+          .where(and(
+            eq(posOrders.id, req.params.id as string),
+            eq(posOrders.status, "held"),
+            ilike(posOrders.paymentMethod, "card%"),
+            eq(posOrders.cashierId, req.user!.id),
+            eq(posOrders.terminalId, String(req.body?.terminalId || "")),
+            isNull(posOrders.cardTerminalRef),
+            or(
+              isNull(posOrders.idempotencyKey),
+              lt(posOrders.chargeAttemptedAt, cutoff),
+            ),
+          ))
+          .returning({ id: posOrders.id });
+        if (row) await releaseReservationsForSourceInTransaction(tx, "pos_order", row.id);
+        return row;
+      });
       if (!cancelled) return res.status(409).json({ message: "This held order cannot be cancelled while a card charge may be in progress" });
       res.json({ ok: true });
-    } catch (e: any) { res.status(500).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 500).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
   });
   app.put("/api/pos/layouts/:id/buttons", requireAdmin, async (req, res) => {
     try {
@@ -10063,6 +10239,46 @@ export async function registerRoutes(
     (req as any).terminal = terminal;
     next();
   }
+
+  async function verifyTerminalCashier(req: Request, res: Response, cashierId: unknown, pin: unknown) {
+    const terminal = (req as any).terminal;
+    if (typeof cashierId !== "string" || !cashierId || typeof pin !== "string" || !/^\d{4,8}$/.test(pin)) {
+      res.status(401).json({ code: "CASHIER_AUTH_REQUIRED", message: "A valid cashier ID and PIN are required." });
+      return undefined;
+    }
+    const cashier = await storage.getPosCashier(cashierId);
+    if (!cashier?.active) {
+      res.status(401).json({ code: "INVALID_CASHIER_CREDENTIALS", message: "Cashier credentials are invalid." });
+      return undefined;
+    }
+    const providedHash = crypto.createHash("sha256").update(pin).digest("hex");
+    const storedPin = String(cashier.pin || "");
+    const storedHashIsValid = /^[a-f0-9]{64}$/i.test(storedPin);
+    const pinMatches = storedHashIsValid
+      && crypto.timingSafeEqual(Buffer.from(providedHash, "hex"), Buffer.from(storedPin, "hex"));
+    if (!pinMatches) {
+      res.status(401).json({ code: "INVALID_CASHIER_CREDENTIALS", message: "Cashier credentials are invalid." });
+      return undefined;
+    }
+    if (cashier.locationId && cashier.locationId !== terminal.locationId) {
+      res.status(403).json({ code: "CASHIER_LOCATION_FORBIDDEN", message: "Cashier is not assigned to this terminal location." });
+      return undefined;
+    }
+    return cashier;
+  }
+
+  function requirePairedTerminalDevice(req: Request, res: Response): boolean {
+    const terminal = (req as any).terminal;
+    const deviceKey = req.headers["x-voucher-device-key"] as string | undefined;
+    if (!matchesVoucherDeviceKey(terminal?.voucherDeviceKeyHash, deviceKey)) {
+      res.status(403).json({
+        code: "TERMINAL_DEVICE_NOT_PAIRED",
+        message: "Pair this terminal with its secure device key before using reservations, transfers, or cash checkout.",
+      });
+      return false;
+    }
+    return true;
+  }
   registerPosVoucherRoutes(app, requireTerminal, requireAdmin);
 
   // Customer-facing display content for this terminal's auto-provisioned signage screen (idle-time rotation).
@@ -10185,13 +10401,11 @@ export async function registerRoutes(
       if (matches.length === 0) return res.status(404).json({ message: "Order not found" });
       if (matches.length > 1) return res.status(409).json({ message: "Order number is ambiguous. Enter more characters." });
 
-      const [updated] = await db.update(portalOrders)
-        .set({ status: "completed" })
-        .where(and(
-          eq(portalOrders.id, matches[0].id),
-          inArray(portalOrders.status, ["pending", "confirmed"]),
-        ))
-        .returning();
+      const updated = await storage.transitionPortalOrderStatus(
+        matches[0].id,
+        "completed",
+        await getLoyaltyPolicy(),
+      );
 
       if (!updated) {
         const [current] = await db.select({ status: portalOrders.status })
@@ -10302,7 +10516,24 @@ export async function registerRoutes(
       const transfer = await storage.completeStockTransfer(req.params.id as string);
       if (!transfer) return res.status(404).json({ message: "Transfer not found" });
       res.json(transfer);
-    } catch (e: any) { res.status(400).json({ message: e.message }); }
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 400).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
+  });
+  app.post("/api/stock-transfers/:id/cancel", requireStaff, async (req, res) => {
+    try {
+      const transfer = await cancelInventoryTransfer(String(req.params.id));
+      if (!transfer) return res.status(404).json({ message: "Transfer not found" });
+      res.json(transfer);
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 400).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
   });
 
   // Stock Transfers (movement log)
@@ -10673,6 +10904,9 @@ export async function registerRoutes(
             if (!terminalBillMatchesExisting(existing, normalizedBill)) {
               throw new Error("orderNumber was already used with different bill data");
             }
+            if (existing.status === "completed" && !existing.inventoryCommitted) {
+              await storage.commitExistingPosOrderInventory(existing.id);
+            }
             results.push({ orderNumber: bill.orderNumber, status: "ok", id: existing.id, deduplicated: true });
             continue;
           }
@@ -10697,7 +10931,14 @@ export async function registerRoutes(
             duplicateMatches = false;
           }
           if (existing?.terminalId === terminal.id && duplicateMatches) {
-            results.push({ orderNumber: bill.orderNumber, status: "ok", id: existing.id, deduplicated: true });
+            try {
+              if (existing.status === "completed" && !existing.inventoryCommitted) {
+                await storage.commitExistingPosOrderInventory(existing.id);
+              }
+              results.push({ orderNumber: bill.orderNumber, status: "ok", id: existing.id, deduplicated: true });
+            } catch (inventoryErr: any) {
+              results.push({ orderNumber: bill?.orderNumber, status: "error", code: "INVENTORY_RECONCILIATION_REQUIRED", message: inventoryErr.message });
+            }
           } else {
             results.push({ orderNumber: bill?.orderNumber, status: "error", message: err.message });
           }
@@ -11505,10 +11746,321 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/pos/stock/search", requireTerminal, async (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store, private");
+      const q = String(req.query.q || "");
+      if (q.length > 120) return res.status(400).json({ message: "Search text must be at most 120 characters." });
+      res.json(await getReservationSearchResults(q));
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/pos/stock/reservations", requireTerminal, async (req, res) => {
+    try {
+      if (!requirePairedTerminalDevice(req, res)) return;
+      res.setHeader("Cache-Control", "no-store, private");
+      if (req.query.scope !== "destination") {
+        return res.status(400).json({ message: "scope=destination is required." });
+      }
+      const terminal = (req as any).terminal;
+      const reservations = await getReservationsForDestination(terminal.locationId);
+      res.json({ reservations });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/pos/stock/reservations", requireTerminal, async (req, res) => {
+    const terminal = (req as any).terminal;
+    const bodySchema = z.object({
+      itemId: z.string().min(1).max(128),
+      variantId: z.string().min(1).max(128).optional().nullable(),
+      sourceLocationId: z.string().min(1).max(128),
+      quantity: z.number().int().min(1).max(10000),
+      customerName: z.string().trim().min(1).max(160),
+      idempotencyKey: z.string().trim().min(8).max(128).regex(/^[A-Za-z0-9._:-]+$/),
+      cashierId: z.string().min(1).max(128),
+      pin: z.string().regex(/^\d{4,8}$/),
+    }).strict();
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid reservation details.", errors: parsed.error.flatten() });
+    try {
+      if (!requirePairedTerminalDevice(req, res)) return;
+      res.setHeader("Cache-Control", "no-store, private");
+      const cashier = await verifyTerminalCashier(req, res, parsed.data.cashierId, parsed.data.pin);
+      if (!cashier) return;
+      const reservation = await createTransferReservation({
+        itemId: parsed.data.itemId,
+        variantId: parsed.data.variantId || null,
+        sourceLocationId: parsed.data.sourceLocationId,
+        destinationLocationId: terminal.locationId,
+        quantity: parsed.data.quantity,
+        customerName: parsed.data.customerName,
+        cashierId: cashier.id,
+        idempotencyKey: parsed.data.idempotencyKey,
+        transferNumber: `POS-RSV-${crypto.randomUUID()}`,
+      });
+      res.status(201).json({
+        id: reservation.id,
+        status: reservation.status,
+        sourceLocationId: reservation.sourceLocationId,
+        destinationLocationId: reservation.destinationLocationId,
+        itemId: reservation.itemId,
+        variantId: reservation.variantId,
+        quantity: reservation.quantity,
+        customerName: reservation.customerName,
+        ...(reservation.transferId ? { transferId: reservation.transferId } : {}),
+      });
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 400).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
+  });
+
+  app.post("/api/pos/stock/reservations/:id/cancel", requireTerminal, async (req, res) => {
+    try {
+      if (!requirePairedTerminalDevice(req, res)) return;
+      res.setHeader("Cache-Control", "no-store, private");
+      const cashier = await verifyTerminalCashier(req, res, req.body?.cashierId, req.body?.pin);
+      if (!cashier) return;
+      const reservation = await cancelTransferReservation(String(req.params.id), cashier.id);
+      if (!reservation) return res.status(404).json({ message: "Reservation not found." });
+      res.json({
+        id: reservation.id,
+        status: reservation.status,
+        sourceLocationId: reservation.sourceLocationId,
+        destinationLocationId: reservation.destinationLocationId,
+        itemId: reservation.itemId,
+        variantId: reservation.variantId,
+        quantity: reservation.quantity,
+        customerName: reservation.customerName,
+        ...(reservation.transferId ? { transferId: reservation.transferId } : {}),
+      });
+    } catch (e: any) {
+      res.status(e instanceof InventoryError ? e.status : 400).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
+  });
+
+  app.post("/api/pos/sync/cash-sale", requireTerminal, async (req, res) => {
+    let orderNumber = "";
+    let terminal: any;
+    let cashier: any;
+    let request: any;
+    let normalizedLines: any[] = [];
+    try {
+      terminal = (req as any).terminal;
+      const schema = z.object({
+        orderId: z.string().trim().min(1).max(120).regex(/^[A-Za-z0-9._:-]+$/),
+        lines: z.array(z.object({
+          itemId: z.string().min(1).max(128),
+          variantId: z.string().min(1).max(128).optional().nullable(),
+          quantity: z.number().int().min(1).max(10000),
+        }).strict()).min(1).max(200),
+        cashierId: z.string().min(1).max(128),
+        pin: z.string().regex(/^\d{4,8}$/),
+        expectedTotalCents: z.number().int().min(0).max(100_000_000),
+        cashTenderCents: z.number().int().min(0).max(100_000_000),
+      }).strict();
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid cash sale.", errors: parsed.error.flatten() });
+      const body = parsed.data;
+      request = body;
+      if (!requirePairedTerminalDevice(req, res)) return;
+      res.setHeader("Cache-Control", "no-store, private");
+      cashier = await verifyTerminalCashier(req, res, body.cashierId, body.pin);
+      if (!cashier) return;
+      if (!terminal.locationId) return res.status(409).json({ message: "Terminal has no configured inventory location." });
+      orderNumber = `CASH-${body.orderId}`;
+      normalizedLines = body.lines.map((line) => ({
+        itemId: line.itemId,
+        variantId: line.variantId || null,
+        quantity: line.quantity,
+      }));
+
+      const findMatchingOrder = async () => {
+        const existing = await storage.getPosOrderByNumber(orderNumber);
+        if (!existing) return undefined;
+        const existingLines = (existing.lines || []).filter((line: any) => line.itemId).map((line: any) => ({
+          itemId: line.itemId,
+          variantId: line.variantId || null,
+          quantity: Number(line.quantity),
+        })).sort((a: any, b: any) => a.itemId.localeCompare(b.itemId) || (a.variantId || "").localeCompare(b.variantId || "") || a.quantity - b.quantity);
+        const wantedLines = [...normalizedLines].sort((a: any, b: any) => a.itemId.localeCompare(b.itemId) || (a.variantId || "").localeCompare(b.variantId || "") || a.quantity - b.quantity);
+        const sameLines = JSON.stringify(existingLines) === JSON.stringify(wantedLines);
+        if (
+          existing.terminalId !== terminal.id ||
+          existing.locationId !== terminal.locationId ||
+          existing.cashierId !== cashier.id ||
+          existing.status !== "completed" ||
+          existing.paymentMethod !== "cash" ||
+          !sameLines ||
+          Math.round(Number(existing.total) * 100) !== Number(body.expectedTotalCents) ||
+          Math.round(Number(existing.amountTendered || 0) * 100) !== Number(body.cashTenderCents)
+        ) {
+          throw new InventoryError("orderId was already used for a different sale.", 409, "IDEMPOTENCY_CONFLICT");
+        }
+        return existing;
+      };
+      const replay = await findMatchingOrder();
+      if (replay) {
+        if (!replay.inventoryCommitted) await storage.commitExistingPosOrderInventory(replay.id);
+        return res.json({
+          id: replay.id,
+          orderId: body.orderId,
+          orderNumber: replay.orderNumber,
+          status: replay.status,
+          terminalId: replay.terminalId,
+          locationId: replay.locationId,
+          totalCents: Math.round(Number(replay.total) * 100),
+          amountTenderedCents: Math.round(Number(replay.amountTendered || 0) * 100),
+          changeDueCents: Math.round(Number(replay.changeDue || 0) * 100),
+          deduplicated: true,
+        });
+      }
+
+      let subtotalCents = 0;
+      let vatCents = 0;
+      const saleLines: any[] = [];
+      for (const line of body.lines) {
+        const item = await storage.getItem(line.itemId);
+        if (!item?.active) return res.status(409).json({ message: "A selected item is inactive or missing." });
+        const variant = line.variantId ? await storage.getItemVariant(line.variantId) : undefined;
+        if (line.variantId && (!variant?.active || variant.itemId !== item.id)) {
+          return res.status(409).json({ code: "VARIANT_UNAVAILABLE", message: "A selected variant is inactive or does not belong to its item." });
+        }
+        if (item.hasVariants && !variant) {
+          return res.status(409).json({ code: "VARIANT_REQUIRED", message: `${item.name} requires a variant selection.` });
+        }
+        if (!item.hasVariants && variant) {
+          return res.status(409).json({ code: "VARIANT_MISMATCH", message: `${item.name} does not have selectable variants.` });
+        }
+        const priceLevel = Math.min(5, Math.max(1, Number(terminal.priceLevel) || 1));
+        const unitPrice = Number(
+          (variant as any)?.[`price${priceLevel}`] ||
+          (variant as any)?.price1 ||
+          (item as any)[`price${priceLevel}`] ||
+          item.price1 ||
+          0,
+        );
+        const vatRate = Number(item.vatRate || 0);
+        if (!Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isFinite(vatRate) || vatRate < 0) {
+          return res.status(409).json({ message: `Pricing for ${item.name} is invalid.` });
+        }
+        const lineGrossCents = Math.round(unitPrice * line.quantity * 100);
+        const lineVatCents = Math.round(lineGrossCents * vatRate / 100);
+        subtotalCents += lineGrossCents;
+        vatCents += lineVatCents;
+        saleLines.push({
+          itemId: item.id,
+          variantId: variant?.id || null,
+          description: variant
+            ? `${item.name} (${[variant.option1Value, variant.option2Value, variant.option3Value].filter(Boolean).join(" / ")})`
+            : item.name,
+          sku: variant?.sku || item.sku || "",
+          quantity: String(line.quantity),
+          unitPrice: (lineGrossCents / line.quantity / 100).toFixed(2),
+          vatRate: vatRate.toFixed(2),
+          discountPercent: "0",
+          total: (lineGrossCents / 100).toFixed(2),
+        });
+      }
+      const totalCents = subtotalCents + vatCents;
+      if (totalCents !== body.expectedTotalCents) {
+        return res.status(409).json({
+          code: "PRICE_CHANGED",
+          message: "Prices changed. Refresh the basket and confirm the updated total.",
+          authoritativeTotalCents: totalCents,
+        });
+      }
+      if (body.cashTenderCents < totalCents) {
+        return res.status(400).json({ message: "Cash tender must be at least the sale total." });
+      }
+      const order = await storage.createPosOrder({
+        orderNumber,
+        terminalId: terminal.id,
+        locationId: terminal.locationId,
+        cashierId: cashier.id,
+        cashierName: cashier.name,
+        paymentMethod: "cash",
+        subtotal: (subtotalCents / 100).toFixed(2),
+        vatAmount: (vatCents / 100).toFixed(2),
+        discountAmount: "0.00",
+        total: (totalCents / 100).toFixed(2),
+        amountTendered: (body.cashTenderCents / 100).toFixed(2),
+        changeDue: ((body.cashTenderCents - totalCents) / 100).toFixed(2),
+        status: "completed",
+        receiptPrinted: false,
+        syncedAt: new Date(),
+      } as any, saleLines);
+      res.status(201).json({
+        id: order.id,
+        orderId: body.orderId,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        terminalId: order.terminalId,
+        locationId: order.locationId,
+        totalCents,
+        amountTenderedCents: body.cashTenderCents,
+        changeDueCents: body.cashTenderCents - totalCents,
+        deduplicated: false,
+      });
+    } catch (e: any) {
+      if (orderNumber && terminal && cashier) {
+        try {
+          const existing = await storage.getPosOrderByNumber(orderNumber);
+          if (
+            existing &&
+            existing.terminalId === terminal.id &&
+            existing.locationId === terminal.locationId &&
+            existing.cashierId === cashier.id &&
+            existing.status === "completed" &&
+            existing.paymentMethod === "cash" &&
+            request &&
+            Math.round(Number(existing.total) * 100) === Number(request.expectedTotalCents) &&
+            Math.round(Number(existing.amountTendered || 0) * 100) === Number(request.cashTenderCents)
+          ) {
+            const existingLines = (existing.lines || []).filter((line: any) => line.itemId).map((line: any) => ({
+              itemId: line.itemId,
+              variantId: line.variantId || null,
+              quantity: Number(line.quantity),
+            })).sort((a: any, b: any) => a.itemId.localeCompare(b.itemId) || (a.variantId || "").localeCompare(b.variantId || "") || a.quantity - b.quantity);
+            const wantedLines = [...normalizedLines].sort((a: any, b: any) => a.itemId.localeCompare(b.itemId) || (a.variantId || "").localeCompare(b.variantId || "") || a.quantity - b.quantity);
+            if (JSON.stringify(existingLines) === JSON.stringify(wantedLines) && existing.inventoryCommitted) {
+              return res.json({
+                id: existing.id,
+                orderId: orderNumber.slice("CASH-".length),
+                orderNumber: existing.orderNumber,
+                status: existing.status,
+                terminalId: existing.terminalId,
+                locationId: existing.locationId,
+                totalCents: Math.round(Number(existing.total) * 100),
+                amountTenderedCents: Math.round(Number(existing.amountTendered || 0) * 100),
+                changeDueCents: Math.round(Number(existing.changeDue || 0) * 100),
+                deduplicated: true,
+              });
+            }
+          }
+        } catch { /* preserve original error */ }
+      }
+      res.status(e instanceof InventoryError ? e.status : 400).json({
+        ...(e instanceof InventoryError ? { code: e.code } : {}),
+        message: e.message,
+      });
+    }
+  });
+
   // Cashier-initiated stock transfer from the POS terminal — creates AND completes the
   // transfer in one call (no PDA-style draft/hold workflow). Terminal-auth (not JWT).
   app.post("/api/pos/sync/transfers", requireTerminal, async (req, res) => {
     try {
+      if (!requirePairedTerminalDevice(req, res)) return;
       const terminal = (req as any).terminal;
       const { toLocationId, cashierName, items: transferItems } = req.body;
       if (!toLocationId || !Array.isArray(transferItems) || transferItems.length === 0) {
@@ -11530,6 +12082,7 @@ export async function registerRoutes(
       });
       const parsedItems = transferItems.map((i: any) => insertStockTransferItemSchema.parse({
         itemId: i.itemId,
+        variantId: i.variantId || null,
         itemName: i.itemName,
         sku: i.sku ?? null,
         quantity: i.quantity,
