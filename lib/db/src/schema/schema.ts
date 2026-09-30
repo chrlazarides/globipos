@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, uuid, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, uuid, integer, numeric, boolean, timestamp, date, jsonb, serial, uniqueIndex, index, check } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { relations } from "drizzle-orm";
@@ -871,6 +871,8 @@ export const posTerminals = pgTable("pos_terminals", {
   name: text("name").notNull(),
   code: text("code").notNull().unique(),
   description: text("description"),
+  priceLevel: integer("price_level").notNull().default(1),
+  voucherDeviceKeyHash: varchar("voucher_device_key_hash", { length: 64 }),
   hardwareType: text("hardware_type").notNull().default("desktop"), // desktop | tablet | mobile
   layoutSetId: varchar("layout_set_id"),
   lastSeenAt: timestamp("last_seen_at"),
@@ -882,7 +884,9 @@ export const posTerminals = pgTable("pos_terminals", {
   peripheralConfig: jsonb("peripheral_config"),
   // Peripheral status — written by terminal on heartbeat, read by back office
   peripheralStatus: jsonb("peripheral_status"),
-});
+}, (table) => [
+  check("pos_terminals_price_level_chk", sql`${table.priceLevel} between 1 and 5`),
+]);
 
 export const posLayoutSets = pgTable("pos_layout_sets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1024,7 +1028,13 @@ export const insertPosLocationSchema = createInsertSchema(posLocations).omit({ i
 export type InsertPosLocation = z.infer<typeof insertPosLocationSchema>;
 export type PosLocation = typeof posLocations.$inferSelect;
 
-export const insertPosTerminalSchema = createInsertSchema(posTerminals).omit({ id: true, createdAt: true, lastSeenAt: true, lastSyncAt: true });
+export const insertPosTerminalSchema = createInsertSchema(posTerminals).omit({
+  id: true,
+  createdAt: true,
+  lastSeenAt: true,
+  lastSyncAt: true,
+  voucherDeviceKeyHash: true,
+});
 export type InsertPosTerminal = z.infer<typeof insertPosTerminalSchema>;
 export type PosTerminal = typeof posTerminals.$inferSelect;
 
@@ -1139,6 +1149,75 @@ export const posReturnOrderLines = pgTable("pos_return_order_lines", {
   lineTotal: numeric("line_total", { precision: 12, scale: 2 }).notNull(),
   restocked: boolean("restocked").notNull().default(true),
 });
+
+// Serialized gift vouchers are bearer instruments. Persist only the hash of a
+// serial; encrypted idempotency responses allow a cashier to reprint the same
+// committed voucher without storing its usable serial in plaintext.
+export const posGiftVouchers = pgTable("pos_gift_vouchers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  serialHash: varchar("serial_hash", { length: 64 }).notNull().unique(),
+  serialSuffix: varchar("serial_suffix", { length: 8 }).notNull(),
+  originalAmountCents: integer("original_amount_cents").notNull(),
+  balanceCents: integer("balance_cents").notNull(),
+  currency: varchar("currency", { length: 3 }).notNull().default("EUR"),
+  status: text("status").notNull().default("active"), // active | spent | void
+  issuedReason: text("issued_reason").notNull(), // sale | return | residual
+  terminalId: varchar("terminal_id").notNull().references(() => posTerminals.id, { onDelete: "restrict" }),
+  locationId: varchar("location_id").notNull().references(() => posLocations.id, { onDelete: "restrict" }),
+  cashierId: varchar("cashier_id").notNull().references(() => posCashiers.id, { onDelete: "restrict" }),
+  sourceOrderId: varchar("source_order_id").references(() => posOrders.id, { onDelete: "set null" }),
+  sourceReturnOrderId: varchar("source_return_order_id").references(() => posReturnOrders.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  spentAt: timestamp("spent_at"),
+}, (table) => [
+  index("pos_gift_vouchers_status_location_idx").on(table.status, table.locationId),
+  check("pos_gift_vouchers_amount_balance_chk", sql`${table.originalAmountCents} > 0 and ${table.balanceCents} >= 0 and ${table.balanceCents} <= ${table.originalAmountCents}`),
+  check("pos_gift_vouchers_status_chk", sql`${table.status} in ('active', 'spent', 'void')`),
+]);
+
+export const posGiftVoucherOperations = pgTable("pos_gift_voucher_operations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  terminalId: varchar("terminal_id").notNull().references(() => posTerminals.id, { onDelete: "restrict" }),
+  idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+  operationType: text("operation_type").notNull(), // sale | return | redeem
+  requestHash: varchar("request_hash", { length: 64 }).notNull(),
+  status: text("status").notNull().default("processing"), // processing | completed
+  responseCiphertext: text("response_ciphertext"),
+  responseIv: varchar("response_iv", { length: 32 }),
+  responseTag: varchar("response_tag", { length: 32 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("pos_gift_voucher_operations_terminal_key_uq").on(table.terminalId, table.idempotencyKey),
+  check("pos_gift_voucher_operations_status_chk", sql`${table.status} in ('processing', 'completed')`),
+]);
+
+export const posGiftVoucherLedger = pgTable("pos_gift_voucher_ledger", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  voucherId: varchar("voucher_id").notNull().references(() => posGiftVouchers.id, { onDelete: "restrict" }),
+  operationId: varchar("operation_id").notNull().references(() => posGiftVoucherOperations.id, { onDelete: "restrict" }),
+  eventType: text("event_type").notNull(), // sale_issue | return_issue | redemption | serial_retirement | residual_issue
+  amountCents: integer("amount_cents").notNull(),
+  balanceAfterCents: integer("balance_after_cents").notNull(),
+  relatedOrderId: varchar("related_order_id").references(() => posOrders.id, { onDelete: "set null" }),
+  relatedReturnOrderId: varchar("related_return_order_id").references(() => posReturnOrders.id, { onDelete: "set null" }),
+  terminalId: varchar("terminal_id").notNull().references(() => posTerminals.id, { onDelete: "restrict" }),
+  cashierId: varchar("cashier_id").notNull().references(() => posCashiers.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("pos_gift_voucher_ledger_event_uq").on(table.operationId, table.voucherId, table.eventType),
+  index("pos_gift_voucher_ledger_voucher_created_idx").on(table.voucherId, table.createdAt),
+  check("pos_gift_voucher_ledger_balance_chk", sql`${table.amountCents} <> 0 and ${table.balanceAfterCents} >= 0`),
+]);
+
+export const posGiftVoucherAuthFailures = pgTable("pos_gift_voucher_auth_failures", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  terminalId: varchar("terminal_id").notNull().references(() => posTerminals.id, { onDelete: "cascade" }),
+  remoteKeyHash: varchar("remote_key_hash", { length: 64 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("pos_gift_voucher_auth_failures_terminal_remote_created_idx").on(table.terminalId, table.remoteKeyHash, table.createdAt),
+  index("pos_gift_voucher_auth_failures_terminal_created_idx").on(table.terminalId, table.createdAt),
+]);
 
 // ── Customer PWA: Push Subscriptions, Loyalty, OTP tokens ────────────────────
 

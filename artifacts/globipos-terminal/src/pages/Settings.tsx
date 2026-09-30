@@ -2,16 +2,18 @@ import { useState, useEffect } from "react";
 import { ArrowLeft, RefreshCw, Terminal, Globe, Info, Download } from "lucide-react";
 import type { TerminalConfig } from "../types";
 import { syncCatalog, syncCashiers, flushOutbox } from "../lib/sync";
-import { getOutbox, getActiveProductsCount, getCashiers } from "../lib/db";
+import { getOutbox, getActiveProductsCount, getCashiers, setConfig } from "../lib/db";
 import { useToast } from "@/hooks/use-toast";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 
 interface SettingsProps {
   config: TerminalConfig;
+  onUpdated: (config: TerminalConfig) => void;
   onBack: () => void;
 }
 
-export function Settings({ config, onBack }: SettingsProps) {
+export function Settings({ config, onUpdated, onBack }: SettingsProps) {
+  const [voucherKey, setVoucherKey] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [outboxCount, setOutboxCount] = useState(0);
   const [productCount, setProductCount] = useState(0);
@@ -68,6 +70,23 @@ export function Settings({ config, onBack }: SettingsProps) {
     }
   }
 
+  async function saveVoucherKey() {
+    const key = voucherKey.trim();
+    if (key.length < 32 || key.length > 256 || /\s/.test(key)) {
+      toast({ title: "Invalid pairing key", description: "Paste the complete one-time key from Back Office.", variant: "destructive" });
+      return;
+    }
+    try {
+      const updated = { ...config, voucher_device_key: key };
+      await setConfig(updated);
+      onUpdated(updated);
+      setVoucherKey("");
+      toast({ title: "Voucher device paired", description: "Voucher actions now require this device key and the cashier PIN." });
+    } catch (error) {
+      toast({ title: "Could not save device pairing", description: error instanceof Error ? error.message : "Try again.", variant: "destructive" });
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <header className="flex items-center px-4 h-16 border-b border-border bg-card sticky top-0 z-10">
@@ -81,6 +100,20 @@ export function Settings({ config, onBack }: SettingsProps) {
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 md:p-8 max-w-3xl mx-auto w-full space-y-6">
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+          <h2 className="text-lg font-semibold">Gift voucher device pairing</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {config.voucher_device_key ? "This Terminal has a saved pairing key." : "Pair this Terminal before issuing or redeeming vouchers."}
+            {" "}An administrator generates a one-time key in Back Office → POS Terminals. Replacing it here does not revoke the old key; rotating it in Back Office does.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <input type="password" autoComplete="off" value={voucherKey} onChange={event => setVoucherKey(event.target.value)}
+              className="min-w-64 flex-1 rounded-lg bg-input px-3 py-2" placeholder="Paste one-time voucher pairing key"
+              aria-label="Voucher pairing key" />
+            <button type="button" onClick={() => void saveVoucherKey()} disabled={!voucherKey.trim()}
+              className="rounded-lg bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50">Save pairing key</button>
+          </div>
+        </section>
         
         <div className="bg-card border border-border rounded-xl p-5 shadow-sm">
           <div className="flex items-center gap-3 mb-4">

@@ -8,6 +8,7 @@ import { BrandLogo } from "@/components/BrandLogo";
 import { calculateLine, createOrderLine, parseValidCashTender } from "@/lib/pos-calculations";
 import { createOrderNumber, effectivePrice } from "@/lib/pos-calculations";
 import { flushOutbox } from "@/lib/sync";
+import { VoucherDialog } from "../components/VoucherDialog";
 
 interface POSProps {
   config: TerminalConfig;
@@ -21,6 +22,7 @@ function formatMoney(amount: number) {
 
 type ExternalLaunch = { type: "web" | "app" | "server"; target: string };
 type ExternalButton = { position: number; label: string; actionCode: string; launch: ExternalLaunch };
+type VoucherButton = { position: number; label: string; actionCode: "GIFT_VOUCHER" | "PAY_VOUCHER" };
 
 function validLaunch(value: unknown): value is ExternalLaunch {
   if (!value || typeof value !== "object") return false;
@@ -43,6 +45,8 @@ export function POS({ config, session, onLogout }: POSProps) {
   const [cart, setCart] = useState<OrderLine[]>([]);
   const [search, setSearch] = useState("");
   const [externalButtons, setExternalButtons] = useState<ExternalButton[]>([]);
+  const [voucherButtons, setVoucherButtons] = useState<VoucherButton[]>([]);
+  const [voucherMode, setVoucherMode] = useState<"issue" | "redeem" | null>(null);
   const [externalPanel, setExternalPanel] = useState<ExternalButton | null>(null);
   const [layoutError, setLayoutError] = useState("");
   const [layoutRefresh, setLayoutRefresh] = useState(0);
@@ -87,8 +91,15 @@ export function POS({ config, session, onLogout }: POSProps) {
           return button.buttonType === "action" && validLaunch(launch) ?
             [{ position: button.position, label: button.label || code, actionCode: code, launch }] : [];
         });
+        const approvedCodes: string[] = Array.isArray(data.voucherActions) ? data.voucherActions : [];
+        const voucherLayoutButtons: VoucherButton[] = data.buttons.flatMap((button: any) =>
+          button.buttonType === "action" &&
+          ["GIFT_VOUCHER", "PAY_VOUCHER"].includes(button.actionCode?.toUpperCase()) &&
+          approvedCodes.includes(button.actionCode?.toUpperCase()) ?
+            [{ position: button.position, label: button.label || button.actionCode, actionCode: button.actionCode.toUpperCase() }] : []);
         if (!controller.signal.aborted) {
           setExternalButtons(buttons.sort((a, b) => a.position - b.position));
+          setVoucherButtons(voucherLayoutButtons.sort((a, b) => a.position - b.position));
           setExternalPanel(current => current && buttons.some(button =>
             button.position === current.position && button.actionCode === current.actionCode &&
             button.launch.type === current.launch.type && button.launch.target === current.launch.target) ? current : null);
@@ -97,6 +108,7 @@ export function POS({ config, session, onLogout }: POSProps) {
       } catch (error) {
         if (!controller.signal.aborted) {
           setExternalButtons([]);
+          setVoucherButtons([]);
           setExternalPanel(null);
           setLayoutError(error instanceof Error ? error.message : "Layout unavailable");
         }
@@ -134,6 +146,36 @@ export function POS({ config, session, onLogout }: POSProps) {
       setExternalPanel(null);
       setLayoutError(error instanceof Error ? error.message : "Could not verify the approved target.");
       toast({ title: "External button unavailable", description: "The assigned button and target must both be approved. Refresh after an admin reviews them.", variant: "destructive" });
+    } finally {
+      setLaunchingCode(null);
+    }
+  }
+
+  async function openVoucher(button: VoucherButton) {
+    if (launchingCode) return;
+    if (!config.voucher_device_key) {
+      toast({ title: "Pair this Terminal first", description: "Ask an administrator for its voucher key, then save it in Terminal Settings.", variant: "destructive" });
+      return;
+    }
+    setLaunchingCode(button.actionCode);
+    try {
+      const response = await fetch(`${config.server_url}/api/pos/sync/layout-config`, {
+        headers: { "X-Terminal-Code": config.terminal_code }, cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Could not verify this button with the store server.");
+      const data = await response.json();
+      if (!Array.isArray(data?.voucherActions) || !data.voucherActions.includes(button.actionCode) ||
+          !Array.isArray(data?.buttons) || !data.buttons.some((entry: any) =>
+            entry.buttonType === "action" && entry.actionCode?.toUpperCase() === button.actionCode &&
+            entry.position === button.position)) {
+        throw new Error("This voucher function is not approved or assigned to this Terminal.");
+      }
+      setVoucherMode(button.actionCode === "GIFT_VOUCHER" ? "issue" : "redeem");
+    } catch (error) {
+      setVoucherButtons([]);
+      toast({ title: "Voucher function unavailable",
+        description: error instanceof Error ? error.message : "Check the approved layout and online connection.",
+        variant: "destructive" });
     } finally {
       setLaunchingCode(null);
     }
@@ -297,6 +339,14 @@ export function POS({ config, session, onLogout }: POSProps) {
 
   return (
     <div className="flex flex-col h-screen bg-background">
+      {voucherMode && <VoucherDialog mode={voucherMode} config={config} session={session} cart={cart} total={total}
+        onClose={() => setVoucherMode(null)}
+        onRedeemed={orderNumber => {
+          setCart([]);
+          void writeAudit("voucher_redemption", "order", orderNumber, "Online voucher sale completed", session.cashier_id, session.cashier_name)
+            .catch(error => console.error("Failed to queue voucher audit record", error));
+          toast({ title: "Voucher payment completed", description: `Order ${orderNumber} recorded online.` });
+        }} />}
       {/* Top Header */}
       <header className="h-14 bg-card border-b border-border flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-3">
@@ -405,8 +455,14 @@ export function POS({ config, session, onLogout }: POSProps) {
                 className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
                 data-testid={`terminal-external-${button.actionCode}`}>{button.label}</button>
             ))}
-            {!externalButtons.length && <span className="text-xs text-muted-foreground">
-              {layoutError ? "Layout tools unavailable" : "No approved external buttons assigned"}
+            {voucherButtons.map(button => (
+              <button key={`${button.position}-${button.actionCode}`} type="button"
+                onClick={() => void openVoucher(button)} disabled={launchingCode !== null}
+                className="rounded border border-emerald-400 bg-emerald-950/40 px-3 py-2 text-xs font-medium text-emerald-200 hover:bg-emerald-900/50"
+                data-testid={`terminal-voucher-${button.actionCode}`}>{button.label}</button>
+            ))}
+            {!externalButtons.length && !voucherButtons.length && <span className="text-xs text-muted-foreground">
+              {layoutError ? "Layout tools unavailable" : "No approved tools assigned"}
             </span>}
             <button type="button" className="ml-auto p-1" aria-label="Refresh layout tools" title={layoutError || "Refresh layout tools"}
               onClick={() => setLayoutRefresh(value => value + 1)}><RefreshCw className="h-4 w-4" /></button>

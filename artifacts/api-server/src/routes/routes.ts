@@ -41,6 +41,7 @@ import { createPosBuildsResolver } from "../pos-builds";
 import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "../customer-ai-service";
 import { createCustomerAiHealthPersistence } from "../customer-ai-health-persistence";
 import { registerErpIntegrationRoutes } from "../erp-integration";
+import { approvedAssignedVoucherActions, registerPosVoucherRoutes } from "../pos-voucher-routes";
 
 function getLogoDataUrl(): string {
   const candidates = [
@@ -365,6 +366,11 @@ const chargeInflightKeys = new Set<string>();
 // as abandoned so a fresh idempotency key is allowed to try again — otherwise a
 // single ambiguous timeout would lock the order out of card payment forever.
 const CHARGE_IN_PROGRESS_WINDOW_MS = 90_000;
+
+function withoutVoucherDeviceKeyHash<T extends { voucherDeviceKeyHash?: string | null }>(terminal: T): Omit<T, "voucherDeviceKeyHash"> {
+  const { voucherDeviceKeyHash: _discard, ...publicTerminal } = terminal;
+  return publicTerminal;
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -9524,25 +9530,29 @@ export async function registerRoutes(
 
   // POS Terminals
   app.get("/api/pos/terminals", requireAdmin, async (req, res) => {
-    try { res.json(await storage.getPosTerminals(req.query.locationId as string | undefined)); } catch (e: any) { res.status(500).json({ message: e.message }); }
+    try {
+      const terminals = await storage.getPosTerminals(req.query.locationId as string | undefined);
+      res.json(terminals.map(withoutVoucherDeviceKeyHash));
+    } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.get("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
     try {
       const t = await storage.getPosTerminal((req.params.id as string));
       if (!t) return res.status(404).json({ message: "Not found" });
-      res.json(t);
+      res.json(withoutVoucherDeviceKeyHash(t));
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
   app.post("/api/pos/terminals", requireAdmin, async (req, res) => {
     try {
       const data = insertPosTerminalSchema.parse(req.body);
-      res.json(await storage.createPosTerminal(data));
+      res.json(withoutVoucherDeviceKeyHash(await storage.createPosTerminal(data)));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.put("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
     try {
-      const t = await storage.updatePosTerminal((req.params.id as string), req.body);
-      res.json(t);
+      const { voucherDeviceKeyHash: _discard, ...updates } = req.body ?? {};
+      const t = await storage.updatePosTerminal((req.params.id as string), updates);
+      res.json(t ? withoutVoucherDeviceKeyHash(t) : t);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.delete("/api/pos/terminals/:id", requireAdmin, async (req, res) => {
@@ -10053,6 +10063,7 @@ export async function registerRoutes(
     (req as any).terminal = terminal;
     next();
   }
+  registerPosVoucherRoutes(app, requireTerminal, requireAdmin);
 
   // Customer-facing display content for this terminal's auto-provisioned signage screen (idle-time rotation).
   app.get("/api/pos/signage/playlist", requireTerminal, async (req, res) => {
@@ -10109,7 +10120,15 @@ export async function registerRoutes(
       const cashierPayload = cashiers.filter(c => c.active).map(c => ({ id: c.id, name: c.name, pinHash: c.pin, role: c.role }));
       // Catalog is bootstrapped separately through the authenticated, bounded sync endpoint.
       // Keep the catalog shape for older clients, but never put the full item table in registration.
-      res.json({ terminal, location, layoutButtons, inboxItems, catalog: { items: [], categories: cats }, syncConfig: syncCfg, cashiers: cashierPayload });
+      res.json({
+        terminal: withoutVoucherDeviceKeyHash(terminal),
+        location,
+        layoutButtons,
+        inboxItems,
+        catalog: { items: [], categories: cats },
+        syncConfig: syncCfg,
+        cashiers: cashierPayload,
+      });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -11242,9 +11261,9 @@ export async function registerRoutes(
     try {
       const terminal = (req as any).terminal;
       const fallback = { columns: 4, colsTablet: 3, colsMobile: 2, colsLarge: 6, colsTV: 8, buttonRadius: "rounded", colorTheme: "standard" };
-      if (!terminal.layoutSetId) return res.json({ ...fallback, buttons: [], externalTools: {} });
+      if (!terminal.layoutSetId) return res.json({ ...fallback, buttons: [], externalTools: {}, voucherActions: [] });
       const ls = await storage.getPosLayoutSet(terminal.layoutSetId);
-      if (!ls) return res.json({ ...fallback, buttons: [], externalTools: {} });
+      if (!ls) return res.json({ ...fallback, buttons: [], externalTools: {}, voucherActions: [] });
       const buttons = await storage.getPosLayoutButtons(terminal.layoutSetId);
       const settings = await storage.getSettings();
       res.json({
@@ -11257,6 +11276,7 @@ export async function registerRoutes(
         colorTheme:   (ls as any).colorTheme   ?? "standard",
         buttons,
         externalTools: approvedExternalTools(buttons, settings),
+        voucherActions: approvedAssignedVoucherActions(buttons, settings),
       });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });

@@ -47,6 +47,7 @@ export const ACTION_GROUPS: ActionGroup[] = [
       { code: "PAY_SPLIT",        label: "Split Payment",        icon: Wallet,       description: "Split across cash and card" },
       { code: "PAY_ACCOUNT",      label: "Charge to Account",    icon: AlignLeft,    description: "Post to customer account / credit" },
       { code: "PAY_VOUCHER",      label: "Redeem Voucher",       icon: Receipt,      description: "Accept a gift voucher or coupon code" },
+      { code: "GIFT_VOUCHER",     label: "Gift Voucher / Credit Note", icon: Receipt, description: "Sell a cash-funded gift voucher or issue return credit against a completed sale" },
       { code: "PAY_LAYAWAY",      label: "Layaway / Deposit",    icon: Wallet,       description: "Take partial payment, hold order" },
     ],
   },

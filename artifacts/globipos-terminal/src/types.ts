@@ -101,6 +101,8 @@ export interface CashierSession {
 export interface TerminalConfig {
   server_url: string;
   terminal_code: string;
+  /** Secret created in Back Office for this device; never sent to catalog or layout sync. */
+  voucher_device_key?: string;
   terminal_id: string;
   terminal_name: string;
   location_id: string;

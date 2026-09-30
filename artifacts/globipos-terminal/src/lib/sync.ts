@@ -17,9 +17,11 @@ export async function registerTerminal(serverUrl: string, terminalCode: string):
   if (!data?.terminal?.id || !data?.terminal?.name || !data?.location?.id || !data?.location?.name) {
     throw new Error("Terminal registration response is incomplete");
   }
+  const previous = await getConfig();
   const config: TerminalConfig = {
     server_url: origin,
     terminal_code: terminalCode,
+    voucher_device_key: previous && previous.terminal_id === data.terminal.id ? previous.voucher_device_key : undefined,
     terminal_id: data.terminal?.id || "",
     terminal_name: data.terminal?.name || "",
     location_id: data.location?.id || "",

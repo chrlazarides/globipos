@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { ActionDef, ActionGroup } from "@/pages/pos-layout-editor";
 import {
   cloneFunctionDefinition, configuredGroups, customFunctionKey, definitionKey,
-  isExternalTargetApproved, readCustomFunctions, readDefinition, validExternalLaunch, voucherExampleRules, type FunctionDefinition,
+  giftVoucherRules, isExternalTargetApproved, readCustomFunctions, readDefinition, validExternalLaunch, voucherExampleRules, type FunctionDefinition,
 } from "./pos-function-config";
 
 const base: ActionDef = { code: "PAY_VOUCHER", label: "Redeem Voucher", description: "Accept a voucher", icon: null };
@@ -70,6 +70,16 @@ test("a target needs its own exact approval and clones do not inherit it", () =>
   assert.equal(isExternalTargetApproved({ ...saved, launch: { type: "server", target: "https://other.example.com" } }), false);
   assert.equal(isExternalTargetApproved(cloneFunctionDefinition(saved)), false);
   assert.equal(isExternalTargetApproved({ ...saved, launchApproval: undefined }), false);
+});
+
+test("new gift voucher button previews return credit or an entered cash-sale amount", () => {
+  const definition = readDefinition([], "GIFT_VOUCHER", "Gift voucher");
+  assert.equal(definition.approved, undefined);
+  assert.equal(definition.mode, "conditional");
+  assert.deepEqual(definition.rules, giftVoucherRules());
+  assert.equal(definition.rules[0].transactionType, "return");
+  assert.equal(definition.rules[0].receiptSign, "negative");
+  assert.equal(definition.rules[1].amountSource, "manual");
 });
 
 test("a newly saved custom function appears under its own name", () => {

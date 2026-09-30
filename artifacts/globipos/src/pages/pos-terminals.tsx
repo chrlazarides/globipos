@@ -40,6 +40,7 @@ import {
   Printer, CreditCard, Wifi, WifiOff, Settings2, RefreshCw, AlertTriangle,
   CheckCircle2, CircleDot, Package, User, ShoppingCart, Layers,
   MonitorSmartphone, Scale, ScanLine, ChevronDown, ChevronRight,
+  KeyRound, Copy,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -1012,6 +1013,9 @@ function TerminalCard({
   onDelete: () => void;
 }) {
   const [configOpen, setConfigOpen] = useState(false);
+  const [pairingDialogOpen, setPairingDialogOpen] = useState(false);
+  const [oneTimeDeviceKey, setOneTimeDeviceKey] = useState("");
+  const { toast } = useToast();
   const seen = terminalOnlineStatus(terminal);
   const cfg = terminal.peripheralConfig as PeripheralConfig | null;
   const status = terminal.peripheralStatus as PeripheralStatus | null;
@@ -1020,6 +1024,39 @@ function TerminalCard({
 
   const enabledPeripherals = pills.filter(p => p.level !== "off").length;
   const problemPeripherals = pills.filter(p => p.level === "error" || p.level === "warn").length;
+  const pairingKeyMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", `/api/pos/vouchers/terminals/${terminal.id}/pairing-key`, {});
+      const result = await response.json();
+      if (typeof result?.deviceKey !== "string" || !result.deviceKey) {
+        throw new Error("The server did not return a terminal pairing key");
+      }
+      return result.deviceKey as string;
+    },
+    onSuccess: key => {
+      setOneTimeDeviceKey(key);
+      toast({ title: "One-time pairing key generated", description: "Copy it now; the key will not be shown again." });
+    },
+    onError: (error: Error) => toast({ title: "Pairing key generation failed", description: error.message, variant: "destructive" }),
+  });
+
+  function closePairingDialog(open: boolean) {
+    if (!open && pairingKeyMutation.isPending) return;
+    setPairingDialogOpen(open);
+    if (!open) {
+      setOneTimeDeviceKey("");
+      pairingKeyMutation.reset();
+    }
+  }
+
+  async function copyOneTimeDeviceKey() {
+    try {
+      await navigator.clipboard.writeText(oneTimeDeviceKey);
+      toast({ title: "Pairing key copied", description: "The key is still shown only in this one-time dialog." });
+    } catch {
+      toast({ title: "Copy failed", description: "Clipboard access was unavailable. Select and copy the key manually.", variant: "destructive" });
+    }
+  }
 
   return (
     <>
@@ -1138,6 +1175,16 @@ function TerminalCard({
               size="sm"
               variant="outline"
               className="h-8 px-2"
+              title="Generate or rotate voucher device key"
+              onClick={() => setPairingDialogOpen(true)}
+              data-testid={`button-voucher-pairing-key-${terminal.id}`}
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 px-2"
               onClick={onEdit}
               data-testid={`button-edit-terminal-${terminal.id}`}
             >
@@ -1161,6 +1208,56 @@ function TerminalCard({
         open={configOpen}
         onClose={() => setConfigOpen(false)}
       />
+
+      <Dialog open={pairingDialogOpen} onOpenChange={closePairingDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{oneTimeDeviceKey ? "Copy the one-time voucher device key" : "Rotate voucher device key?"}</DialogTitle>
+          </DialogHeader>
+          {oneTimeDeviceKey ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Copy this key into Terminal Settings now. It is shown once and is not saved in this browser.
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  value={oneTimeDeviceKey}
+                  readOnly
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label="One-time voucher device key"
+                  data-testid={`input-voucher-pairing-key-${terminal.id}`}
+                />
+                <Button type="button" variant="outline" onClick={copyOneTimeDeviceKey} aria-label="Copy pairing key">
+                  <Copy className="w-4 h-4" />
+                </Button>
+              </div>
+              <div className="flex justify-end">
+                <Button type="button" onClick={() => closePairingDialog(false)}>Close and clear key</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-sm text-amber-700 dark:text-amber-300">
+                Rotating the key immediately disconnects this Terminal from voucher actions until the new key is entered in Terminal Settings.
+                The current key will stop working.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => closePairingDialog(false)}>Cancel</Button>
+                <Button
+                  type="button"
+                  onClick={() => pairingKeyMutation.mutate()}
+                  disabled={pairingKeyMutation.isPending}
+                  data-testid={`button-confirm-voucher-pairing-key-${terminal.id}`}
+                >
+                  {pairingKeyMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Generate / rotate key
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

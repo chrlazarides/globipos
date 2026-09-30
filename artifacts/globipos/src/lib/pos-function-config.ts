@@ -65,6 +65,18 @@ export const voucherExampleRules = (): ConditionRule[] => [
     note: "Propose the positive receipt amount; allow the operator to confirm or edit it.",
   },
 ];
+export const giftVoucherRules = (): ConditionRule[] => [
+  {
+    receiptSign: "negative", transactionType: "return", result: "print_credit_note",
+    amountSource: "absolute_receipt_total", functionCode: "",
+    note: "Complete and verify the original sale's return before issuing store credit.",
+  },
+  {
+    receiptSign: "any", transactionType: "sale", result: "propose_gift_voucher",
+    amountSource: "manual", functionCode: "",
+    note: "Collect cash for the amount entered in the popup before issuing the gift voucher.",
+  },
+];
 // Reserve a namespace so new codes cannot accidentally invoke a legacy POS handler.
 export const validFunctionCode = (code: string) => /^CUSTOM_[A-Z][A-Z0-9_]{0,32}$/.test(code);
 
@@ -101,7 +113,9 @@ export function readCustomFunctions(settings: PosSetting[], builtIns: ActionDef[
 
 export function readDefinition(settings: PosSetting[], code: string, fallback: string): FunctionDefinition {
   const value = settings.find(setting => setting.key === definitionKey(code))?.value;
-  if (!value) return { behavior: fallback, mode: "single", steps: [], rules: [] };
+  if (!value) return code === "GIFT_VOUCHER"
+    ? { behavior: fallback, mode: "conditional", steps: [], rules: giftVoucherRules() }
+    : { behavior: fallback, mode: "single", steps: [], rules: [] };
   try {
     const data = JSON.parse(value);
     if (typeof data?.behavior === "string" && ["single", "macro", "conditional"].includes(data?.mode) &&

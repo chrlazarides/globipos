@@ -85,7 +85,7 @@ function MainRouter() {
       </Route>
       <Route path="/settings">
         {config ? (
-          <Settings config={config} onBack={() => setLocation(session ? "/register" : "/")} />
+          <Settings config={config} onUpdated={setConfig} onBack={() => setLocation(session ? "/register" : "/")} />
         ) : (
           <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground">
             <p>Terminal not configured.</p>
