@@ -2,6 +2,7 @@
 - [Async Chromium test completion](async-chromium-test-completion.md) — For long IndexedDB tests, wait through DevTools rather than relying on headless DOM dump timing.
 - [PWA shell cache matching](pwa-shell-cache-matching.md) — Cached build assets must match parser requests despite proxy-added Vary headers.
 - [Product and customer logos](product-customer-logos.md) — Product-level Terminal branding must not reuse the mutable customer logo asset.
+- [Native release boundary](native-release-boundary.md) — GitHub CI verifies native builds; Tauri updates require a newer signed release, separate from web publishing.
 - [Rewards refund liability](rewards-refund-liability.md) — Full refunds reverse earned rewards and restore applied Cash Back; spent earnings may leave a negative liability.
 - [Duplicate workflow port owners](workflow-duplicate-port-owners.md) — A failed restart may leave an older healthy server owning the port; inspect the listener before changing config.
 - [Layout simulation boundary](layout-simulation-boundary.md) — Use the test cart for saved-rule traces, but don't report proposed financial outcomes as completed operations.
