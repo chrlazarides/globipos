@@ -1,6 +1,6 @@
 # GlobiPOS independent WHM deployments
 
-Status: proposed architecture and implementation plan, pending hosting capability confirmation.
+Status: proposed architecture and implementation plan. Full WHM administrator/root access confirmed by the owner; server capabilities and SSH/API access remain to be verified.
 
 ## Goal
 
@@ -26,9 +26,11 @@ Actual rollout dispatch is not attached: creating a rollout currently leaves it 
 
 ### Hosting capability gate
 
-Before choosing an installation method, confirm:
+The owner has confirmed full WHM administrator/root access. Plan for administrator-led bootstrap and automated customer-account provisioning, rather than a reseller-only installation.
 
-- Root/administrator versus reseller privileges; SSH availability and permitted account operations.
+Before selecting the exact runtime and connecting automation, verify:
+
+- SSH availability, API access and the dedicated automation identity's actual permitted account operations.
 - WHM/cPanel version, operating system and supported account isolation.
 - Maintained Node.js runtime compatible with the release, PostgreSQL availability and database provisioning permissions.
 - Application Manager/Passenger or another host-supported Node.js process manager.
@@ -37,6 +39,15 @@ Before choosing an installation method, confirm:
 - Reliable encrypted backups stored outside the application server.
 
 Test startup, ESM packaging, static asset paths, background tasks and restart behaviour on a pilot account. Do not assume that a generic PM2 startup script also works unchanged under Passenger.
+
+### Administrator bootstrap and least privilege
+
+- Use administrator access for the initial server prerequisites, approved service configuration and creation of isolated customer accounts.
+- Require explicit approval before changing server-wide packages, Apache/Passenger configuration or existing hosting services.
+- Create a dedicated automation connection with only the privileges needed for supported operations. Do not use or distribute the owner's root password.
+- Keep WHM provisioning credentials exclusively in the central control centre, separate from each customer's management credentials.
+- Run customer applications, background workers and release agents as their customer account users. Administrator access does not mean running GlobiPOS as root.
+- Bootstrap one pilot account first. Do not change existing live customer installations or migrate production data during the capability audit.
 
 ## 2. Separate API responsibilities
 
@@ -52,7 +63,7 @@ Configure account-level applications and supported hosting settings through cPan
 
 Use unique credentials or authenticated identities for each deployment. Bind requests to an exact deployment, scope monitoring separately from deployment operations, rotate/revoke credentials, and reject expired or replayed requests.
 
-A small, separately supervised deployment agent performs allowlisted actions such as installing an approved release, reporting job progress, restarting the application and creating a backup. It operates as the customer account, not as root. Initial agent installation may require administrator assistance, depending on hosting privileges.
+A small, separately supervised deployment agent performs allowlisted actions such as installing an approved release, reporting job progress, restarting the application and creating a backup. It operates as the customer account, not as root. Use the confirmed administrator access for initial agent installation and supervision setup, once server capabilities and the pilot approach are approved.
 
 Do not expose arbitrary shell execution through the Deployment menu. Restrict remote targets and destinations to registered, validated hosts to prevent unintended internal-network access.
 
@@ -124,7 +135,7 @@ Availability of the support identity must not become a hidden authentication byp
 
 ## 7. Ordered implementation
 
-1. **Capability audit and specification:** confirm hosting privileges and pilot server capabilities; choose the supported runtime/provisioning method and recovery requirements.
+1. **Capability audit and specification:** use the confirmed full administrator access to verify SSH/API permissions and pilot server capabilities; choose the supported runtime/provisioning method and recovery requirements. The audit is read-only.
 2. **Independent installation baseline:** create one isolated pilot customer account, package adapter, database migration process, secrets and verified backup/restore procedure.
 3. **WHM/cPanel connections:** add the WHM provider, secure connection registry, capability checks and permitted provisioning operations.
 4. **Management agent and monitoring:** add authenticated enrolment, reporting, external checks, operation jobs and agent lifecycle handling.
