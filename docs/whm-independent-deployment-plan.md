@@ -8,6 +8,12 @@ Run independent customer installations on WHM-managed hosting. Extend the existi
 
 Each customer installation must continue normal operation if the control centre is unavailable. An unavailable or stale monitoring connection must never be mistaken for a healthy installation.
 
+### Master and customer operating roles
+
+The owner agreed to develop in this workspace and operate a dedicated published master with independent customer installations. Maintain shared source code with explicitly enforced Master and Customer roles, rather than maintaining separate customer code copies.
+
+The existing default published instance can become the master only if dedicated to central administration. If it already serves live trading or customer business data, preserve it and establish a separate master. Customer installations must not expose fleet administration, inherit WHM credentials or depend on the development workspace.
+
 ## Current foundation and gaps
 
 The application already has deployment profiles, domains and domain checks, current/target Back Office and POS versions, monitoring credentials, a heartbeat receiver, incident history and rollout records. The provider choices currently cover manual, GitHub and Replit operation.
@@ -23,6 +29,49 @@ Actual rollout dispatch is not attached: creating a rollout currently leaves it 
 - Keep the control centre's customer registry, WHM credentials and fleet-wide operations out of customer database copies.
 - The control centre holds deployment metadata and support telemetry, not a shared operational customer database.
 - Multiple accounts on one WHM server provide account isolation, not separate-server fault isolation or high availability. Allow installations to be assigned to different WHM servers.
+
+### Configurable server profiles
+
+The owner requires flexibility to deploy on another server. Support multiple registered WHM/cPanel servers from the outset; do not hard-code one hosting endpoint, root identity, directory, domain or runtime.
+
+Each server profile contains:
+
+- Stable server ID, display name, provider/region metadata and lifecycle state.
+- WHM HTTPS hostname and port, verified TLS/connection policy, administrator or delegated API identity and secure credential references.
+- Optional approved SSH connection and access policy, if the selected installation method needs it.
+- Verified WHM/cPanel, operating system, Node.js, PostgreSQL and application-hosting capabilities; last verification time and permission limitations.
+- Supported deployment adapter, account/package defaults, account-relative application directory conventions and resource limits.
+- DNS provider/zone references, domain defaults, SSL configuration and off-server backup policy.
+- Connection status, supported operations and maintenance/retirement state.
+
+Secret values remain server-side and are not embedded in profiles exported to customer installations. Credentials and capabilities are specific to each server; full administrator access on the current server does not establish access or capabilities on another server.
+
+The create-installation workflow selects a server, validates compatibility and creates or explicitly links the correct cPanel account. Support selecting an existing permitted account as well as provisioning a new one. Discover account-specific requirements rather than assuming that all accounts inherit identical runtime or database settings.
+
+Account identity is scoped by server ID plus cPanel account identity; the same username on another server is not the same account. Keep the customer's logical deployment ID, domains and history separate from the physical hosting assignment.
+
+Use one release format with hosting adapters for verified supported runtimes. Differences in Passenger/process management, directory layouts, CPU architecture and required PostgreSQL extensions belong in capability checks and adapters, not customer-specific forks.
+
+Select a server explicitly for each new installation. Never silently move existing customers because the preferred server changes. Editing a connection endpoint is not a migration; changes require revalidation, and pending jobs must not silently retarget to another host or account.
+
+Retiring a server stops new placements and schedules approved moves; it does not automatically suspend customer applications. Block removal of hosting records still needed by active installations or unresolved operations, and retain historical hosting assignments.
+
+### Moving an existing installation
+
+Provide a separate, auditable migration operation, not an ordinary server dropdown edit:
+
+1. Select the target server/account and validate permissions, runtime, PostgreSQL restore compatibility, capacity, domains and backup/recovery requirements.
+2. Stage the current compatible release on the target. Keep target checkouts, scheduled workers and integrations inactive while testing.
+3. Agree a maintenance window. Stop source writes and background processing, drain or account for in-flight work, then capture a consistent database/files/configuration backup.
+4. Transfer and restore customer data and approved configuration securely. Preserve business IDs, stock, pairing configuration, idempotency records and queued work; do not copy WHM provisioning secrets.
+5. Validate the target application, files, integrations and support identity. Enrol the new hosting instance with unique management credentials tied to the same logical deployment.
+6. Confirm the source is fenced against writes before activating the target. If source fencing cannot be established, do not activate a second writable copy.
+7. Switch the approved domains/routing and master hosting assignment. Keep customer-facing URLs stable where possible; stale DNS clients must not be allowed to write to the old database.
+8. Verify health, terminal synchronisation and integrations; revoke old management credentials and retain the fenced source for an agreed recovery period. Cleanup requires explicit approval.
+
+Rollback before target writes can reactivate the source under controlled routing. Once the target has accepted transactions, the old database is stale: moving DNS back alone is unsafe. A return migration requires fencing the target and transferring the latest data back before reopening the source.
+
+Do not promise zero downtime. Preserve offline POS pending transactions and ensure they later sync only to the authoritative installation.
 
 ### Hosting capability gate
 
@@ -73,6 +122,8 @@ Do not expose arbitrary shell execution through the Deployment menu. Restrict re
 
 Show customer, deployment ID, assigned WHM server/account, domain, deployment state, health, last contact, installed/target versions and available updates.
 
+Add a Servers section for connection profiles, verified capabilities, account inventory and maintenance/retirement status. Installation records distinguish current hosting, previous hosting and any planned migration target; provide filters by customer, server, environment and release.
+
 ### Deployment details
 
 - Hosting: account, domains, certificates, application/runtime configuration and connection status.
@@ -95,6 +146,7 @@ All displayed support dates/times use Europe/Nicosia. Secrets, tokens and unnece
 - Keep actual reported versions separate from target versions and release-channel policy.
 - Use stable/pilot channels, pinned customer versions and explicit maintenance windows.
 - Run jobs asynchronously with durable status, idempotency, progress, retries and an audit trail. Never mark a queued request as a completed deployment.
+- Bind each job to the approved server/account, connection revision and hosting instance. Server-profile changes invalidate or require explicit reapproval of affected pending jobs; do not reinterpret their targets at execution time.
 
 ### Update sequence
 
@@ -133,15 +185,56 @@ Availability of the support identity must not become a hidden authentication byp
 - Connection failures or revoked credentials must be visible without exposing credential values.
 - Limit logs and diagnostics to necessary support information, with redaction, size limits and retention policies.
 
+### Standalone POS and PWA live sync status
+
+The owner requires visible processing/synchronisation indicators in both the standalone POS and PWA, including transferred item counts and last-sync information. Define one shared status contract, with platform-appropriate persistence and execution. This is a planned requirement, not a claim that the installed applications already provide it.
+
+#### Local indication
+
+- Always-visible compact status on the POS screen, opening a detailed sync panel. Do not make staff leave checkout to discover a stalled or failed sync.
+- Show device/network connectivity separately from verified application-server connectivity. Internet access or navigator online status alone does not establish a working server connection.
+- Distinguish up to date, running, pending work, offline, unreachable server, retry waiting, partial failure, failed and interrupted/stale status. Derive these from the actual worker, queue and server observations, not a decorative animation.
+- Show the active phase: connection check, catalog download, local save, pending transaction/audit upload, server confirmation or completion.
+- Show elapsed time, last progress time, retry attempts and next retry where known. A stalled or abandoned operation must not spin indefinitely or remain marked running after restart.
+- Provide Sync Now, supported retry controls and redacted diagnostics. Respect existing authorisation and offline-checkout rules; observing sync must not change transaction eligibility or introduce new financial actions.
+
+#### Counts and timestamps
+
+- Catalog records received, locally committed, updated/deactivated and rejected where the protocol can establish those counts; distinguish the last run from the number currently stored.
+- Confirmed uploaded transactions and audit records, with separate pending and failed/rejected queue counts.
+- Completed stock-transfer references and confirmed units moved, where relevant. Drafts, reservations and attempted requests are not completed movements.
+- The label "transferred" must identify whether it means catalog records, acknowledged transactions or actual stock units; these are different operations and must not share an ambiguous counter.
+- Use completed/total and a percentage only when the protocol supplies a reliable total. Otherwise show actual records/pages processed and the active phase without inventing a percentage.
+- Keep last attempt, last verified server contact, last completed catalog sync, last confirmed transaction upload and last fully successful sync cycle separate.
+- Persist successful timestamps and confirmed results across app/browser restarts. Store timestamps consistently and display them in Europe/Nicosia with clear age/freshness information.
+- Update successful counters only after the required server acknowledgement and local persistence. Partial failures retain their pending records and previous success timestamps; retries of the same operation must not inflate totals.
+
+#### Coordinator, recovery and reporting
+
+- Use a single sync coordinator per device, with appropriate tab/window exclusion and shared status updates. Manual and automatic triggers must not launch overlapping copies of the same operation.
+- Preserve resumable catalog checkpoints and outbox records. Recover interrupted runs safely; retry only eligible failures with bounded backoff and existing idempotency identities.
+- Use lightweight revision/change checks and incremental or paginated transfers where supported, rather than repeatedly downloading the full catalog simply to produce a live indicator.
+- Keep rejected work visible with a redacted reason. Never clear failed queues, recreate monetary actions or repeat stock movements merely to make the indicator green.
+- Report bounded, authenticated device telemetry to that customer's installation. The installation relays necessary summaries to the master; POS devices do not receive fleet/WHM credentials or depend on master availability.
+- Associate reports with deployment identity, physical hosting instance, device identity, installed build, run identity and ordering information. Delayed reports from an old run or migrated instance must not overwrite fresher active state.
+- The customer device monitor and master show last received report, last successful sync, actual reported versions, pending/failed counts, current phase and recent errors. Label aged counts as last reported, not current verified values.
+- A closed/sleeping PWA cannot be assumed to send continuous heartbeats or execute background jobs. Show stale/inactive device reporting separately from the customer application server being offline; the same distinction applies to sleeping standalone devices.
+
+#### Current implementation baseline and prerequisites
+
+The browser terminal currently has paginated catalog sync, local persistence and transaction/audit outboxes, but not the consolidated status contract above. Its catalog progress callback currently reports completion only, and outbox errors are logged rather than exposed as a complete persisted status model.
+
+The active standalone POS build source must be established before implementation and release: native source is present under the migration backup, while the current top-level pos-app directory does not contain a complete source/build definition. Locate/recover the approved source and build process without treating a browser rebuild as an updated native installer. Both clients must be verified against the same observable sync semantics.
+
 ## 7. Ordered implementation
 
-1. **Capability audit and specification:** use the confirmed full administrator access to verify SSH/API permissions and pilot server capabilities; choose the supported runtime/provisioning method and recovery requirements. The audit is read-only.
+1. **Operating roles and capability specification:** define the dedicated Master/Customer boundaries, stable customer/deployment identities and multi-server profile model. Use the confirmed full administrator access for a read-only SSH/API and pilot-server capability audit; choose supported hosting adapters and recovery requirements.
 2. **Independent installation baseline:** create one isolated pilot customer account, package adapter, database migration process, secrets and verified backup/restore procedure.
-3. **WHM/cPanel connections:** add the WHM provider, secure connection registry, capability checks and permitted provisioning operations.
-4. **Management agent and monitoring:** add authenticated enrolment, reporting, external checks, operation jobs and agent lifecycle handling.
+3. **WHM/cPanel connections:** add the WHM provider, multiple secure server profiles, account discovery/selection, capability checks and permitted provisioning operations. Server settings must not be global hard-coded defaults.
+4. **Management agent and device sync monitoring:** establish the active standalone POS build source; implement the shared sync status contract, native/PWA coordinators and local indicators, authenticated device reporting, management-agent lifecycle and external checks.
 5. **Support access:** add managed support identity, MFA-protected session launch, revocation, audit and emergency recovery.
-6. **Release execution and dashboard:** wire rollout records to real execution; expose versions, health, support details, diagnostic exports and controlled update/rollback actions.
-7. **Pilot and staged rollout:** verify one non-trading/pilot installation, then one approved customer installation before expanding deployment groups.
+6. **Release execution and dashboard:** wire rollout records to real execution; expose versions, installation health, per-device sync freshness/progress, support details, diagnostic exports and controlled update/rollback actions.
+7. **Pilot, portability and staged rollout:** verify one non-trading/pilot installation, then prove a second supported server profile can deploy independently and complete a controlled test migration before expanding to approved customer installations.
 
 These are ordered phases of one deployment-management programme, not independent parallel implementations.
 
@@ -157,6 +250,16 @@ These are ordered phases of one deployment-management programme, not independent
 - Updates preserve customer data, branding and configuration; backups are restorable.
 - Monitoring/diagnostics expose no secret credentials or unnecessary customer information.
 - Installed POS/PDA devices and pending offline transactions remain compatible across a staged update.
+- New installations can select a different WHM/cPanel server without customer code changes or disturbing existing installations.
+- Identical cPanel usernames on different servers cannot mix credentials, jobs, customer records or monitoring results.
+- Changing a preferred server or connection profile cannot silently move an installation or retarget a queued operation.
+- A migration preserves the logical deployment identity/history and never leaves two writable copies active.
+- A migration failure has a recovery path that preserves transactions accepted after cutover, rather than blindly reverting DNS to stale data.
+- Both standalone POS and PWA show real phase/progress, confirmed record counts, queue failures and persisted channel-specific last-sync timestamps.
+- Offline/unreachable, interrupted restart, slow/stalled requests, partial acknowledgements and failed local persistence cannot appear as successful completed syncs.
+- Retried requests cannot inflate transferred counts or duplicate transactions/stock movements; pending data survives reloads and client updates.
+- Manual and background sync triggers cannot overlap unsafely, including multiple PWA tabs.
+- Closing/sleeping a device or losing its reporting connection produces stale/inactive device state in monitoring, not a false fresh/healthy sync claim.
 
 ## References
 

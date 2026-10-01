@@ -9,3 +9,4 @@
 - [POS external launch boundary](pos-external-tools.md) — External targets need separate exact-match approval; URL and app links never imply arbitrary command execution.
 - [Voucher device trust boundary](voucher-device-trust.md) — Monetary POS actions need a separate paired-device credential; terminal codes and local PINs are insufficient.
 - [Legacy stock provenance](legacy-stock-provenance.md) — Never guess which shop owns legacy global stock; location imports assign existing stock, while Stock In records new receipts.
+- [Deployment control boundaries](deployment-control-boundaries.md) — Dedicated production master, independent customer installations and stable identities across configurable hosting servers.
