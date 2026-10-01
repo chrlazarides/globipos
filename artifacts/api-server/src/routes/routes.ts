@@ -37,6 +37,7 @@ import { registerDeploymentControlRoutes } from "../deployment-control";
 import { registerDeploymentPackageRoutes } from "../deployment-package-routes";
 import { createItemImageSet, deleteItemImageSet, downloadItemImage, ITEM_IMAGE_MAX_BYTES, ITEM_IMAGE_MIME_TYPES, type ItemImageSize, uploadItemImageSet } from "../item-images";
 import { PosStockInError, receivePosStock, setImportedLocationStock, validateImportStockLocation } from "../pos-stock-in-service";
+import { getInventoryMode, InventoryModeError } from "../inventory-mode";
 
 import { createPosBuildsResolver } from "../pos-builds";
 import { classifyCustomerFeedback, configureCustomerAiHealthPersistence, enhanceCustomerRecommendations, getCustomerAiStatus, resolveCustomerAiConfig } from "../customer-ai-service";
@@ -2416,7 +2417,7 @@ export async function registerRoutes(
             active: true,
           };
 
-          if (!selectedLocationId && getValue("stockQuantity")) {
+          if (!selectedLocationId && getValue("stockQuantity") && await getInventoryMode()) {
             throw new Error("Choose a stock location before importing quantities, or leave the stock column unmapped.");
           }
           let importedItemId: string;
@@ -2588,7 +2589,7 @@ export async function registerRoutes(
             active: true,
           };
 
-          if (!selectedLocationId && clean(row.stockQuantity)) {
+          if (!selectedLocationId && clean(row.stockQuantity) && await getInventoryMode()) {
             throw new Error("Choose a stock location before importing quantities, or omit stockQuantity.");
           }
           let importedItemId: string;
@@ -4989,7 +4990,7 @@ export async function registerRoutes(
       }
       res.json(results);
     } catch (e: any) {
-      res.status(500).json({ message: e.message });
+      res.status(e instanceof InventoryModeError ? e.status : 500).json({ message: e.message });
     }
   });
 
@@ -11772,6 +11773,15 @@ export async function registerRoutes(
       res.json(locations.filter((l: any) => l.active).map((l: any) => ({ id: l.id, name: l.name })));
     } catch (e: any) {
       res.status(400).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/pos/stock/mode", requireTerminal, async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store, private");
+    try {
+      res.json({ multiStoreEnabled: await getInventoryMode() });
+    } catch {
+      res.status(503).json({ message: "Stock-control status is unavailable." });
     }
   });
 

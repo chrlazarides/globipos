@@ -12,6 +12,7 @@ import {
   stockTransfers,
 } from "@workspace/db";
 import { db } from "./db";
+import { getInventoryMode, getInventoryModeInTransaction } from "./inventory-mode";
 
 export class InventoryError extends Error {
   status: number;
@@ -186,7 +187,33 @@ export async function consumeLocationStockInTransaction(
 ): Promise<void> {
   const lines = normalizeLines(rawLines);
   if (!lines.length) throw new InventoryError("At least one stock item is required.", 400, "EMPTY_LINES");
+  const multiStore = await getInventoryModeInTransaction(tx);
   await lockInventoryEntities(tx, lines);
+
+  if (!multiStore) {
+    for (const line of lines) {
+      const [item] = await tx.select({ active: items.active, hasVariants: items.hasVariants })
+        .from(items).where(eq(items.id, line.itemId)).limit(1);
+      if (!item?.active) throw new InventoryError("Item is inactive or missing.", 409, "ITEM_UNAVAILABLE");
+      if (item.hasVariants && !line.variantId) throw new InventoryError("Select an item variant.", 400, "VARIANT_REQUIRED");
+      const holds = await tx.execute(sql`SELECT COALESCE(SUM(quantity), 0)::int AS quantity
+        FROM inventory_reservations WHERE item_id = ${line.itemId}
+        AND variant_id IS NOT DISTINCT FROM ${line.variantId} AND status = 'reserved'`);
+      if (Number(holds.rows[0].quantity) > 0) {
+        throw new InventoryError("This item still has active reservations. Release or complete them before using legacy checkout.", 409, "STOCK_RESERVED");
+      }
+      // Preserve legacy sales: missing shop allocations must not block a sale.
+      // Do not invent which shop owned these units or modify setup counts.
+      await tx.execute(line.variantId ? sql`
+        UPDATE item_variants SET stock_quantity = GREATEST(0, stock_quantity - ${line.quantity}), updated_at = now()
+        WHERE id = ${line.variantId} AND item_id = ${line.itemId}
+      ` : sql`
+        UPDATE items SET stock_quantity = GREATEST(0, stock_quantity - ${line.quantity}), updated_at = now()
+        WHERE id = ${line.itemId}
+      `);
+    }
+    return;
+  }
 
   const [location] = await tx.select({ id: posLocations.id, active: posLocations.active })
     .from(posLocations).where(eq(posLocations.id, locationId)).limit(1);
@@ -262,6 +289,9 @@ async function holdInTransaction(
     notes?: string | null;
   },
 ) {
+  if (!await getInventoryModeInTransaction(tx)) {
+    throw new InventoryError("Reservations are unavailable while multi-store stock control is disabled.", 409, "MULTISTORE_DISABLED");
+  }
   const line = normalizeLines([{ itemId: options.itemId, variantId: options.variantId, quantity: options.quantity }])[0];
   const customerName = options.customerName.trim();
   if (!customerName) throw new InventoryError("Customer name is required.", 400, "CUSTOMER_NAME_REQUIRED");
@@ -399,6 +429,7 @@ export async function createOrderReservationInTransaction(
     idempotencyKey: string;
   },
 ): Promise<void> {
+  if (!await getInventoryModeInTransaction(tx)) return;
   for (const line of normalizeLines(options.lines)) {
     if (options.locationId === POOLED_ONLINE_LOCATION_ID) {
       // Lock the item before choosing locations. Every hold and sale takes this
@@ -587,6 +618,7 @@ export async function setLocationStockSafely(
 
 export async function completeInventoryTransfer(id: string) {
   return db.transaction(async (tx) => {
+    await getInventoryModeInTransaction(tx);
     const result = await tx.execute(sql`SELECT * FROM stock_transfers WHERE id = ${id} FOR UPDATE`);
     const existing = result.rows[0] as any;
     if (!existing) return undefined;
@@ -699,6 +731,7 @@ export async function getTransferReservation(id: string) {
 }
 
 export async function getReservationSearchResults(query: string) {
+  const multiStoreEnabled = await getInventoryMode();
   const term = query.trim();
   const activeItems = await db.select().from(items)
     .where(and(
@@ -710,7 +743,7 @@ export async function getReservationSearchResults(query: string) {
     .orderBy(items.name)
     .limit(80);
   const itemIds = activeItems.map((item: any) => item.id);
-  if (!itemIds.length) return { items: [] };
+  if (!itemIds.length) return { items: [], multiStoreEnabled };
   const [locations, variants, stocks, reservations] = await Promise.all([
     db.select().from(posLocations).where(eq(posLocations.active, true)).orderBy(posLocations.name),
     db.select().from(itemVariants).where(and(inArray(itemVariants.itemId, itemIds), eq(itemVariants.active, true))),
@@ -752,6 +785,7 @@ export async function getReservationSearchResults(query: string) {
     };
   });
   return {
+    multiStoreEnabled,
     items: activeItems.map((item: any) => {
       const itemVariants = variantsByItem.get(item.id) || [];
       return {
@@ -798,6 +832,25 @@ export async function getReservationsForDestination(destinationLocationId: strin
 }
 
 export async function getAvailableAtLocation(locationId: string) {
+  if (!await getInventoryMode()) {
+    const result = await db.execute(sql`
+      WITH products AS (
+        SELECT id AS item_id, NULL::varchar AS variant_id, stock_quantity AS on_hand FROM items WHERE active = true
+        UNION ALL SELECT v.item_id, v.id, v.stock_quantity FROM item_variants v
+        JOIN items i ON i.id = v.item_id AND i.active = true WHERE v.active = true
+      ), holds AS (
+        SELECT item_id, variant_id, SUM(quantity)::int AS quantity
+        FROM inventory_reservations WHERE status = 'reserved' GROUP BY item_id, variant_id
+      )
+      SELECT p.item_id AS "itemId", p.variant_id AS "variantId", p.on_hand AS "onHand",
+        COALESCE(h.quantity, 0) AS reserved FROM products p LEFT JOIN holds h
+        ON h.item_id = p.item_id AND h.variant_id IS NOT DISTINCT FROM p.variant_id
+    `);
+    return (result.rows as any[]).map(row => ({
+      itemId: row.itemId, variantId: row.variantId, onHand: Number(row.onHand),
+      reserved: Number(row.reserved), available: Math.max(0, Number(row.onHand) - Number(row.reserved)),
+    }));
+  }
   if (locationId === POOLED_ONLINE_LOCATION_ID) {
     const rows = await db.execute(sql`
       SELECT stock.item_id AS "itemId", stock.variant_id AS "variantId",
@@ -862,6 +915,7 @@ export async function getAvailableAtLocation(locationId: string) {
 }
 
 export async function getOnlineFulfillmentLocation() {
+  if (!await getInventoryMode()) return { id: POOLED_ONLINE_LOCATION_ID, name: "Global stock" };
   const locations = await db.select().from(posLocations).where(and(
     eq(posLocations.active, true),
     eq(posLocations.isDefaultReceiving, true),

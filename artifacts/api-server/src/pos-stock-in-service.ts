@@ -81,6 +81,8 @@ export async function setImportedLocationStock(
   const client = await database.connect();
   try {
     await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock_shared(hashtext($1)::bigint)", ["multistore_inventory_enabled"]);
+    const mode = await client.query("SELECT value FROM system_settings WHERE key = $1", ["multistore_inventory_enabled"]);
     const item = await client.query("SELECT id, has_variants FROM items WHERE id = $1 FOR UPDATE", [itemId]);
     if (!item.rowCount) throw new Error("Imported item was not found while assigning location stock.");
     if (item.rows[0].has_variants) {
@@ -117,10 +119,9 @@ export async function setImportedLocationStock(
         [itemId, locationId, quantity],
       );
     }
-    // Once stock is assigned to shops, global stock must be the sum of those
-    // shops. Otherwise importing a second location overwrites the total with
-    // only the last imported row and valid shop sales become impossible.
-    await client.query(
+    // During setup these are shop-count snapshots, not replacements for the
+    // existing global total. Only active stock control owns that total.
+    if (mode.rows[0]?.value === "true") await client.query(
       `UPDATE items SET stock_quantity = (
         SELECT COALESCE(SUM(quantity), 0)::int FROM item_location_stock
         WHERE item_id = $1 AND variant_id IS NULL
@@ -149,6 +150,7 @@ export async function receivePosStock(
   const client = await database.connect();
   try {
     await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock_shared(hashtext($1)::bigint)", ["multistore_inventory_enabled"]);
     // Serialise stock-in operations for this terminal so both idempotency
     // lookups and generated (negative) audit local IDs are race-safe.
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.terminalId]);

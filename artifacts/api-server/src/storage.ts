@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { db } from "./db";
+import { getInventoryModeInTransaction, MULTISTORE_DEFAULT, MULTISTORE_SETTING, setInventoryMode } from "./inventory-mode";
 import {
   chooseSingleLocationForLinesInTransaction,
   POOLED_ONLINE_LOCATION_ID,
@@ -1197,10 +1198,12 @@ export class DatabaseStorage implements IStorage {
           stockLines.push({ itemId: line.itemId, variantId: line.variantId || null, quantity });
         }
         if (stockLines.length) {
-          if (inventoryLocationId === POOLED_ONLINE_LOCATION_ID) {
+          const multiStore = await getInventoryModeInTransaction(tx);
+          if (multiStore && inventoryLocationId === POOLED_ONLINE_LOCATION_ID) {
             inventoryLocationId = await chooseSingleLocationForLinesInTransaction(tx, stockLines);
           }
           await consumeLocationStockInTransaction(tx, inventoryLocationId, stockLines);
+          if (!multiStore) inventoryLocationId = undefined;
         } else if (inventoryLocationId === POOLED_ONLINE_LOCATION_ID) {
           inventoryLocationId = undefined;
         }
@@ -2408,7 +2411,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSettings() {
-    return db.select().from(systemSettings).orderBy(systemSettings.group, systemSettings.key);
+    const rows = await db.select().from(systemSettings).orderBy(systemSettings.group, systemSettings.key);
+    return rows.some(row => row.key === MULTISTORE_SETTING) ? rows : [...rows, MULTISTORE_DEFAULT];
   }
 
   async getSetting(key: string) {
@@ -2417,6 +2421,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertSetting(key: string, value: string, label: string, group: string) {
+    if (key === MULTISTORE_SETTING) return setInventoryMode(value);
     const existing = await this.getSetting(key);
     if (existing) {
       const [updated] = await db.update(systemSettings).set({ value, label, group }).where(eq(systemSettings.key, key)).returning();
@@ -2497,6 +2502,25 @@ export class DatabaseStorage implements IStorage {
       if (order.status === status) return order;
       assertPortalOrderTransition(order.status, status);
       if (status === "completed") {
+        const holds = await tx.execute(sql`SELECT id FROM inventory_reservations
+          WHERE source_id = ${id} AND source_type IN ('portal_order', 'reorder') AND status = 'reserved'`);
+        if (!holds.rows.length) {
+          const orderLines = await tx.select().from(portalOrderItems).where(eq(portalOrderItems.orderId, id));
+          const stockLines = orderLines.map(line => ({ itemId: line.itemId, variantId: line.variantId, quantity: Number(line.quantity) }));
+          if (stockLines.length) {
+            if (await getInventoryModeInTransaction(tx)) {
+              // Orders placed during setup have no holds. Allocate at completion
+              // if stock control has since been enabled.
+              await createOrderReservationInTransaction(tx, {
+                lines: stockLines, locationId: POOLED_ONLINE_LOCATION_ID,
+                sourceType: "portal_order", sourceId: id,
+                customerName: "Online customer", idempotencyKey: `completion:${id}`,
+              });
+            } else {
+              await consumeLocationStockInTransaction(tx, POOLED_ONLINE_LOCATION_ID, stockLines);
+            }
+          }
+        }
         await fulfillReservationsForSourceInTransaction(tx, "portal_order", id);
         await fulfillReservationsForSourceInTransaction(tx, "reorder", id);
       } else if (status === "rejected" || status === "cancelled") {

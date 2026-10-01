@@ -56,6 +56,7 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
   const [reservationKey, setReservationKey] = useState(() => crypto.randomUUID());
   const [stockInKey, setStockInKey] = useState(() => crypto.randomUUID());
   const [stockInQuantity, setStockInQuantity] = useState("1");
+  const [multiStoreEnabled, setMultiStoreEnabled] = useState(false);
 
   const headers = {
     "X-Terminal-Code": config.terminal_code,
@@ -83,6 +84,20 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
   }
 
   useEffect(() => { void refreshReservations(); }, [config.server_url, config.terminal_code]);
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      try {
+        const data = await request("/api/pos/stock/mode");
+        if (active) setMultiStoreEnabled(data.multiStoreEnabled === true);
+      } catch {
+        if (active) setMultiStoreEnabled(false);
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 30_000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [config.server_url, config.terminal_code]);
 
   useEffect(() => {
     if (query.trim().length < 2) {
@@ -98,6 +113,7 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
         if (active) {
           if (!Array.isArray(data?.items)) throw new Error("Invalid stock search response.");
           setItems(data.items);
+          setMultiStoreEnabled(data.multiStoreEnabled === true);
           setSelected(null);
           setError("");
         }
@@ -127,6 +143,7 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
 
   async function reserve() {
     if (!selected || !source || pending) return;
+    if (!multiStoreEnabled) { setError("Enable multi-store stock control in Back Office before reserving stock."); return; }
     if (!config.voucher_device_key) {
       setError("Pair this Terminal in Settings with its device key before reserving stock.");
       return;
@@ -241,6 +258,9 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
           </label>
           {error && <p role="alert" className="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
           {notice && <p role="status" className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">{notice}</p>}
+          {mode === "lookup" && !multiStoreEnabled && <p role="status" className="mt-3 rounded-lg border border-border p-3 text-sm">
+            Multi-store stock control is disabled. Shop counts are setup information only; sales use global stock and reservations are unavailable.
+          </p>}
           <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
             <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border border-border p-2">
               {loading ? <p className="p-3 text-sm">Checking shops…</p> : items.length === 0
@@ -269,7 +289,7 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
                     {stockRows.map(row => {
                       const local = row.locationId === config.location_id;
                       return <button key={`${row.locationId}-${row.variantId ?? ""}`} type="button"
-                        disabled={local || row.available <= 0} onClick={() => { setSource(row); setReservationKey(crypto.randomUUID()); }}
+                        disabled={!multiStoreEnabled || local || row.available <= 0} onClick={() => { setSource(row); setReservationKey(crypto.randomUUID()); }}
                         className={`w-full rounded-lg border px-3 py-2 text-left text-sm disabled:opacity-60 ${source?.locationId === row.locationId ? "border-primary bg-primary/10" : "border-border hover:bg-input"}`}>
                         <span className="font-medium">{row.locationName}{local ? " · this shop" : ""}</span>
                         <span className="block text-xs">{row.available} available · {row.onHand} on hand · {row.reserved} reserved</span>
@@ -290,7 +310,7 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
                           className="mt-1 w-full rounded-lg bg-input p-2 text-sm" />
                       </label>
                     </div>
-                    <button type="button" disabled={pending} onClick={() => void reserve()}
+                    <button type="button" disabled={pending || !multiStoreEnabled} onClick={() => void reserve()}
                       className="w-full rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-50">
                       {pending ? "Reserving…" : "Reserve for transfer"}
                     </button>

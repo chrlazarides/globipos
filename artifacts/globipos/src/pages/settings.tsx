@@ -768,7 +768,7 @@ export default function SettingsPage() {
       );
     }
 
-    if (setting.key === "portal_enabled" || setting.key === "portal_allow_ordering" || setting.key === "loyalty_enabled" || setting.key === "cashback_enabled" ||
+    if (setting.key === "multistore_inventory_enabled" || setting.key === "portal_enabled" || setting.key === "portal_allow_ordering" || setting.key === "loyalty_enabled" || setting.key === "cashback_enabled" ||
       setting.key === "customer_ai_enabled" || setting.key === "customer_ai_recommendations_enabled" || setting.key === "customer_ai_sentiment_enabled") {
       return (
         <Select value={val} onValueChange={(v) => updateValue(setting.key, v)}>
@@ -1101,6 +1101,16 @@ export default function SettingsPage() {
                           {setting.label}
                         </Label>
                         {renderField(setting)}
+                        {setting.key === "multistore_inventory_enabled" && (
+                          <p className="text-xs text-muted-foreground">
+                            Disabled by default: sales use existing global stock and reservations are unavailable.
+                            You can enter shop counts gradually through location imports and receive new units through POS Stock In.
+                            Before enabling, reconcile each item's shop counts with its global total.
+                            Legacy sales do not update shop-count snapshots, so recheck counts before activation.
+                            Enabled: checkout requires available shop stock and reservations block shop and online sales.
+                            Complete or release active reservations before disabling.
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>

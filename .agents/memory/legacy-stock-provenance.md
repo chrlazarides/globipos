@@ -7,4 +7,8 @@ Do not automatically distribute legacy global stock to shops, even when there ar
 
 **Why:** A guessed allocation could expose a held last item for sale at the wrong shop. Adding existing units through Stock In instead would inflate the global balance.
 
-**How to apply:** When extending inventory, keep location-controlled sales fail-closed until real per-shop counts exist. Treat a location-tagged import as an absolute count, not a receipt, and preserve the sum of assigned shop quantities as the global balance.
+The user approved a staged rollout: multi-store stock control stays disabled by default while shop quantities are populated gradually. Setup-mode sales retain legacy global-stock behavior; reservations cannot be created in setup mode.
+
+**Why:** Publishing strict shop-stock enforcement before counts exist would stop normal trading. Partial shop imports must not overwrite the existing global total.
+
+**How to apply:** Treat shop counts as setup snapshots while control is disabled, not as live sale balances. Legacy sales can make those snapshots stale, so reconcile them with global totals before activation. Once enabled, enforce unreserved location stock for shop and online sales; refuse disabling with active holds. Do not bypass holds simply because a setting is missing.

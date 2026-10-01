@@ -616,6 +616,10 @@ export default function ImportData() {
   const { data: importLocations = [] } = useQuery<{ id: string; name: string; active?: boolean }[]>({
     queryKey: ["/api/pos/locations"],
   });
+  const { data: stockSettings = [] } = useQuery<{ key: string; value: string }[]>({
+    queryKey: ["/api/settings"], staleTime: 0, refetchInterval: 30_000,
+  });
+  const multiStoreEnabled = stockSettings.some(setting => setting.key === "multistore_inventory_enabled" && setting.value === "true");
 
   const reset = () => {
     selectedFileRef.current = null;
@@ -765,7 +769,7 @@ export default function ImportData() {
       reset();
       return;
     }
-    if (hasStockRowsWithoutLocation && !selectedLocationId) {
+    if (multiStoreEnabled && hasStockRowsWithoutLocation && !selectedLocationId) {
       toast({ title: "Stock location required", description: "Choose the location where imported stock quantities should be assigned.", variant: "destructive" });
       return;
     }
@@ -950,13 +954,16 @@ export default function ImportData() {
                         <SelectValue placeholder="Choose location" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="__unset__">Choose location</SelectItem>
+                        <SelectItem value="__unset__">{multiStoreEnabled ? "Choose location" : "Global stock (legacy)"}</SelectItem>
                         {importLocations.filter((location) => location.active !== false).map((location) => (
                           <SelectItem key={location.id} value={location.id}>{location.name}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
+                  {!multiStoreEnabled && <p className="text-xs text-muted-foreground">
+                    Stock control is disabled. A selected shop receives setup counts; leave location blank to import legacy global quantities.
+                  </p>}
                   <Button variant="outline" onClick={reset} data-testid="button-import-change-file">
                     <RefreshCw className="w-4 h-4 mr-2" />
                     Change File
