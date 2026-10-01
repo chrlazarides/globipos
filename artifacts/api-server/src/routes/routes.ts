@@ -9,6 +9,9 @@ import { customerPreferences, customerFeedback, customerNotifications, customerC
 import { productFamilies, insertProductFamilySchema } from "@workspace/db";
 import { labelProfiles } from "@workspace/db";
 import { parseAdminImportRequest, shouldRestoreBackupSettings } from "../import-settings-policy";
+import { TerminalHeartbeatBody } from "@workspace/api-zod";
+import { posTerminals as syncPosTerminals } from "@workspace/db";
+import { mergeSyncHeartbeat, parseSyncTelemetry } from "../sync-telemetry";
 import { parseIntentAI, parseIntentKeyword, matchFaq, transcribeAudio, extractInvoiceFromImage, sendWhatsAppMessage, getWaCart, addToWaCart, clearWaCart, formatWaCart, getPendingItem, setPendingItem, clearPendingItem, consumeExpiredPendingFlag, getBrowseResults, setBrowseResults, wordToNumber, type WaPendingItem } from "../chatbot-service";
 import { z } from "zod/v4";
 import multer from "multer";
@@ -10893,7 +10896,11 @@ export async function registerRoutes(
           return res.status(400).json({ message: "Invalid catalog cursor" });
         }
       }
-      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), lastSyncAt: new Date() });
+      // A page request is not confirmation that the device saved a complete catalog.
+      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date() });
+      const watermarkResult = await db.execute(sql`select clock_timestamp() AS "serverWatermark"`);
+      const watermark = watermarkResult.rows[0] as { serverWatermark: Date | string };
+      const serverWatermark = new Date(watermark.serverWatermark).toISOString();
       const [pageItems, cats, offers] = await Promise.all([
         storage.getCatalogPage({ limit: limit + 1, cursor, since: sinceDate || undefined }),
         storage.getCategories(),
@@ -10912,7 +10919,7 @@ export async function registerRoutes(
         ? Buffer.from(JSON.stringify({ name: last.name, id: last.id })).toString("base64url")
         : null;
       res.json({ items, categories: cursor ? [] : categories, seasonalOffers: cursor ? [] : activeOffers,
-        syncedAt: new Date().toISOString(), full: !sinceDate, since: since || null, nextCursor, done });
+        syncedAt: new Date().toISOString(), serverWatermark, full: !sinceDate, since: since || null, nextCursor, done });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
 
@@ -10986,7 +10993,11 @@ export async function registerRoutes(
           }
         }
       }
-      await storage.updatePosTerminal(terminal.id, { lastSeenAt: new Date(), lastSyncAt: new Date(), outboxQueueSize: 0 });
+      await storage.updatePosTerminal(terminal.id, {
+        lastSeenAt: new Date(),
+        ...(results.length > 0 && results.every(result => result.status === "ok") ? { lastSyncAt: new Date() } : {}),
+        // Pending counts remain device-reported; receiving one bill does not empty its local queue.
+      });
       res.json({ results });
     } catch (e: any) { res.status(500).json({ message: e.message }); }
   });
@@ -11098,27 +11109,33 @@ export async function registerRoutes(
     try {
       const terminal = (req as any).terminal;
       if ((req.params.id as string) !== terminal.id) return res.status(403).json({ message: "Forbidden: terminal mismatch" });
-      const { outboxQueueSize = 0, peripheralStatus } = req.body;
-      const update: any = { lastSeenAt: new Date(), outboxQueueSize };
-      if (peripheralStatus && typeof peripheralStatus === "object") {
-        const nextPeripheralStatus = { ...peripheralStatus };
-        const previousPeripheralStatus = (terminal.peripheralStatus ?? {}) as Record<string, unknown>;
-        const incomingScoMode = nextPeripheralStatus.sco_mode;
-        const incomingNeedsAttendant = incomingScoMode === "attendant_needed" || incomingScoMode === "age_check";
-
-        // An attendant acknowledgement must survive heartbeats from a lane that
-        // is still showing the same local alert. Once the lane leaves its alert
-        // mode, clear the acknowledgement so a later alert is visible normally.
-        if (previousPeripheralStatus.sco_override_acknowledged === true && incomingNeedsAttendant) {
-          nextPeripheralStatus.sco_mode = "scanning";
-          nextPeripheralStatus.sco_attendant_reason = null;
-          nextPeripheralStatus.sco_override_acknowledged = true;
-        } else {
-          delete nextPeripheralStatus.sco_override_acknowledged;
-        }
-        update.peripheralStatus = nextPeripheralStatus;
+      const parsed = TerminalHeartbeatBody.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid terminal heartbeat" });
+      const { outboxQueueSize = 0, peripheralStatus, syncStatus } = parsed.data;
+      if (JSON.stringify(req.body).length > 32_768 || (peripheralStatus && Object.keys(peripheralStatus).length > 40)) {
+        return res.status(400).json({ message: "Terminal report is too large" });
       }
-      await storage.updatePosTerminal(terminal.id, update);
+      const rawSync = syncStatus ?? peripheralStatus?.sync;
+      if (rawSync !== undefined) {
+        try { parseSyncTelemetry(rawSync); }
+        catch { return res.status(400).json({ message: "Invalid sync report" }); }
+      }
+      try {
+        await db.transaction(async transaction => {
+          const [current] = await transaction.select().from(syncPosTerminals).where(eq(syncPosTerminals.id, terminal.id)).for("update");
+          if (!current) throw new Error("Terminal unavailable");
+          const next = mergeSyncHeartbeat(
+            (current.peripheralStatus ?? {}) as Record<string, unknown>, peripheralStatus,
+            rawSync, new Date().toISOString(),
+          );
+          await transaction.update(syncPosTerminals).set({
+            lastSeenAt: new Date(), outboxQueueSize, peripheralStatus: next,
+          }).where(eq(syncPosTerminals.id, terminal.id));
+        });
+      } catch {
+        req.log.error({ terminalId: terminal.id }, "Terminal heartbeat persistence failed");
+        return res.status(500).json({ message: "Terminal telemetry could not be saved" });
+      }
       // Return the peripheral config so the terminal can apply it
       const updated = await storage.getPosTerminal(terminal.id);
       res.json({ ok: true, peripheralConfig: updated?.peripheralConfig ?? null });

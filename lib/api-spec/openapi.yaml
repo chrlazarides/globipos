@@ -24,6 +24,69 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /pos/terminals/{id}/heartbeat:
+    post:
+      operationId: terminalHeartbeat
+      summary: Report terminal connectivity and aggregate sync observations
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: header
+          name: X-Terminal-Code
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TerminalHeartbeatInput" }
+      responses:
+        "200":
+          description: Report received; not a financial acknowledgement
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TerminalHeartbeatReceipt" }
+        "400": { description: Invalid bounded telemetry }
+        "401": { description: Terminal authentication required }
+        "403": { description: Terminal identity mismatch }
+  /control/heartbeat:
+    post:
+      operationId: deploymentHeartbeat
+      summary: Authenticated customer installation report to the master
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeploymentHeartbeatInput" }
+      responses:
+        "200":
+          description: Report received
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentHeartbeatReceipt" }
+        "400": { description: Invalid telemetry }
+        "401": { description: Deployment credential required }
+        "403": { description: Suspended deployment }
+  /control/deployments/{id}/device-sync:
+    get:
+      operationId: getDeploymentDeviceSync
+      summary: Read redacted device telemetry for the selected deployment
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Last reported device states, not a live checkout guarantee
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentDeviceSyncResponse" }
+        "401": { description: Authentication required }
+        "403": { description: Fleet superuser access required }
+        "404": { description: Deployment not found }
 components:
   schemas:
     HealthStatus:
@@ -33,4 +96,97 @@ components:
           type: string
       required:
         - status
+    SyncCount:
+      type: integer
+      minimum: 0
+      maximum: 1000000
+    SyncTime:
+      type: [string, "null"]
+      maxLength: 40
+      description: ISO 8601 device observation time; never the master's freshness clock
+    PosSyncSnapshot:
+      type: object
+      required: [schemaVersion, platform, deviceId, sequence, phase, syncing, online, serverReachable, catalogReceived, catalogCommitted, catalogPages, transactionsConfirmed, auditsConfirmed, outboxPending, outboxFailed, auditPending, auditFailed]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        platform: { type: string, enum: [pwa, native] }
+        deviceId: { type: string, minLength: 1, maxLength: 80 }
+        sequence: { type: integer, minimum: 1, maximum: 9007199254740991 }
+        buildVersion: { type: [string, "null"], maxLength: 80 }
+        runId: { type: [string, "null"], maxLength: 80 }
+        phase:
+          type: string
+          enum: [idle, cashiers, catalog-download, catalog-save, transactions, audits, inbox, complete, failed, partial, interrupted]
+        syncing: { type: boolean }
+        online: { type: boolean }
+        serverReachable: { type: [boolean, "null"] }
+        lastAttemptAt: { $ref: "#/components/schemas/SyncTime" }
+        startedAt: { $ref: "#/components/schemas/SyncTime" }
+        progressAt: { $ref: "#/components/schemas/SyncTime" }
+        lastServerContactAt: { $ref: "#/components/schemas/SyncTime" }
+        lastCatalogSyncAt: { $ref: "#/components/schemas/SyncTime" }
+        lastTransactionSyncAt: { $ref: "#/components/schemas/SyncTime" }
+        lastSuccessAt: { $ref: "#/components/schemas/SyncTime" }
+        retryAt: { $ref: "#/components/schemas/SyncTime" }
+        error: { type: [string, "null"], maxLength: 240 }
+        catalogReceived: { $ref: "#/components/schemas/SyncCount" }
+        catalogCommitted: { $ref: "#/components/schemas/SyncCount" }
+        catalogPages: { $ref: "#/components/schemas/SyncCount" }
+        transactionsConfirmed: { $ref: "#/components/schemas/SyncCount" }
+        auditsConfirmed: { $ref: "#/components/schemas/SyncCount" }
+        outboxPending: { $ref: "#/components/schemas/SyncCount" }
+        outboxFailed: { $ref: "#/components/schemas/SyncCount" }
+        auditPending: { $ref: "#/components/schemas/SyncCount" }
+        auditFailed: { $ref: "#/components/schemas/SyncCount" }
+    TerminalHeartbeatInput:
+      type: object
+      properties:
+        outboxQueueSize: { $ref: "#/components/schemas/SyncCount" }
+        peripheralStatus:
+          type: object
+          additionalProperties: true
+          description: Existing native peripheral observations; sync uses PosSyncSnapshot
+        syncStatus: { $ref: "#/components/schemas/PosSyncSnapshot" }
+    TerminalHeartbeatReceipt:
+      type: object
+      required: [ok, peripheralConfig]
+      properties:
+        ok: { type: boolean }
+        peripheralConfig: { type: [object, "null"], additionalProperties: true }
+    DeviceSyncReport:
+      type: object
+      required: [terminalId, receivedAt, sync]
+      properties:
+        terminalId: { type: string, minLength: 1, maxLength: 80 }
+        terminalName: { type: string, maxLength: 80 }
+        receivedAt: { type: string, maxLength: 40 }
+        sync: { $ref: "#/components/schemas/PosSyncSnapshot" }
+    DeploymentHeartbeatInput:
+      type: object
+      properties:
+        deploymentId: { type: string, format: uuid }
+        backOfficeVersion: { type: [string, "null"], maxLength: 80 }
+        posVersion: { type: [string, "null"], maxLength: 80 }
+        healthStatus: { type: string, enum: [unknown, healthy, warning, offline, error] }
+        healthMessage: { type: [string, "null"], maxLength: 1000 }
+        deviceReports:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/DeviceSyncReport" }
+    DeploymentHeartbeatReceipt:
+      type: object
+      required: [ok, deploymentId]
+      properties:
+        ok: { type: boolean }
+        deploymentId: { type: string }
+    DeploymentDeviceSyncResponse:
+      type: object
+      required: [deploymentId, asOf, devices]
+      properties:
+        deploymentId: { type: string }
+        asOf: { type: string }
+        lastInstallationHeartbeatAt: { type: [string, "null"] }
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceSyncReport" }
 

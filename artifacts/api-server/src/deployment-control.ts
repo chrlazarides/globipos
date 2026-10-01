@@ -1,5 +1,9 @@
 import type { Express, Request, Response } from "express";
 import crypto from "crypto";
+import { DeploymentHeartbeatBody } from "@workspace/api-zod";
+import { mergeDeploymentDeviceReports, parseDeploymentDeviceReports } from "./sync-telemetry";
+import { systemSettings } from "@workspace/db";
+import type { DeviceSyncReport } from "@workspace/api-zod";
 import { z } from "zod/v4";
 import { db } from "./db";
 import { requireSuperuser } from "./auth";
@@ -100,10 +104,12 @@ const profilePatchSchema = profileBaseSchema.partial().extend({
   overrideDomainWarning: z.boolean().optional(),
 }).strict();
 const heartbeatSchema = z.object({
+  deploymentId: z.string().uuid().optional(),
   backOfficeVersion: versionSchema.optional(),
   posVersion: versionSchema.optional(),
   healthStatus: healthStatusSchema.optional(),
   healthMessage: z.string().trim().max(1000).nullable().optional(),
+  deviceReports: z.unknown().optional(),
 }).strict();
 const rolloutSchema = z.object({
   all: z.boolean().optional(),
@@ -711,6 +717,24 @@ export function registerDeploymentControlRoutes(app: Express) {
     res.json(await loadDeploymentProfilesWithIncidents());
   });
 
+  app.get("/api/control/deployments/:id/device-sync", requireSuperuser, async (req, res) => {
+    const deploymentId = z.uuid().safeParse(req.params.id);
+    if (!deploymentId.success) return res.status(400).json({ message: "Invalid deployment ID" });
+    const [profile] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, deploymentId.data));
+    if (!profile) return res.status(404).json({ message: "Deployment not found" });
+    const [stored] = await db.select().from(systemSettings).where(eq(systemSettings.key, `device_sync:${profile.id}`));
+    let devices: DeviceSyncReport[] = [];
+    try {
+      if (stored) devices = parseDeploymentDeviceReports(JSON.parse(stored.value));
+    } catch {
+      return res.status(500).json({ message: "Stored device monitoring data could not be read" });
+    }
+    res.json({
+      deploymentId: profile.id, asOf: new Date().toISOString(),
+      lastInstallationHeartbeatAt: profile.lastHeartbeatAt?.toISOString() ?? null, devices,
+    });
+  });
+
   app.get("/api/control/deployments/:id/incidents", requireSuperuser, async (req, res) => {
     const parsed = incidentHistoryQuerySchema.safeParse(req.query);
     if (!parsed.success) return validationError(res, parsed.error);
@@ -1012,15 +1036,37 @@ export function registerDeploymentControlRoutes(app: Express) {
     if (!token) return res.status(401).json({ message: "Deployment credential required" });
     const parsed = heartbeatSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error);
+    const generated = DeploymentHeartbeatBody.safeParse(req.body);
+    if (!generated.success) return res.status(400).json({ message: "Invalid deployment heartbeat" });
+    let deviceReports: DeviceSyncReport[] | undefined;
+    try {
+      if (parsed.data.deviceReports !== undefined) deviceReports = parseDeploymentDeviceReports(parsed.data.deviceReports);
+    } catch {
+      return res.status(400).json({ message: "Invalid device telemetry" });
+    }
     const credentialHash = crypto.createHash("sha256").update(token).digest("hex");
     const [profile] = await db.select().from(deploymentProfiles).where(eq(deploymentProfiles.credentialHash, credentialHash));
     if (!profile) return res.status(401).json({ message: "Invalid deployment credential" });
     if (profile.status === "suspended") return res.status(403).json({ message: "Deployment profile is suspended" });
-    await db.update(deploymentProfiles).set(withoutUndefined({
-      ...parsed.data,
-      lastHeartbeatAt: new Date(),
-      updatedAt: new Date(),
-    })).where(eq(deploymentProfiles.id, profile.id));
+    if (parsed.data.deploymentId && parsed.data.deploymentId !== profile.id) return res.status(403).json({ message: "Deployment mismatch" });
+    const { deviceReports: _deviceReports, deploymentId: _deploymentId, ...profileUpdate } = parsed.data;
+    await db.transaction(async transaction => {
+      const [locked] = await transaction.select().from(deploymentProfiles).where(eq(deploymentProfiles.id, profile.id)).for("update");
+      if (!locked || locked.status === "suspended") throw new Error("Deployment no longer accepts heartbeats");
+      if (deviceReports !== undefined) {
+        const key = `device_sync:${profile.id}`;
+        const [old] = await transaction.select().from(systemSettings).where(eq(systemSettings.key, key)).for("update");
+        let previous: DeviceSyncReport[] = [];
+        try { previous = old ? parseDeploymentDeviceReports(JSON.parse(old.value)) : []; } catch { /* discard obsolete schema */ }
+        const merged = mergeDeploymentDeviceReports(previous, deviceReports);
+        await transaction.insert(systemSettings).values({
+          key, value: JSON.stringify(merged), label: "Device sync summaries", group: "deployment_monitoring",
+        }).onConflictDoUpdate({ target: systemSettings.key, set: { value: JSON.stringify(merged) } });
+      }
+      await transaction.update(deploymentProfiles).set(withoutUndefined({
+        ...profileUpdate, lastHeartbeatAt: new Date(), updatedAt: new Date(),
+      })).where(eq(deploymentProfiles.id, profile.id));
+    });
     res.json({ ok: true, deploymentId: profile.id });
   });
 }

@@ -17,3 +17,344 @@ export const HealthCheckResponse = zod.object({
 })
 
 
+/**
+ * @summary Report terminal connectivity and aggregate sync observations
+ */
+export const TerminalHeartbeatParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const TerminalHeartbeatHeader = zod.object({
+  "X-Terminal-Code": zod.string()
+})
+
+export const terminalHeartbeatBodyOutboxQueueSizeMin = 0;
+export const terminalHeartbeatBodyOutboxQueueSizeMax = 1000000;
+
+export const terminalHeartbeatBodySyncStatusDeviceIdMax = 80;
+
+export const terminalHeartbeatBodySyncStatusSequenceMax = 9007199254740991;
+
+export const terminalHeartbeatBodySyncStatusBuildVersionMax = 80;
+
+export const terminalHeartbeatBodySyncStatusRunIdMax = 80;
+
+export const terminalHeartbeatBodySyncStatusLastAttemptAtMax = 40;
+
+export const terminalHeartbeatBodySyncStatusStartedAtMax = 40;
+
+export const terminalHeartbeatBodySyncStatusProgressAtMax = 40;
+
+export const terminalHeartbeatBodySyncStatusLastServerContactAtMax = 40;
+
+export const terminalHeartbeatBodySyncStatusLastCatalogSyncAtMax = 40;
+
+export const terminalHeartbeatBodySyncStatusLastTransactionSyncAtMax = 40;
+
+export const terminalHeartbeatBodySyncStatusLastSuccessAtMax = 40;
+
+export const terminalHeartbeatBodySyncStatusRetryAtMax = 40;
+
+export const terminalHeartbeatBodySyncStatusErrorMax = 240;
+
+export const terminalHeartbeatBodySyncStatusCatalogReceivedMin = 0;
+export const terminalHeartbeatBodySyncStatusCatalogReceivedMax = 1000000;
+
+export const terminalHeartbeatBodySyncStatusCatalogCommittedMin = 0;
+export const terminalHeartbeatBodySyncStatusCatalogCommittedMax = 1000000;
+
+export const terminalHeartbeatBodySyncStatusCatalogPagesMin = 0;
+export const terminalHeartbeatBodySyncStatusCatalogPagesMax = 1000000;
+
+export const terminalHeartbeatBodySyncStatusTransactionsConfirmedMin = 0;
+export const terminalHeartbeatBodySyncStatusTransactionsConfirmedMax = 1000000;
+
+export const terminalHeartbeatBodySyncStatusAuditsConfirmedMin = 0;
+export const terminalHeartbeatBodySyncStatusAuditsConfirmedMax = 1000000;
+
+export const terminalHeartbeatBodySyncStatusOutboxPendingMin = 0;
+export const terminalHeartbeatBodySyncStatusOutboxPendingMax = 1000000;
+
+export const terminalHeartbeatBodySyncStatusOutboxFailedMin = 0;
+export const terminalHeartbeatBodySyncStatusOutboxFailedMax = 1000000;
+
+export const terminalHeartbeatBodySyncStatusAuditPendingMin = 0;
+export const terminalHeartbeatBodySyncStatusAuditPendingMax = 1000000;
+
+export const terminalHeartbeatBodySyncStatusAuditFailedMin = 0;
+export const terminalHeartbeatBodySyncStatusAuditFailedMax = 1000000;
+
+
+
+export const TerminalHeartbeatBody = zod.object({
+  "outboxQueueSize": zod.number().int().min(terminalHeartbeatBodyOutboxQueueSizeMin).max(terminalHeartbeatBodyOutboxQueueSizeMax).optional(),
+  "peripheralStatus": zod.record(zod.string(), zod.unknown()).optional().describe('Existing native peripheral observations; sync uses PosSyncSnapshot'),
+  "syncStatus": zod.object({
+  "schemaVersion": zod.literal(1),
+  "platform": zod.enum(['pwa', 'native']),
+  "deviceId": zod.string().min(1).max(terminalHeartbeatBodySyncStatusDeviceIdMax),
+  "sequence": zod.number().int().min(1).max(terminalHeartbeatBodySyncStatusSequenceMax),
+  "buildVersion": zod.string().max(terminalHeartbeatBodySyncStatusBuildVersionMax).nullish(),
+  "runId": zod.string().max(terminalHeartbeatBodySyncStatusRunIdMax).nullish(),
+  "phase": zod.enum(['idle', 'cashiers', 'catalog-download', 'catalog-save', 'transactions', 'audits', 'inbox', 'complete', 'failed', 'partial', 'interrupted']),
+  "syncing": zod.boolean(),
+  "online": zod.boolean(),
+  "serverReachable": zod.boolean().nullable(),
+  "lastAttemptAt": zod.string().max(terminalHeartbeatBodySyncStatusLastAttemptAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "startedAt": zod.string().max(terminalHeartbeatBodySyncStatusStartedAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "progressAt": zod.string().max(terminalHeartbeatBodySyncStatusProgressAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastServerContactAt": zod.string().max(terminalHeartbeatBodySyncStatusLastServerContactAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastCatalogSyncAt": zod.string().max(terminalHeartbeatBodySyncStatusLastCatalogSyncAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastTransactionSyncAt": zod.string().max(terminalHeartbeatBodySyncStatusLastTransactionSyncAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastSuccessAt": zod.string().max(terminalHeartbeatBodySyncStatusLastSuccessAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "retryAt": zod.string().max(terminalHeartbeatBodySyncStatusRetryAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "error": zod.string().max(terminalHeartbeatBodySyncStatusErrorMax).nullish(),
+  "catalogReceived": zod.number().int().min(terminalHeartbeatBodySyncStatusCatalogReceivedMin).max(terminalHeartbeatBodySyncStatusCatalogReceivedMax),
+  "catalogCommitted": zod.number().int().min(terminalHeartbeatBodySyncStatusCatalogCommittedMin).max(terminalHeartbeatBodySyncStatusCatalogCommittedMax),
+  "catalogPages": zod.number().int().min(terminalHeartbeatBodySyncStatusCatalogPagesMin).max(terminalHeartbeatBodySyncStatusCatalogPagesMax),
+  "transactionsConfirmed": zod.number().int().min(terminalHeartbeatBodySyncStatusTransactionsConfirmedMin).max(terminalHeartbeatBodySyncStatusTransactionsConfirmedMax),
+  "auditsConfirmed": zod.number().int().min(terminalHeartbeatBodySyncStatusAuditsConfirmedMin).max(terminalHeartbeatBodySyncStatusAuditsConfirmedMax),
+  "outboxPending": zod.number().int().min(terminalHeartbeatBodySyncStatusOutboxPendingMin).max(terminalHeartbeatBodySyncStatusOutboxPendingMax),
+  "outboxFailed": zod.number().int().min(terminalHeartbeatBodySyncStatusOutboxFailedMin).max(terminalHeartbeatBodySyncStatusOutboxFailedMax),
+  "auditPending": zod.number().int().min(terminalHeartbeatBodySyncStatusAuditPendingMin).max(terminalHeartbeatBodySyncStatusAuditPendingMax),
+  "auditFailed": zod.number().int().min(terminalHeartbeatBodySyncStatusAuditFailedMin).max(terminalHeartbeatBodySyncStatusAuditFailedMax)
+}).optional()
+})
+
+export const TerminalHeartbeatResponse = zod.object({
+  "ok": zod.boolean(),
+  "peripheralConfig": zod.record(zod.string(), zod.unknown()).nullable()
+})
+
+
+/**
+ * @summary Authenticated customer installation report to the master
+ */
+export const deploymentHeartbeatBodyBackOfficeVersionMax = 80;
+
+export const deploymentHeartbeatBodyPosVersionMax = 80;
+
+export const deploymentHeartbeatBodyHealthMessageMax = 1000;
+
+export const deploymentHeartbeatBodyDeviceReportsItemTerminalIdMax = 80;
+
+export const deploymentHeartbeatBodyDeviceReportsItemTerminalNameMax = 80;
+
+export const deploymentHeartbeatBodyDeviceReportsItemReceivedAtMax = 40;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncDeviceIdMax = 80;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncSequenceMax = 9007199254740991;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncBuildVersionMax = 80;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncRunIdMax = 80;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncLastAttemptAtMax = 40;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncStartedAtMax = 40;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncProgressAtMax = 40;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncLastServerContactAtMax = 40;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncLastCatalogSyncAtMax = 40;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncLastTransactionSyncAtMax = 40;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncLastSuccessAtMax = 40;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncRetryAtMax = 40;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncErrorMax = 240;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncCatalogReceivedMin = 0;
+export const deploymentHeartbeatBodyDeviceReportsItemSyncCatalogReceivedMax = 1000000;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncCatalogCommittedMin = 0;
+export const deploymentHeartbeatBodyDeviceReportsItemSyncCatalogCommittedMax = 1000000;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncCatalogPagesMin = 0;
+export const deploymentHeartbeatBodyDeviceReportsItemSyncCatalogPagesMax = 1000000;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncTransactionsConfirmedMin = 0;
+export const deploymentHeartbeatBodyDeviceReportsItemSyncTransactionsConfirmedMax = 1000000;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncAuditsConfirmedMin = 0;
+export const deploymentHeartbeatBodyDeviceReportsItemSyncAuditsConfirmedMax = 1000000;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncOutboxPendingMin = 0;
+export const deploymentHeartbeatBodyDeviceReportsItemSyncOutboxPendingMax = 1000000;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncOutboxFailedMin = 0;
+export const deploymentHeartbeatBodyDeviceReportsItemSyncOutboxFailedMax = 1000000;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncAuditPendingMin = 0;
+export const deploymentHeartbeatBodyDeviceReportsItemSyncAuditPendingMax = 1000000;
+
+export const deploymentHeartbeatBodyDeviceReportsItemSyncAuditFailedMin = 0;
+export const deploymentHeartbeatBodyDeviceReportsItemSyncAuditFailedMax = 1000000;
+
+export const deploymentHeartbeatBodyDeviceReportsMax = 200;
+
+
+
+export const DeploymentHeartbeatBody = zod.object({
+  "deploymentId": zod.string().uuid().optional(),
+  "backOfficeVersion": zod.string().max(deploymentHeartbeatBodyBackOfficeVersionMax).nullish(),
+  "posVersion": zod.string().max(deploymentHeartbeatBodyPosVersionMax).nullish(),
+  "healthStatus": zod.enum(['unknown', 'healthy', 'warning', 'offline', 'error']).optional(),
+  "healthMessage": zod.string().max(deploymentHeartbeatBodyHealthMessageMax).nullish(),
+  "deviceReports": zod.array(zod.object({
+  "terminalId": zod.string().min(1).max(deploymentHeartbeatBodyDeviceReportsItemTerminalIdMax),
+  "terminalName": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemTerminalNameMax).optional(),
+  "receivedAt": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemReceivedAtMax),
+  "sync": zod.object({
+  "schemaVersion": zod.literal(1),
+  "platform": zod.enum(['pwa', 'native']),
+  "deviceId": zod.string().min(1).max(deploymentHeartbeatBodyDeviceReportsItemSyncDeviceIdMax),
+  "sequence": zod.number().int().min(1).max(deploymentHeartbeatBodyDeviceReportsItemSyncSequenceMax),
+  "buildVersion": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncBuildVersionMax).nullish(),
+  "runId": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncRunIdMax).nullish(),
+  "phase": zod.enum(['idle', 'cashiers', 'catalog-download', 'catalog-save', 'transactions', 'audits', 'inbox', 'complete', 'failed', 'partial', 'interrupted']),
+  "syncing": zod.boolean(),
+  "online": zod.boolean(),
+  "serverReachable": zod.boolean().nullable(),
+  "lastAttemptAt": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncLastAttemptAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "startedAt": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncStartedAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "progressAt": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncProgressAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastServerContactAt": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncLastServerContactAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastCatalogSyncAt": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncLastCatalogSyncAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastTransactionSyncAt": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncLastTransactionSyncAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastSuccessAt": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncLastSuccessAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "retryAt": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncRetryAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "error": zod.string().max(deploymentHeartbeatBodyDeviceReportsItemSyncErrorMax).nullish(),
+  "catalogReceived": zod.number().int().min(deploymentHeartbeatBodyDeviceReportsItemSyncCatalogReceivedMin).max(deploymentHeartbeatBodyDeviceReportsItemSyncCatalogReceivedMax),
+  "catalogCommitted": zod.number().int().min(deploymentHeartbeatBodyDeviceReportsItemSyncCatalogCommittedMin).max(deploymentHeartbeatBodyDeviceReportsItemSyncCatalogCommittedMax),
+  "catalogPages": zod.number().int().min(deploymentHeartbeatBodyDeviceReportsItemSyncCatalogPagesMin).max(deploymentHeartbeatBodyDeviceReportsItemSyncCatalogPagesMax),
+  "transactionsConfirmed": zod.number().int().min(deploymentHeartbeatBodyDeviceReportsItemSyncTransactionsConfirmedMin).max(deploymentHeartbeatBodyDeviceReportsItemSyncTransactionsConfirmedMax),
+  "auditsConfirmed": zod.number().int().min(deploymentHeartbeatBodyDeviceReportsItemSyncAuditsConfirmedMin).max(deploymentHeartbeatBodyDeviceReportsItemSyncAuditsConfirmedMax),
+  "outboxPending": zod.number().int().min(deploymentHeartbeatBodyDeviceReportsItemSyncOutboxPendingMin).max(deploymentHeartbeatBodyDeviceReportsItemSyncOutboxPendingMax),
+  "outboxFailed": zod.number().int().min(deploymentHeartbeatBodyDeviceReportsItemSyncOutboxFailedMin).max(deploymentHeartbeatBodyDeviceReportsItemSyncOutboxFailedMax),
+  "auditPending": zod.number().int().min(deploymentHeartbeatBodyDeviceReportsItemSyncAuditPendingMin).max(deploymentHeartbeatBodyDeviceReportsItemSyncAuditPendingMax),
+  "auditFailed": zod.number().int().min(deploymentHeartbeatBodyDeviceReportsItemSyncAuditFailedMin).max(deploymentHeartbeatBodyDeviceReportsItemSyncAuditFailedMax)
+})
+})).max(deploymentHeartbeatBodyDeviceReportsMax).optional()
+})
+
+export const DeploymentHeartbeatResponse = zod.object({
+  "ok": zod.boolean(),
+  "deploymentId": zod.string()
+})
+
+
+/**
+ * @summary Read redacted device telemetry for the selected deployment
+ */
+export const GetDeploymentDeviceSyncParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const getDeploymentDeviceSyncResponseDevicesItemTerminalIdMax = 80;
+
+export const getDeploymentDeviceSyncResponseDevicesItemTerminalNameMax = 80;
+
+export const getDeploymentDeviceSyncResponseDevicesItemReceivedAtMax = 40;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncDeviceIdMax = 80;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncSequenceMax = 9007199254740991;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncBuildVersionMax = 80;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncRunIdMax = 80;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncLastAttemptAtMax = 40;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncStartedAtMax = 40;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncProgressAtMax = 40;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncLastServerContactAtMax = 40;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncLastCatalogSyncAtMax = 40;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncLastTransactionSyncAtMax = 40;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncLastSuccessAtMax = 40;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncRetryAtMax = 40;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncErrorMax = 240;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncCatalogReceivedMin = 0;
+export const getDeploymentDeviceSyncResponseDevicesItemSyncCatalogReceivedMax = 1000000;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncCatalogCommittedMin = 0;
+export const getDeploymentDeviceSyncResponseDevicesItemSyncCatalogCommittedMax = 1000000;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncCatalogPagesMin = 0;
+export const getDeploymentDeviceSyncResponseDevicesItemSyncCatalogPagesMax = 1000000;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncTransactionsConfirmedMin = 0;
+export const getDeploymentDeviceSyncResponseDevicesItemSyncTransactionsConfirmedMax = 1000000;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncAuditsConfirmedMin = 0;
+export const getDeploymentDeviceSyncResponseDevicesItemSyncAuditsConfirmedMax = 1000000;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncOutboxPendingMin = 0;
+export const getDeploymentDeviceSyncResponseDevicesItemSyncOutboxPendingMax = 1000000;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncOutboxFailedMin = 0;
+export const getDeploymentDeviceSyncResponseDevicesItemSyncOutboxFailedMax = 1000000;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncAuditPendingMin = 0;
+export const getDeploymentDeviceSyncResponseDevicesItemSyncAuditPendingMax = 1000000;
+
+export const getDeploymentDeviceSyncResponseDevicesItemSyncAuditFailedMin = 0;
+export const getDeploymentDeviceSyncResponseDevicesItemSyncAuditFailedMax = 1000000;
+
+
+
+export const GetDeploymentDeviceSyncResponse = zod.object({
+  "deploymentId": zod.string(),
+  "asOf": zod.string(),
+  "lastInstallationHeartbeatAt": zod.string().nullish(),
+  "devices": zod.array(zod.object({
+  "terminalId": zod.string().min(1).max(getDeploymentDeviceSyncResponseDevicesItemTerminalIdMax),
+  "terminalName": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemTerminalNameMax).optional(),
+  "receivedAt": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemReceivedAtMax),
+  "sync": zod.object({
+  "schemaVersion": zod.literal(1),
+  "platform": zod.enum(['pwa', 'native']),
+  "deviceId": zod.string().min(1).max(getDeploymentDeviceSyncResponseDevicesItemSyncDeviceIdMax),
+  "sequence": zod.number().int().min(1).max(getDeploymentDeviceSyncResponseDevicesItemSyncSequenceMax),
+  "buildVersion": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncBuildVersionMax).nullish(),
+  "runId": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncRunIdMax).nullish(),
+  "phase": zod.enum(['idle', 'cashiers', 'catalog-download', 'catalog-save', 'transactions', 'audits', 'inbox', 'complete', 'failed', 'partial', 'interrupted']),
+  "syncing": zod.boolean(),
+  "online": zod.boolean(),
+  "serverReachable": zod.boolean().nullable(),
+  "lastAttemptAt": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncLastAttemptAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "startedAt": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncStartedAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "progressAt": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncProgressAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastServerContactAt": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncLastServerContactAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastCatalogSyncAt": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncLastCatalogSyncAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastTransactionSyncAt": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncLastTransactionSyncAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "lastSuccessAt": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncLastSuccessAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "retryAt": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncRetryAtMax).nullish().describe('ISO 8601 device observation time; never the master\'s freshness clock'),
+  "error": zod.string().max(getDeploymentDeviceSyncResponseDevicesItemSyncErrorMax).nullish(),
+  "catalogReceived": zod.number().int().min(getDeploymentDeviceSyncResponseDevicesItemSyncCatalogReceivedMin).max(getDeploymentDeviceSyncResponseDevicesItemSyncCatalogReceivedMax),
+  "catalogCommitted": zod.number().int().min(getDeploymentDeviceSyncResponseDevicesItemSyncCatalogCommittedMin).max(getDeploymentDeviceSyncResponseDevicesItemSyncCatalogCommittedMax),
+  "catalogPages": zod.number().int().min(getDeploymentDeviceSyncResponseDevicesItemSyncCatalogPagesMin).max(getDeploymentDeviceSyncResponseDevicesItemSyncCatalogPagesMax),
+  "transactionsConfirmed": zod.number().int().min(getDeploymentDeviceSyncResponseDevicesItemSyncTransactionsConfirmedMin).max(getDeploymentDeviceSyncResponseDevicesItemSyncTransactionsConfirmedMax),
+  "auditsConfirmed": zod.number().int().min(getDeploymentDeviceSyncResponseDevicesItemSyncAuditsConfirmedMin).max(getDeploymentDeviceSyncResponseDevicesItemSyncAuditsConfirmedMax),
+  "outboxPending": zod.number().int().min(getDeploymentDeviceSyncResponseDevicesItemSyncOutboxPendingMin).max(getDeploymentDeviceSyncResponseDevicesItemSyncOutboxPendingMax),
+  "outboxFailed": zod.number().int().min(getDeploymentDeviceSyncResponseDevicesItemSyncOutboxFailedMin).max(getDeploymentDeviceSyncResponseDevicesItemSyncOutboxFailedMax),
+  "auditPending": zod.number().int().min(getDeploymentDeviceSyncResponseDevicesItemSyncAuditPendingMin).max(getDeploymentDeviceSyncResponseDevicesItemSyncAuditPendingMax),
+  "auditFailed": zod.number().int().min(getDeploymentDeviceSyncResponseDevicesItemSyncAuditFailedMin).max(getDeploymentDeviceSyncResponseDevicesItemSyncAuditFailedMax)
+})
+}))
+})
+
+

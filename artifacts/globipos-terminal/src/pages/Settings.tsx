@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
-import { ArrowLeft, RefreshCw, Terminal, Globe, Info, Download } from "lucide-react";
+import { ArrowLeft, RefreshCw, Terminal, Info, Download } from "lucide-react";
 import type { TerminalConfig } from "../types";
-import { syncCatalog, syncCashiers, flushOutbox } from "../lib/sync";
-import { getOutbox, getActiveProductsCount, getCashiers, setConfig } from "../lib/db";
+import { getActiveProductsCount, getCashiers, setConfig } from "../lib/db";
+import { SyncDetails } from "../components/SyncIndicator";
 import { useToast } from "@/hooks/use-toast";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 
@@ -14,61 +14,21 @@ interface SettingsProps {
 
 export function Settings({ config, onUpdated, onBack }: SettingsProps) {
   const [voucherKey, setVoucherKey] = useState("");
-  const [syncing, setSyncing] = useState(false);
-  const [outboxCount, setOutboxCount] = useState(0);
   const [productCount, setProductCount] = useState(0);
   const [cashierCount, setCashierCount] = useState(0);
-  const [progress, setProgress] = useState(0);
   const { toast } = useToast();
   const { canInstall, installed, install } = usePwaInstall();
 
   useEffect(() => {
     async function load() {
-      const outbox = await getOutbox();
-      setOutboxCount(outbox.length);
       setProductCount(await getActiveProductsCount());
       const cashiers = await getCashiers();
       setCashierCount(cashiers.length);
     }
-    load();
+    void load();
+    window.addEventListener("globipos:catalog-updated", load);
+    return () => window.removeEventListener("globipos:catalog-updated", load);
   }, []);
-
-  async function handleForceSync() {
-    if (syncing) return;
-    setSyncing(true);
-    setProgress(0);
-    
-    try {
-      // 1. Sync cashiers
-      await syncCashiers();
-      
-      // 2. Sync catalog
-      const pCount = await syncCatalog((p) => setProgress(p));
-      setProductCount(pCount);
-      
-      // 3. Flush outbox
-      const flushed = await flushOutbox();
-      const newOutbox = await getOutbox();
-      setOutboxCount(newOutbox.length);
-      
-      const c = await getCashiers();
-      setCashierCount(c.length);
-      
-      toast({
-        title: "Sync complete",
-        description: `Synced catalog (${pCount} items). Sent ${flushed} offline orders.`,
-      });
-    } catch (e: any) {
-      toast({
-        variant: "destructive",
-        title: "Sync failed",
-        description: e.message || "Network error. Try again later.",
-      });
-    } finally {
-      setSyncing(false);
-      setProgress(0);
-    }
-  }
 
   async function saveVoucherKey() {
     const key = voucherKey.trim();
@@ -147,27 +107,8 @@ export function Settings({ config, onUpdated, onBack }: SettingsProps) {
               </div>
               <h2 className="text-lg font-semibold text-foreground">Sync & Storage</h2>
             </div>
-            <button
-              onClick={handleForceSync}
-              disabled={syncing}
-              className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Syncing...' : 'Force Sync'}
-            </button>
           </div>
           
-          {syncing && progress > 0 && (
-            <div className="mb-4">
-              <div className="flex justify-between text-xs text-muted-foreground mb-1.5">
-                <span>Downloading catalog</span>
-                <span>{progress}%</span>
-              </div>
-              <div className="w-full bg-input rounded-full h-1.5">
-                <div className="bg-primary h-1.5 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
-              </div>
-            </div>
-          )}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
             <div className="bg-background rounded-lg p-3 border border-border">
@@ -178,19 +119,8 @@ export function Settings({ config, onUpdated, onBack }: SettingsProps) {
               <p className="text-xs text-muted-foreground mb-1">Cashiers</p>
               <p className="text-xl font-semibold text-foreground">{cashierCount}</p>
             </div>
-            <div className="bg-background rounded-lg p-3 border border-border">
-              <p className="text-xs text-muted-foreground mb-1">Outbox (Pending)</p>
-              <p className={`text-xl font-semibold ${outboxCount > 0 ? 'text-amber-500' : 'text-foreground'}`}>
-                {outboxCount}
-              </p>
-            </div>
-            <div className="bg-background rounded-lg p-3 border border-border">
-              <p className="text-xs text-muted-foreground mb-1">Status</p>
-              <p className="text-sm font-semibold text-green-500 flex items-center gap-1.5 mt-1">
-                <Globe className="w-4 h-4" /> Ready
-              </p>
-            </div>
           </div>
+          <div className="mt-4"><SyncDetails /></div>
         </div>
 
         <div className="bg-accent/30 border border-border rounded-xl p-5 shadow-sm">

@@ -261,6 +261,15 @@ These are ordered phases of one deployment-management programme, not independent
 - Manual and background sync triggers cannot overlap unsafely, including multiple PWA tabs.
 - Closing/sleeping a device or losing its reporting connection produces stale/inactive device state in monitoring, not a false fresh/healthy sync claim.
 
+## Implemented device sync reporting
+
+- The standalone native source and the PWA now report actual catalog page/record saves, server-acknowledged queued bills and audit records, failed/pending work, per-channel sync times and contact/progress times. Catalog records do not represent physical stock transfers.
+- Back Office **Sync Monitor** polls customer-local terminal reports. **Deployment Control → Customer POS sync reports** reads the master's stored, redacted summaries. A device report becomes stale after 45 seconds; installation contact is assessed separately.
+- Customer-to-master reporting is opt-in, server-side only. Configure all three variables on the customer API service: `GLOBIPOS_MASTER_ORIGIN` (HTTPS origin, no path), `GLOBIPOS_DEPLOYMENT_ID` (enrolled UUID) and `GLOBIPOS_DEPLOYMENT_TOKEN` (that deployment's scoped credential, held as a server secret). Do not put this token in POS configuration, PWA assets or an installer.
+- Without these settings, customer-local sync and monitoring continue normally; no central live report is claimed. The relay runs every 30 seconds with a request deadline and does not overwrite device receipt times when replaying reports.
+- Interrupted PWA catalog pages remain staged until the complete catalog can be activated atomically. Rejected queued bills stay on the device for explicit review/retry. Native bills require matching successful acknowledgements and use recoverable outbox claims. Native catalog delta watermarks come from the database before the first page, not the device's completion clock.
+- Verification in this workspace covers browser catalog interruption/recovery, rejected-bill retention, acknowledged retries, cross-window lock exclusion, reload persistence, ordered/redacted server reports and stale replay handling. Native Rust/Tauri compilation and signed-installer validation still require the native build pipeline. No installer has been published as part of this implementation.
+
 ## References
 
 - [WHM account creation](https://docs.cpanel.net/whm/account-functions/create-a-new-account/)

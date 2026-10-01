@@ -5,22 +5,27 @@ import { Badge } from "@/components/ui/badge";
 import { Activity, Loader2, Wifi, WifiOff, Monitor, Clock, Package } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { PosHeartbeatIndicator, type PeripheralStatusLike } from "@/components/pos-heartbeat-indicator";
+import { DeviceSyncReportView } from "@/components/device-sync-report";
+import type { DeviceSyncReport, PosSyncSnapshot } from "@workspace/api-client-react";
 
 type Terminal = {
   id: string; name: string; code: string; locationId: string; locationName?: string;
   hardwareType: string; active: boolean; lastSeenAt?: string | null; lastSyncAt?: string | null;
-  outboxQueueSize: number; peripheralStatus?: PeripheralStatusLike | null;
+  outboxQueueSize: number; peripheralStatus?: (PeripheralStatusLike & {
+    sync?: PosSyncSnapshot & { receivedAt: string };
+    syncDevices?: Record<string, PosSyncSnapshot & { receivedAt: string }>;
+  }) | null;
 };
 
 function isOnline(lastSeenAt?: string | null): boolean {
   if (!lastSeenAt) return false;
-  return Date.now() - new Date(lastSeenAt).getTime() < 5 * 60 * 1000;
+  return Date.now() - new Date(lastSeenAt).getTime() < 45_000;
 }
 
 function OnlineChip({ lastSeenAt }: { lastSeenAt?: string | null }) {
   if (!lastSeenAt) return <Badge variant="secondary" className="gap-1"><WifiOff className="w-3 h-3" />Never seen</Badge>;
   const diff = Date.now() - new Date(lastSeenAt).getTime();
-  const online = diff < 5 * 60 * 1000;
+  const online = diff < 45_000;
   return (
     <Badge variant={online ? "default" : "secondary"} className={`gap-1 ${online ? "bg-green-600" : ""}`}>
       {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
@@ -30,17 +35,19 @@ function OnlineChip({ lastSeenAt }: { lastSeenAt?: string | null }) {
 }
 
 export default function PosSyncMonitor() {
-  const { data: terminals = [], isLoading } = useQuery<Terminal[]>({ queryKey: ["/api/pos/terminals"] });
+  const { data: terminals = [], isLoading, isError, fetchStatus } = useQuery<Terminal[]>({
+    queryKey: ["/api/pos/terminals"], refetchInterval: 10_000,
+  });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"] });
 
-  const onlineCount = terminals.filter(t => t.lastSeenAt && Date.now() - new Date(t.lastSeenAt).getTime() < 5 * 60 * 1000).length;
+  const onlineCount = terminals.filter(t => isOnline(t.lastSeenAt)).length;
   const pendingTotal = terminals.reduce((s, t) => s + (t.outboxQueueSize || 0), 0);
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2"><Activity className="w-6 h-6" />Sync Monitor</h1>
-        <p className="text-sm text-muted-foreground mt-1">Real-time status of all GlobiPOS terminals</p>
+        <p className="text-sm text-muted-foreground mt-1">Device-reported progress, last sync and pending work. Inactive devices show their last known values.</p>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
@@ -85,7 +92,8 @@ export default function PosSyncMonitor() {
         </Card>
       </div>
 
-      {isLoading ? (
+      {(isError || fetchStatus === "paused") && <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Monitoring is unavailable. Any displayed counts are last-known observations, not verified live values.</p>}
+      {isError && terminals.length === 0 ? null : isLoading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
       ) : terminals.length === 0 ? (
         <Card>
@@ -107,7 +115,7 @@ export default function PosSyncMonitor() {
                   <th className="px-4 py-3 text-center">Status</th>
                   <th className="px-4 py-3 text-center">Heartbeat</th>
                   <th className="px-4 py-3 text-left">Last Seen</th>
-                  <th className="px-4 py-3 text-left">Last Sync</th>
+                  <th className="px-4 py-3 text-left">Completed Cycle</th>
                   <th className="px-4 py-3 text-center">Outbox</th>
                 </tr>
               </thead>
@@ -117,6 +125,19 @@ export default function PosSyncMonitor() {
                     <td className="px-4 py-3">
                       <div className="font-medium">{t.name}</div>
                       <div className="text-xs text-muted-foreground font-mono">{t.code}</div>
+                      {(() => {
+                        const devices = t.peripheralStatus?.syncDevices
+                          ? Object.values(t.peripheralStatus.syncDevices)
+                          : t.peripheralStatus?.sync ? [t.peripheralStatus.sync] : [];
+                        return devices.length ? <details className="mt-2 min-w-60">
+                          <summary className="cursor-pointer text-xs font-medium text-primary">Live sync details · {devices.length} device{devices.length === 1 ? "" : "s"}</summary>
+                          <div className="mt-2 space-y-2">
+                            {devices.map(device => <DeviceSyncReportView key={device.deviceId} report={{
+                              terminalId: t.id, terminalName: t.name, receivedAt: device.receivedAt, sync: device,
+                            } satisfies DeviceSyncReport} />)}
+                          </div>
+                        </details> : <p className="mt-1 text-xs text-muted-foreground">No device sync report yet</p>;
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{t.locationName || t.locationId}</td>
                     <td className="px-4 py-3 text-center"><OnlineChip lastSeenAt={t.lastSeenAt} /></td>
@@ -132,7 +153,9 @@ export default function PosSyncMonitor() {
                       ) : "—"}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">
-                      {t.lastSyncAt ? formatDistanceToNow(new Date(t.lastSyncAt), { addSuffix: true }) : "—"}
+                      {t.peripheralStatus?.sync?.lastSuccessAt
+                        ? formatDistanceToNow(new Date(t.peripheralStatus.sync.lastSuccessAt), { addSuffix: true })
+                        : "Not reported"}
                     </td>
                     <td className="px-4 py-3 text-center">
                       {t.outboxQueueSize > 0 ? (

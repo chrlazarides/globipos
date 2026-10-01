@@ -9,6 +9,7 @@ import { calculateLine, createOrderLine, parseValidCashTender } from "@/lib/pos-
 import { effectivePrice } from "@/lib/pos-calculations";
 import { VoucherDialog } from "../components/VoucherDialog";
 import { MultiLocationSearch } from "../components/MultiLocationSearch";
+import { SyncIndicator } from "../components/SyncIndicator";
 
 interface POSProps {
   config: TerminalConfig;
@@ -74,7 +75,9 @@ export function POS({ config, session, onLogout }: POSProps) {
       const prods = await getProducts();
       setProducts(prods.filter((product) => product.active));
     }
-    load();
+    void load();
+    window.addEventListener("globipos:catalog-updated", load);
+    return () => window.removeEventListener("globipos:catalog-updated", load);
   }, []);
 
   useEffect(() => {
@@ -385,6 +388,7 @@ export function POS({ config, session, onLogout }: POSProps) {
         }} />}
       {/* Top Header */}
       <header className="h-14 bg-card border-b border-border flex items-center justify-between px-4 shrink-0">
+        <SyncIndicator />
         <div className="flex items-center gap-3">
           <BrandLogo compact />
           <div className="ml-2">

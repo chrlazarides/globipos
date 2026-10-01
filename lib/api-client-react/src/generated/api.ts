@@ -6,21 +6,30 @@
  * OpenAPI spec version: 0.1.0
  */
 import {
+  useMutation,
   useQuery
 } from '@tanstack/react-query';
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult
 } from '@tanstack/react-query';
 
 import type {
-  HealthStatus
+  DeploymentDeviceSyncResponse,
+  DeploymentHeartbeatInput,
+  DeploymentHeartbeatReceipt,
+  HealthStatus,
+  TerminalHeartbeatInput,
+  TerminalHeartbeatReceipt
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
-import type { ErrorType } from '../custom-fetch';
+import type { ErrorType , BodyType } from '../custom-fetch';
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -112,6 +121,260 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getHealthCheckQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getTerminalHeartbeatUrl = (id: string,) => {
+
+
+
+
+  return `/api/pos/terminals/${id}/heartbeat`
+}
+
+/**
+ * @summary Report terminal connectivity and aggregate sync observations
+ */
+export const terminalHeartbeat = async (id: string,
+    terminalHeartbeatInput: TerminalHeartbeatInput, options?: Parameters<typeof customFetch>[1]): Promise<TerminalHeartbeatReceipt> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<TerminalHeartbeatReceipt>(getTerminalHeartbeatUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(terminalHeartbeatInput)
+  }
+);}
+
+
+
+
+
+export const getTerminalHeartbeatMutationKey = () => ['terminalHeartbeat'] as const;
+
+export const getTerminalHeartbeatMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof terminalHeartbeat>>, TError,TerminalHeartbeatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof terminalHeartbeat>>, TError,TerminalHeartbeatMutationVariables, TContext> => {
+
+const mutationKey = getTerminalHeartbeatMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof terminalHeartbeat>>, TerminalHeartbeatMutationVariables> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  terminalHeartbeat(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type TerminalHeartbeatMutationResult = NonNullable<Awaited<ReturnType<typeof terminalHeartbeat>>>
+    export type TerminalHeartbeatMutationBody = BodyType<TerminalHeartbeatInput>
+    export type TerminalHeartbeatMutationError = ErrorType<void>
+    export type TerminalHeartbeatMutationVariables = {id: string;data: BodyType<TerminalHeartbeatInput>}
+
+    /**
+ * @summary Report terminal connectivity and aggregate sync observations
+ */
+export const useTerminalHeartbeat = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof terminalHeartbeat>>, TError,TerminalHeartbeatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof terminalHeartbeat>>,
+        TError,
+        TerminalHeartbeatMutationVariables,
+        TContext
+      > => {
+      return useMutation(getTerminalHeartbeatMutationOptions(options));
+    }
+
+export const getDeploymentHeartbeatUrl = () => {
+
+
+
+
+  return `/api/control/heartbeat`
+}
+
+/**
+ * @summary Authenticated customer installation report to the master
+ */
+export const deploymentHeartbeat = async (deploymentHeartbeatInput: DeploymentHeartbeatInput, options?: Parameters<typeof customFetch>[1]): Promise<DeploymentHeartbeatReceipt> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<DeploymentHeartbeatReceipt>(getDeploymentHeartbeatUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(deploymentHeartbeatInput)
+  }
+);}
+
+
+
+
+
+export const getDeploymentHeartbeatMutationKey = () => ['deploymentHeartbeat'] as const;
+
+export const getDeploymentHeartbeatMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deploymentHeartbeat>>, TError,DeploymentHeartbeatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deploymentHeartbeat>>, TError,DeploymentHeartbeatMutationVariables, TContext> => {
+
+const mutationKey = getDeploymentHeartbeatMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deploymentHeartbeat>>, DeploymentHeartbeatMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  deploymentHeartbeat(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeploymentHeartbeatMutationResult = NonNullable<Awaited<ReturnType<typeof deploymentHeartbeat>>>
+    export type DeploymentHeartbeatMutationBody = BodyType<DeploymentHeartbeatInput>
+    export type DeploymentHeartbeatMutationError = ErrorType<void>
+    export type DeploymentHeartbeatMutationVariables = {data: BodyType<DeploymentHeartbeatInput>}
+
+    /**
+ * @summary Authenticated customer installation report to the master
+ */
+export const useDeploymentHeartbeat = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deploymentHeartbeat>>, TError,DeploymentHeartbeatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deploymentHeartbeat>>,
+        TError,
+        DeploymentHeartbeatMutationVariables,
+        TContext
+      > => {
+      return useMutation(getDeploymentHeartbeatMutationOptions(options));
+    }
+
+export const getGetDeploymentDeviceSyncUrl = (id: string,) => {
+
+
+
+
+  return `/api/control/deployments/${id}/device-sync`
+}
+
+/**
+ * @summary Read redacted device telemetry for the selected deployment
+ */
+export const getDeploymentDeviceSync = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<DeploymentDeviceSyncResponse> => {
+
+  return customFetch<DeploymentDeviceSyncResponse>(getGetDeploymentDeviceSyncUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetDeploymentDeviceSyncQueryKey = (id: string,) => {
+    return [
+    `/api/control/deployments/${id}/device-sync`
+    ] as const;
+    }
+
+
+export const getGetDeploymentDeviceSyncQueryOptions = <TData = Awaited<ReturnType<typeof getDeploymentDeviceSync>>, TError = ErrorType<void>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDeploymentDeviceSync>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetDeploymentDeviceSyncQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDeploymentDeviceSync>>> = ({ signal }) => getDeploymentDeviceSync(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDeploymentDeviceSync>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetDeploymentDeviceSyncQueryResult = NonNullable<Awaited<ReturnType<typeof getDeploymentDeviceSync>>>
+export type GetDeploymentDeviceSyncQueryError = ErrorType<void>
+
+
+/**
+ * @summary Read redacted device telemetry for the selected deployment
+ */
+
+export function useGetDeploymentDeviceSync<TData = Awaited<ReturnType<typeof getDeploymentDeviceSync>>, TError = ErrorType<void>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDeploymentDeviceSync>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetDeploymentDeviceSyncQueryOptions(id,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

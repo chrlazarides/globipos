@@ -4,6 +4,7 @@ import type { TerminalConfig } from "../types";
 import { registerTerminal, syncCatalog } from "../lib/sync";
 import { setConfig } from "../lib/db";
 import { BrandLogo } from "../components/BrandLogo";
+import { useLiveSync } from "../hooks/use-live-sync";
 
 interface SetupProps {
   initialConfig?: TerminalConfig | null;
@@ -18,6 +19,7 @@ export function Setup({ initialConfig, onComplete }: SetupProps) {
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState<"form" | "testing" | "syncing" | "done">("form");
   const [syncProgress, setSyncProgress] = useState(0);
+  const sync = useLiveSync();
 
   async function handleRegister() {
     let url = serverUrl.trim();
@@ -73,7 +75,7 @@ export function Setup({ initialConfig, onComplete }: SetupProps) {
                 {step === "syncing" ? "Preparing product catalog..." : "Connecting to server..."}
               </p>
               <p className="text-muted-foreground text-sm mt-1">
-                {step === "syncing" ? `Saving products for first use${syncProgress ? ` · ${syncProgress}%` : ""}` : "Verifying terminal code"}
+                {step === "syncing" ? `${sync.catalogCommitted.toLocaleString()} records saved · ${sync.catalogPages} pages${syncProgress === 100 ? " · Complete" : ""}` : "Verifying terminal code"}
               </p>
             </div>
           ) : (

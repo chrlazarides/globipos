@@ -48,7 +48,14 @@ export class HttpError extends Error {
 }
 
 async function readSuccessfulResponse(url: string, options: RequestInit): Promise<string> {
-  const response = await fetch(url, options);
+  // Bound both headers and body reads; a stalled request must release the sync worker.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  const onAbort = () => controller.abort();
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+  if (options.signal?.aborted) controller.abort();
+  try {
+  const response = await fetch(url, { ...options, signal: controller.signal });
   if (!response.ok) {
     let errorText = "";
     try {
@@ -58,7 +65,11 @@ async function readSuccessfulResponse(url: string, options: RequestInit): Promis
     }
     throw new HttpError(response.status, `HTTP error ${response.status}: ${errorText}`);
   }
-  return response.text();
+  return await response.text();
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 export async function fetchOnce(url: string, options: RequestInit): Promise<string> {

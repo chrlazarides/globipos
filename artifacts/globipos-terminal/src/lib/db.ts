@@ -1,14 +1,24 @@
 import type { TerminalConfig, CashierSession, Product, Category, Order, OrderLine } from "../types";
 import { hashPin } from "./utils";
+import type { SyncSnapshot } from "./sync-state";
 
 const DB_NAME = "globipos_terminal";
-const DB_VERSION = 2; // Incremented for sync_cursor
+const DB_VERSION = 3; // Stage each catalog before replacing the active snapshot.
 
 function getDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
+    let blocked = false;
     req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve(req.result);
+    req.onblocked = () => {
+      blocked = true;
+      reject(new Error("Terminal storage is busy in another tab. Close other terminal tabs and retry. Do not clear offline data."));
+    };
+    req.onsuccess = () => {
+      req.result.onversionchange = () => req.result.close();
+      if (blocked) { req.result.close(); return; }
+      resolve(req.result);
+    };
     req.onupgradeneeded = (e) => {
       const db = req.result;
       if (!db.objectStoreNames.contains("config")) {
@@ -24,6 +34,12 @@ function getDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains("categories")) {
         db.createObjectStore("categories", { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains("products_staging")) {
+        db.createObjectStore("products_staging", { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains("categories_staging")) {
+        db.createObjectStore("categories_staging", { keyPath: "id" });
       }
       if (!db.objectStoreNames.contains("orders")) {
         const orderStore = db.createObjectStore("orders", { keyPath: "id" });
@@ -52,8 +68,9 @@ async function tx<T>(storeName: string, mode: IDBTransactionMode, fn: (store: ID
     const transaction = db.transaction(storeName, mode);
     const store = transaction.objectStore(storeName);
     const req = fn(store);
-    req.onsuccess = () => resolve(req.result as T);
-    req.onerror = () => reject(req.error);
+    transaction.oncomplete = () => { db.close(); resolve(req.result as T); };
+    transaction.onerror = () => { db.close(); reject(transaction.error ?? req.error); };
+    transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error("Local save aborted")); };
   });
 }
 
@@ -79,6 +96,40 @@ export async function saveSyncCursor(origin: string, terminalCode: string, curso
 
 export async function clearSyncCursor(origin: string, terminalCode: string): Promise<void> {
   await tx("sync_cursor", "readwrite", s => s.delete(`${origin}:${terminalCode}`));
+}
+
+export async function hasCatalogStaging(): Promise<boolean> {
+  return (await tx<number>("products_staging", "readonly", s => s.count())) > 0 ||
+    (await tx<number>("categories_staging", "readonly", s => s.count())) > 0;
+}
+
+export async function getSyncSnapshot(origin: string, terminalCode: string): Promise<SyncSnapshot | null> {
+  const row = await tx<{ snapshot: SyncSnapshot } | undefined>("sync_cursor", "readonly",
+    s => s.get(`status:${origin}:${terminalCode}`));
+  return row?.snapshot ?? null;
+}
+
+export async function saveSyncSnapshot(origin: string, terminalCode: string, snapshot: SyncSnapshot): Promise<void> {
+  await tx("sync_cursor", "readwrite", s => s.put({ id: `status:${origin}:${terminalCode}`, snapshot }));
+}
+
+/** An independent durable counter prevents delayed reports overwriting newer observations. */
+export async function nextSyncReportSequence(origin: string, terminalCode: string): Promise<number> {
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction("sync_cursor", "readwrite");
+    const store = transaction.objectStore("sync_cursor");
+    const id = `report:${origin}:${terminalCode}`;
+    let sequence = 0;
+    const request = store.get(id);
+    request.onsuccess = () => {
+      sequence = (request.result?.sequence ?? 0) + 1;
+      store.put({ id, sequence });
+    };
+    transaction.oncomplete = () => { db.close(); resolve(sequence); };
+    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error("Report counter save aborted")); };
+  });
 }
 
 // Cashiers
@@ -144,33 +195,47 @@ export async function saveCatalogPage(
   origin: string,
   terminalCode: string,
   nextCursor: string | null,
+  snapshot?: SyncSnapshot,
 ): Promise<void> {
   const db = await getDb();
   return new Promise((resolve, reject) => {
-    const t = db.transaction(["categories", "products", "sync_cursor"], "readwrite");
+    const t = db.transaction(["categories", "products", "categories_staging", "products_staging", "sync_cursor"], "readwrite");
     
-    if (categories && isFirstPage) {
-      const catStore = t.objectStore("categories");
-      catStore.clear();
-      categories.forEach(c => catStore.put(c));
-    }
-    
-    const prodStore = t.objectStore("products");
     if (isFirstPage) {
-      prodStore.clear();
+      t.objectStore("products_staging").clear();
+      t.objectStore("categories_staging").clear();
     }
-    products.forEach(p => prodStore.put(p));
+    if (categories && isFirstPage) categories.forEach(c => t.objectStore("categories_staging").put(c));
+    products.forEach(p => t.objectStore("products_staging").put(p));
 
     const cursorStore = t.objectStore("sync_cursor");
     const cursorId = `${origin}:${terminalCode}`;
     if (nextCursor === null) {
       cursorStore.delete(cursorId);
+      const activeProducts = t.objectStore("products");
+      const stagedProducts = t.objectStore("products_staging");
+      const productRequest = stagedProducts.getAll();
+      productRequest.onsuccess = () => {
+        activeProducts.clear();
+        for (const product of productRequest.result as Product[]) activeProducts.put(product);
+        stagedProducts.clear();
+      };
+      const activeCategories = t.objectStore("categories");
+      const stagedCategories = t.objectStore("categories_staging");
+      const categoryRequest = stagedCategories.getAll();
+      categoryRequest.onsuccess = () => {
+        activeCategories.clear();
+        for (const category of categoryRequest.result as Category[]) activeCategories.put(category);
+        stagedCategories.clear();
+      };
     } else {
       cursorStore.put({ id: cursorId, cursor: nextCursor });
     }
+    if (snapshot) cursorStore.put({ id: `status:${origin}:${terminalCode}`, snapshot });
     
-    t.oncomplete = () => resolve();
-    t.onerror = () => reject(t.error);
+    t.oncomplete = () => { db.close(); resolve(); };
+    t.onerror = () => { db.close(); reject(t.error); };
+    t.onabort = () => { db.close(); reject(t.error ?? new Error("Catalog save aborted")); };
   });
 }
 
@@ -204,6 +269,45 @@ export async function getOutbox(): Promise<any[]> {
 
 export async function clearOutboxItem(id: number): Promise<void> {
   await tx("outbox", "readwrite", s => s.delete(id));
+}
+
+export async function confirmQueueItem(
+  store: "outbox" | "audit", id: number, origin: string, terminalCode: string, snapshot: SyncSnapshot,
+): Promise<void> {
+  const db = await getDb();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction([store, "sync_cursor"], "readwrite");
+    transaction.objectStore(store).delete(id);
+    transaction.objectStore("sync_cursor").put({ id: `status:${origin}:${terminalCode}`, snapshot });
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error("Confirmation save aborted")); };
+  });
+}
+
+export async function markQueueFailure(store: "outbox" | "audit", id: number, retryable: boolean): Promise<void> {
+  const db = await getDb();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(store, "readwrite");
+    const objectStore = transaction.objectStore(store);
+    const request = objectStore.get(id);
+    request.onsuccess = () => {
+      if (request.result) objectStore.put({ ...request.result, sync_failed: true, sync_retryable: retryable });
+    };
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error("Could not save queue failure")); };
+  });
+}
+
+export async function getQueueCounts() {
+  const [orders, audits] = await Promise.all([getOutbox(), getAuditOutbox()]);
+  return {
+    outboxPending: orders.filter(item => !item.sync_failed).length,
+    outboxFailed: orders.filter(item => item.sync_failed).length,
+    auditPending: audits.filter(item => !item.sync_failed).length,
+    auditFailed: audits.filter(item => item.sync_failed).length,
+  };
 }
 
 // Audit

@@ -6,4 +6,19 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './deploymentDeviceSyncResponse';
+export * from './deploymentHeartbeatInput';
+export * from './deploymentHeartbeatInputHealthStatus';
+export * from './deploymentHeartbeatReceipt';
+export * from './deviceSyncReport';
 export * from './healthStatus';
+export * from './posSyncSnapshot';
+export * from './posSyncSnapshotPhase';
+export * from './posSyncSnapshotPlatform';
+export * from './posSyncSnapshotSchemaVersion';
+export * from './syncCount';
+export * from './syncTime';
+export * from './terminalHeartbeatInput';
+export * from './terminalHeartbeatInputPeripheralStatus';
+export * from './terminalHeartbeatReceipt';
+export * from './terminalHeartbeatReceiptPeripheralConfig';

@@ -7,7 +7,8 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 
 import type { TerminalConfig, CashierSession } from "./types";
 import { getConfig } from "./lib/db";
-import { flushOutbox } from "./lib/sync";
+import { flushOutbox, syncAll, reportSyncStatus } from "./lib/sync";
+import { refreshSyncSnapshot } from "./lib/sync-state";
 import { Setup } from "./pages/Setup";
 import { Login } from "./pages/Login";
 import { POS } from "./pages/POS";
@@ -16,7 +17,8 @@ import { Settings } from "./pages/Settings";
 const queryClient = new QueryClient();
 
 function MainRouter() {
-  const [screen, setScreen] = useState<"loading" | "setup" | "login" | "pos">("loading");
+  const [screen, setScreen] = useState<"loading" | "failed" | "setup" | "login" | "pos">("loading");
+  const [initError, setInitError] = useState("");
   const [config, setConfig] = useState<TerminalConfig | null>(null);
   const [session, setSession] = useState<CashierSession | null>(null);
   const [, setLocation] = useLocation();
@@ -33,23 +35,32 @@ function MainRouter() {
         }
       } catch (e) {
         console.error("Init failed:", e);
-        setScreen("setup");
+        setInitError(e instanceof Error ? e.message : "Local terminal storage could not be opened.");
+        setScreen("failed");
       }
     }
     init();
   }, []);
 
   useEffect(() => {
-    if (!config) return;
+    if (!config || config.initial_sync_complete === false) return;
     const flushWhenOnline = () => {
-      if (navigator.onLine) void flushOutbox();
+      if (navigator.onLine) void flushOutbox().catch(() => {});
     };
-    flushWhenOnline();
-    window.addEventListener("online", flushWhenOnline);
-    const interval = window.setInterval(flushWhenOnline, 5 * 60 * 1000);
+    const fullSyncWhenOnline = () => {
+      if (navigator.onLine) void syncAll().catch(() => {});
+    };
+    const heartbeat = () => { void reportSyncStatus().catch(() => {}); };
+    void refreshSyncSnapshot().then(fullSyncWhenOnline).catch(() => {});
+    window.addEventListener("online", fullSyncWhenOnline);
+    const interval = window.setInterval(flushWhenOnline, 30_000);
+    const catalogInterval = window.setInterval(fullSyncWhenOnline, 15 * 60 * 1000);
+    const heartbeatInterval = window.setInterval(heartbeat, 10_000);
     return () => {
-      window.removeEventListener("online", flushWhenOnline);
+      window.removeEventListener("online", fullSyncWhenOnline);
       window.clearInterval(interval);
+      window.clearInterval(catalogInterval);
+      window.clearInterval(heartbeatInterval);
     };
   }, [config]);
 
@@ -63,6 +74,14 @@ function MainRouter() {
       </div>
     );
   }
+  if (screen === "failed") return <div className="flex min-h-screen items-center justify-center bg-background p-6">
+    <div role="alert" className="max-w-md rounded-xl border border-destructive bg-card p-6">
+      <h1 className="text-xl font-semibold">Terminal storage unavailable</h1>
+      <p className="mt-3 text-sm">{initError}</p>
+      <p className="mt-3 text-xs text-muted-foreground">Close any other terminal tabs and retry. Do not clear browser data: it may contain pending transactions.</p>
+      <button className="mt-4 rounded-lg bg-primary px-4 py-2 text-primary-foreground" onClick={() => window.location.reload()}>Retry</button>
+    </div>
+  </div>;
 
   return (
     <Switch>

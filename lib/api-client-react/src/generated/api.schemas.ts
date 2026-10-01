@@ -9,3 +9,182 @@ export interface HealthStatus {
   status: string;
 }
 
+/**
+ * @minimum 0
+ * @maximum 1000000
+ */
+export type SyncCount = number;
+
+/**
+ * ISO 8601 device observation time; never the master's freshness clock
+ * @maxLength 40
+ * @nullable
+ */
+export type SyncTime = string | null;
+
+export type PosSyncSnapshotSchemaVersion = typeof PosSyncSnapshotSchemaVersion[keyof typeof PosSyncSnapshotSchemaVersion];
+
+
+export const PosSyncSnapshotSchemaVersion = {
+  NUMBER_1: 1,
+} as const;
+
+export type PosSyncSnapshotPlatform = typeof PosSyncSnapshotPlatform[keyof typeof PosSyncSnapshotPlatform];
+
+
+export const PosSyncSnapshotPlatform = {
+  pwa: 'pwa',
+  native: 'native',
+} as const;
+
+export type PosSyncSnapshotPhase = typeof PosSyncSnapshotPhase[keyof typeof PosSyncSnapshotPhase];
+
+
+export const PosSyncSnapshotPhase = {
+  idle: 'idle',
+  cashiers: 'cashiers',
+  'catalog-download': 'catalog-download',
+  'catalog-save': 'catalog-save',
+  transactions: 'transactions',
+  audits: 'audits',
+  inbox: 'inbox',
+  complete: 'complete',
+  failed: 'failed',
+  partial: 'partial',
+  interrupted: 'interrupted',
+} as const;
+
+export interface PosSyncSnapshot {
+  schemaVersion: PosSyncSnapshotSchemaVersion;
+  platform: PosSyncSnapshotPlatform;
+  /**
+     * @minLength 1
+     * @maxLength 80
+     */
+  deviceId: string;
+  /**
+     * @minimum 1
+     * @maximum 9007199254740991
+     */
+  sequence: number;
+  /**
+     * @maxLength 80
+     * @nullable
+     */
+  buildVersion?: string | null;
+  /**
+     * @maxLength 80
+     * @nullable
+     */
+  runId?: string | null;
+  phase: PosSyncSnapshotPhase;
+  syncing: boolean;
+  online: boolean;
+  /** @nullable */
+  serverReachable: boolean | null;
+  lastAttemptAt?: SyncTime | null;
+  startedAt?: SyncTime | null;
+  progressAt?: SyncTime | null;
+  lastServerContactAt?: SyncTime | null;
+  lastCatalogSyncAt?: SyncTime | null;
+  lastTransactionSyncAt?: SyncTime | null;
+  lastSuccessAt?: SyncTime | null;
+  retryAt?: SyncTime | null;
+  /**
+     * @maxLength 240
+     * @nullable
+     */
+  error?: string | null;
+  catalogReceived: SyncCount;
+  catalogCommitted: SyncCount;
+  catalogPages: SyncCount;
+  transactionsConfirmed: SyncCount;
+  auditsConfirmed: SyncCount;
+  outboxPending: SyncCount;
+  outboxFailed: SyncCount;
+  auditPending: SyncCount;
+  auditFailed: SyncCount;
+}
+
+/**
+ * Existing native peripheral observations; sync uses PosSyncSnapshot
+ */
+export type TerminalHeartbeatInputPeripheralStatus = { [key: string]: unknown };
+
+export interface TerminalHeartbeatInput {
+  outboxQueueSize?: SyncCount;
+  /** Existing native peripheral observations; sync uses PosSyncSnapshot */
+  peripheralStatus?: TerminalHeartbeatInputPeripheralStatus;
+  syncStatus?: PosSyncSnapshot;
+}
+
+/**
+ * @nullable
+ */
+export type TerminalHeartbeatReceiptPeripheralConfig = { [key: string]: unknown } | null;
+
+export interface TerminalHeartbeatReceipt {
+  ok: boolean;
+  /** @nullable */
+  peripheralConfig: TerminalHeartbeatReceiptPeripheralConfig;
+}
+
+export interface DeviceSyncReport {
+  /**
+     * @minLength 1
+     * @maxLength 80
+     */
+  terminalId: string;
+  /** @maxLength 80 */
+  terminalName?: string;
+  /** @maxLength 40 */
+  receivedAt: string;
+  sync: PosSyncSnapshot;
+}
+
+export type DeploymentHeartbeatInputHealthStatus = typeof DeploymentHeartbeatInputHealthStatus[keyof typeof DeploymentHeartbeatInputHealthStatus];
+
+
+export const DeploymentHeartbeatInputHealthStatus = {
+  unknown: 'unknown',
+  healthy: 'healthy',
+  warning: 'warning',
+  offline: 'offline',
+  error: 'error',
+} as const;
+
+export interface DeploymentHeartbeatInput {
+  deploymentId?: string;
+  /**
+     * @maxLength 80
+     * @nullable
+     */
+  backOfficeVersion?: string | null;
+  /**
+     * @maxLength 80
+     * @nullable
+     */
+  posVersion?: string | null;
+  healthStatus?: DeploymentHeartbeatInputHealthStatus;
+  /**
+     * @maxLength 1000
+     * @nullable
+     */
+  healthMessage?: string | null;
+  /** @maxItems 200 */
+  deviceReports?: DeviceSyncReport[];
+}
+
+export interface DeploymentHeartbeatReceipt {
+  ok: boolean;
+  deploymentId: string;
+}
+
+export interface DeploymentDeviceSyncResponse {
+  deploymentId: string;
+  asOf: string;
+  /** @nullable */
+  lastInstallationHeartbeatAt?: string | null;
+  devices: DeviceSyncReport[];
+}
+

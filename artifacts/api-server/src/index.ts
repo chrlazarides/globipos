@@ -6,6 +6,7 @@ import { sendBackupEmail } from "./email";
 import { seedDatabase, ensureDefaultSettings } from "./seed";
 import { initializeCustomerAiRuntimeHealth } from "./customer-ai-service";
 import { loadWaStateFromDb, startWaCartPruning } from "./chatbot-service";
+import { startDeviceSyncRelay } from "./device-sync-relay";
 import { logger } from "./lib/logger";
 
 const rawPort = process.env["PORT"];
@@ -31,6 +32,7 @@ async function initializeApplication() {
   await loadWaStateFromDb().then(startWaCartPruning).catch((err) => logger.error({ err }, "WhatsApp cart state restore failed"));
 
   await registerRoutes(httpServer, app);
+  startDeviceSyncRelay();
 
   app.use((err: any, _req: unknown, res: any, next: (error?: unknown) => void) => {
     const status = err.status || err.statusCode || 500;
