@@ -18,3 +18,9 @@ Transfers remain usable during staged rollout, but require entered source-shop q
 **Why:** The global balance does not establish physical ownership by a shop. Falling back to global stock for a transfer would invent that ownership; treating transfers as Stock In would inflate total stock.
 
 **How to apply:** Protect reserved units in every transfer channel and mode. Require source counts instead of guessing an allocation, and leave global quantities unchanged.
+
+Stock locations are user-defined inventory pools, not exclusively POS shops. The user explicitly includes stock locations created as needed, including eShop stock.
+
+**Why:** A warehouse or dedicated online allocation must not require a physical checkout terminal simply to hold inventory.
+
+**How to apply:** Keep location creation flexible and transfer pickers data-driven. A dedicated eShop pool represents separately allocated units, not a duplicate of quantities already counted at shops; its name alone must not silently change online fulfillment routing.
