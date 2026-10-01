@@ -1,5 +1,6 @@
 import { and, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { createHash } from "node:crypto";
 import {
   inventoryReservations,
   itemLocationStock,
@@ -617,7 +618,10 @@ export async function setLocationStockSafely(
 }
 
 export async function completeInventoryTransfer(id: string) {
-  return db.transaction(async (tx) => {
+  return db.transaction(tx => completeInventoryTransferInTransaction(tx, id));
+}
+
+export async function completeInventoryTransferInTransaction(tx: any, id: string) {
     await getInventoryModeInTransaction(tx);
     const result = await tx.execute(sql`SELECT * FROM stock_transfers WHERE id = ${id} FOR UPDATE`);
     const existing = result.rows[0] as any;
@@ -642,14 +646,15 @@ export async function completeInventoryTransfer(id: string) {
     await lockInventoryEntities(tx, lines);
 
     const sourceRows = await tx.select().from(posLocations)
-      .where(ilike(posLocations.name, existing.from_location));
+      .where(and(eq(posLocations.name, existing.from_location), eq(posLocations.active, true)));
     const destinationRows = await tx.select().from(posLocations)
-      .where(ilike(posLocations.name, existing.to_location));
+      .where(and(eq(posLocations.name, existing.to_location), eq(posLocations.active, true)));
     if (sourceRows.length !== 1 || destinationRows.length !== 1) {
       throw new InventoryError("Transfer location names are ambiguous or no longer resolve to active locations.", 409, "TRANSFER_LOCATION_UNRESOLVED");
     }
     const source = sourceRows[0];
     const destination = destinationRows[0];
+    if (source.id === destination.id) throw new InventoryError("Source and destination must be different shops.", 400, "INVALID_TRANSFER_LOCATIONS");
     const reservations = await tx.select().from(inventoryReservations).where(and(
       eq(inventoryReservations.transferId, id),
       eq(inventoryReservations.status, "reserved"),
@@ -686,11 +691,97 @@ export async function completeInventoryTransfer(id: string) {
       .where(and(eq(stockTransfers.id, id), eq(stockTransfers.status, "draft"))).returning();
     if (!completed) throw new InventoryError("Transfer state changed while completing.", 409, "TRANSFER_STATE_CHANGED");
     return completed;
-  });
+}
+
+type TransferOptions = {
+  completeImmediately?: boolean;
+  terminalId?: string;
+  cashierId?: string;
+  idempotencyKey?: string;
+  staffId?: string;
+};
+
+export async function createInventoryTransfer(data: any, rawLines: InventoryLine[], options: TransferOptions = {}) {
+  return db.transaction(tx => createInventoryTransferInTransaction(tx, data, rawLines, options));
+}
+
+export async function createInventoryTransferInTransaction(tx: any, data: any, rawLines: InventoryLine[], options: TransferOptions = {}) {
+  const lines = normalizeLines(rawLines);
+  if (!lines.length) throw new InventoryError("Add at least one item to the transfer.", 400, "TRANSFER_EMPTY");
+  await getInventoryModeInTransaction(tx);
+  const auditPrefix = options.terminalId && options.idempotencyKey
+    ? `TRANSFER:${Buffer.from(options.idempotencyKey).toString("base64url")}:` : null;
+  const requestHash = createHash("sha256").update(JSON.stringify({
+    from: data.fromLocation, to: data.toLocation, cashier: options.cashierId, staff: options.staffId,
+    immediate: options.completeImmediately === true, notes: data.notes || null, lines,
+  })).digest("hex");
+  const staffRequestKey = options.staffId && options.idempotencyKey
+    ? createHash("sha256").update(JSON.stringify([options.staffId, options.idempotencyKey])).digest("hex") : null;
+  if (staffRequestKey) {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${staffRequestKey}, 0))`);
+    const [prior] = await tx.select().from(stockTransfers).where(eq(stockTransfers.requestKey, staffRequestKey));
+    if (prior) {
+      if (prior.requestHash !== requestHash) throw new InventoryError("This request already belongs to a different transfer. Check transfer history before creating another.", 409, "IDEMPOTENCY_CONFLICT");
+      return prior;
+    }
+  }
+  if (auditPrefix) {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${options.terminalId!}, 0))`);
+    const prior = await tx.execute(sql`SELECT detail FROM pos_audit_logs
+      WHERE terminal_id = ${options.terminalId!} AND action = 'STOCK_TRANSFER'
+        AND left(detail, length(${auditPrefix})) = ${auditPrefix} ORDER BY created_at DESC LIMIT 1`);
+    if (prior.rows.length) {
+      const saved = JSON.parse(String(prior.rows[0].detail).slice(auditPrefix.length));
+      if (saved.requestHash !== requestHash) throw new InventoryError("This key was already used for a different transfer.", 409, "IDEMPOTENCY_CONFLICT");
+      return saved.response;
+    }
+  }
+  const sources = await tx.select().from(posLocations).where(and(eq(posLocations.name, data.fromLocation), eq(posLocations.active, true)));
+  const destinations = await tx.select().from(posLocations).where(and(eq(posLocations.name, data.toLocation), eq(posLocations.active, true)));
+  if (sources.length !== 1 || destinations.length !== 1 || sources[0].id === destinations[0].id) {
+    throw new InventoryError("Select two different, active, unambiguous stock locations.", 400, "INVALID_TRANSFER_LOCATIONS");
+  }
+  await lockInventoryEntities(tx, lines);
+  const canonicalLines = [];
+  for (const line of lines) {
+    const [item] = await tx.select().from(items).where(eq(items.id, line.itemId));
+    if (!item?.active) throw new InventoryError("Transfer item is inactive or missing.", 400, "ITEM_UNAVAILABLE");
+    const [variant] = line.variantId
+      ? await tx.select().from(itemVariants).where(eq(itemVariants.id, line.variantId)) : [];
+    if (line.variantId && !variant?.active) throw new InventoryError("Transfer variant is inactive.", 400, "VARIANT_UNAVAILABLE");
+    if (item.hasVariants && !variant) throw new InventoryError("Select the size or colour variant to transfer.", 400, "VARIANT_REQUIRED");
+    const label = variant ? [variant.option1Value, variant.option2Value, variant.option3Value].filter(Boolean).join(" / ") : "";
+    canonicalLines.push({
+      ...line, itemName: label ? `${item.name} · ${label}` : item.name,
+      sku: variant?.sku || item.sku || null, barcode: variant?.barcode || item.barcode || null,
+    });
+  }
+  // Status and product descriptions are server-owned; a client must never be
+  // able to label an unexecuted movement as completed.
+  const [draft] = await tx.insert(stockTransfers).values({
+    transferNumber: data.transferNumber, fromLocation: sources[0].name, toLocation: destinations[0].name,
+    createdByUsername: data.createdByUsername, notes: data.notes || null, status: "draft",
+    createdByUserId: data.createdByUserId || null,
+    requestKey: staffRequestKey, requestHash: staffRequestKey ? requestHash : null,
+  }).returning();
+  await tx.insert(stockTransferItems).values(canonicalLines.map(line => ({ ...line, transferId: draft.id })));
+  const response = options.completeImmediately ? await completeInventoryTransferInTransaction(tx, draft.id) : draft;
+  if (auditPrefix) {
+    const ids = await tx.execute(sql`SELECT LEAST(COALESCE(MIN(local_id), 0), 0) - 1 AS local_id
+      FROM pos_audit_logs WHERE terminal_id = ${options.terminalId!}`);
+    await tx.execute(sql`INSERT INTO pos_audit_logs
+      (terminal_id, local_id, cashier_id, action, entity, entity_id, detail, created_at)
+      VALUES (${options.terminalId!}, ${Number(ids.rows[0].local_id)}, ${options.cashierId!}, 'STOCK_TRANSFER',
+        'stock_transfer', ${response.id}, ${auditPrefix + JSON.stringify({ requestHash, response })}, now())`);
+  }
+  return response;
 }
 
 export async function cancelInventoryTransfer(id: string) {
-  return db.transaction(async (tx) => {
+  return db.transaction(tx => cancelInventoryTransferInTransaction(tx, id));
+}
+
+export async function cancelInventoryTransferInTransaction(tx: any, id: string) {
     const result = await tx.execute(sql`SELECT * FROM stock_transfers WHERE id = ${id} FOR UPDATE`);
     const transfer = result.rows[0] as any;
     if (!transfer) return undefined;
@@ -721,7 +812,6 @@ export async function cancelInventoryTransfer(id: string) {
       .where(and(eq(stockTransfers.id, id), eq(stockTransfers.status, "draft")))
       .returning();
     return cancelled;
-  });
 }
 
 export async function getTransferReservation(id: string) {

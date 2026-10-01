@@ -50,6 +50,7 @@ import {
   cancelInventoryTransfer,
   cancelTransferReservation,
   createTransferReservation,
+  createInventoryTransfer,
   getAvailableAtLocation,
   getOnlineFulfillmentLocation,
   getReservationSearchResults,
@@ -10528,20 +10529,22 @@ export async function registerRoutes(
   });
 
   // Back-office Stock Transfers (same storage, accessible to all staff)
-  app.get("/api/stock-transfers", requireStaff, async (_req, res) => {
+  app.get("/api/stock-transfers", requireStaff, requireModule("items"), async (_req, res) => {
     try { res.json(await storage.getStockTransfers()); }
     catch (e: any) { res.status(500).json({ message: e.message }); }
   });
-  app.post("/api/stock-transfers", requireStaff, async (req, res) => {
+  app.post("/api/stock-transfers", requireStaff, requireModule("items"), async (req, res) => {
     try {
-      const { items: transferItems, ...transferBody } = req.body;
+      const { items: transferItems, completeImmediately, idempotencyKey, ...transferBody } = req.body;
+      if ((idempotencyKey !== undefined && (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey))) ||
+        (completeImmediately === true && !idempotencyKey)) return res.status(400).json({ message: "A valid request key is required for an immediate stock transfer." });
       const transferNumber = await storage.getNextTransferNumber();
-      const data = insertStockTransferSchema.parse({ ...transferBody, transferNumber, createdByUsername: req.user!.username });
+      const data = insertStockTransferSchema.parse({ ...transferBody, transferNumber, createdByUsername: req.user!.username, createdByUserId: req.user!.id });
       const parsedItems = (transferItems || []).map((i: any) => insertStockTransferItemSchema.parse(i));
-      res.status(201).json(await storage.createStockTransfer(data, parsedItems));
+      res.status(201).json(await storage.createStockTransfer(data, parsedItems, completeImmediately === true, { staffId: req.user!.id, idempotencyKey }));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
-  app.post("/api/stock-transfers/:id/complete", requireStaff, async (req, res) => {
+  app.post("/api/stock-transfers/:id/complete", requireStaff, requireModule("items"), async (req, res) => {
     try {
       const transfer = await storage.completeStockTransfer(req.params.id as string);
       if (!transfer) return res.status(404).json({ message: "Transfer not found" });
@@ -10553,7 +10556,7 @@ export async function registerRoutes(
       });
     }
   });
-  app.post("/api/stock-transfers/:id/cancel", requireStaff, async (req, res) => {
+  app.post("/api/stock-transfers/:id/cancel", requireStaff, requireModule("items"), async (req, res) => {
     try {
       const transfer = await cancelInventoryTransfer(String(req.params.id));
       if (!transfer) return res.status(404).json({ message: "Transfer not found" });
@@ -10580,11 +10583,13 @@ export async function registerRoutes(
   });
   app.post("/api/pda/transfers", requireStaff, requireModule("pda_operations"), async (req, res) => {
     try {
-      const { items: transferItems, ...transferBody } = req.body;
+      const { items: transferItems, completeImmediately, idempotencyKey, ...transferBody } = req.body;
+      if ((idempotencyKey !== undefined && (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey))) ||
+        (completeImmediately === true && !idempotencyKey)) return res.status(400).json({ message: "A valid request key is required for an immediate stock transfer." });
       const transferNumber = await storage.getNextTransferNumber();
-      const data = insertStockTransferSchema.parse({ ...transferBody, transferNumber, createdByUsername: req.user!.username });
+      const data = insertStockTransferSchema.parse({ ...transferBody, transferNumber, createdByUsername: req.user!.username, createdByUserId: req.user!.id });
       const parsedItems = (transferItems || []).map((i: any) => insertStockTransferItemSchema.parse(i));
-      res.status(201).json(await storage.createStockTransfer(data, parsedItems));
+      res.status(201).json(await storage.createStockTransfer(data, parsedItems, completeImmediately === true, { staffId: req.user!.id, idempotencyKey }));
     } catch (e: any) { res.status(400).json({ message: e.message }); }
   });
   app.post("/api/pda/transfers/:id/complete", requireStaff, requireModule("pda_operations"), async (req, res) => {
@@ -10593,6 +10598,13 @@ export async function registerRoutes(
       if (!transfer) return res.status(404).json({ message: "Transfer not found" });
       res.json(transfer);
     } catch (e: any) { res.status(400).json({ message: e.message }); }
+  });
+  app.post("/api/pda/transfers/:id/cancel", requireStaff, requireModule("pda_operations"), async (req, res) => {
+    try {
+      const transfer = await cancelInventoryTransfer(String(req.params.id));
+      if (!transfer) return res.status(404).json({ message: "Transfer not found" });
+      res.json(transfer);
+    } catch (e: any) { res.status(e instanceof InventoryError ? e.status : 400).json({ message: e.message }); }
   });
 
   // Agoranomia — shelf unit-price labels & price/label compliance audit
@@ -12144,10 +12156,18 @@ export async function registerRoutes(
     try {
       if (!requirePairedTerminalDevice(req, res)) return;
       const terminal = (req as any).terminal;
-      const { toLocationId, cashierName, items: transferItems } = req.body;
-      if (!toLocationId || !Array.isArray(transferItems) || transferItems.length === 0) {
-        return res.status(400).json({ message: "toLocationId and at least one item are required" });
-      }
+      const parsed = z.object({
+        toLocationId: z.string().min(1).max(128), cashierId: z.string().min(1).max(128),
+        pin: z.string().regex(/^\d{4,8}$/), idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9._:-]+$/),
+        items: z.array(z.object({
+          itemId: z.string().min(1).max(128), variantId: z.string().max(128).nullable().optional(),
+          quantity: z.number().int().min(1).max(10000),
+        }).strict()).min(1).max(100),
+      }).strict().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid stock transfer details." });
+      const cashier = await verifyTerminalCashier(req, res, parsed.data.cashierId, parsed.data.pin);
+      if (!cashier) return;
+      const { toLocationId, items: transferItems } = parsed.data;
       const locations = await storage.getPosLocations();
       const fromLoc = locations.find((l: any) => l.id === terminal.locationId);
       const toLoc = locations.find((l: any) => l.id === toLocationId);
@@ -12160,20 +12180,14 @@ export async function registerRoutes(
         transferNumber,
         fromLocation: fromLoc.name,
         toLocation: toLoc.name,
-        createdByUsername: cashierName || terminal.name,
+        createdByUsername: cashier.name,
       });
-      const parsedItems = transferItems.map((i: any) => insertStockTransferItemSchema.parse({
-        itemId: i.itemId,
-        variantId: i.variantId || null,
-        itemName: i.itemName,
-        sku: i.sku ?? null,
-        quantity: i.quantity,
-      }));
-      const created = await storage.createStockTransfer(data, parsedItems);
-      const completed = await storage.completeStockTransfer(created.id);
+      const completed = await createInventoryTransfer(data, transferItems, {
+        completeImmediately: true, terminalId: terminal.id, cashierId: cashier.id, idempotencyKey: parsed.data.idempotencyKey,
+      });
       res.status(201).json(completed);
     } catch (e: any) {
-      res.status(400).json({ message: e.message });
+      res.status(e instanceof InventoryError ? e.status : 400).json({ message: e.message });
     }
   });
 

@@ -154,6 +154,7 @@ function AdminRouter() {
       <Route path="/apparel-purchases" component={ApparelPurchases} />
       <Route path="/inventory-in" component={InventoryIn} />
       <Route path="/stock-transfers" component={StockTransfers} />
+      <Route path="/pda-transfers"><StockTransfers pda /></Route>
       <Route path="/expiration" component={ExpirationPage} />
       <Route path="/supplier-payments" component={SupplierPaymentsPage} />
       <Route path="/customer-payments" component={CustomerPaymentsPage} />

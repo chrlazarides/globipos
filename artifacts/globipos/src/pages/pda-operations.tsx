@@ -1,4 +1,5 @@
 import { useState } from "react";
+import StockTransfersPage from "./stock-transfers";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -204,7 +205,6 @@ function GrvRow({ grv, suppliers, catalogItems }: { grv: Grv; suppliers: Supplie
 
 export default function PdaOperations() {
   const sessionsQuery = useQuery<StockTakeSession[]>({ queryKey: ["/api/pda/stock-take/sessions"] });
-  const transfersQuery = useQuery<Transfer[]>({ queryKey: ["/api/pda/transfers"] });
   const auditQuery = useQuery<AuditRow[]>({ queryKey: ["/api/pda/agoranomia/audit"] });
   const grvQuery = useQuery<Grv[]>({ queryKey: ["/api/pda/grv"] });
   const suppliersQuery = useQuery<SupplierLite[]>({ queryKey: ["/api/suppliers"] });
@@ -281,48 +281,8 @@ export default function PdaOperations() {
         </TabsContent>
 
         <TabsContent value="transfers" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Stock Transfers (movement log)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {transfersQuery.isLoading ? (
-                <Skeleton className="h-40 w-full" />
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Transfer #</TableHead>
-                      <TableHead>From</TableHead>
-                      <TableHead>To</TableHead>
-                      <TableHead>Created By</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(transfersQuery.data || []).map((t) => (
-                      <TableRow key={t.id} data-testid={`row-transfer-${t.id}`}>
-                        <TableCell className="font-medium">{t.transferNumber}</TableCell>
-                        <TableCell>{t.fromLocation}</TableCell>
-                        <TableCell>{t.toLocation}</TableCell>
-                        <TableCell>{t.createdByUsername}</TableCell>
-                        <TableCell>{new Date(t.createdAt).toLocaleString()}</TableCell>
-                        <TableCell>{statusBadge(t.status)}</TableCell>
-                      </TableRow>
-                    ))}
-                    {(transfersQuery.data || []).length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                          No transfers logged yet.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
+          <a href="/pda-transfers" className="text-sm underline">Open handheld transfer screen</a>
+          <StockTransfersPage pda />
         </TabsContent>
 
         <TabsContent value="agoranomia" className="mt-4">

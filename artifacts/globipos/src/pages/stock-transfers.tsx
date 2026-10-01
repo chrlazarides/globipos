@@ -16,75 +16,96 @@ import type { PosLocation, StockTransfer, StockTransferItem, Item, ItemLocationS
 
 type TransferWithItems = StockTransfer & { items: StockTransferItem[] };
 
-interface DraftLine { key: string; itemId: string; itemName: string; sku: string | null; barcode: string | null; quantity: number; }
+interface DraftLine { key: string; itemId: string; variantId: string | null; itemName: string; sku: string | null; barcode: string | null; quantity: number; }
+type VariantChoice = { id: string; active: boolean; sku?: string; barcode?: string; option1Value?: string; option2Value?: string; option3Value?: string };
 
-export default function StockTransfersPage() {
+export default function StockTransfersPage({ pda = false }: { pda?: boolean }) {
   const { toast } = useToast();
+  const endpoint = pda ? "/api/pda/transfers" : "/api/stock-transfers";
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [historyFilter, setHistoryFilter] = useState("");
 
-  const { data: transfers = [], isLoading } = useQuery<TransferWithItems[]>({ queryKey: ["/api/stock-transfers"] });
+  const { data: transfers = [], isLoading, error: historyError } = useQuery<TransferWithItems[]>({ queryKey: [endpoint], refetchInterval: 15000 });
   const { data: locations = [] } = useQuery<PosLocation[]>({ queryKey: ["/api/pos/locations"] });
   const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"], staleTime: 30000 });
 
   const [fromLocation, setFromLocation] = useState("");
   const [toLocation, setToLocation] = useState("");
   const [notes, setNotes] = useState("");
+  const [transferKey, setTransferKey] = useState(() => crypto.randomUUID());
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [searchQ, setSearchQ] = useState("");
   const [scanning, setScanning] = useState(false);
+  const [variantItem, setVariantItem] = useState<Item | null>(null);
+  const { data: variantChoices = [], isLoading: variantsLoading } = useQuery<VariantChoice[]>({
+    queryKey: [`/api/items/${variantItem?.id}/variants`], enabled: !!variantItem,
+  });
 
   // On-hand at the selected source location (per-location stock pool)
   const { data: sourceStock = [] } = useQuery<ItemLocationStock[]>({
     queryKey: ["/api/location-stock", fromLocation],
     queryFn: async () => (await apiRequest("GET", `/api/location-stock?locationId=${fromLocation}`)).json(),
     enabled: !!fromLocation,
+    refetchInterval: 15000,
   });
 
   const onHandMap = useMemo(() => {
     const m = new Map<string, number>();
-    for (const s of sourceStock) m.set(s.itemId, (m.get(s.itemId) || 0) + s.quantity);
+    for (const s of sourceStock) {
+      m.set(s.itemId, (m.get(s.itemId) || 0) + s.quantity);
+      if (s.variantId) m.set(`${s.itemId}:${s.variantId}`, (m.get(`${s.itemId}:${s.variantId}`) || 0) + s.quantity);
+    }
     return m;
   }, [sourceStock]);
-  const onHand = (itemId: string) => onHandMap.get(itemId) ?? 0;
+  const onHand = (itemId: string, variantId?: string | null) => onHandMap.get(variantId ? `${itemId}:${variantId}` : itemId) ?? 0;
+  const refreshTransfers = () => {
+    for (const key of ["/api/stock-transfers", "/api/pda/transfers", "/api/location-stock", "/api/items"])
+      queryClient.invalidateQueries({ queryKey: [key] });
+  };
 
   const resetForm = () => {
-    setFromLocation(""); setToLocation(""); setNotes(""); setLines([]); setSearchQ("");
+    setFromLocation(""); setToLocation(""); setNotes(""); setLines([]); setSearchQ(""); setVariantItem(null);
+    setTransferKey(crypto.randomUUID());
   };
 
   const completeMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await apiRequest("POST", `/api/stock-transfers/${id}/complete`, {});
+      const res = await apiRequest("POST", `${endpoint}/${id}/complete`, {});
       if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
       return res.json();
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/stock-transfers"] }); toast({ title: "Transfer completed" }); },
+    onSuccess: () => { refreshTransfers(); toast({ title: "Transfer completed and shop stock updated" }); },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const cancelMutation = useMutation({
+    mutationFn: async (id: string) => (await apiRequest("POST", `${endpoint}/${id}/cancel`, {})).json(),
+    onSuccess: () => { refreshTransfers(); toast({ title: "Transfer cancelled" }); },
+    onError: (e: Error) => toast({ title: "Cannot cancel transfer", description: e.message, variant: "destructive" }),
+  });
   const createMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (completeImmediately: boolean) => {
       if (!fromLocation) throw new Error("Select a 'From' location");
       if (!toLocation) throw new Error("Select a 'To' location");
       if (fromLocation === toLocation) throw new Error("From and To must be different locations");
       if (lines.length === 0) throw new Error("Add at least one item");
-      const res = await apiRequest("POST", "/api/stock-transfers", {
+      if (lines.some(line => !Number.isSafeInteger(line.quantity) || line.quantity <= 0)) throw new Error("Quantities must be positive whole units");
+      const res = await apiRequest("POST", endpoint, {
         fromLocation: locations.find(l => l.id === fromLocation)?.name || fromLocation,
         toLocation: locations.find(l => l.id === toLocation)?.name || toLocation,
         notes: notes || null,
-        status: "completed",
-        items: lines.map(l => ({ itemId: l.itemId, itemName: l.itemName, sku: l.sku, barcode: l.barcode, quantity: l.quantity })),
+        completeImmediately,
+        idempotencyKey: transferKey,
+        items: lines.map(l => ({ itemId: l.itemId, variantId: l.variantId, itemName: l.itemName, sku: l.sku, barcode: l.barcode, quantity: l.quantity })),
       });
       if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
       const transfer = await res.json();
-      await apiRequest("POST", `/api/stock-transfers/${transfer.id}/complete`, {});
       return transfer;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/stock-transfers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/location-stock"] });
-      toast({ title: "Transfer completed and stock updated" });
+    onSuccess: (transfer) => {
+      refreshTransfers();
+      toast({ title: transfer.status === "completed" ? "Transfer completed and stock updated" : "Draft saved — no stock moved yet" });
       setOpen(false);
       resetForm();
     },
@@ -95,7 +116,7 @@ export default function StockTransfersPage() {
   // source location; typed query → filter the whole catalogue by name/sku/barcode.
   const pickerItems = useMemo(() => {
     const q = searchQ.trim().toLowerCase();
-    let list = items.filter(i => i.active !== false && !i.hasVariants);
+    let list = items.filter(i => i.active !== false);
     if (q) {
       list = list.filter(i =>
         i.name.toLowerCase().includes(q) ||
@@ -110,12 +131,17 @@ export default function StockTransfersPage() {
       .slice(0, 60);
   }, [items, searchQ, fromLocation, onHandMap]);
 
-  const addLine = (item: Item, qty = 1) => {
+  const addLine = (item: Item, qty = 1, variant?: VariantChoice) => {
+    if (item.hasVariants && !variant) { setVariantItem(item); return; }
+    const variantId = variant?.id || null;
+    const key = `${item.id}:${variantId || ""}`;
+    const label = variant && [variant.option1Value, variant.option2Value, variant.option3Value].filter(Boolean).join(" / ");
     setLines(prev => {
-      const ex = prev.find(l => l.itemId === item.id);
-      if (ex) return prev.map(l => l.itemId === item.id ? { ...l, quantity: l.quantity + qty } : l);
-      return [...prev, { key: item.id, itemId: item.id, itemName: item.name, sku: item.sku, barcode: item.barcode, quantity: qty }];
+      const ex = prev.find(l => l.key === key);
+      if (ex) return prev.map(l => l.key === key ? { ...l, quantity: l.quantity + qty } : l);
+      return [...prev, { key, itemId: item.id, variantId, itemName: label ? `${item.name} · ${label}` : item.name, sku: variant?.sku || item.sku, barcode: variant?.barcode || item.barcode, quantity: qty }];
     });
+    setVariantItem(null);
   };
 
   // Enter in the search field acts as a barcode scan: exact-match lookup (also
@@ -128,11 +154,7 @@ export default function StockTransfersPage() {
       const res = await apiRequest("GET", `/api/items/barcode/${encodeURIComponent(code)}`);
       if (res.ok) {
         const item = await res.json();
-        if (item.hasVariants || item.variantId) {
-          toast({ title: "Not supported", description: `${item.name} has colour/size variants — variant-level transfers aren't available yet.`, variant: "destructive" });
-          return;
-        }
-        addLine(item);
+        addLine(item, 1, item.variantId ? { id: item.variantId, active: true, sku: item.variantSku, barcode: item.barcode, option1Value: item.variantLabel } : undefined);
         setSearchQ("");
         toast({ title: "Added", description: item.name });
         return;
@@ -142,7 +164,7 @@ export default function StockTransfersPage() {
     if (pickerItems.length === 1) { addLine(pickerItems[0]); setSearchQ(""); }
   };
 
-  const hasWarnings = lines.some(l => fromLocation && onHand(l.itemId) > 0 && l.quantity > onHand(l.itemId));
+  const hasWarnings = lines.some(l => fromLocation && l.quantity > onHand(l.itemId, l.variantId));
 
   const filteredTransfers = useMemo(() => {
     const q = historyFilter.trim().toLowerCase();
@@ -161,8 +183,8 @@ export default function StockTransfersPage() {
   return (
     <div className="p-3 sm:p-6 space-y-4 sm:space-y-6">
       <PageHeader
-        title="Stock Transfers"
-        description="Move stock between locations. Each transfer is logged and immediately adjusts per-location stock pools."
+        title={pda ? "PDA Stock Transfers" : "Stock Transfers"}
+        description="Move entered shop quantities without changing global stock. Drafts move no stock; completion protects reserved units."
         icon={<ArrowLeftRight className="w-5 h-5" />}
         action={<Button onClick={() => setOpen(true)} data-testid="button-new-transfer"><Plus className="w-4 h-4 mr-1" />New Transfer</Button>}
       />
@@ -180,7 +202,9 @@ export default function StockTransfersPage() {
 
       <Card>
         <CardContent className="p-0">
-          {isLoading ? (
+          {historyError ? (
+            <p className="p-6 text-sm text-destructive">Could not load transfers: {historyError.message}</p>
+          ) : isLoading ? (
             <p className="text-sm text-muted-foreground p-6">Loading…</p>
           ) : filteredTransfers.length === 0 ? (
             <p className="text-sm text-muted-foreground p-6" data-testid="text-no-transfers">
@@ -217,10 +241,13 @@ export default function StockTransfersPage() {
                       <TableCell className="text-xs text-muted-foreground">{t.createdByUsername || "—"}</TableCell>
                       <TableCell onClick={e => e.stopPropagation()}>
                         {t.status === "draft" && (
-                          <Button size="sm" variant="outline" className="text-xs h-7" onClick={() => completeMutation.mutate(t.id)} disabled={completeMutation.isPending} data-testid={`button-complete-transfer-${t.id}`}>
+                          <Button size="sm" variant="outline" className="text-xs h-7" onClick={() => completeMutation.mutate(t.id)} disabled={completeMutation.isPending || cancelMutation.isPending} data-testid={`button-complete-transfer-${t.id}`}>
                             <CheckCircle2 className="w-3 h-3 mr-1" />Complete
                           </Button>
                         )}
+                        {t.status === "draft" && <Button size="sm" variant="outline" className="ml-1 h-7 text-xs"
+                          disabled={cancelMutation.isPending || completeMutation.isPending}
+                          onClick={() => { if (confirm("Cancel this draft transfer? No stock will be moved.")) cancelMutation.mutate(t.id); }}>Cancel</Button>}
                       </TableCell>
                     </TableRow>
                     {expandedId === t.id && t.items.length > 0 && (
@@ -252,7 +279,7 @@ export default function StockTransfersPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={open} onOpenChange={o => { if (!o) { setOpen(false); resetForm(); } else setOpen(true); }}>
+      <Dialog open={open} onOpenChange={o => { if (createMutation.isPending) return; if (!o) { setOpen(false); resetForm(); } else setOpen(true); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><ArrowLeftRight className="w-4 h-4" />New Stock Transfer</DialogTitle></DialogHeader>
 
@@ -333,6 +360,17 @@ export default function StockTransfersPage() {
               </div>
             </div>
 
+            {variantItem && <div className="rounded-md border p-3 space-y-2">
+              <Label>Select size / colour for {variantItem.name}</Label>
+              <Select onValueChange={id => { const variant = variantChoices.find(v => v.id === id); if (variant) addLine(variantItem, 1, variant); }}>
+                <SelectTrigger data-testid="select-transfer-variant"><SelectValue placeholder={variantsLoading ? "Loading variants…" : "Choose variant"} /></SelectTrigger>
+                <SelectContent>{variantChoices.filter(v => v.active !== false).map(v => <SelectItem key={v.id} value={v.id}>
+                  {[v.option1Value, v.option2Value, v.option3Value].filter(Boolean).join(" / ") || v.sku || v.id} · {onHand(variantItem.id, v.id)} on hand
+                </SelectItem>)}</SelectContent>
+              </Select>
+              <Button variant="ghost" size="sm" onClick={() => setVariantItem(null)}>Cancel selection</Button>
+            </div>}
+
             {lines.length > 0 && (
               <div className="border rounded-md">
                 <Table>
@@ -346,8 +384,8 @@ export default function StockTransfersPage() {
                   </TableHeader>
                   <TableBody>
                     {lines.map(l => {
-                      const oh = onHand(l.itemId);
-                      const over = fromLocation && oh > 0 && l.quantity > oh;
+                      const oh = onHand(l.itemId, l.variantId);
+                      const over = fromLocation && l.quantity > oh;
                       return (
                         <TableRow key={l.key}>
                           <TableCell className="text-sm">{l.itemName}<br /><span className="text-xs text-muted-foreground">{l.sku}</span></TableCell>
@@ -361,7 +399,8 @@ export default function StockTransfersPage() {
                               type="number"
                               min="1"
                               value={l.quantity}
-                              onChange={e => setLines(prev => prev.map(x => x.key === l.key ? { ...x, quantity: parseInt(e.target.value) || 1 } : x))}
+                              step="1"
+                              onChange={e => setLines(prev => prev.map(x => x.key === l.key ? { ...x, quantity: Number(e.target.value) } : x))}
                               className={`w-16 ml-auto text-center h-7 text-sm ${over ? "border-destructive" : ""}`}
                               data-testid={`input-line-qty-${l.itemId}`}
                             />
@@ -386,8 +425,9 @@ export default function StockTransfersPage() {
             )}
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => { setOpen(false); resetForm(); }}>Cancel</Button>
-              <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending || lines.length === 0} data-testid="button-submit-transfer">
+              <Button variant="outline" disabled={createMutation.isPending} onClick={() => { setOpen(false); resetForm(); }}>Cancel</Button>
+              <Button variant="outline" onClick={() => createMutation.mutate(false)} disabled={createMutation.isPending || lines.length === 0}>Save draft</Button>
+              <Button onClick={() => createMutation.mutate(true)} disabled={createMutation.isPending || lines.length === 0} data-testid="button-submit-transfer">
                 <CheckCircle2 className="w-4 h-4 mr-1" />
                 {createMutation.isPending ? "Transferring…" : `Transfer ${lines.length} item${lines.length !== 1 ? "s" : ""}`}
               </Button>

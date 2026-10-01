@@ -12,3 +12,9 @@ The user approved a staged rollout: multi-store stock control stays disabled by 
 **Why:** Publishing strict shop-stock enforcement before counts exist would stop normal trading. Partial shop imports must not overwrite the existing global total.
 
 **How to apply:** Treat shop counts as setup snapshots while control is disabled, not as live sale balances. Legacy sales can make those snapshots stale, so reconcile them with global totals before activation. Once enabled, enforce unreserved location stock for shop and online sales; refuse disabling with active holds. Do not bypass holds simply because a setting is missing.
+
+Transfers remain usable during staged rollout, but require entered source-shop quantities even when stock control is disabled. They move existing units, not new receipts.
+
+**Why:** The global balance does not establish physical ownership by a shop. Falling back to global stock for a transfer would invent that ownership; treating transfers as Stock In would inflate total stock.
+
+**How to apply:** Protect reserved units in every transfer channel and mode. Require source counts instead of guessing an allocation, and leave global quantities unchanged.

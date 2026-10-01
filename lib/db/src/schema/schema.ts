@@ -1511,6 +1511,8 @@ export const stockTransfers = pgTable("stock_transfers", {
   toLocation: text("to_location").notNull(),
   status: text("status").notNull().default("draft"), // draft | completed | cancelled
   notes: text("notes"),
+  requestKey: varchar("request_key").unique(),
+  requestHash: varchar("request_hash"),
   createdByUserId: varchar("created_by_user_id"),
   createdByUsername: text("created_by_username"),
   completedAt: timestamp("completed_at"),

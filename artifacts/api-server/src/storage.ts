@@ -6,6 +6,7 @@ import {
   POOLED_ONLINE_LOCATION_ID,
   completePosOrderStockInTransaction,
   completeInventoryTransfer,
+  createInventoryTransfer,
   consumeLocationStockInTransaction,
   createOrderReservationInTransaction,
   fulfillReservationsForSourceInTransaction,
@@ -375,7 +376,7 @@ export interface IStorage {
   getStockTransfers(): Promise<(import("@shared/schema").StockTransfer & { items: import("@shared/schema").StockTransferItem[] })[]>;
   getStockTransfer(id: string): Promise<(import("@shared/schema").StockTransfer & { items: import("@shared/schema").StockTransferItem[] }) | undefined>;
   getNextTransferNumber(): Promise<string>;
-  createStockTransfer(data: import("@shared/schema").InsertStockTransfer, items: import("@shared/schema").InsertStockTransferItem[]): Promise<import("@shared/schema").StockTransfer>;
+  createStockTransfer(data: import("@shared/schema").InsertStockTransfer, items: import("@shared/schema").InsertStockTransferItem[], completeImmediately?: boolean, request?: { staffId: string; idempotencyKey?: string }): Promise<import("@shared/schema").StockTransfer>;
   completeStockTransfer(id: string): Promise<import("@shared/schema").StockTransfer | undefined>;
 
   // PDA: Agoranomia label compliance
@@ -4119,13 +4120,8 @@ export class DatabaseStorage implements IStorage {
     const num = (parseInt(result?.maxNum || "0") || 0) + 1;
     return `TRF${String(num).padStart(5, "0")}`;
   }
-  async createStockTransfer(data: import("@shared/schema").InsertStockTransfer, transferItems: import("@shared/schema").InsertStockTransferItem[]) {
-    const { stockTransfers, stockTransferItems } = await import("@shared/schema");
-    const [transfer] = await db.insert(stockTransfers).values(data).returning();
-    if (transferItems.length) {
-      await db.insert(stockTransferItems).values(transferItems.map(i => ({ ...i, transferId: transfer.id })));
-    }
-    return transfer;
+  async createStockTransfer(data: import("@shared/schema").InsertStockTransfer, transferItems: import("@shared/schema").InsertStockTransferItem[], completeImmediately = false, request?: { staffId: string; idempotencyKey?: string }) {
+    return createInventoryTransfer(data, transferItems, { completeImmediately, ...request });
   }
   async completeStockTransfer(id: string) {
     return completeInventoryTransfer(id);

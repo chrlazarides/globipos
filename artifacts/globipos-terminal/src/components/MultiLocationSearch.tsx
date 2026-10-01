@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Search, X } from "lucide-react";
 import type { CashierSession, TerminalConfig } from "../types";
+import { transferDestinations, type TransferLocation } from "./stock-transfer-options";
 
 type StockRow = {
   locationId: string;
@@ -35,11 +36,11 @@ type Props = {
   config: TerminalConfig;
   session: CashierSession;
   onClose: () => void;
-  initialMode?: "lookup" | "stockIn";
+  initialMode?: "lookup" | "stockIn" | "transfer";
 };
 
 export function MultiLocationSearch({ config, session, onClose, initialMode = "lookup" }: Props) {
-  const [mode, setMode] = useState<"lookup" | "stockIn">(initialMode);
+  const [mode, setMode] = useState<"lookup" | "stockIn" | "transfer">(initialMode);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<StockItem[]>([]);
   const [selected, setSelected] = useState<StockItem | null>(null);
@@ -57,6 +58,10 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
   const [stockInKey, setStockInKey] = useState(() => crypto.randomUUID());
   const [stockInQuantity, setStockInQuantity] = useState("1");
   const [multiStoreEnabled, setMultiStoreEnabled] = useState(false);
+  const [transferDestination, setTransferDestination] = useState("");
+  const [transferQuantity, setTransferQuantity] = useState("1");
+  const [transferKey, setTransferKey] = useState(() => crypto.randomUUID());
+  const [transferLocations, setTransferLocations] = useState<TransferLocation[]>([]);
 
   const headers = {
     "X-Terminal-Code": config.terminal_code,
@@ -72,6 +77,34 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
     const data = await response.json().catch(() => null);
     if (!response.ok) throw new Error(data?.message || `Stock service returned ${response.status}`);
     return data;
+  }
+  useEffect(() => {
+    request("/api/pos/sync/locations").then(setTransferLocations).catch(e => setError(e.message));
+  }, []);
+
+  async function transferStock() {
+    if (!selected || !transferDestination || pending) return;
+    if (!config.voucher_device_key) { setError("Pair this Terminal with its device key before transferring stock."); return; }
+    const units = Number(transferQuantity);
+    if (!Number.isSafeInteger(units) || units <= 0 || units > 10000) { setError("Enter 1–10,000 whole units."); return; }
+    if (selected.variants?.length && !variantId) { setError("Select a size or colour variant."); return; }
+    if (!/^\d{4,8}$/.test(pin)) { setError("Enter your cashier PIN to authorize the transfer."); return; }
+    setPending(true); setError(""); setNotice("");
+    try {
+      const result = await request("/api/pos/sync/transfers", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          toLocationId: transferDestination, cashierId: session.cashier_id, pin,
+          idempotencyKey: transferKey,
+          items: [{ itemId: selected.id, variantId: variantId || null, quantity: units }],
+        }),
+      });
+      if (result.status !== "completed" || !result.id) throw new Error("Transfer confirmation was incomplete. Retry with the same details.");
+      setTransferKey(crypto.randomUUID()); setPin("");
+      setNotice(`Transfer ${result.transferNumber} completed: ${units} units moved.`);
+      setQuery(current => current + " ");
+    } catch (e: any) { setError(e.message); }
+    finally { setPending(false); }
   }
 
   async function refreshReservations() {
@@ -115,6 +148,7 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
           setItems(data.items);
           setMultiStoreEnabled(data.multiStoreEnabled === true);
           setSelected(null);
+          setTransferKey(crypto.randomUUID());
           setError("");
         }
       } catch (cause) {
@@ -242,17 +276,22 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
         className="flex max-h-[92vh] w-full max-w-3xl flex-col rounded-xl border border-border bg-card text-foreground shadow-2xl">
         <header className="flex items-center justify-between border-b border-border px-5 py-4">
           <div>
-            <h2 className="text-lg font-bold">{mode === "stockIn" ? "Stock In · quick entry" : "Search items · all shops"}</h2>
+            <h2 className="text-lg font-bold">{mode === "transfer" ? "Transfer stock" : mode === "stockIn" ? "Stock In · quick entry" : "Search items · all shops"}</h2>
             <p className="text-xs text-muted-foreground">{mode === "stockIn"
               ? `Record stock physically received at ${config.location_name}.`
+              : mode === "transfer" ? `Move stock from ${config.location_name} to another shop. Global stock stays unchanged.`
               : "Available means stock on hand minus active reservations. Transfers do not move stock until completed."}</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close item search" className="rounded p-2 hover:bg-input"><X className="h-5 w-5" /></button>
         </header>
         <div className="overflow-y-auto p-5">
+          <div className="mb-3 flex gap-2">
+            <button type="button" onClick={() => setMode("lookup")} className="rounded border border-border px-3 py-2 text-sm">Stock lookup</button>
+            <button type="button" onClick={() => setMode("transfer")} className="rounded border border-border px-3 py-2 text-sm" data-testid="tab-stock-transfer">Transfer stock</button>
+          </div>
           <label className="relative block">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-            <input autoFocus value={query} onChange={event => { setQuery(event.target.value); setSource(null); setReservationKey(crypto.randomUUID()); setStockInKey(crypto.randomUUID()); }}
+            <input autoFocus value={query} onChange={event => { setQuery(event.target.value); setSource(null); setReservationKey(crypto.randomUUID()); setStockInKey(crypto.randomUUID()); setTransferKey(crypto.randomUUID()); }}
               placeholder="Search name, SKU or barcode…" className="w-full rounded-lg bg-input py-2 pl-10 pr-3"
               aria-label="Search items in all shops" />
           </label>
@@ -279,7 +318,7 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
                   <h3 className="font-semibold">{selected.name}</h3>
                   {selected.variants?.length ? (
                     <label className="mt-3 block text-sm">Size / variant
-                      <select value={variantId} onChange={event => { setVariantId(event.target.value); setSource(null); setReservationKey(crypto.randomUUID()); setStockInKey(crypto.randomUUID()); }}
+                      <select value={variantId} onChange={event => { setVariantId(event.target.value); setSource(null); setReservationKey(crypto.randomUUID()); setStockInKey(crypto.randomUUID()); setTransferKey(crypto.randomUUID()); }}
                         className="mt-1 w-full rounded-lg bg-input p-2">
                         {selected.variants.map(variant => <option key={variant.id} value={variant.id}>{variant.label} {variant.sku ? `· ${variant.sku}` : ""}</option>)}
                       </select>
@@ -315,6 +354,28 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
                       {pending ? "Reserving…" : "Reserve for transfer"}
                     </button>
                   </div>}
+                  {mode === "transfer" && <div className="mt-4 space-y-3 border-t border-border pt-4">
+                    <p className="text-sm">Source: {config.location_name} · {stockRows.find(row => row.locationId === config.location_id)?.available ?? 0} available</p>
+                    <label className="block text-sm">Destination shop
+                      <select value={transferDestination} disabled={pending}
+                        onChange={event => { setTransferDestination(event.target.value); setTransferKey(crypto.randomUUID()); }}
+                        className="mt-1 w-full rounded-lg bg-input p-2" data-testid="select-pos-transfer-destination">
+                        <option value="">Choose shop</option>
+                        {transferDestinations(transferLocations, config.location_id).map(location =>
+                          <option key={location.id} value={location.id}>{location.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="block text-sm">Quantity to transfer
+                      <input type="number" min="1" max="10000" step="1" value={transferQuantity} disabled={pending}
+                        onChange={event => { setTransferQuantity(event.target.value); setTransferKey(crypto.randomUUID()); }}
+                        className="mt-1 w-full rounded-lg bg-input p-2" data-testid="input-pos-transfer-quantity" />
+                    </label>
+                    <button type="button" disabled={pending || !transferDestination || !!selected.variants?.length && !variantId}
+                      onClick={() => void transferStock()} data-testid="submit-pos-stock-transfer"
+                      className="w-full rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-50">
+                      {pending ? "Transferring…" : "Complete stock transfer"}
+                    </button>
+                  </div>}
                   {mode === "stockIn" && <div className="mt-4 space-y-3 border-t border-border pt-4">
                     <p className="text-sm">Current on hand here: {stockRows.find(row => row.locationId === config.location_id)?.onHand ?? 0}</p>
                     <label className="block text-sm">Quantity physically received
@@ -332,7 +393,7 @@ export function MultiLocationSearch({ config, session, onClose, initialMode = "l
               )}
             </div>
           </div>
-          <label className="mt-4 block text-sm">Cashier PIN to reserve or release
+          <label className="mt-4 block text-sm">Cashier PIN to authorize stock actions
             <input type="password" inputMode="numeric" autoComplete="off" minLength={4} maxLength={8}
               value={pin} onChange={event => setPin(event.target.value)}
               className="mt-1 w-full max-w-56 rounded-lg bg-input p-2" />

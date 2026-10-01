@@ -49,7 +49,7 @@ export function POS({ config, session, onLogout }: POSProps) {
   const [voucherMode, setVoucherMode] = useState<"issue" | "redeem" | null>(null);
   const [itemSearchAssigned, setItemSearchAssigned] = useState(false);
   const [stockInAssigned, setStockInAssigned] = useState(false);
-  const [stockDialogMode, setStockDialogMode] = useState<"lookup" | "stockIn" | null>(null);
+  const [stockDialogMode, setStockDialogMode] = useState<"lookup" | "stockIn" | "transfer" | null>(null);
   const [externalPanel, setExternalPanel] = useState<ExternalButton | null>(null);
   const [layoutError, setLayoutError] = useState("");
   const [layoutRefresh, setLayoutRefresh] = useState(0);
@@ -503,6 +503,9 @@ export function POS({ config, session, onLogout }: POSProps) {
             {stockInAssigned && <button type="button" onClick={() => setStockDialogMode("stockIn")}
               className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
               data-testid="terminal-stock-in">Stock In</button>}
+            {(itemSearchAssigned || stockInAssigned) && <button type="button" onClick={() => setStockDialogMode("transfer")}
+              className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
+              data-testid="terminal-stock-transfer">Stock Transfer</button>}
             {!externalButtons.length && !voucherButtons.length && !itemSearchAssigned && !stockInAssigned && <span className="text-xs text-muted-foreground">
               {layoutError ? "Layout tools unavailable" : "No approved tools assigned"}
             </span>}
