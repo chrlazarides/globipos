@@ -15,8 +15,14 @@ When reconciling GitHub before a native release, preserve current native release
 
 **How to apply:** Merge without force-pushing, resolve workflow conflicts against the current workspace layout, and keep native checks intact. A local exclusion of the native source directory can coexist with already-tracked source; stage only tracked version files, not the entire directory or private build output.
 
-Keep a public native release tag immutable when fixing a failed release check; publish the correction under a higher version through the normal signed pipeline.
+Keep a public native release tag immutable. Publish native binary corrections under a higher version through the normal signed pipeline.
 
 **Why:** Desktop installers and updater metadata may already be public even when Android fails. Replacing a published tag can make installed binaries and release source disagree.
 
 **How to apply:** Do not move an existing public release tag or silently replace its desktop binaries to repair an Android inspection failure.
+
+Verification-only corrections can recheck unchanged release files without a new native version, using the original tagged build's inspection reports.
+
+**Why:** Fixing an inspection or filename-comparison bug does not require rebuilding already-correct signed binaries, and rebuilding adds avoidable cost.
+
+**How to apply:** Validate the original build's workflow, release-tag commit, and successful platform inspections before reusing reports. Match published binary hashes; never treat a metadata-only check as branding verification.

@@ -1,0 +1,78 @@
+name: Recheck Published POS Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing immutable release tag'
+        required: true
+        type: string
+      build_run_id:
+        description: 'Original tagged build run containing all four branding reports'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    name: Verify existing signed release without rebuilding
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      SOURCE_RUN_ID: ${{ inputs.build_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Test published-file verification safeguards
+        run: node --test scripts/pos-release-branding.test.mjs scripts/verify-pos-release.test.mjs
+      - name: Require original tagged build and successful package inspections
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const runId = process.env.SOURCE_RUN_ID;
+            if (!/^v\d+\.\d+\.\d+$/.test(tag) || !/^\d+$/.test(runId)) {
+              throw new Error('A release tag and numeric original build run ID are required');
+            }
+            const repo = context.repo;
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              ...repo, run_id: Number(runId),
+            });
+            const { data: workflow } = await github.rest.actions.getWorkflow({
+              ...repo, workflow_id: run.workflow_id,
+            });
+            const { data: commit } = await github.rest.repos.getCommit({ ...repo, ref: tag });
+            if (workflow.path !== '.github/workflows/build-pos.yml' ||
+                run.event !== 'push' || run.head_branch !== tag ||
+                run.head_sha !== commit.sha || run.status !== 'completed') {
+              throw new Error('Reports must come from the original completed build of this exact release tag');
+            }
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              ...repo, run_id: Number(runId), per_page: 100,
+            });
+            for (const name of [
+              'Test POS version safety', 'Validate release version',
+              'Validate native POS build', 'Validate Windows native POS build',
+              'Build Windows', 'Build macOS (Universal)', 'Build Linux', 'Build Android APK',
+            ]) {
+              if (!jobs.some(job => job.name === name && job.conclusion === 'success')) {
+                throw new Error(`Original build did not pass ${name}`);
+              }
+            }
+      - name: Download inspections only from the validated original build
+        uses: actions/download-artifact@v4
+        with:
+          pattern: branding-*
+          path: branding-reports
+          merge-multiple: true
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify published binaries, signatures, updater metadata, and branding hashes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/verify-pos-release.mjs "${{ github.repository }}" "$RELEASE_TAG" --branding-reports branding-reports

@@ -34,6 +34,38 @@ test("published installers must match every inspected binary and surface", async
   const { dir, assets, download } = await fixture(t);
   assert.equal(await verifyPublishedBranding(assets, dir, download), 6);
 });
+test("GitHub space-to-dot filenames still require exact inspected binary checksums", async t => {
+  const { dir, assets, download, bytes } = await fixture(t);
+  for (const platform of ["windows", "macos", "linux"]) {
+    const file = path.join(dir, `branding-${platform}.json`);
+    const report = JSON.parse(await readFile(file, "utf8"));
+    for (const row of report.packages) {
+      const asset = assets.find(asset => asset.name === row.name);
+      row.name = `GlobiPOS Terminal_${row.name}`;
+      asset.name = row.name.replaceAll(" ", ".");
+    }
+    await writeFile(file, JSON.stringify(report));
+  }
+  assert.equal(await verifyPublishedBranding(assets, dir, download), 6);
+  const asset = assets.find(asset => asset.name.endsWith(".AppImage"));
+  bytes.set(asset.browser_download_url, Buffer.alloc(asset.size));
+  await assert.rejects(verifyPublishedBranding(assets, dir, download), /differs from inspected binary/);
+});
+test("space-to-dot filename collisions cannot overwrite an inspection", async t => {
+  const { dir, assets, download } = await fixture(t);
+  const file = path.join(dir, "branding-linux.json");
+  const report = JSON.parse(await readFile(file, "utf8"));
+  const row = report.packages.find(row => row.name.endsWith(".AppImage"));
+  row.name = "GlobiPOS Terminal.AppImage";
+  report.packages.push({ ...row, name: "GlobiPOS.Terminal.AppImage" });
+  await writeFile(file, JSON.stringify(report));
+  await assert.rejects(verifyPublishedBranding(assets, dir, download), /Duplicate inspected package/);
+});
+test("unrelated filename changes do not bypass inspected package matching", async t => {
+  const { dir, assets, download } = await fixture(t);
+  assets.find(asset => asset.name.endsWith(".AppImage")).name = "different.AppImage";
+  await assert.rejects(verifyPublishedBranding(assets, dir, download), /has not been inspected/);
+});
 test("missing reports cannot silently fall back to source or metadata checks", async () => {
   await assert.rejects(verifyPublishedBranding([], undefined), /reports are required/);
 });

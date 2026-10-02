@@ -14,6 +14,8 @@ const requiredSurfaces = {
   ".apk": ["APK manifest", "all density/round/foreground artwork", "adaptive launcher/background"],
 };
 const platformSuffixes = { windows: [".msi", ".exe"], macos: [".dmg"], linux: [".deb", ".appimage"], android: [".apk"] };
+// GitHub release uploads replace ASCII spaces in package filenames with dots.
+const publishedPackageName = name => name.replaceAll(" ", ".");
 
 export async function verifyPublishedBranding(assets, directory, fetchAsset = fetch) {
   assert.ok(directory, "Package branding reports are required; metadata checks alone do not verify icons.");
@@ -33,13 +35,15 @@ export async function verifyPublishedBranding(assets, directory, fetchAsset = fe
       assert.ok(platformSuffixes[platform].includes(suffix), `Unexpected ${platform} package: ${row.name}`);
       assert.match(row.sha256 ?? "", /^[a-f0-9]{64}$/, `Missing binary checksum: ${row.name}`);
       assert.ok(requiredSurfaces[suffix].every(surface => row.surfaces?.includes(surface)), `Unverified package surfaces: ${row.name}`);
-      assert.ok(!verified.has(row.name), `Duplicate inspected package: ${row.name}`);
-      verified.set(row.name, row.sha256);
+      const publishedName = publishedPackageName(row.name);
+      assert.ok(!verified.has(publishedName), `Duplicate inspected package: ${row.name}`);
+      verified.set(publishedName, row.sha256);
     }
   }
   const packages = assets.filter(asset => requiredSurfaces[path.extname(asset.name).toLowerCase()]);
   for (const asset of packages) {
-    assert.ok(verified.has(asset.name), `Published package has not been inspected: ${asset.name}`);
+    const publishedName = publishedPackageName(asset.name);
+    assert.ok(verified.has(publishedName), `Published package has not been inspected: ${asset.name}`);
     const response = await fetchAsset(asset.browser_download_url, { headers: { Accept: "application/octet-stream" } });
     assert.ok(response.ok && response.body, `Could not download inspected package: ${asset.name} (HTTP ${response.status})`);
     const hash = createHash("sha256");
@@ -49,8 +53,8 @@ export async function verifyPublishedBranding(assets, directory, fetchAsset = fe
       bytes += chunk.length;
     }
     assert.equal(bytes, asset.size, `Published package size mismatch: ${asset.name}`);
-    assert.equal(hash.digest("hex"), verified.get(asset.name), `Published package differs from inspected binary: ${asset.name}`);
-    verified.delete(asset.name);
+    assert.equal(hash.digest("hex"), verified.get(publishedName), `Published package differs from inspected binary: ${asset.name}`);
+    verified.delete(publishedName);
   }
   assert.equal(verified.size, 0, "Inspected packages are missing from the published release");
   return packages.length;
