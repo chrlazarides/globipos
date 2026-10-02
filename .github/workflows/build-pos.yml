@@ -36,9 +36,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Setup Node.js 20
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20
       - name: Test version and published-asset release safeguards
-        run: node --test scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs scripts/pos-branding.test.mjs scripts/pos-release-branding.test.mjs
+        run: node --test --test-concurrency=1 scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs scripts/pos-branding.test.mjs scripts/pos-release-branding.test.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -281,7 +285,9 @@ jobs:
           java-version: 17
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: platform-tools
 
       - name: Install Android NDK
         run: sdkmanager "ndk;27.0.12077973"
@@ -356,13 +362,15 @@ jobs:
           if-no-files-found: error
 
       - name: Upload APK to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            pos-app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find pos-app/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -print)
+          test "${#apks[@]}" -gt 0
+          gh release upload "${TAG_NAME}" "${apks[@]}" --clobber
 
   verify-release:
     name: Verify published release assets
