@@ -12,3 +12,4 @@
 - [Legacy stock provenance](legacy-stock-provenance.md) — Never guess which shop owns legacy global stock; location imports assign existing stock, while Stock In records new receipts.
 - [Deployment control boundaries](deployment-control-boundaries.md) — Dedicated production master, independent customer installations and stable identities across configurable hosting servers.
 - [Retail eShop scope](retail-eshop-scope.md) — Ecosystem-connected stores need industry look-and-feel choices in both deployment options and upgrades.
+- [POS customer credit scope](pos-customer-credit-scope.md) — Optional wholesale POS invoicing supports paid/on-account sales; loyalty members can have approved credit limits and terms too.
