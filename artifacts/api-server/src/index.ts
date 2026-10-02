@@ -8,6 +8,7 @@ import { initializeCustomerAiRuntimeHealth } from "./customer-ai-service";
 import { loadWaStateFromDb, startWaCartPruning } from "./chatbot-service";
 import { startDeviceSyncRelay } from "./device-sync-relay";
 import { logger } from "./lib/logger";
+import { createScheduledBackupRunner } from "./scheduled-backup";
 
 const rawPort = process.env["PORT"];
 
@@ -41,29 +42,13 @@ async function initializeApplication() {
     return res.status(status).json({ message: err.message || "Internal Server Error" });
   });
 
-  const runScheduledBackup = async () => {
-    try {
-      const autoSetting = await storage.getSetting("backup_auto");
-      if (autoSetting?.value !== "true") return;
-      const lastSetting = await storage.getSetting("backup_last_date");
-      const lastDate = lastSetting?.value ? new Date(lastSetting.value) : null;
-      const now = new Date();
-      const hoursSinceLast = lastDate ? (now.getTime() - lastDate.getTime()) / 3_600_000 : Infinity;
-      if (hoursSinceLast < 24) return;
-      const toEmail = (await storage.getSetting("backup_email"))?.value || "";
-      if (!toEmail) return;
-      const companyName = (await storage.getSetting("company_name"))?.value || "Company";
-      const backup = await generateBackupJson(lastDate && hoursSinceLast < 192 ? lastDate.toISOString() : undefined);
-      const result = await sendBackupEmail(toEmail, companyName, backup, now.toISOString().split("T")[0]);
-      if (result.success) {
-        await storage.upsertSetting("backup_last_date", now.toISOString(), "Last Backup Date", "backup");
-      } else {
-        logger.error({ error: result.error }, "Scheduled backup failed");
-      }
-    } catch (err) {
-      logger.error({ err }, "Scheduled backup error");
-    }
-  };
+  const runScheduledBackup = createScheduledBackupRunner({
+    getSetting: (key) => storage.getSetting(key),
+    generateBackupJson,
+    sendBackupEmail,
+    setLastBackupDate: (date) => storage.upsertSetting("backup_last_date", date, "Last Backup Date", "backup"),
+    logger,
+  });
 
   setTimeout(runScheduledBackup, 60_000);
   setInterval(runScheduledBackup, 3_600_000);
