@@ -8,3 +8,9 @@ The standalone GlobiPOS Terminal must use the stable blue aperture product mark 
 **Why:** The back-office logo asset is customer-managed and can contain a retailer's identity. Reusing it made a standalone GlobiPOS product appear to belong to one customer.
 
 **How to apply:** For product-level install screens, manifests, and launcher surfaces, use dedicated GlobiPOS assets. Reserve customer logos for customer-branded back-office or storefront contexts.
+
+Check native branding in actual release packages, separately for application icons, installer icons and Android launcher icons. Correct desktop source icons are not proof that every installation surface is correctly branded.
+
+**Why:** Package inspection found correct GlobiPOS icons in macOS/Linux bundles while the Windows setup executable used a generic NSIS icon and the Android APK contained default Tauri launcher artwork.
+
+**How to apply:** Inspect the packaged resources for each surface before saying a native release has the correct branding. Keep verification separate from permission to push, tag or publish a replacement release.
