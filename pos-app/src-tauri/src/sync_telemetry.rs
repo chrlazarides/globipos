@@ -338,7 +338,7 @@ async fn refresh_counts(
             .fetch_one(pool)
             .await
             .map_err(|e| e.to_string())?;
-    telemetry.retry_at = sqlx::query_scalar(
+    telemetry.retry_at = sqlx::query_scalar::<_, Option<String>>(
         "SELECT MIN(next_attempt_at) FROM pos_outbox WHERE status = 'pending' AND next_attempt_at IS NOT NULL",
     )
     .fetch_one(pool)
@@ -365,6 +365,56 @@ fn normalize_sqlite_timestamp(value: &str) -> String {
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn retry_timestamp_handles_empty_and_pending_outbox() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE pos_outbox (
+                status TEXT, last_error TEXT, next_attempt_at TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE TABLE audit_log (pushed INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE pos_inbox (processed INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut telemetry = SyncTelemetry::default();
+        refresh_counts(&pool, &mut telemetry).await.unwrap();
+        assert_eq!(telemetry.retry_at, None);
+        sqlx::query(
+            "INSERT INTO pos_outbox (status, next_attempt_at) VALUES
+                ('pending', NULL),
+                ('failed', '2026-04-14 09:00:00'),
+                ('pending', '2026-04-14 12:00:00'),
+                ('pending', '2026-04-14 11:30:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        refresh_counts(&pool, &mut telemetry).await.unwrap();
+        assert_eq!(
+            telemetry.retry_at.as_deref(),
+            Some("2026-04-14T11:30:00Z")
+        );
+        sqlx::query("UPDATE pos_outbox SET status = 'synced' WHERE status = 'pending'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        refresh_counts(&pool, &mut telemetry).await.unwrap();
+        assert_eq!(telemetry.retry_at, None);
+    }
 
     #[test]
     fn sqlite_utc_timestamps_are_iso8601() {

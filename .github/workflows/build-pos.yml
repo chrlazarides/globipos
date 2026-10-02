@@ -101,6 +101,9 @@ jobs:
       - name: Compile native Tauri application
         working-directory: pos-app
         run: npx tauri build --no-bundle -- --locked
+      - name: Test native sync telemetry
+        working-directory: pos-app/src-tauri
+        run: cargo test --locked --release sync_telemetry::tests
 
   windows-native-preflight:
     name: Validate Windows native POS build
