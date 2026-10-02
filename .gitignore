@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+__pycache__/
+*.py[cod]
+branding-*.json
+branding-reports/

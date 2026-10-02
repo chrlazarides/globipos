@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 
-const [repo, rawTag] = process.argv.slice(2);
+import { verifyPublishedBranding } from "./pos-release-branding.mjs";
+
+const [repo, rawTag, mode, reportDirectory] = process.argv.slice(2);
 if (!repo || !rawTag) {
-  console.error("Usage: node scripts/verify-pos-release.mjs owner/repo <v1.2.3|latest>");
+  console.error("Usage: node scripts/verify-pos-release.mjs owner/repo <v1.2.3|latest> --branding-reports <directory> | --metadata-only");
   process.exit(2);
+}
+if (!((mode === "--branding-reports" && reportDirectory) || mode === "--metadata-only")) {
+  throw new Error("Package branding reports are required. Use --metadata-only explicitly for an inventory check that does NOT verify branding.");
 }
 
 const apiUrl = (process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/$/, "");
@@ -72,4 +77,9 @@ for (const [label, keys] of updaterPlatformGroups) {
   }
 }
 
-console.log(`Verified ${tag}: all desktop, Android, and updater assets are published.`);
+if (mode === "--branding-reports") {
+  const count = await verifyPublishedBranding(assets, reportDirectory);
+  console.log(`Verified ${tag}: ${count} published packages match binary-level GlobiPOS branding inspections.`);
+} else {
+  console.log(`Verified ${tag}: all desktop, Android, and updater assets are published. Metadata only: package branding NOT verified.`);
+}

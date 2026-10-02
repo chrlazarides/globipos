@@ -101,7 +101,9 @@ pm2 status</code></pre>
         
         <p><strong>Read-only source/version checks from the repository root</strong></p><pre class="guide-code"><code>git status --short
 git ls-files pos-app/src pos-app/src-tauri/src
-node scripts/pos-version.mjs --check</code></pre><p><strong>Publishes a native release: 1.0.13 is an example, replace it with the approved higher unused version</strong></p><pre class="guide-code"><code>bash scripts/publish-release.sh 1.0.13</code></pre><p><strong>Verify the published release&#39;s expected assets; use the existing authenticated environment if required</strong></p><pre class="guide-code"><code>node scripts/verify-pos-release.mjs chrlazarides/globipos latest</code></pre>
+node scripts/pos-version.mjs --check</code></pre><p><strong>Publishes a native release: 1.0.13 is an example, replace it with the approved higher unused version</strong></p><pre class="guide-code"><code>bash scripts/publish-release.sh 1.0.13</code></pre><p><strong>Check expected assets and updater metadata only; this does not verify packaged logos</strong></p><pre class="guide-code"><code>node scripts/verify-pos-release.mjs chrlazarides/globipos latest --metadata-only</code></pre>
+        <p>The native release workflow extracts actual packages and verifies GlobiPOS artwork. Download all four branding inspection reports from the same successful GitHub build into <code>branding-reports/</code> for the full published-file checksum check:</p>
+        <pre class="guide-code"><code>node scripts/verify-pos-release.mjs chrlazarides/globipos latest --branding-reports branding-reports</code></pre>
         <div class="note"><strong>Important:</strong> If a signing/build/verification job fails, do not advertise the release as ready. Some assets may already have been uploaded. Inspect the failed job and the release state; do not bypass the gate or retag a different commit.</div>
       </section>
     

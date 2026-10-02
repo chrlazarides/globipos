@@ -14,3 +14,9 @@ Check native branding in actual release packages, separately for application ico
 **Why:** Package inspection found correct GlobiPOS icons in macOS/Linux bundles while the Windows setup executable used a generic NSIS icon and the Android APK contained default Tauri launcher artwork.
 
 **How to apply:** Inspect the packaged resources for each surface before saying a native release has the correct branding. Keep verification separate from permission to push, tag or publish a replacement release.
+
+Match package inspection evidence to the exact published bytes, and keep metadata-only inventory checks explicitly separate from branding verification.
+
+**Why:** Successful checks of local build output do not prove the release uploaded those same binaries. PNG resource compression can also change bytes without changing artwork.
+
+**How to apply:** Compare decoded pixels for packaged PNG artwork and match full-package checksums against inspection reports from the same native workflow run. A failed desktop check may occur after the existing release action uploaded assets; it is a readiness failure, not proof that nothing was published.

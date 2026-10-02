@@ -1,0 +1,8 @@
+[project]
+name = "repl-nix-workspace"
+version = "0.1.0"
+description = "Dependencies for native POS package-branding checks"
+requires-python = ">=3.13"
+dependencies = [
+    "pillow>=11.3,<13",
+]

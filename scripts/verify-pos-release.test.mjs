@@ -54,7 +54,7 @@ async function runVerifier(assets, { rawTag = `v${version}`, platforms = complet
     }));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const child = spawn(process.execPath, [verifier, "example/globipos", rawTag], {
+  const child = spawn(process.execPath, [verifier, "example/globipos", rawTag, "--metadata-only"], {
     env: {
       ...process.env,
       GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`,

@@ -226,10 +226,16 @@ Publishes a native release: 1.0.13 is an example, replace it with the approved h
 bash scripts/publish-release.sh 1.0.13
 ```
 
-Verify the published release's expected assets; use the existing authenticated environment if required
+Check the published release's expected assets (metadata only, not packaged logo verification); use the existing authenticated environment if required
 
 ```sh
-node scripts/verify-pos-release.mjs chrlazarides/globipos latest
+node scripts/verify-pos-release.mjs chrlazarides/globipos latest --metadata-only
+```
+
+The native release workflow also extracts the actual packages and verifies GlobiPOS artwork. It saves `branding-*` inspection reports and compares their binary checksums with the downloaded release assets. For the full check, download all four reports from the same successful GitHub build into `branding-reports/`, then run:
+
+```sh
+node scripts/verify-pos-release.mjs chrlazarides/globipos latest --branding-reports branding-reports
 ```
 
 > Important: If a signing/build/verification job fails, do not advertise the release as ready. Some assets may already have been uploaded. Inspect the failed job and the release state; do not bypass the gate or retag a different commit.
