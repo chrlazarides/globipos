@@ -171,6 +171,9 @@ jobs:
         working-directory: pos-app
         run: npx @tauri-apps/cli icon src-tauri/app-icon.png
 
+      - name: Verify GlobiPOS application and installer branding
+        run: node scripts/pos-branding.mjs
+
       - name: Build POS (no bundle — compile only)
         working-directory: pos-app
         run: npx tauri build --no-bundle

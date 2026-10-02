@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test version and published-asset release safeguards
-        run: node --test scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs
+        run: node --test scripts/pos-version.test.mjs scripts/verify-pos-release.test.mjs scripts/resolve-native-target.test.mjs scripts/pos-branding.test.mjs
 
   validate-version:
     name: Validate release version
@@ -183,6 +183,9 @@ jobs:
         working-directory: pos-app
         run: npx @tauri-apps/cli icon src-tauri/app-icon.png
 
+      - name: Verify GlobiPOS application and installer branding
+        run: node scripts/pos-branding.mjs
+
       - name: Clean stale bundle output
         working-directory: pos-app/src-tauri
         shell: bash
@@ -275,6 +278,13 @@ jobs:
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android init
+
+      - name: Generate GlobiPOS icons after Android initialization
+        working-directory: pos-app
+        run: npx tauri icon src-tauri/app-icon.png
+
+      - name: Install and verify GlobiPOS Android launcher branding
+        run: node scripts/pos-branding.mjs --sync-android
 
       - name: Build Android APK
         working-directory: pos-app
