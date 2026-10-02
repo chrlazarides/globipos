@@ -7,6 +7,8 @@ Wholesale invoicing must be optionally available from the POS and support both p
 
 Credit terms should be available for loyalty members as well, with a credit limit if approved.
 
-**Why:** The user confirmed paid or on-account POS invoices and explicitly included approved loyalty-member credit.
+Administrators and authorised managers can approve or change customer credit limits and payment terms.
 
-**How to apply:** Do not restrict customer credit to wholesale customers or treat loyalty membership alone as credit approval. Approval roles and detailed credit policies still need agreement.
+**Why:** The user confirmed paid or on-account POS invoices, explicitly included approved loyalty-member credit, and selected administrators and authorised managers as credit approvers.
+
+**How to apply:** Do not restrict customer credit to wholesale customers or treat loyalty membership alone as credit approval. Preserve the authorised-manager approval scope; detailed credit policies still need agreement.
