@@ -14,3 +14,9 @@ When reconciling GitHub before a native release, preserve current native release
 **Why:** GitHub and the Replit workspace can have diverged histories; older GitHub workflow fixes may assume legacy root npm/PWA files that no longer exist in the migrated workspace.
 
 **How to apply:** Merge without force-pushing, resolve workflow conflicts against the current workspace layout, and keep native checks intact. A local exclusion of the native source directory can coexist with already-tracked source; stage only tracked version files, not the entire directory or private build output.
+
+Keep a public native release tag immutable when fixing a failed release check; publish the correction under a higher version through the normal signed pipeline.
+
+**Why:** Desktop installers and updater metadata may already be public even when Android fails. Replacing a published tag can make installed binaries and release source disagree.
+
+**How to apply:** Do not move an existing public release tag or silently replace its desktop binaries to repair an Android inspection failure.

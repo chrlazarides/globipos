@@ -251,9 +251,12 @@ def verify_android_tree(tree, icons=ICONS / "android"):
     colours = []
     for file in (tree / "res").glob("values*/*.xml"):
         for item in ET.parse(file).getroot():
-            if item.get("name") == "ic_launcher_background":
+            # apktool's public.xml declares resource IDs, not colour values.
+            is_colour = item.tag == "color" or (
+                item.tag == "item" and item.get("type") == "color")
+            if is_colour and item.get("name") == "ic_launcher_background":
                 require(file.parent.name == "values", f"Unverified APK background override: {file}")
-                colours.append((item.text or "").lower())
+                colours.append((item.text or "").strip().lower())
     require(len(colours) == 1 and colours[0] in ("#fff", "#ffffff", "#ffffffff"),
             "Incorrect APK launcher background")
     return ["APK manifest", "all density/round/foreground artwork", "adaptive launcher/background"]

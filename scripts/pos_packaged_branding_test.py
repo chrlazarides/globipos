@@ -115,6 +115,41 @@ class PackagedBrandingTests(unittest.TestCase):
             image.save(file, compress_level=0)
         branding.verify_android_tree(tree)
 
+    def test_android_public_resource_declaration_is_not_a_colour_definition(self):
+        tree = self.android()
+        # apktool emits both colors.xml and public.xml for a compiled APK.
+        (tree / "res/values/public.xml").write_text(
+            '<resources><public type="color" name="ic_launcher_background" '
+            'id="0x7f060001"/></resources>')
+        branding.verify_android_tree(tree)
+
+    def test_android_public_metadata_cannot_hide_missing_or_wrong_background(self):
+        tree = self.android()
+        (tree / "res/values/public.xml").write_text(
+            '<resources><public type="color" name="ic_launcher_background" '
+            'id="0x7f060001"/></resources>')
+        colour = tree / "res/values/ic_launcher_background.xml"
+        colour.write_text(
+            '<resources><color name="ic_launcher_background">#000</color></resources>')
+        with self.assertRaisesRegex(ValueError, "Incorrect APK launcher background"):
+            branding.verify_android_tree(tree)
+        colour.unlink()
+        with self.assertRaisesRegex(ValueError, "Incorrect APK launcher background"):
+            branding.verify_android_tree(tree)
+
+    def test_android_typed_colour_items_remain_checked(self):
+        tree = self.android()
+        colour = tree / "res/values/ic_launcher_background.xml"
+        colour.write_text(
+            '<resources><item type="color" name="ic_launcher_background">'
+            ' #FFFFFFFF </item></resources>')
+        branding.verify_android_tree(tree)
+        colour.write_text(
+            '<resources><item type="color" name="ic_launcher_background">'
+            '#000</item></resources>')
+        with self.assertRaisesRegex(ValueError, "Incorrect APK launcher background"):
+            branding.verify_android_tree(tree)
+
     def test_default_tauri_android_artwork_regression(self):
         tree = self.android()
         image = tree / "res/mipmap-xxxhdpi-v4/ic_launcher.png"
