@@ -49,6 +49,29 @@ async function runHelper(root, ...args) {
   return execFileAsync(process.execPath, [helper, ...args], { cwd: root });
 }
 
+test("release stages only tracked version files despite a local pos-app exclusion", async t => {
+  const root = await createFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const files = [
+    "pos-app/package.json", "pos-app/package-lock.json",
+    "pos-app/src-tauri/Cargo.toml", "pos-app/src-tauri/Cargo.lock",
+    "pos-app/src-tauri/tauri.conf.json",
+  ];
+  await execFileAsync("git", ["init", "-q"], { cwd: root });
+  await execFileAsync("git", ["add", "--", ...files], { cwd: root });
+  await execFileAsync("git", ["-c", "user.name=Release Test", "-c", "user.email=test@example.invalid",
+    "commit", "-qm", "Fixture"], { cwd: root });
+  await writeFile(path.join(root, ".git/info/exclude"), "pos-app/\n");
+  await writeFile(path.join(root, "pos-app/untracked-build-output"), "must never be staged");
+  await runHelper(root, "--set", updatedVersion);
+  const script = await readFile(publishScript, "utf8");
+  const staging = script.split("\n").find(line => line.startsWith("git add "));
+  assert.match(staging, /^git add -u -- /);
+  await execFileAsync("bash", ["-c", staging], { cwd: root });
+  const { stdout } = await execFileAsync("git", ["diff", "--cached", "--name-only"], { cwd: root });
+  assert.deepEqual(stdout.trim().split("\n").sort(), files.sort());
+});
+
 async function createWindowsPreflightFixture(scenario) {
   const root = await createFixture();
   const scriptsDir = path.join(root, "scripts");

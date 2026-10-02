@@ -229,7 +229,7 @@ RELEASE_VERSION_MUTATED=0
 
 # ── Commit the version bump ───────────────────────────────────────────────────
 info "Committing version bump…"
-git add pos-app/package.json pos-app/package-lock.json pos-app/src-tauri/Cargo.toml pos-app/src-tauri/Cargo.lock pos-app/src-tauri/tauri.conf.json
+git add -u -- pos-app/package.json pos-app/package-lock.json pos-app/src-tauri/Cargo.toml pos-app/src-tauri/Cargo.lock pos-app/src-tauri/tauri.conf.json
 git diff --cached --quiet || git commit -m "chore: bump terminal version to $VERSION" --no-verify
 
 # Refuse to tag if the staged/committed files no longer match the requested tag.
