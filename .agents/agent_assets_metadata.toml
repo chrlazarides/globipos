@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "ST8wwVliUyYPHuFY-5O8Y"
+uri = "file://docs/deployment-and-monitoring.html"
+type = "html"
+title = "GlobiPOS Deployment & Monitoring Manual"
+description = "Printable 18-chapter guide covering web publishing, customer deployment, Tauri releases, monitoring, backups and rollback. Open it and choose Print / Save as PDF."
+logical_id = "4a8c0a3b-25e4-4195-93d2-e47c2aa000ee"
+content_hash = "sha256:1dfbe267e3563f87d8dbc1d950d1e5517198e419c63bcecbc209c9ca41ade5bc"
+size = 37077
+mtime_ms = 1790920429642
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:c34615a6-7489-4dd2-a56b-6f3607de7cba/4a8c0a3b-25e4-4195-93d2-e47c2aa000ee/1e75bbc1-3730-4064-b03d-890613cd7fb5"
+storage_version_token = "1790920525431070"
+content_type = "text/html"

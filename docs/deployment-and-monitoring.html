@@ -1,0 +1,193 @@
+
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>GlobiPOS Deployment and Monitoring Manual</title><style>
+    *{box-sizing:border-box}body{font:15px/1.65 system-ui,Arial,sans-serif;color:#17212b;background:#f3f5f7;margin:0}
+    main{max-width:960px;margin:24px auto;padding:36px 48px;background:white}h1,h2,h3{color:#203c57}h3{margin-top:36px}
+    a{color:#175a93}li{margin-bottom:10px}.guide-steps{padding-left:24px}.guide-code{background:#edf1f5;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 monospace}
+    .note{border-left:4px solid #b37918;background:#fff6e5;padding:14px;margin:16px 0}nav{background:#f3f5f7;padding:16px}
+    button{padding:10px 18px;border:0;border-radius:5px;background:#203c57;color:white;cursor:pointer}
+    @media(max-width:600px){main{padding:22px;margin:0}}@media print{body{background:white}main{max-width:none;margin:0;padding:0}.no-print{display:none}h3{break-after:avoid}.guide-code,.note{break-inside:avoid}}
+    </style></head><body><main><div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>
+    <h1>GlobiPOS Deployment and Monitoring Manual</h1><nav><ol><li><a href="#deployment-operations">Deployment &amp; Monitoring</a><ol class="sub"><li><a href="#deployment-paths">1. Choose the correct deployment procedure</a></li><li><a href="#deployment-preflight">2. Pre-deployment safety checklist</a></li><li><a href="#deployment-replit">3. Publish or republish the Replit web application</a></li><li><a href="#deployment-pwa">4. Confirm the PWA received the web update</a></li><li><a href="#deployment-customer">5. Prepare an independent customer installation</a></li><li><a href="#deployment-packages">6. Install a verified customer package on a new server</a></li><li><a href="#deployment-enrollment">7. Connect customer monitoring to the master</a></li><li><a href="#deployment-upgrades">8. Upgrade or migrate a trading customer safely</a></li><li><a href="#deployment-native">9. Publish the installed Tauri POS through GitHub</a></li><li><a href="#deployment-terminal-update">10. Install and verify a terminal update</a></li><li><a href="#monitoring-overview">11. Monitor four separate layers</a></li><li><a href="#monitoring-platform">12. Monitor the published web application and customer host</a></li><li><a href="#monitoring-fleet">13. Monitor Deployment Control and operator alerts</a></li><li><a href="#monitoring-sync">14. Use POS Sync Monitor without misreading progress</a></li><li><a href="#monitoring-backups">15. Configure, verify and monitor backups</a></li><li><a href="#monitoring-incidents">16. Incident response and rollback</a></li><li><a href="#monitoring-routine">17. Operator handover and routine checklist</a></li><li><a href="#deployment-references">18. Reference screens and current documentation</a></li></ol></li></ol></nav>
+    <div class="section" id="deployment-operations">
+    <h2 class="section-title">Deployment &amp; Monitoring — Operator Procedures</h2>
+    <p>Documentation revision: 2026-10-02 (Europe/Nicosia).</p>
+    <p>For deployment operators, superusers and POS administrators. This guide describes the existing release paths; it does not publish an app, install an agent or change a database. Record operational times in Europe/Nicosia and keep the original UTC timestamp from logs when escalating an incident.</p>
+    
+      <section id="deployment-paths">
+        <h3 class="sub-title">1. Choose the correct deployment procedure</h3>
+        <p>Replit Publish/Republish updates the web Back Office, PWA and application server in this project. It does not build or publish the installed Tauri POS executable.</p><p>GitHub Actions builds and publishes signed native POS installers. Existing supported desktop installations discover a higher version through the Tauri updater.</p><p>An independent customer server needs its own application deployment, PostgreSQL database, configuration, HTTPS and process supervision. Publishing the master does not automatically update an independent customer installation.</p><p>Run fleet management from a dedicated published master. Customer installations must remain able to trade when the master is unavailable. Never copy master fleet credentials into a customer installation.</p>
+        
+        <ul class="guide-steps"><li>Identify the target: web/PWA server, installed native POS, dedicated master, or independent customer server.</li><li>Record the current and intended Back Office and POS versions separately.</li><li>Identify who may approve publishing, database changes, native release tags and customer cutover.</li></ul>
+        
+        
+      </section>
+    
+      <section id="deployment-preflight">
+        <h3 class="sub-title">2. Pre-deployment safety checklist</h3>
+        
+        <ol class="guide-steps"><li>Arrange a maintenance window and nominate the operator who will decide whether to continue or stop.</li><li>Check outstanding POS bills, failed acknowledgements and offline queues. Do not clear browser storage, reinstall a terminal or delete queued records to make the status look clean.</li><li>Create a fresh recoverable backup. For moving a complete server, use the superuser System Export or a verified PostgreSQL dump as appropriate; a normal JSON backup is not a full account/configuration migration.</li><li>Store backups outside the server being changed with restricted access. A SQL dump or System Export can contain confidential business data, user security material and sensitive settings.</li><li>Record release identifiers, database schema state, current domains, process configuration and the previous working release. Keep secret values in the approved secret store, not in the deployment record.</li><li>Build and run the focused checks for the change. Investigate failing checks; do not treat a successful frontend build as proof that native Rust code compiles.</li><li>Review any proposed database migration, especially dropped tables/columns, type changes and data replacements. Test restore and migration on a disposable environment first.</li></ol>
+        
+        
+        <div class="note"><strong>Important:</strong> Never import a deployment dump, use Restore (Replace All), run a blind schema push, or rerun a fresh-install setup script against a trading database as a normal software update.</div>
+      </section>
+    
+      <section id="deployment-replit">
+        <h3 class="sub-title">3. Publish or republish the Replit web application</h3>
+        
+        <ol class="guide-steps"><li>Complete the pre-deployment checklist and confirm the intended code is present in the workspace.</li><li>Open the Publishing tool. Review the deployment target and application build/run settings. For this monorepo, artifact production settings determine each service&#39;s build and run commands; do not substitute development commands.</li><li>Confirm the production environment has its required database connection, session/authentication settings and enabled provider configuration. Configure credentials through Secrets/integrations; never paste them into chat or source control.</li><li>Review the production database schema changes shown during publishing. Stop if an unexpected destructive change is proposed. Republish is not permission to overwrite customer data.</li><li>Click Publish or Republish. Follow the current attempt in Publishing logs until the build and launch finish successfully. Do not assume that a responding URL means the new build has finished; an older build may still be serving.</li><li>Open the published URL shown in Publishing, not a workspace preview URL. Check HTTPS and the health endpoint, then sign in and verify the intended version in the application.</li><li>On an authorised test terminal/account, check a small approved workflow and reconcile its result. Do not create an unapproved live sale merely to test deployment.</li><li>Keep Publishing logs and Monitoring open during the observation window. Record the successful release, time and outcome.</li></ol>
+        
+        <p><strong>Public health check: replace the hostname with the actual published domain</strong></p><pre class="guide-code"><code>curl -fsS https://YOUR-PUBLISHED-DOMAIN/api/healthz</code></pre>
+        <div class="note"><strong>Important:</strong> Expected health response: {&quot;status&quot;:&quot;ok&quot;}. This proves the server is responding, not that database queries, email delivery, backups or terminal sync all work. A private/password-protected deployment can block unauthenticated checks; do not disable access protection to make a monitor pass.</div>
+      </section>
+    
+      <section id="deployment-pwa">
+        <h3 class="sub-title">4. Confirm the PWA received the web update</h3>
+        
+        <ol class="guide-steps"><li>Confirm that publishing has completed and that the production web application shows the expected version.</li><li>Bring the PWA online and allow pending bills/audits to finish uploading. Confirm acceptance in the Back Office, not just a network-connected icon.</li><li>At a safe break in trading, use the application&#39;s update/reload action if offered, or close and reopen the PWA while online. If the old shell remains, stop and investigate its cached asset version.</li><li>Open POS Sync Monitor and check the device&#39;s current catalog transfer, pending/failed bills, audits and channel-specific last-success times.</li><li>Interrupting a catalog download must leave the previously active complete catalog usable. The downloaded catalog becomes active only after the entire transfer completes.</li></ol>
+        
+        
+        <div class="note"><strong>Important:</strong> A closed or sleeping PWA cannot continuously report. Do not uninstall it, clear site data or reset IndexedDB while it contains unsent transactions.</div>
+      </section>
+    
+      <section id="deployment-customer">
+        <h3 class="sub-title">5. Prepare an independent customer installation</h3>
+        
+        <ol class="guide-steps"><li>On the published master, sign in as a superuser and open Deployment Control. Create or review the customer profile: stable slug/identity, customer name, customer domain, Back Office/POS URLs, optional eShop domain, features, providers and target versions.</li><li>Confirm the intended hosting server and customer account before provisioning. Changing a hosting preference is not an automatic migration of an existing customer.</li><li>Arrange a supported Node.js runtime, PostgreSQL, private configuration storage, process supervision and HTTPS on the chosen server. Confirm the hosting account actually supports these features before purchasing or provisioning it.</li><li>Create a dedicated customer database and database user with only the required privileges. Keep the database inaccessible from the public internet unless a reviewed access policy explicitly requires it.</li><li>Choose a verified application release/package. Inspect its manifest and included README before installation. The legacy source ZIP expects package.json, client/, server/, shared/ and related source folders; a compiled ZIP expects dist/. Neither is automatically interchangeable with this pnpm monorepo.</li><li>If a package download reports missing source/build files, stop. Do not manufacture empty folders, use an unverified ZIP, or clone an unrelated repository to bypass that check.</li><li>Set the customer&#39;s environment and providers through the approved configuration template. Keep master credentials out of customer configuration and keep production secrets out of the webroot.</li><li>Configure the customer domains and HTTPS, then deploy the application using the package-specific instructions below.</li></ol>
+        
+        
+        <div class="note"><strong>Important:</strong> Saving a profile, selecting an automation provider, requesting an upgrade or entering a target version is not proof that an application has been installed or upgraded. Confirm the actual server/agent outcome.</div>
+      </section>
+    
+      <section id="deployment-packages">
+        <h3 class="sub-title">6. Install a verified customer package on a new server</h3>
+        
+        <ol class="guide-steps"><li>As a superuser, open Settings → Backup &amp; Recovery and choose the appropriate deployment package. Confirm the download completes successfully; store it privately.</li><li>Extract the package into a private application directory outside the public document root. Confirm the SQL dump, environment template, process config and relevant source/build files are present and match the approved release.</li><li>Create a NEW, empty customer database. Validate that DATABASE_URL points to that database before any import. Do not print its value or place it in a shell command history.</li><li>Import the reviewed dump with PostgreSQL&#39;s error-stop option. Any SQL error is a failed validation step; do not assume role/ownership errors are harmless.</li><li>For the legacy source package, install build dependencies and build using that package&#39;s package.json/README. The generated setup.sh also imports database.sql: use it only for an approved new installation and inspect it first, not for routine updates.</li><li>For a compiled package, retain its verified dist/ and follow its included start.sh/PM2 instructions. Do not run source-only build commands against a compiled-only package.</li><li>If deploying this workspace&#39;s source instead of a legacy package, use pnpm and the artifact build/start commands. Do not copy old npm run db:push instructions into a live monorepo deployment.</li><li>Start the application with its approved process supervisor and correct private environment. Configure the reverse proxy to route both the web application and /api to the correct services. Never expose .env, database.sql, exports, internal admin credentials or the PostgreSQL port publicly.</li><li>Verify HTTPS, /api/healthz, login, customer branding and the expected release. Check database-backed screens and a controlled POS sync before admitting normal traffic.</li><li>Remove installation dumps/archives from any web-accessible location, retain protected off-server copies, and record installation acceptance.</li></ol>
+        
+        <p><strong>New empty database only, after DATABASE_URL has been privately configured</strong></p><pre class="guide-code"><code>psql &quot;$DATABASE_URL&quot; -v ON_ERROR_STOP=1 -f database.sql</code></pre><p><strong>Verified legacy source package only</strong></p><pre class="guide-code"><code>npm ci --include=dev
+npm run build</code></pre><p><strong>This pnpm workspace&#39;s source: build paths shown for Back Office at / and PWA at /terminal/</strong></p><pre class="guide-code"><code>pnpm install --frozen-lockfile
+PORT=3000 BASE_PATH=/ pnpm --filter @workspace/globipos run build
+PORT=3001 BASE_PATH=/terminal/ pnpm --filter @workspace/globipos-terminal run build
+pnpm --filter @workspace/api-server run build
+# Configure the supervisor&#39;s private environment, NODE_ENV=production and API PORT first.
+pnpm --filter @workspace/api-server run start</code></pre><p><strong>A package that includes ecosystem.config.js and an approved PM2 runtime</strong></p><pre class="guide-code"><code>pm2 start ecosystem.config.js
+pm2 save
+pm2 status</code></pre>
+        <div class="note"><strong>Important:</strong> Confirm the packaged release&#39;s runtime layout, port and proxy configuration rather than guessing a generic server/dist path. A database import is a data operation, not a software update.</div>
+      </section>
+    
+      <section id="deployment-enrollment">
+        <h3 class="sub-title">7. Connect customer monitoring to the master</h3>
+        
+        <ol class="guide-steps"><li>Confirm both customer and master HTTPS endpoints work and that the customer application is already running independently.</li><li>Use the customer-specific enrollment/agent configuration supported by Deployment Control and the installed agent. Transfer one-time enrollment credentials only through a secure channel.</li><li>Install/configure the agent separately on the customer host when required. Profile creation or an enrollment credential alone does not start a host agent.</li><li>Confirm a real heartbeat reaches the correct customer profile. Compare the reporting installation identity, active release, URLs and timestamp with the server being enrolled.</li><li>Check the customer and POS domains, and the separate eShop domain if configured. A valid DNS result is not proof that checkout, database access or POS sync are healthy.</li><li>Verify the customer continues to operate during an authorised, controlled master-connectivity interruption; restore communication and confirm reports recover without losing pending work.</li></ol>
+        
+        
+        <div class="note"><strong>Important:</strong> Do not label an unconfigured or unreachable agent as healthy. Never reuse a customer&#39;s identity/agent credential for a different installation.</div>
+      </section>
+    
+      <section id="deployment-upgrades">
+        <h3 class="sub-title">8. Upgrade or migrate a trading customer safely</h3>
+        
+        <ol class="guide-steps"><li>Select one pilot customer first. Record its actual active versions and current database state, then take and verify a fresh backup.</li><li>Stage the approved application release beside the current one. Compare its environment/runtime requirements and explicitly review required versioned migrations.</li><li>Apply only approved, tested migrations. Do not overwrite the live database with database.sql or rerun setup.sh as an upgrade.</li><li>For a hosting move, arrange a cutover window, stop/fence writes on the old installation and account for pending terminal/offline transactions. Preserve the customer&#39;s stable deployment identity.</li><li>Activate the new release or move traffic to the new host. Check HTTPS, readiness, login, database-backed operations, POS sync and the agent heartbeat before declaring success.</li><li>Confirm the reported active version changed to the expected version. A requested target version or queued rollout is not completion.</li><li>Observe the pilot, then expand deliberately to more customers. Do not use Upgrade all deployments before the pilot passes and operators approve the wider rollout.</li></ol>
+        
+        
+        <div class="note"><strong>Important:</strong> After new financial or stock transactions reach the new database, switching traffic back to an older database can lose or duplicate data. Stop writes and reconcile post-cutover transactions before deciding on rollback.</div>
+      </section>
+    
+      <section id="deployment-native">
+        <h3 class="sub-title">9. Publish the installed Tauri POS through GitHub</h3>
+        <p>This is a separate, explicitly approved release procedure. Run the release script only when you intend to push commits and create a public signed native release. Replit republishing does not perform these steps.</p><p>Updater verification keys and existing signing identities must remain consistent. Configure signing credentials through GitHub Actions repository secrets, not the source tree or release notes.</p>
+        <ol class="guide-steps"><li>Review and commit all intended native/source changes before release. Check git status and git ls-files to make sure pos-app source changes are tracked; ignored or uncommitted fixes will not reach GitHub. Never force-add a whole folder containing private keys or build output.</li><li>Check the latest final GitHub release and choose a strictly higher unused semantic version. Align package, Cargo, Tauri and lockfile versions with the existing version helper; never silently replace a published tag.</li><li>Confirm the repository&#39;s required Tauri signing secret and Android signing configuration are present through GitHub&#39;s secret settings. Do not reveal their values or rotate the updater public key as a quick fix.</li><li>Use bash scripts/publish-release.sh with the approved next version. Read its confirmation: it updates version files, pushes the version commit, requests the Windows preflight and pushes a v* tag only after that check passes. It requires the configured project-scoped GitHub credential.</li><li>If using the GitHub Actions screen for an additional preflight, select Build &amp; Release POS Terminal → Run workflow, select the intended source branch and set preflight_only to true. This compiles Linux and Windows without publishing installers. Check that the run&#39;s source commit is the intended commit.</li><li>Follow the tagged Build &amp; Release POS Terminal run. Require the release-version safeguards, Linux and Windows native preflights, platform installer builds and published-asset verification to succeed. A frontend-only check is insufficient.</li><li>Open the final GitHub release and inspect installers, desktop .sig files and latest.json. Confirm that latest.json reports the release version and contains the supported desktop platforms and signatures.</li><li>Run the existing release verifier where repository access is available. Its metadata/signature-presence checks do not replace an actual Tauri install/signature-verification test.</li><li>Update one pilot terminal, verify the running version and successful catalog/bill/audit sync, then expand the rollout.</li></ol>
+        
+        <p><strong>Read-only source/version checks from the repository root</strong></p><pre class="guide-code"><code>git status --short
+git ls-files pos-app/src pos-app/src-tauri/src
+node scripts/pos-version.mjs --check</code></pre><p><strong>Publishes a native release: 1.0.13 is an example, replace it with the approved higher unused version</strong></p><pre class="guide-code"><code>bash scripts/publish-release.sh 1.0.13</code></pre><p><strong>Verify the published release&#39;s expected assets; use the existing authenticated environment if required</strong></p><pre class="guide-code"><code>node scripts/verify-pos-release.mjs chrlazarides/globipos latest</code></pre>
+        <div class="note"><strong>Important:</strong> If a signing/build/verification job fails, do not advertise the release as ready. Some assets may already have been uploaded. Inspect the failed job and the release state; do not bypass the gate or retag a different commit.</div>
+      </section>
+    
+      <section id="deployment-terminal-update">
+        <h3 class="sub-title">10. Install and verify a terminal update</h3>
+        
+        <ol class="guide-steps"><li>Bring the desktop terminal online and check that outstanding transactions are preserved. Use a safe pause in trading for installation.</li><li>The Tauri updater checks about 15 seconds after launch, then hourly. It offers a higher available version; it does not force immediate installation.</li><li>Accept the in-app update when offered, keep the device online and powered, and allow the download/install to finish. Follow the installer&#39;s restart instructions.</li><li>Reopen the terminal and verify the running version, customer server URL and terminal registration. Check peripheral operation and the channel-specific sync results.</li><li>If no update appears, compare the installed version with latest.json, check connectivity and review updater errors. A device already on the manifest version will not receive a same-version update.</li><li>For first installation use the approved platform installer and register the terminal against the correct customer server. Windows setup .exe files are installers, not portable executables.</li><li>Treat Android separately: use the compatible signed APK and Android&#39;s installation procedure. The desktop Tauri updater is not evidence of Android automatic updates. Preserve the Android signing identity and test an in-place upgrade on a pilot device.</li></ol>
+        
+        
+        <div class="note"><strong>Important:</strong> Do not uninstall, reset local storage or re-register a terminal just to resolve an update prompt while unsent transactions remain.</div>
+      </section>
+    
+      <section id="monitoring-overview">
+        <h3 class="sub-title">11. Monitor four separate layers</h3>
+        <p>A green indicator at one layer does not prove the other layers are healthy. Compare expected and observed versions separately for Back Office and POS.</p><p>Keep a deployment record containing operator, customer/host, release identifiers, database migration/backup references, UTC log timestamp, Europe/Nicosia local time and test outcomes. Do not record passwords, tokens or signed download URLs.</p>
+        
+        <ul class="guide-steps"><li>Publishing: Is the intended build actually deployed successfully, or is the URL serving an older successful build?</li><li>Server: Does HTTPS and /api/healthz respond, and do database-backed workflows work?</li><li>Customer control: Are the customer agent heartbeat, actual active version, domains and operator alerts current?</li><li>Device sync: Is each POS/PWA reporting recently, and have catalog, bills and audits actually completed and been acknowledged?</li></ul>
+        
+        
+      </section>
+    
+      <section id="monitoring-platform">
+        <h3 class="sub-title">12. Monitor the published web application and customer host</h3>
+        
+        <ol class="guide-steps"><li>In Replit Publishing → Logs, check the current build/start attempt first. For runtime problems, inspect application logs around the exact incident time.</li><li>In Publishing → Monitoring, inspect the available availability, resource and request/error information. Look for recurring crashes or increased latency, not only one successful page request.</li><li>For a supervised customer host, inspect its actual process manager and application logs. With PM2, use status and describe to identify the configured process name before using logs or restart commands.</li><li>Check disk space, database connectivity, TLS certificate validity/renewal and backup storage independently. Configure an authorised external monitor if continuous alerting is required.</li><li>Investigate repeated idle-connection errors or repeated backup retries even if the application recovers. Recovery logging is not proof that the underlying hosting/database interruption has stopped.</li></ol>
+        
+        <p><strong>PM2 customer hosts only; replace APP_NAME with the name shown by pm2 status</strong></p><pre class="guide-code"><code>pm2 status
+pm2 describe APP_NAME
+pm2 logs APP_NAME --lines 100
+curl -fsS https://YOUR-CUSTOMER-DOMAIN/api/healthz
+df -h</code></pre>
+        <div class="note"><strong>Important:</strong> Do not publish raw logs containing credentials, private backup contents or customer details. A workspace workflow restart is not a restart of the published production instance.</div>
+      </section>
+    
+      <section id="monitoring-fleet">
+        <h3 class="sub-title">13. Monitor Deployment Control and operator alerts</h3>
+        
+        <ol class="guide-steps"><li>On the dedicated master, open Deployment Control as a superuser and refresh the fleet overview.</li><li>For each customer, compare health status/message, last heartbeat, actual and target Back Office/POS versions, and customer/POS/eShop domain checks.</li><li>Inspect the customer&#39;s history when a version, domain or health state changes. An unknown/offline report may reflect agent connectivity; verify the actual customer application before concluding trading is down.</li><li>Open Customer POS sync reports and distinguish absent/stale reports from reported sync failures. A reporting path to the master is separate from local customer trading.</li><li>Review Operator alerts could not be delivered and the resolved history. Record the operation, failure reason, occurrences and last attempt without copying private payloads.</li><li>Correct the notification provider/configuration first, then let an authorised superuser retry when the cooldown permits. A delivered notification is not proof that the original operational incident is resolved.</li><li>After recovery, confirm a fresh heartbeat/domain check and the correct actual version rather than manually marking an old report healthy.</li></ol>
+        
+        
+        
+      </section>
+    
+      <section id="monitoring-sync">
+        <h3 class="sub-title">14. Use POS Sync Monitor without misreading progress</h3>
+        
+        <ol class="guide-steps"><li>As an authorised POS administrator, open POS Sync Monitor for the customer installation (/pos/sync-monitor). Identify the correct terminal and location.</li><li>Check the device&#39;s last report. A device is considered current for about 45 seconds after its last report; sleeping/closed devices become stale/offline rather than remaining apparently live.</li><li>For catalog downloads, inspect actual records/pages downloaded versus the reported total. An incomplete staged transfer is not an activated catalog and an unavailable total must not be treated as 100%.</li><li>For bills and audits, inspect pending, in-progress, accepted and failed work with each channel&#39;s last successful sync time. HTTP 200 alone is not acceptance: validate the server acknowledgement.</li><li>Inspect a failed record&#39;s reason, correct the cause, then use the supported explicit retry action. Verify the record is accepted and the queue/Back Office result reflects that acknowledgement.</li><li>If the last channel-success time is old while the device reports normally, investigate that channel. New heartbeats must not reset failed work or overwrite the last confirmed success.</li><li>During authorised offline/recovery testing, verify unsent work survives reopening the app and is acknowledged once when connectivity returns.</li></ol>
+        
+        
+        <div class="note"><strong>Important:</strong> Catalog records transferred are not units of physical stock moved. A connected device is not the same as a fully synced device. Do not clear failed work or invent a progress percentage.</div>
+      </section>
+    
+      <section id="monitoring-backups">
+        <h3 class="sub-title">15. Configure, verify and monitor backups</h3>
+        
+        <ol class="guide-steps"><li>Open Settings → Backup &amp; Recovery. Confirm the backup email destination and email provider settings, and enable automatic backup only after a controlled send test succeeds.</li><li>Send an approved test backup and verify the recipient actually receives an intact attachment. Inspect its backupType, sinceDate, exportedAt and tableCounts, and retain the required previous full/differential files.</li><li>The application scheduler first checks about one minute after server start, then hourly while the process is running. It attempts a backup when automatic backup is enabled, a destination exists, and the last successful recorded backup is at least 24 hours old.</li><li>Treat this as an in-process scheduler, not a guaranteed fixed-time external backup service. Shutdowns and scaling can interrupt scheduling. Multiple instances or a failed post-send timestamp write can still produce duplicate emails; an external/durable backup plan is required where that reliability is essential.</li><li>If a last backup exists less than eight days ago, the scheduled export is differential; otherwise it is full. This is not a guarantee of a weekly full backup when differential sends happen every day.</li><li>The scheduled runner retries recognised database interruptions up to three attempts with waits of two and ten seconds. It regenerates the export before email delivery; retries of the timestamp write do not resend that email within the same run.</li><li>Use logs to distinguish Scheduled backup completed, database interrupted; retrying, Scheduled backup failed, Scheduled backup error, and email sent but last backup date could not be saved.</li><li>After an error, check the last recorded successful backup and actual delivery. If delivery happened but the timestamp could not be saved, confirm the attachment first; do not blindly click Send again.</li><li>Periodically create a fresh full PostgreSQL backup and test recovery in an isolated environment. JSON differential exports select new transactions by creation date and are not a complete history of later edits/deletions or every subsystem.</li></ol>
+        
+        
+        <div class="note"><strong>Important:</strong> Do not report a successful backup based only on an email-provider acceptance or a green server indicator. Test recoverability. Never restore a backup onto live trading data merely to test it.</div>
+      </section>
+    
+      <section id="monitoring-incidents">
+        <h3 class="sub-title">16. Incident response and rollback</h3>
+        
+        <ol class="guide-steps"><li>Record the affected customer/terminal, current release, exact symptom, local Europe/Nicosia time and original UTC log timestamp. Preserve pending work and stop destructive operations.</li><li>Check the appropriate layer: Publishing build/start logs, customer process/database, agent/domain report, or device sync/acknowledgement. Identify the first causal error rather than treating every follow-on error separately.</li><li>For a failed publish, confirm whether the previous build still serves traffic. Correct the evidenced build/configuration issue and republish; do not claim an old working URL proves the new release succeeded.</li><li>For database disconnects, allow bounded recovery, then investigate the database/host if errors recur. Do not replace the database or run restore/schema changes to treat a connection error.</li><li>For native failures, pause rollout. Inspect the GitHub job, actual release assets and terminal updater error. A successful web republish does not fix a failed native build.</li><li>Before any rollback, determine whether new writes or incompatible migrations occurred. Stop/fence affected writers and agree how to preserve or reconcile post-deployment financial and stock records.</li><li>For Replit code recovery, select the appropriate checkpoint through the workspace recovery tools, understand any database rollback selection, and explicitly republish the approved code. A workspace checkpoint selection alone does not publish it.</li><li>For an independent customer, activate a tested compatible prior application release only after confirming schema/data compatibility. Do not point traffic at a stale database that has missed recent sales.</li><li>Verify service and transaction recovery, collect evidence and record the final outcome. Keep the incident open if delivery, active version or transaction acceptance remains uncertain.</li></ol>
+        
+        
+        
+      </section>
+    
+      <section id="monitoring-routine">
+        <h3 class="sub-title">17. Operator handover and routine checklist</h3>
+        
+        
+        <ul class="guide-steps"><li>Immediately after deployment: successful current build, correct active release, HTTPS/health, sign-in, approved database workflow, pilot terminal/PWA sync, agent/domain report and no new unexplained errors.</li><li>During the observation window: refresh server/fleet/device reports and review failed/pending work and notification-delivery failures.</li><li>At daily opening and closing: identify stale/offline terminals, reconcile outstanding bills/audits, review last backup and attachment delivery, and record unresolved incidents.</li><li>At the agreed recovery-test interval: perform an isolated restore test, verify TLS/host resources and review access to backups and signing credentials.</li><li>Handover: record owner, next action and expected follow-up time for each unresolved issue. Do not mark a deployment complete when a required release, backup or transaction acceptance is unverified.</li></ul>
+        
+        
+      </section>
+    
+      <section id="deployment-references">
+        <h3 class="sub-title">18. Reference screens and current documentation</h3>
+        <p>In-app: User Manual (/api/manual), Deployment &amp; Monitoring Guide (/deploy-guide), Settings → Backup &amp; Recovery, superuser Deployment Control (/deployment-control), and authorised POS Sync Monitor (/pos/sync-monitor). Access depends on installation mode and user permissions.</p><p>GitHub repository: https://github.com/chrlazarides/globipos — Actions and Releases show the current native build and published version. Do not assume the example version in this manual is the latest.</p><p>Replit publishing: https://docs.replit.com/features/publishing/overview</p><p>Replit monitoring: https://docs.replit.com/features/publishing/monitoring-a-deployment</p><p>Replit production databases: https://docs.replit.com/features/data-and-storage/development-and-production</p><p>Replit checkpoints: https://docs.replit.com/features/version-control/checkpoints-and-rollbacks</p>
+        
+        
+        
+        
+      </section>
+    
+  </div></main></body></html>

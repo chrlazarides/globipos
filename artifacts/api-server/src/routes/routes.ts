@@ -9,6 +9,7 @@ import { customerPreferences, customerFeedback, customerNotifications, customerC
 import { productFamilies, insertProductFamilySchema } from "@workspace/db";
 import { labelProfiles } from "@workspace/db";
 import { parseAdminImportRequest, shouldRestoreBackupSettings } from "../import-settings-policy";
+import { escapeManualHtml, renderDeploymentManualContents, renderDeploymentManualSections } from "../manual-deployment";
 import { TerminalHeartbeatBody } from "@workspace/api-zod";
 import { posTerminals as syncPosTerminals } from "@workspace/db";
 import { mergeSyncHeartbeat, parseSyncTelemetry } from "../sync-telemetry";
@@ -3614,7 +3615,7 @@ export async function registerRoutes(
     const allSettings = await storage.getSettings();
     const settingsMap: Record<string, string> = {};
     for (const s of allSettings) settingsMap[s.key] = s.value;
-    const manualCompanyName = settingsMap["company_name"] || "GlobiPOS";
+    const manualCompanyName = escapeManualHtml(settingsMap["company_name"] || "GlobiPOS");
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3648,6 +3649,9 @@ export async function registerRoutes(
   .toc .sub { padding-left: 18px; font-size: 12px; color: #555; list-style: lower-alpha; }
 
   /* Sections */
+  .guide-steps { padding-left: 24px; margin: 12px 0 18px; }
+  .guide-steps li { margin-bottom: 10px; }
+  .guide-code { background: #f1f3f5; padding: 14px; margin: 10px 0 18px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
   .section { margin-bottom: 48px; }
   h2.section-title { font-size: 18px; font-weight: 800; color: #6b1f2a; border-bottom: 2px solid #6b1f2a; padding-bottom: 8px; margin-bottom: 20px; }
   h3.sub-title { font-size: 14px; font-weight: 700; color: #1a1a1a; margin: 24px 0 10px; }
@@ -3720,7 +3724,7 @@ export async function registerRoutes(
     <div class="cover-logo">${manualCompanyName}</div>
     <div class="cover-subtitle">Retail &amp; Hospitality POS + ERP</div>
     <div class="cover-title">Instructions for Use — Complete System Guide</div>
-    <div class="cover-meta">For internal use &nbsp;·&nbsp; June 2026</div>
+    <div class="cover-meta">For internal use &nbsp;·&nbsp; Deployment &amp; monitoring procedures revised 02 October 2026</div>
   </div>
 
   <!-- TOC -->
@@ -3808,6 +3812,7 @@ export async function registerRoutes(
         </ol>
       </li>
       <li><a href="#offline">Offline Mode &amp; Mobile App</a></li>
+      ${renderDeploymentManualContents()}
     </ol>
   </div>
 
@@ -4234,7 +4239,7 @@ export async function registerRoutes(
       <thead><tr><th>Restore mode</th><th>Behaviour</th></tr></thead>
       <tbody>
         <tr><td><strong>Full restore</strong></td><td>Wipes all current data and replaces it with the backup. User accounts and passwords on the current server are <em>preserved</em> (not overwritten).</td></tr>
-        <tr><td><strong>Differential merge</strong></td><td>Inserts new records from the backup without removing any existing data. Safe to run on a live system.</td></tr>
+        <tr><td><strong>Differential merge</strong></td><td>Merges records from the backup without removing existing data. Review the preview and test on an isolated instance before touching live data; this is not a complete history of later edits or deletions.</td></tr>
         <tr><td><strong>System restore</strong></td><td>Same as full restore, but also upserts user accounts from the export. Your own active session is preserved.</td></tr>
       </tbody>
     </table>
@@ -4264,9 +4269,11 @@ export async function registerRoutes(
     <div class="note"><strong>Note:</strong> Offline mode uses data cached from your last online session. If items or customers were added since your last sync, they will not be available offline until you go back online.</div>
   </div>
 
+  ${renderDeploymentManualSections()}
+
   <div class="footer">
     <p>${manualCompanyName} &nbsp;·&nbsp; Confidential &amp; for Internal Use Only</p>
-    <p style="margin-top:4px;">Generated ${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" })}</p>
+    <p style="margin-top:4px;">Generated ${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric", timeZone: "Europe/Nicosia" })} (Europe/Nicosia)</p>
   </div>
 
 </div>
