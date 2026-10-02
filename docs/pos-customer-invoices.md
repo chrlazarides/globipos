@@ -28,6 +28,15 @@ initiate a card-terminal charge. On-account checkout cannot exceed the limit.
 Overdue invoices warn but do not block; suspended/unapproved credit does block.
 These operations are online only.
 
+Before sending a checkout, both terminals save its immutable purchase and
+checkout ID locally, without storing the cashier PIN. If a response is lost or
+the terminal reloads, the same cashier on the same terminal/store is prompted
+to recover that attempt. Enter the PIN, confirm the original quote and retry
+the same invoice; do not collect payment again. Payment details and the original
+checkout ID stay unchanged, even if a recovery attempt hits an authentication
+or connection error. Unreadable recovery data blocks new invoicing and directs
+staff to check the existing back-office invoices instead of guessing.
+
 After issuance, print the existing invoice format or email the customer's saved
 email address. The invoice is available in the existing back-office invoice list,
 payments and customer account. Changes to limits/terms for existing customers

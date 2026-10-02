@@ -42,7 +42,7 @@ import { SyncHeader } from "../components/SyncHeader";
 import { CategoryNav } from "../components/CategoryNav";
 import { LayoutGrid } from "../components/LayoutGrid";
 import { CustomerInvoiceDialog } from "../components/CustomerInvoiceDialog";
-import { mapCartLines, type CheckoutResult } from "../lib/customer-invoice";
+import { mapCartLines, readPendingInvoice, type CheckoutResult, type InvoiceMode } from "../lib/customer-invoice";
 import { OrderTicket } from "../components/OrderTicket";
 import { CorrectionsPanel } from "../components/CorrectionsPanel";
 import { PriceCheckDialog } from "../components/PriceCheckDialog";
@@ -670,6 +670,7 @@ function PaymentSuccessOverlay({
 
 export function POS({ config, session, sync, onLogout }: POSProps) {
   const [invoiceMode, setInvoiceMode] = useState<"wholesale" | "retail">("wholesale");
+  const clearedInvoices = useRef(new Set<string>());
   const engine    = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
   const perms     = usePermissions(session);
   const hw        = useHardware();
@@ -739,6 +740,20 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const activeRows    = Math.ceil((maxButtonPos + 1) / activeColumns);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [dialog, setDialog]               = useState<Dialog>(null);
+  useEffect(() => {
+    try {
+      const pending = readPendingInvoice(config, session.cashier_id);
+      if (pending) { setInvoiceMode(pending.request.mode); setDialog("customer_invoice"); }
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+  }, [config.server_url, config.terminal_code, session.cashier_id]);
+
+  function openCustomerInvoice(mode: InvoiceMode) {
+    try {
+      const pending = readPendingInvoice(config, session.cashier_id);
+      setInvoiceMode(pending?.request.mode ?? mode);
+      setDialog("customer_invoice");
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+  }
   const [numpadMode, setNumpadModeState]  = useState<NumpadMode>("qty");
   const [paymentInitialTab, setPaymentInitialTab] = useState<"cash" | "card" | "split">("cash");
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; code: string; phone?: string; loyaltyPoints?: number } | null>(null);
@@ -1083,8 +1098,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "TOTAL":
       case "SUBTOTAL":            setPaymentInitialTab("split"); setDialog("payment"); break;
       case "CUSTOMER_LOOKUP":     setDialog("customer_lookup"); break;
-      case "WHOLESALE_INVOICE":   setInvoiceMode("wholesale"); setDialog("customer_invoice"); break;
-      case "CUSTOMER_ACCOUNT":    setInvoiceMode("retail"); setDialog("customer_invoice"); break;
+      case "WHOLESALE_INVOICE":   openCustomerInvoice("wholesale"); break;
+      case "CUSTOMER_ACCOUNT":    openCustomerInvoice("retail"); break;
       case "CUSTOMER_CLEAR":      engine.setCustomer(""); setSelectedCustomer(null); break;
       // ── Quantity multiplier before scan ──────────────────────────────────
       case "NUMPAD": setNumpadModeState("qty_multiplier"); setDialog("numpad"); break;
@@ -1284,20 +1299,25 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     );
   }
 
-  async function handleInvoiceCompleted(r: CheckoutResult) {
-    const shiftRow = shift.currentShift;
-    if (shiftRow) {
+  async function handleInvoiceCompleted(r: CheckoutResult, originalShiftId?: string) {
+    // Clear the completed basket before any asynchronous local work. No normal
+    // completion/outbox call: the server has already posted and consumed stock.
+    if (!clearedInvoices.current.has(r.orderId)) {
+      clearedInvoices.current.add(r.orderId);
+      engine.clearOrder();
+      setSelectedCustomer(null);
+      void sync.triggerCatalogSync();
+    }
+    if (originalShiftId) {
       try {
         await invoke("record_invoice_shift_sale", {
-          shiftId: shiftRow.id, orderId: r.orderId, total: r.totalCents / 100, paymentMethod: r.paymentMethod,
+          shiftId: originalShiftId, orderId: r.orderId, total: r.totalCents / 100, paymentMethod: r.paymentMethod,
         });
         await shift.refreshShift();
       } catch (e) {
-        alert(`Invoice ${r.invoiceNumber} ALREADY ISSUED. The local shift totals could not be updated (${e instanceof Error ? e.message : String(e)}). Do not start a new checkout for this sale.`);
+        throw new Error(`Invoice ${r.invoiceNumber} ALREADY ISSUED. The local shift totals could not be updated (${e instanceof Error ? e.message : String(e)}). Do not start a new checkout for this sale.`);
       }
     }
-    engine.clearOrder();
-    setSelectedCustomer(null);
   }
 
   if (mode === "shift") {
@@ -1570,6 +1590,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           mode={invoiceMode}
           config={config}
           cashierId={session.cashier_id}
+          localShiftId={shift.currentShift?.id}
           lines={mapCartLines(engine.lines.filter((l) => !l.id.startsWith("multibuy-") && !l.id.startsWith("coupon-")))}
           onCompleted={handleInvoiceCompleted}
           onClose={() => setDialog(null)}

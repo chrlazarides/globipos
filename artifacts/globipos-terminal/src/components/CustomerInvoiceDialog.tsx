@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import {
-  InvoiceApiError, amountTenderedCents, basketFingerprint, validateCheckout, validateQuote, euro, fetchInvoiceHtml, invoiceRequest, paymentBlockReason, termsLabel, validPin,
+  InvoiceApiError, amountTenderedCents, basketFingerprint, validateCheckout, validateQuote, euro, fetchInvoiceHtml, invoiceRequest, paymentBlockReason, termsLabel, validPin, readPendingInvoice, savePendingInvoice, clearPendingInvoice,
   type CheckoutResult, type InvoiceConn, type InvoiceCustomer, type InvoiceLineInput, type InvoiceMode, type PayMethod, type Quote,
 } from "../lib/customer-invoice";
 
@@ -11,7 +11,8 @@ type Props = {
   lines: InvoiceLineInput[];
   onClose: () => void;
   /** Called once the server has finalized the invoice; the caller must clear the cart. */
-  onCompleted: (result: CheckoutResult) => void;
+  onCompleted: (result: CheckoutResult, localShiftId?: string) => void | Promise<void>;
+  localShiftId?: string;
 };
 
 const input = "w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-primary disabled:opacity-50";
@@ -19,35 +20,59 @@ const btn = "rounded-lg px-4 py-2.5 text-sm font-semibold disabled:cursor-not-al
 const primary = `${btn} bg-primary text-primary-foreground`;
 const ghost = `${btn} bg-gray-800 text-gray-200 hover:bg-gray-700`;
 
-export function CustomerInvoiceDialog({ mode, config, cashierId, lines, onClose, onCompleted }: Props) {
+export function CustomerInvoiceDialog({ mode, config, cashierId, lines, onClose, onCompleted, localShiftId }: Props) {
+  const [recovery] = useState(() => readPendingInvoice(config, cashierId));
   const [pin, setPin] = useState("");
   const [search, setSearch] = useState("");
   const [customers, setCustomers] = useState<InvoiceCustomer[] | null>(null);
-  const [customer, setCustomer] = useState<InvoiceCustomer | null>(null);
-  const [quote, setQuote] = useState<Quote | null>(null);
+  const [customer, setCustomer] = useState<InvoiceCustomer | null>(recovery?.quote.customer ?? null);
+  const [quote, setQuote] = useState<Quote | null>(recovery?.quote ?? null);
   const [confirmed, setConfirmed] = useState(false);
-  const [method, setMethod] = useState<PayMethod>(mode === "retail" ? "account_credit" : "cash");
-  const [tender, setTender] = useState("");
-  const [cardReference, setCardReference] = useState("");
-  const [cardConfirmed, setCardConfirmed] = useState(false);
+  const [method, setMethod] = useState<PayMethod>(recovery?.request.paymentMethod ?? (mode === "retail" ? "account_credit" : "cash"));
+  const [tender, setTender] = useState(recovery?.request.paymentMethod === "cash" ? (recovery.request.amountTenderedCents / 100).toFixed(2) : "");
+  const [cardReference, setCardReference] = useState(recovery?.request.cardReference ?? "");
+  const [cardConfirmed, setCardConfirmed] = useState(!!recovery && recovery.request.paymentMethod === "card");
   const [busy, setBusy] = useState(false);
-  const [ambiguous, setAmbiguous] = useState(false);
-  const [error, setError] = useState("");
+  const [ambiguous, setAmbiguous] = useState(!!recovery);
+  const [error, setError] = useState(recovery ? "An unfinished invoice was restored. Enter your PIN and retry this same invoice; do not take payment again." : "");
   const [result, setResult] = useState<CheckoutResult | null>(null);
   const [notice, setNotice] = useState("");
+  const [completionFailed, setCompletionFailed] = useState(false);
   const [printHtml, setPrintHtml] = useState<string | null>(null);
-  const [quotedLines, setQuotedLines] = useState<InvoiceLineInput[]>([]);
-  const keyRef = useRef(crypto.randomUUID());
+  const [quotedLines, setQuotedLines] = useState<InvoiceLineInput[]>(recovery?.request.lines ?? []);
+  const keyRef = useRef(recovery?.request.orderId ?? crypto.randomUUID());
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const frozen = busy || ambiguous;
   const title = mode === "wholesale" ? "Wholesale Invoice" : "Customer Account Sale";
   const pay = { method, tender, cardReference, cardConfirmed };
-  const basketChanged = !!quote && !result && basketFingerprint(lines) !== basketFingerprint(quotedLines);
-  const blocked = basketChanged ? "The cart changed after this quote. Reprice before charging." : quote ? paymentBlockReason(quote, pay, mode) : "No quote";
+  const basketChanged = !!quote && !result && !ambiguous && basketFingerprint(lines) !== basketFingerprint(quotedLines);
+  const blocked = !validPin(pin) ? "Enter your cashier PIN." : basketChanged ? "The cart changed after this quote. Reprice before charging." : quote ? paymentBlockReason(quote, pay, mode) : "No quote";
 
   function fail(e: unknown) {
     setError(e instanceof Error ? e.message : "Request failed.");
+  }
+
+  async function finishLocally(data: CheckoutResult, originalShiftId?: string) {
+    try {
+      await onCompleted(data, originalShiftId);
+      clearPendingInvoice(config, cashierId);
+      setCompletionFailed(false);
+      setNotice("");
+    } catch (e) {
+      setCompletionFailed(true);
+      setNotice(`Invoice ${data.invoiceNumber} is ALREADY ISSUED. ${e instanceof Error ? e.message : "Local completion failed."} Retry terminal completion; do not collect payment or issue another invoice.`);
+    }
+  }
+
+  async function retryLocalCompletion() {
+    if (!result || busy) return;
+    setBusy(true);
+    try {
+      const pending = readPendingInvoice(config, cashierId);
+      await finishLocally(result, pending ? pending.localShiftId : localShiftId);
+    } catch (e) { setNotice(e instanceof Error ? e.message : "Local recovery is unavailable."); }
+    finally { setBusy(false); }
   }
 
   async function findCustomers() {
@@ -78,19 +103,25 @@ export function CustomerInvoiceDialog({ mode, config, cashierId, lines, onClose,
     if (!ambiguous) keyRef.current = crypto.randomUUID();
     setBusy(true); setError("");
     try {
-      const raw = await invoiceRequest<unknown>(config, "POST", "checkout", {
-        customerId: customer.id, mode, lines: quotedLines, cashierId, pin,
+      const saved = ambiguous ? readPendingInvoice(config, cashierId) : null;
+      if (ambiguous && !saved) throw new InvoiceApiError("The saved checkout is missing. Check issued invoices in the back office before taking payment again.", "RECOVERY_MISSING", null, true);
+      const request = saved?.request ?? {
+        customerId: customer.id, mode, lines: quotedLines,
         orderId: keyRef.current, expectedTotalCents: quote.totalCents, quoteHash: quote.quoteHash,
         paymentMethod: method, amountTenderedCents: amountTenderedCents(quote, pay),
         ...(method === "card" ? { cardReference: cardReference.trim() } : {}),
-      });
+      };
+      const originalShiftId = saved ? saved.localShiftId : localShiftId;
+      savePendingInvoice(config, cashierId, { request, quote, localShiftId: originalShiftId });
+      const raw = await invoiceRequest<unknown>(config, "POST", "checkout", { ...request, cashierId, pin });
       const data = validateCheckout(raw, keyRef.current, quote.totalCents, method);
       setAmbiguous(false);
       setResult(data);
-      onCompleted(data);
+      await finishLocally(data, originalShiftId);
     } catch (e) {
-      const isAmb = e instanceof InvoiceApiError && e.ambiguous;
+      const isAmb = ambiguous || (e instanceof InvoiceApiError && e.ambiguous);
       setAmbiguous(isAmb);
+      if (!isAmb) { try { clearPendingInvoice(config, cashierId); } catch { /* No request was committed; report the original error. */ } }
       if (e instanceof InvoiceApiError && !isAmb && (e.status === 409 || e.code === "QUOTE_CHANGED" || e.code === "PRICE_CHANGED")) {
         setConfirmed(false);
         setError(`${e.message} Reprice before charging.`);
@@ -143,7 +174,8 @@ export function CustomerInvoiceDialog({ mode, config, cashierId, lines, onClose,
               <div className="flex flex-wrap justify-center gap-2">
                 <button className={primary} disabled={busy} onClick={() => void printInvoice()} data-testid="button-print-invoice">Print invoice</button>
                 <button className={ghost} disabled={busy} onClick={() => void emailInvoice()} data-testid="button-email-invoice">Email to customer</button>
-                <button className={ghost} onClick={onClose} data-testid="button-invoice-done">Done</button>
+                {completionFailed && <button className={ghost} disabled={busy} onClick={() => void retryLocalCompletion()} data-testid="button-invoice-retry-completion">Retry terminal completion</button>}
+                <button className={ghost} disabled={busy} onClick={onClose} data-testid="button-invoice-done">Done</button>
               </div>
               {notice && <p role="status" className="text-sm text-amber-300" data-testid="text-invoice-notice">{notice}</p>}
               {printHtml !== null && (
@@ -178,6 +210,9 @@ export function CustomerInvoiceDialog({ mode, config, cashierId, lines, onClose,
             </>
           ) : (
             <>
+              <label className="block text-xs text-gray-400">Cashier PIN
+                <input type="password" inputMode="numeric" autoComplete="off" maxLength={8} value={pin} disabled={busy} onChange={e => setPin(e.target.value)} className={`${input} mt-1`} data-testid="input-invoice-confirm-pin" />
+              </label>
               <div className="rounded-xl border border-gray-700 bg-gray-800 p-3">
                 <div className="flex items-baseline justify-between">
                   <p className="font-semibold" data-testid="text-invoice-customer">{quote.customer.name} <span className="font-mono text-xs text-gray-400">{quote.customer.code}</span></p>
@@ -243,7 +278,7 @@ export function CustomerInvoiceDialog({ mode, config, cashierId, lines, onClose,
                   <p className="text-sm text-gray-300">Charged to the customer's account ({euro(credit!.availableCents)} available).</p>
                 )}
                 <label className="flex items-start gap-2 text-sm">
-                  <input type="checkbox" checked={confirmed} disabled={frozen} onChange={e => setConfirmed(e.target.checked)} className="mt-1" data-testid="checkbox-invoice-confirm-quote" />
+                  <input type="checkbox" checked={confirmed} disabled={busy} onChange={e => setConfirmed(e.target.checked)} className="mt-1" data-testid="checkbox-invoice-confirm-quote" />
                   I confirm these prices and the total of {euro(quote.totalCents)}.
                 </label>
                 {blocked && <p className="text-sm text-amber-300" data-testid="text-invoice-blocked">{blocked}</p>}

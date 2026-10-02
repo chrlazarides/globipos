@@ -70,7 +70,7 @@ export function paymentBlockReason(quote: Quote, p: PayInputs, mode: InvoiceMode
 
 export function amountTenderedCents(quote: Quote, p: PayInputs): number {
   if (p.method === "cash") return parseCents(p.tender) ?? 0;
-  return quote.totalCents;
+  return 0;
 }
 
 /** Network failures, 5xx and malformed bodies leave the outcome unknown; the same key must be reused. */
@@ -98,6 +98,54 @@ export function mapCartLines(cart: CartLike[]): InvoiceLineInput[] {
 /** Stable fingerprint of a basket, order independent. */
 export function basketFingerprint(lines: InvoiceLineInput[]): string {
   return lines.map(l => `${l.itemId}|${l.variantId ?? ""}|${l.saleUnit ?? "pc"}|${l.quantity}`).sort().join(";");
+}
+
+export type PendingInvoice = {
+  localShiftId?: string;
+  request: {
+    customerId: string; mode: InvoiceMode; lines: InvoiceLineInput[];
+    orderId: string; expectedTotalCents: number; quoteHash: string;
+    paymentMethod: PayMethod; amountTenderedCents: number; cardReference?: string;
+  };
+  quote: Quote;
+};
+
+function pendingKey(conn: InvoiceConn, cashierId: string): string {
+  return `globipos:pending-invoice:v1:${JSON.stringify([conn.server_url.replace(/\/$/, ""), conn.terminal_code, cashierId])}`;
+}
+
+/** Persist only the immutable purchase, never the PIN or paired-device key. */
+export function readPendingInvoice(conn: InvoiceConn, cashierId: string): PendingInvoice | null {
+  const value = localStorage.getItem(pendingKey(conn, cashierId));
+  if (!value) return null;
+  try {
+    const pending = JSON.parse(value) as PendingInvoice;
+    validateQuote(pending.quote);
+    const r = pending.request;
+    if (!r || !["retail", "wholesale"].includes(r.mode) ||
+        !["cash", "card", "account_credit"].includes(r.paymentMethod) ||
+        typeof r.orderId !== "string" || !r.orderId ||
+        !Array.isArray(r.lines) || r.customerId !== pending.quote.customer.id ||
+        r.expectedTotalCents !== pending.quote.totalCents ||
+        r.quoteHash !== pending.quote.quoteHash ||
+        !Number.isSafeInteger(r.amountTenderedCents) || r.amountTenderedCents < 0 ||
+        "pin" in r || "voucher_device_key" in r) throw new Error("Invalid recovery data");
+    return pending;
+  } catch {
+    throw new InvoiceApiError("Saved invoice recovery data is unreadable. Check issued invoices in the back office before making another invoice.", "RECOVERY_INVALID", null, true);
+  }
+}
+
+export function savePendingInvoice(conn: InvoiceConn, cashierId: string, pending: PendingInvoice): void {
+  const existing = readPendingInvoice(conn, cashierId);
+  if (existing && existing.request.orderId !== pending.request.orderId) {
+    throw new InvoiceApiError("An unfinished invoice must be recovered first.", "RECOVERY_REQUIRED", null, true);
+  }
+  localStorage.setItem(pendingKey(conn, cashierId), JSON.stringify(pending));
+}
+
+export function clearPendingInvoice(conn: InvoiceConn, cashierId: string): void {
+  localStorage.removeItem(pendingKey(conn, cashierId));
 }
 
 export function validateQuote(data: any): Quote {
@@ -131,23 +179,27 @@ export const failureText = (status: number, message?: string | null) =>
 export async function invoiceRequest<T>(conn: InvoiceConn, method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
   if (typeof navigator !== "undefined" && !navigator.onLine) throw new InvoiceApiError("Customer invoices need a live connection to the store server.", null, null, false);
   if (!conn.voucher_device_key) throw new InvoiceApiError("Pair this device in Terminal Settings first.", "DEVICE_NOT_PAIRED", null, false);
-  let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    response = await fetch(`${conn.server_url.replace(/\/$/, "")}/api/pos/customer-invoices/${path}`, {
-      method, cache: "no-store",
+    const response = await fetch(`${conn.server_url.replace(/\/$/, "")}/api/pos/customer-invoices/${path}`, {
+      method, cache: "no-store", signal: controller.signal,
       headers: { "Content-Type": "application/json", "X-Terminal-Code": conn.terminal_code, "X-Voucher-Device-Key": conn.voucher_device_key },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  } catch {
-    throw new InvoiceApiError("Connection to the store server failed.", null, null, true);
-  }
-  if (!response.ok) {
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new InvoiceApiError(failureText(response.status, data?.message), data?.code ?? null, response.status, isAmbiguousFailure(response.status));
+    }
     const data = await response.json().catch(() => null);
-    throw new InvoiceApiError(failureText(response.status, data?.message), data?.code ?? null, response.status, isAmbiguousFailure(response.status));
+    if (data === null) throw new InvoiceApiError("The server reply was unreadable.", null, response.status, true);
+    return data as T;
+  } catch (error) {
+    if (error instanceof InvoiceApiError) throw error;
+    throw new InvoiceApiError("Connection to the store server failed.", null, null, true);
+  } finally {
+    clearTimeout(timeout);
   }
-  const data = await response.json().catch(() => null);
-  if (data === null) throw new InvoiceApiError("The server reply was unreadable.", null, response.status, true);
-  return data as T;
 }
 
 export async function fetchInvoiceHtml(conn: InvoiceConn, invoiceId: string): Promise<string> {

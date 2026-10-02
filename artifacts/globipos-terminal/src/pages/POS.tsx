@@ -8,7 +8,7 @@ import { BrandLogo } from "@/components/BrandLogo";
 import { calculateLine, createOrderLine, parseValidCashTender } from "@/lib/pos-calculations";
 import { effectivePrice } from "@/lib/pos-calculations";
 import { CustomerInvoiceDialog } from "../components/CustomerInvoiceDialog";
-import { mapCartLines } from "../lib/customer-invoice";
+import { mapCartLines, readPendingInvoice } from "../lib/customer-invoice";
 import { VoucherDialog } from "../components/VoucherDialog";
 import { MultiLocationSearch } from "../components/MultiLocationSearch";
 import { SyncIndicator } from "../components/SyncIndicator";
@@ -69,6 +69,14 @@ export function POS({ config, session, onLogout }: POSProps) {
   const [checkoutUncertain, setCheckoutUncertain] = useState(false);
   
   const { toast } = useToast();
+  useEffect(() => {
+    try {
+      const pending = readPendingInvoice(config, session.cashier_id);
+      if (pending) setInvoiceMode(pending.request.mode);
+    } catch (e) {
+      toast({ title: "Invoice recovery needs attention", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    }
+  }, [config.server_url, config.terminal_code, session.cashier_id]);
 
   useEffect(() => {
     async function load() {
@@ -183,8 +191,13 @@ export function POS({ config, session, onLogout }: POSProps) {
       toast({ title: "Pair this Terminal first", description: "Save the device key in Terminal Settings.", variant: "destructive" });
       return;
     }
-    if (cart.length === 0) { toast({ title: "Add items to the cart first", variant: "destructive" }); return; }
-    setInvoiceMode(button.actionCode === "WHOLESALE_INVOICE" ? "wholesale" : "retail");
+    try {
+      const pending = readPendingInvoice(config, session.cashier_id);
+      if (!pending && cart.length === 0) { toast({ title: "Add items to the cart first", variant: "destructive" }); return; }
+      setInvoiceMode(pending?.request.mode ?? (button.actionCode === "WHOLESALE_INVOICE" ? "wholesale" : "retail"));
+    } catch (e) {
+      toast({ title: "Invoice recovery needs attention", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    }
   }
 
   async function openVoucher(button: VoucherButton) {

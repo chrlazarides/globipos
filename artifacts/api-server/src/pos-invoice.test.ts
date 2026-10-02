@@ -8,6 +8,8 @@ import { creditBalance, requireAvailableCredit, priceInvoiceLine, dueDate } from
 import { checkoutPosInvoice, quotePosInvoice, getCustomerCredit, saveCustomerCredit } from "./pos-invoice-service";
 import { canApproveCustomerCredit, creditUpdateSchema, invoiceCheckoutSchema } from "./pos-invoice-routes";
 import { isPublicPath, signToken } from "./auth";
+import { amountTenderedCents as browserTender } from "../../globipos-terminal/src/lib/customer-invoice";
+import { amountTenderedCents as nativeTender } from "../../../pos-app/src/lib/customer-invoice";
 
 after(async () => { await pool.end(); await legacyPool.end(); });
 
@@ -207,6 +209,18 @@ test("database checkout, credit approval and concurrent credit limits", async t 
       assert.equal(issued.status, 201, JSON.stringify(issued.data));
       assert.equal(issued.data.orderId, checkout.orderId);
       assert.equal((await api("/api/pos/customer-invoices/checkout", checkout)).data.deduplicated, true);
+      for (const tender of [browserTender, nativeTender]) {
+        for (const paymentMethod of ["card", "account_credit"] as const) {
+          const pay = { method: paymentMethod, tender: "", cardReference: "synthetic-approved-reference", cardConfirmed: true };
+          const payload = { ...checkout, orderId: randomUUID(), paymentMethod,
+            amountTenderedCents: tender(quote.data, pay),
+            ...(paymentMethod === "card" ? { cardReference: pay.cardReference } : {}) };
+          const completed = await api("/api/pos/customer-invoices/checkout", payload);
+          assert.equal(completed.status, 201, JSON.stringify(completed.data));
+          assert.equal(completed.data.paymentMethod, paymentMethod);
+          assert.equal((await api("/api/pos/customer-invoices/checkout", payload)).data.deduplicated, true);
+        }
+      }
       const document = await fetch(`http://localhost:80/api/pos/customer-invoices/${issued.data.invoiceId}/document`, { headers });
       assert.equal(document.status, 200);
       assert.match(await document.text(), new RegExp(issued.data.invoiceNumber));
