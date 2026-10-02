@@ -537,6 +537,11 @@ export default function PaymentDialog({
                 </div>
 
                 {/* Account credit */}
+                {accountCredit <= 0 && (
+                  <p className="text-muted-foreground text-xs" data-testid="text-account-credit-disabled">
+                    Account credit is not available here. Use the Customer Account Sale action; it needs online approval.
+                  </p>
+                )}
                 {accountCredit > 0 && (
                   <div className="flex items-center justify-between rounded border p-2">
                     <div>

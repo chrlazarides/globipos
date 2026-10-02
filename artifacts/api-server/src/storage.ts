@@ -1184,8 +1184,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createInvoice(data: InsertInvoice, lineItems: InsertInvoiceItem[], overrideNumber?: string, inventoryLocationId?: string) {
-    const invoiceNumber = overrideNumber || await this.getNextInvoiceNumber(data.type as string);
     return db.transaction(async (tx) => {
+      // Share the numbering lock with POS invoice issuance.
+      await tx.select({ id: customers.id }).from(customers).where(eq(customers.id, data.customerId)).for("update");
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`invoice-number:${data.type}`}))`);
+      const prefix = data.type === "credit_note" ? "CN" : data.type === "proforma" ? "PF" : data.type === "quotation" ? "QT" : "INV";
+      const [sequence] = await tx.select({
+        maxNum: sql<string>`MAX(CAST(NULLIF(SUBSTRING(invoice_number FROM '[0-9]+$'), '') AS INTEGER))`,
+      }).from(invoices).where(eq(invoices.type, data.type));
+      const invoiceNumber = overrideNumber || `${prefix}-${String((parseInt(sequence?.maxNum || "0") || 0) + 1).padStart(5, "0")}`;
       const isPostedSale = data.type === "invoice" && data.status !== "draft";
       if (isPostedSale) {
         if (!inventoryLocationId) {

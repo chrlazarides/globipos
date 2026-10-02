@@ -73,6 +73,7 @@ import WhatsAppOrders from "@/pages/whatsapp-orders";
 import DigitalSignage from "@/pages/signage";
 import SignagePlayer from "@/pages/signage-player";
 import type { Customer } from "@shared/schema";
+import { canAccessModule } from "@/lib/module-permissions";
 import { isPosAdmin, isPosStaff } from "@/lib/pos-permissions";
 import { Loader2 } from "lucide-react";
 
@@ -106,8 +107,7 @@ export const useAuth = () => useContext(AuthContext);
 export function hasModuleAccess(user: AuthUser | null, module: string): boolean {
   if (!user) return false;
   if (user.role === "admin" || user.role === "superuser") return true;
-  if (!user.permissions || user.permissions.length === 0) return true;
-  return user.permissions.includes(module);
+  return canAccessModule(user.role, user.permissions, module);
 }
 
 // ─── Offline Data Sync ───────────────────────────────────────────────────────

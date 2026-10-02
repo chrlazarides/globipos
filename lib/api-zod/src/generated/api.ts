@@ -358,3 +358,218 @@ export const GetDeploymentDeviceSyncResponse = zod.object({
 })
 
 
+/**
+ * @summary Get customer credit and approval history
+ */
+export const GetCustomerCreditParams = zod.object({
+  "customerId": zod.coerce.string()
+})
+
+export const GetCustomerCreditResponse = zod.object({
+  "approvalStatus": zod.enum(['pending', 'approved', 'suspended']),
+  "limitCents": zod.number().int(),
+  "balanceCents": zod.number().int(),
+  "availableCents": zod.number().int(),
+  "paymentTerms": zod.string(),
+  "overdueCents": zod.number().int(),
+  "hasOverdue": zod.boolean()
+}).and(zod.object({
+  "history": zod.array(zod.record(zod.string(), zod.unknown())).optional()
+}))
+
+
+/**
+ * @summary Set credit approval, limit and terms (explicit approval permission required)
+ */
+export const ApproveCustomerCreditParams = zod.object({
+  "customerId": zod.coerce.string()
+})
+
+export const approveCustomerCreditBodyCreditLimitRegExp = new RegExp('^\\d{1,8}(?:\\.\\d{1,2})?$');
+export const approveCustomerCreditBodyPaymentTermsRegExp = new RegExp('^(cash|credit_(?:0|[1-9]\\d{0,2}))$');
+export const approveCustomerCreditBodyReasonMax = 500;
+
+
+
+export const ApproveCustomerCreditBody = zod.object({
+  "approvalStatus": zod.enum(['pending', 'approved', 'suspended']),
+  "creditLimit": zod.string().regex(approveCustomerCreditBodyCreditLimitRegExp),
+  "paymentTerms": zod.string().regex(approveCustomerCreditBodyPaymentTermsRegExp),
+  "reason": zod.string().min(1).max(approveCustomerCreditBodyReasonMax)
+})
+
+export const ApproveCustomerCreditResponse = zod.object({
+  "approvalStatus": zod.enum(['pending', 'approved', 'suspended']),
+  "limitCents": zod.number().int(),
+  "balanceCents": zod.number().int(),
+  "availableCents": zod.number().int(),
+  "paymentTerms": zod.string(),
+  "overdueCents": zod.number().int(),
+  "hasOverdue": zod.boolean()
+})
+
+
+/**
+ * @summary Find an invoice customer (paired terminal and live cashier authentication)
+ */
+export const searchPosInvoiceCustomersBodyOnePinRegExp = new RegExp('^\\d{4,8}$');
+export const searchPosInvoiceCustomersBodyTwoSearchMax = 100;
+
+
+
+export const SearchPosInvoiceCustomersBody = zod.object({
+  "cashierId": zod.string(),
+  "pin": zod.string().regex(searchPosInvoiceCustomersBodyOnePinRegExp)
+}).and(zod.object({
+  "search": zod.string().min(1).max(searchPosInvoiceCustomersBodyTwoSearchMax)
+}))
+
+export const SearchPosInvoiceCustomersResponse = zod.object({
+  "customers": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "code": zod.string(),
+  "priceLevel": zod.number().int().optional()
+}))
+})
+
+
+/**
+ * @summary Get authoritative prices and live credit; overdue balances warn but do not block
+ */
+export const quotePosCustomerInvoiceBodyOnePinRegExp = new RegExp('^\\d{4,8}$');
+export const quotePosCustomerInvoiceBodyTwoLinesItemQuantityMax = 10000;
+
+export const quotePosCustomerInvoiceBodyTwoLinesMax = 200;
+
+
+
+export const QuotePosCustomerInvoiceBody = zod.object({
+  "cashierId": zod.string(),
+  "pin": zod.string().regex(quotePosCustomerInvoiceBodyOnePinRegExp)
+}).and(zod.object({
+  "customerId": zod.string(),
+  "mode": zod.enum(['retail', 'wholesale']),
+  "lines": zod.array(zod.object({
+  "itemId": zod.string(),
+  "variantId": zod.string().nullish(),
+  "quantity": zod.number().int().min(1).max(quotePosCustomerInvoiceBodyTwoLinesItemQuantityMax),
+  "saleUnit": zod.enum(['pc', 'pack']).optional()
+})).min(1).max(quotePosCustomerInvoiceBodyTwoLinesMax)
+}))
+
+export const QuotePosCustomerInvoiceResponse = zod.object({
+  "customer": zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "code": zod.string(),
+  "priceLevel": zod.number().int().optional()
+}),
+  "credit": zod.object({
+  "approvalStatus": zod.enum(['pending', 'approved', 'suspended']),
+  "limitCents": zod.number().int(),
+  "balanceCents": zod.number().int(),
+  "availableCents": zod.number().int(),
+  "paymentTerms": zod.string(),
+  "overdueCents": zod.number().int(),
+  "hasOverdue": zod.boolean()
+}),
+  "subtotalCents": zod.number().int(),
+  "vatCents": zod.number().int(),
+  "totalCents": zod.number().int(),
+  "quoteHash": zod.string(),
+  "lines": zod.array(zod.object({
+  "itemId": zod.string(),
+  "variantId": zod.string().nullable(),
+  "description": zod.string(),
+  "quantity": zod.number(),
+  "saleUnit": zod.enum(['pc', 'pack']),
+  "unitPrice": zod.number(),
+  "discountPercent": zod.number(),
+  "totalCents": zod.number().int(),
+  "vatCents": zod.number().int(),
+  "vatRate": zod.number()
+}))
+})
+
+
+/**
+ * @summary Atomically issue one POS sale and one invoice; retry unchanged requests with the same orderId
+ */
+export const checkoutPosCustomerInvoiceBodyOneOnePinRegExp = new RegExp('^\\d{4,8}$');
+export const checkoutPosCustomerInvoiceBodyOneTwoLinesItemQuantityMax = 10000;
+
+export const checkoutPosCustomerInvoiceBodyOneTwoLinesMax = 200;
+
+export const checkoutPosCustomerInvoiceBodyTwoExpectedTotalCentsMin = 0;
+export const checkoutPosCustomerInvoiceBodyTwoExpectedTotalCentsMax = 100000000;
+
+export const checkoutPosCustomerInvoiceBodyTwoAmountTenderedCentsMin = 0;
+export const checkoutPosCustomerInvoiceBodyTwoAmountTenderedCentsMax = 100000000;
+
+
+
+export const CheckoutPosCustomerInvoiceBody = zod.object({
+  "cashierId": zod.string(),
+  "pin": zod.string().regex(checkoutPosCustomerInvoiceBodyOneOnePinRegExp)
+}).and(zod.object({
+  "customerId": zod.string(),
+  "mode": zod.enum(['retail', 'wholesale']),
+  "lines": zod.array(zod.object({
+  "itemId": zod.string(),
+  "variantId": zod.string().nullish(),
+  "quantity": zod.number().int().min(1).max(checkoutPosCustomerInvoiceBodyOneTwoLinesItemQuantityMax),
+  "saleUnit": zod.enum(['pc', 'pack']).optional()
+})).min(1).max(checkoutPosCustomerInvoiceBodyOneTwoLinesMax)
+})).and(zod.object({
+  "orderId": zod.string().uuid(),
+  "expectedTotalCents": zod.number().int().min(checkoutPosCustomerInvoiceBodyTwoExpectedTotalCentsMin).max(checkoutPosCustomerInvoiceBodyTwoExpectedTotalCentsMax),
+  "quoteHash": zod.string(),
+  "paymentMethod": zod.enum(['cash', 'card', 'account_credit']),
+  "amountTenderedCents": zod.number().int().min(checkoutPosCustomerInvoiceBodyTwoAmountTenderedCentsMin).max(checkoutPosCustomerInvoiceBodyTwoAmountTenderedCentsMax),
+  "cardReference": zod.string().optional().describe('Reference of an already-approved external card payment; this endpoint does not charge a card')
+}))
+
+export const CheckoutPosCustomerInvoiceResponse = zod.object({
+  "orderId": zod.string(),
+  "posOrderId": zod.string().optional(),
+  "orderNumber": zod.string(),
+  "invoiceId": zod.string(),
+  "invoiceNumber": zod.string(),
+  "totalCents": zod.number().int(),
+  "changeDueCents": zod.number().int(),
+  "paymentMethod": zod.enum(['cash', 'card', 'account_credit']),
+  "deduplicated": zod.boolean()
+})
+
+
+/**
+ * @summary Printable existing invoice format, limited to the paired issuing terminal
+ */
+export const GetPosInvoiceDocumentParams = zod.object({
+  "invoiceId": zod.coerce.string()
+})
+
+export const GetPosInvoiceDocumentResponse = zod.unknown()
+
+
+/**
+ * @summary Send the invoice to the customer's saved email address
+ */
+export const EmailPosInvoiceDocumentParams = zod.object({
+  "invoiceId": zod.coerce.string()
+})
+
+export const emailPosInvoiceDocumentBodyPinRegExp = new RegExp('^\\d{4,8}$');
+
+
+export const EmailPosInvoiceDocumentBody = zod.object({
+  "cashierId": zod.string(),
+  "pin": zod.string().regex(emailPosInvoiceDocumentBodyPinRegExp)
+})
+
+export const EmailPosInvoiceDocumentResponse = zod.object({
+  "sent": zod.boolean()
+})
+
+

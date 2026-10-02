@@ -19,6 +19,8 @@ import multer from "multer";
 import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { sendInvoiceEmail, sendBackupEmail, sendLoginAlertEmail, sendFailedLoginAlertEmail, sendNewAdminAlertEmail, getEmailStatus, sendTestEmail, sendEmailWithContent } from "../email";
+import { registerPosInvoiceRoutes } from "../pos-invoice-routes";
+import { posInvoiceSales } from "@workspace/db";
 import { db } from "../db";
 import { sql, and, or, eq, gte, lte, lt, gt, desc, isNull, ilike, inArray, count } from "drizzle-orm";
 import crypto from "crypto";
@@ -2794,6 +2796,11 @@ export async function registerRoutes(
       return res.status(403).json({ message: "Admin access required" });
     }
     try {
+      const existing = await storage.getCustomer(String(req.params.id));
+      if (existing && ((req.body.creditLimit !== undefined && Number(req.body.creditLimit) !== Number(existing.creditLimit)) ||
+          (req.body.paymentTerms !== undefined && req.body.paymentTerms !== existing.paymentTerms))) {
+        return res.status(400).json({ message: "Use the customer's Credit tab to change credit limits or payment terms with an approval reason." });
+      }
       const cust = await storage.updateCustomer((req.params.id as string), req.body);
       if (!cust) return res.status(404).json({ message: "Customer not found" });
       res.json(cust);
@@ -3394,6 +3401,8 @@ export async function registerRoutes(
 
   app.patch("/api/invoices/:id", async (req, res) => {
     try {
+      const [posLink] = await db.select().from(posInvoiceSales).where(eq(posInvoiceSales.invoiceId, String(req.params.id)));
+      if (posLink) return res.status(409).json({ message: "Issued POS invoices cannot be edited. Use Payments to settle debt or issue a linked credit note for corrections." });
       const { items: lineItems, ...invoiceData } = req.body;
       const parsedItems = lineItems ? (lineItems as any[]).map((li: any) => insertInvoiceItemSchema.parse({ ...li, invoiceId: (req.params.id as string) })) : undefined;
       const inv = await storage.updateInvoice((req.params.id as string), invoiceData, parsedItems);
@@ -3426,7 +3435,8 @@ export async function registerRoutes(
         if (li.itemId) {
           const item = await storage.getItem(li.itemId);
           const catVat = item?.categoryId ? catMap[item.categoryId]?.vatRate : null;
-          const lineVatRate = item?.vatRate != null ? parseFloat(String(item.vatRate))
+          const lineVatRate = li.vatRate != null ? parseFloat(String(li.vatRate))
+                            : item?.vatRate != null ? parseFloat(String(item.vatRate))
                             : catVat != null ? parseFloat(String(catVat))
                             : parseFloat(inv.taxRate || "19");
           return { ...li, barcode: item?.barcode || null, lineVatRate };
@@ -3513,7 +3523,8 @@ export async function registerRoutes(
         if (li.itemId) {
           const item = await storage.getItem(li.itemId);
           const catVat = item?.categoryId ? catMap2[item.categoryId]?.vatRate : null;
-          const lineVatRate = item?.vatRate != null ? parseFloat(String(item.vatRate))
+          const lineVatRate = li.vatRate != null ? parseFloat(String(li.vatRate))
+                            : item?.vatRate != null ? parseFloat(String(item.vatRate))
                             : catVat != null ? parseFloat(String(catVat))
                             : parseFloat(inv.taxRate || "19");
           return { ...li, barcode: item?.barcode || null, lineVatRate };
@@ -10321,6 +10332,22 @@ export async function registerRoutes(
     return true;
   }
   registerPosVoucherRoutes(app, requireTerminal, requireAdmin);
+  registerPosInvoiceRoutes(app, {
+    requireTerminal,
+    requireDevice: requirePairedTerminalDevice,
+    verifyCashier: verifyTerminalCashier,
+    renderDocument: (invoice, customer, settings) => generateInvoiceHtml(invoice, customer, "INVOICE", false, settings),
+    emailDocument: async (invoice, customer, settings, html) => {
+      const subject = `INVOICE ${invoice.invoiceNumber} from ${settings.company_name || "Company"}`;
+      const result = await sendInvoiceEmail(customer.email, subject, html);
+      await storage.createEmailLog({
+        invoiceId: invoice.id, customerId: customer.id, customerName: customer.name, toEmail: customer.email,
+        fromEmail: result.fromEmail || null, replyTo: result.replyTo || null, subject,
+        status: result.success ? "sent" : "failed", errorMessage: result.error || null,
+      });
+      if (!result.success) throw new Error(result.error || "Invoice email could not be sent.");
+    },
+  });
 
   // Customer-facing display content for this terminal's auto-provisioned signage screen (idle-time rotation).
   app.get("/api/pos/signage/playlist", requireTerminal, async (req, res) => {
@@ -10952,6 +10979,9 @@ export async function registerRoutes(
         try {
           const { validateTerminalBill, terminalBillMatchesExisting } = await import("../terminal-bill");
           const normalizedBill = validateTerminalBill(bill);
+          if (normalizedBill.paymentMethod === "account_credit") {
+            throw new Error("On-account sales must use the online customer-invoice checkout with approved credit.");
+          }
           const existing = await storage.getPosOrderByNumber(normalizedBill.orderNumber);
           if (existing) {
             if (existing.terminalId !== terminal.id) {

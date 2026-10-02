@@ -20,10 +20,21 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  CheckoutPosCustomerInvoice201,
+  CustomerCredit,
+  CustomerCreditUpdate,
   DeploymentDeviceSyncResponse,
   DeploymentHeartbeatInput,
   DeploymentHeartbeatReceipt,
+  EmailPosInvoiceDocument200,
+  GetCustomerCredit200,
   HealthStatus,
+  PosInvoiceAuth,
+  PosInvoiceCart,
+  PosInvoiceCheckout,
+  PosInvoiceQuote,
+  PosInvoiceSearch,
+  SearchPosInvoiceCustomers200,
   TerminalHeartbeatInput,
   TerminalHeartbeatReceipt
 } from './api.schemas';
@@ -386,4 +397,600 @@ export function useGetDeploymentDeviceSync<TData = Awaited<ReturnType<typeof get
 
 
 
+
+export const getGetCustomerCreditUrl = (customerId: string,) => {
+
+
+
+
+  return `/api/customer-credit/${customerId}`
+}
+
+/**
+ * @summary Get customer credit and approval history
+ */
+export const getCustomerCredit = async (customerId: string, options?: Parameters<typeof customFetch>[1]): Promise<GetCustomerCredit200> => {
+
+  return customFetch<GetCustomerCredit200>(getGetCustomerCreditUrl(customerId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetCustomerCreditQueryKey = (customerId: string,) => {
+    return [
+    `/api/customer-credit/${customerId}`
+    ] as const;
+    }
+
+
+export const getGetCustomerCreditQueryOptions = <TData = Awaited<ReturnType<typeof getCustomerCredit>>, TError = ErrorType<unknown>>(customerId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCustomerCredit>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCustomerCreditQueryKey(customerId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCustomerCredit>>> = ({ signal }) => getCustomerCredit(customerId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: customerId !== null && customerId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCustomerCredit>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetCustomerCreditQueryResult = NonNullable<Awaited<ReturnType<typeof getCustomerCredit>>>
+export type GetCustomerCreditQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get customer credit and approval history
+ */
+
+export function useGetCustomerCredit<TData = Awaited<ReturnType<typeof getCustomerCredit>>, TError = ErrorType<unknown>>(
+ customerId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCustomerCredit>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetCustomerCreditQueryOptions(customerId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getApproveCustomerCreditUrl = (customerId: string,) => {
+
+
+
+
+  return `/api/customer-credit/${customerId}`
+}
+
+/**
+ * @summary Set credit approval, limit and terms (explicit approval permission required)
+ */
+export const approveCustomerCredit = async (customerId: string,
+    customerCreditUpdate: CustomerCreditUpdate, options?: Parameters<typeof customFetch>[1]): Promise<CustomerCredit> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<CustomerCredit>(getApproveCustomerCreditUrl(customerId),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(customerCreditUpdate)
+  }
+);}
+
+
+
+
+
+export const getApproveCustomerCreditMutationKey = () => ['approveCustomerCredit'] as const;
+
+export const getApproveCustomerCreditMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof approveCustomerCredit>>, TError,ApproveCustomerCreditMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof approveCustomerCredit>>, TError,ApproveCustomerCreditMutationVariables, TContext> => {
+
+const mutationKey = getApproveCustomerCreditMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof approveCustomerCredit>>, ApproveCustomerCreditMutationVariables> = (props) => {
+          const {customerId,data} = props ?? {};
+
+          return  approveCustomerCredit(customerId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ApproveCustomerCreditMutationResult = NonNullable<Awaited<ReturnType<typeof approveCustomerCredit>>>
+    export type ApproveCustomerCreditMutationBody = BodyType<CustomerCreditUpdate>
+    export type ApproveCustomerCreditMutationError = ErrorType<void>
+    export type ApproveCustomerCreditMutationVariables = {customerId: string;data: BodyType<CustomerCreditUpdate>}
+
+    /**
+ * @summary Set credit approval, limit and terms (explicit approval permission required)
+ */
+export const useApproveCustomerCredit = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof approveCustomerCredit>>, TError,ApproveCustomerCreditMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof approveCustomerCredit>>,
+        TError,
+        ApproveCustomerCreditMutationVariables,
+        TContext
+      > => {
+      return useMutation(getApproveCustomerCreditMutationOptions(options));
+    }
+
+export const getSearchPosInvoiceCustomersUrl = () => {
+
+
+
+
+  return `/api/pos/customer-invoices/customers`
+}
+
+/**
+ * @summary Find an invoice customer (paired terminal and live cashier authentication)
+ */
+export const searchPosInvoiceCustomers = async (posInvoiceSearch: PosInvoiceSearch, options?: Parameters<typeof customFetch>[1]): Promise<SearchPosInvoiceCustomers200> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<SearchPosInvoiceCustomers200>(getSearchPosInvoiceCustomersUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(posInvoiceSearch)
+  }
+);}
+
+
+
+
+
+export const getSearchPosInvoiceCustomersMutationKey = () => ['searchPosInvoiceCustomers'] as const;
+
+export const getSearchPosInvoiceCustomersMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof searchPosInvoiceCustomers>>, TError,SearchPosInvoiceCustomersMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof searchPosInvoiceCustomers>>, TError,SearchPosInvoiceCustomersMutationVariables, TContext> => {
+
+const mutationKey = getSearchPosInvoiceCustomersMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof searchPosInvoiceCustomers>>, SearchPosInvoiceCustomersMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  searchPosInvoiceCustomers(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SearchPosInvoiceCustomersMutationResult = NonNullable<Awaited<ReturnType<typeof searchPosInvoiceCustomers>>>
+    export type SearchPosInvoiceCustomersMutationBody = BodyType<PosInvoiceSearch>
+    export type SearchPosInvoiceCustomersMutationError = ErrorType<unknown>
+    export type SearchPosInvoiceCustomersMutationVariables = {data: BodyType<PosInvoiceSearch>}
+
+    /**
+ * @summary Find an invoice customer (paired terminal and live cashier authentication)
+ */
+export const useSearchPosInvoiceCustomers = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof searchPosInvoiceCustomers>>, TError,SearchPosInvoiceCustomersMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof searchPosInvoiceCustomers>>,
+        TError,
+        SearchPosInvoiceCustomersMutationVariables,
+        TContext
+      > => {
+      return useMutation(getSearchPosInvoiceCustomersMutationOptions(options));
+    }
+
+export const getQuotePosCustomerInvoiceUrl = () => {
+
+
+
+
+  return `/api/pos/customer-invoices/quote`
+}
+
+/**
+ * @summary Get authoritative prices and live credit; overdue balances warn but do not block
+ */
+export const quotePosCustomerInvoice = async (posInvoiceCart: PosInvoiceCart, options?: Parameters<typeof customFetch>[1]): Promise<PosInvoiceQuote> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<PosInvoiceQuote>(getQuotePosCustomerInvoiceUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(posInvoiceCart)
+  }
+);}
+
+
+
+
+
+export const getQuotePosCustomerInvoiceMutationKey = () => ['quotePosCustomerInvoice'] as const;
+
+export const getQuotePosCustomerInvoiceMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof quotePosCustomerInvoice>>, TError,QuotePosCustomerInvoiceMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof quotePosCustomerInvoice>>, TError,QuotePosCustomerInvoiceMutationVariables, TContext> => {
+
+const mutationKey = getQuotePosCustomerInvoiceMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof quotePosCustomerInvoice>>, QuotePosCustomerInvoiceMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  quotePosCustomerInvoice(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type QuotePosCustomerInvoiceMutationResult = NonNullable<Awaited<ReturnType<typeof quotePosCustomerInvoice>>>
+    export type QuotePosCustomerInvoiceMutationBody = BodyType<PosInvoiceCart>
+    export type QuotePosCustomerInvoiceMutationError = ErrorType<unknown>
+    export type QuotePosCustomerInvoiceMutationVariables = {data: BodyType<PosInvoiceCart>}
+
+    /**
+ * @summary Get authoritative prices and live credit; overdue balances warn but do not block
+ */
+export const useQuotePosCustomerInvoice = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof quotePosCustomerInvoice>>, TError,QuotePosCustomerInvoiceMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof quotePosCustomerInvoice>>,
+        TError,
+        QuotePosCustomerInvoiceMutationVariables,
+        TContext
+      > => {
+      return useMutation(getQuotePosCustomerInvoiceMutationOptions(options));
+    }
+
+export const getCheckoutPosCustomerInvoiceUrl = () => {
+
+
+
+
+  return `/api/pos/customer-invoices/checkout`
+}
+
+/**
+ * @summary Atomically issue one POS sale and one invoice; retry unchanged requests with the same orderId
+ */
+export const checkoutPosCustomerInvoice = async (posInvoiceCheckout: PosInvoiceCheckout, options?: Parameters<typeof customFetch>[1]): Promise<CheckoutPosCustomerInvoice201> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<CheckoutPosCustomerInvoice201>(getCheckoutPosCustomerInvoiceUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(posInvoiceCheckout)
+  }
+);}
+
+
+
+
+
+export const getCheckoutPosCustomerInvoiceMutationKey = () => ['checkoutPosCustomerInvoice'] as const;
+
+export const getCheckoutPosCustomerInvoiceMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof checkoutPosCustomerInvoice>>, TError,CheckoutPosCustomerInvoiceMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof checkoutPosCustomerInvoice>>, TError,CheckoutPosCustomerInvoiceMutationVariables, TContext> => {
+
+const mutationKey = getCheckoutPosCustomerInvoiceMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof checkoutPosCustomerInvoice>>, CheckoutPosCustomerInvoiceMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  checkoutPosCustomerInvoice(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CheckoutPosCustomerInvoiceMutationResult = NonNullable<Awaited<ReturnType<typeof checkoutPosCustomerInvoice>>>
+    export type CheckoutPosCustomerInvoiceMutationBody = BodyType<PosInvoiceCheckout>
+    export type CheckoutPosCustomerInvoiceMutationError = ErrorType<void>
+    export type CheckoutPosCustomerInvoiceMutationVariables = {data: BodyType<PosInvoiceCheckout>}
+
+    /**
+ * @summary Atomically issue one POS sale and one invoice; retry unchanged requests with the same orderId
+ */
+export const useCheckoutPosCustomerInvoice = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof checkoutPosCustomerInvoice>>, TError,CheckoutPosCustomerInvoiceMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof checkoutPosCustomerInvoice>>,
+        TError,
+        CheckoutPosCustomerInvoiceMutationVariables,
+        TContext
+      > => {
+      return useMutation(getCheckoutPosCustomerInvoiceMutationOptions(options));
+    }
+
+export const getGetPosInvoiceDocumentUrl = (invoiceId: string,) => {
+
+
+
+
+  return `/api/pos/customer-invoices/${invoiceId}/document`
+}
+
+/**
+ * @summary Printable existing invoice format, limited to the paired issuing terminal
+ */
+export const getPosInvoiceDocument = async (invoiceId: string, options?: Parameters<typeof customFetch>[1]): Promise<string> => {
+
+  return customFetch<string>(getGetPosInvoiceDocumentUrl(invoiceId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetPosInvoiceDocumentQueryKey = (invoiceId: string,) => {
+    return [
+    `/api/pos/customer-invoices/${invoiceId}/document`
+    ] as const;
+    }
+
+
+export const getGetPosInvoiceDocumentQueryOptions = <TData = Awaited<ReturnType<typeof getPosInvoiceDocument>>, TError = ErrorType<unknown>>(invoiceId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPosInvoiceDocument>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPosInvoiceDocumentQueryKey(invoiceId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPosInvoiceDocument>>> = ({ signal }) => getPosInvoiceDocument(invoiceId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: invoiceId !== null && invoiceId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPosInvoiceDocument>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetPosInvoiceDocumentQueryResult = NonNullable<Awaited<ReturnType<typeof getPosInvoiceDocument>>>
+export type GetPosInvoiceDocumentQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Printable existing invoice format, limited to the paired issuing terminal
+ */
+
+export function useGetPosInvoiceDocument<TData = Awaited<ReturnType<typeof getPosInvoiceDocument>>, TError = ErrorType<unknown>>(
+ invoiceId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPosInvoiceDocument>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetPosInvoiceDocumentQueryOptions(invoiceId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getEmailPosInvoiceDocumentUrl = (invoiceId: string,) => {
+
+
+
+
+  return `/api/pos/customer-invoices/${invoiceId}/email`
+}
+
+/**
+ * @summary Send the invoice to the customer's saved email address
+ */
+export const emailPosInvoiceDocument = async (invoiceId: string,
+    posInvoiceAuth: PosInvoiceAuth, options?: Parameters<typeof customFetch>[1]): Promise<EmailPosInvoiceDocument200> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<EmailPosInvoiceDocument200>(getEmailPosInvoiceDocumentUrl(invoiceId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(posInvoiceAuth)
+  }
+);}
+
+
+
+
+
+export const getEmailPosInvoiceDocumentMutationKey = () => ['emailPosInvoiceDocument'] as const;
+
+export const getEmailPosInvoiceDocumentMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof emailPosInvoiceDocument>>, TError,EmailPosInvoiceDocumentMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof emailPosInvoiceDocument>>, TError,EmailPosInvoiceDocumentMutationVariables, TContext> => {
+
+const mutationKey = getEmailPosInvoiceDocumentMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof emailPosInvoiceDocument>>, EmailPosInvoiceDocumentMutationVariables> = (props) => {
+          const {invoiceId,data} = props ?? {};
+
+          return  emailPosInvoiceDocument(invoiceId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type EmailPosInvoiceDocumentMutationResult = NonNullable<Awaited<ReturnType<typeof emailPosInvoiceDocument>>>
+    export type EmailPosInvoiceDocumentMutationBody = BodyType<PosInvoiceAuth>
+    export type EmailPosInvoiceDocumentMutationError = ErrorType<unknown>
+    export type EmailPosInvoiceDocumentMutationVariables = {invoiceId: string;data: BodyType<PosInvoiceAuth>}
+
+    /**
+ * @summary Send the invoice to the customer's saved email address
+ */
+export const useEmailPosInvoiceDocument = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof emailPosInvoiceDocument>>, TError,EmailPosInvoiceDocumentMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof emailPosInvoiceDocument>>,
+        TError,
+        EmailPosInvoiceDocumentMutationVariables,
+        TContext
+      > => {
+      return useMutation(getEmailPosInvoiceDocumentMutationOptions(options));
+    }
 

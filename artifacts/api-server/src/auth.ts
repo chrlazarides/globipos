@@ -119,6 +119,7 @@ const PUBLIC_PATHS = [
   "/api/customer",
   "/api/pos/terminals/register", // bootstrap — no session cookie on first launch
   "/api/pos/sync", // native terminal routes authenticate with X-Terminal-Code (requireTerminal)
+  "/api/pos/customer-invoices", // handlers enforce paired device and live cashier authentication
   "/api/sync", // legacy native terminal routes authenticate with X-Terminal-Code (requireTerminal)
   "/api/orders", // Click & Collect lookup/collect — authenticated via X-Terminal-Code (requireTerminal)
   "/api/signage/play", // screen-facing player, keyed by pairing code, no session
@@ -191,7 +192,8 @@ export function requireModule(module: string) {
     if (user.role === "admin" || user.role === "superuser") {
       return next();
     }
-    if (!user.permissions || user.permissions.length === 0 || user.permissions.includes(module)) {
+    const modulePermissions = (user.permissions || []).filter(permission => permission !== "customer_credit_approve");
+    if (modulePermissions.length === 0 || modulePermissions.includes(module)) {
       return next();
     }
     return res.status(403).json({ message: `Access to the "${module}" module is required` });

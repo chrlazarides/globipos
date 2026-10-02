@@ -1,3 +1,4 @@
+import { moduleKeys, withModules, withCreditApprove, hasCreditApprovePermission } from "@/lib/module-permissions";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -237,7 +238,18 @@ function UserDialog({ open, onClose, user, currentUser }: { open: boolean; onClo
           {isStaff && (
             <div className="space-y-2">
               <Label>Module Access</Label>
-              <PermissionsSelector value={form.permissions} onChange={v => setForm(f => ({ ...f, permissions: v }))} />
+              <PermissionsSelector
+                value={moduleKeys(form.permissions)}
+                onChange={v => setForm(f => ({ ...f, permissions: withModules(f.permissions, v) }))}
+              />
+              <label className="flex items-start gap-2 text-sm cursor-pointer rounded border p-2">
+                <Checkbox
+                  checked={hasCreditApprovePermission(form.permissions)}
+                  onCheckedChange={c => setForm(f => ({ ...f, permissions: withCreditApprove(f.permissions, c === true) }))}
+                  data-testid="checkbox-permission-customer-credit-approve"
+                />
+                <span>Can approve customer credit<span className="block text-xs text-muted-foreground">Set credit limits, terms and approval status. Not included in full access.</span></span>
+              </label>
             </div>
           )}
 
@@ -501,10 +513,10 @@ export function UsersContent() {
                     <TableCell>
                       {user.role !== "staff" ? (
                         <span className="text-xs text-muted-foreground">Full access</span>
-                      ) : user.permissions.length === 0 ? (
+                      ) : moduleKeys(user.permissions).length === 0 ? (
                         <span className="text-xs text-muted-foreground">All modules</span>
                       ) : (
-                        <span className="text-xs text-amber-700 dark:text-amber-400">{user.permissions.length} module{user.permissions.length !== 1 ? "s" : ""}</span>
+                        <span className="text-xs text-amber-700 dark:text-amber-400">{moduleKeys(user.permissions).length} module{moduleKeys(user.permissions).length !== 1 ? "s" : ""}</span>
                       )}
                     </TableCell>
                     <TableCell>

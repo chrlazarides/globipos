@@ -87,8 +87,228 @@ paths:
         "401": { description: Authentication required }
         "403": { description: Fleet superuser access required }
         "404": { description: Deployment not found }
+  /customer-credit/{customerId}:
+    parameters:
+      - { name: customerId, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getCustomerCredit
+      summary: Get customer credit and approval history
+      responses:
+        "200":
+          description: Credit account and history
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/CustomerCredit" }
+                  - { type: object, properties: { history: { type: array, items: { type: object, additionalProperties: true } } } }
+    put:
+      operationId: approveCustomerCredit
+      summary: Set credit approval, limit and terms (explicit approval permission required)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerCreditUpdate"
+      responses:
+        "200":
+          description: Updated credit
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerCredit" }
+        "403": { description: Credit approval permission required }
+  /pos/customer-invoices/customers:
+    post:
+      operationId: searchPosInvoiceCustomers
+      summary: Find an invoice customer (paired terminal and live cashier authentication)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PosInvoiceSearch"
+      responses:
+        "200":
+          description: Matching customers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [customers]
+                properties:
+                  customers: { type: array, items: { $ref: "#/components/schemas/PosInvoiceCustomer" } }
+  /pos/customer-invoices/quote:
+    post:
+      operationId: quotePosCustomerInvoice
+      summary: Get authoritative prices and live credit; overdue balances warn but do not block
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PosInvoiceCart" }
+      responses:
+        "200":
+          description: Quote to confirm before checkout
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PosInvoiceQuote" }
+  /pos/customer-invoices/checkout:
+    post:
+      operationId: checkoutPosCustomerInvoice
+      summary: Atomically issue one POS sale and one invoice; retry unchanged requests with the same orderId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PosInvoiceCheckout"
+      responses:
+        "201":
+          description: Completed invoice or matching replay
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orderId, orderNumber, invoiceId, invoiceNumber, totalCents, changeDueCents, paymentMethod, deduplicated]
+                properties:
+                  orderId: { type: string }
+                  posOrderId: { type: string }
+                  orderNumber: { type: string }
+                  invoiceId: { type: string }
+                  invoiceNumber: { type: string }
+                  totalCents: { type: integer }
+                  changeDueCents: { type: integer }
+                  paymentMethod: { type: string, enum: [cash, card, account_credit] }
+                  deduplicated: { type: boolean }
+        "409": { description: "Changed quote, insufficient stock, exceeded credit limit or checkout ID reuse" }
+        "403": { description: "Device, cashier, layout or credit approval required" }
+  /pos/customer-invoices/{invoiceId}/document:
+    parameters:
+      - { name: invoiceId, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getPosInvoiceDocument
+      summary: Printable existing invoice format, limited to the paired issuing terminal
+      responses:
+        "200":
+          description: Printable HTML
+          content:
+            text/html:
+              schema: { type: string }
+  /pos/customer-invoices/{invoiceId}/email:
+    parameters:
+      - { name: invoiceId, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: emailPosInvoiceDocument
+      summary: Send the invoice to the customer's saved email address
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PosInvoiceAuth" }
+      responses:
+        "200":
+          description: Email sent
+          content:
+            application/json:
+              schema: { type: object, required: [sent], properties: { sent: { type: boolean } } }
 components:
   schemas:
+    CustomerCreditUpdate:
+      type: object
+      required: [approvalStatus, creditLimit, paymentTerms, reason]
+      properties:
+        approvalStatus: { type: string, enum: [pending, approved, suspended] }
+        creditLimit: { type: string, pattern: '^\d{1,8}(?:\.\d{1,2})?$' }
+        paymentTerms: { type: string, pattern: '^(cash|credit_(?:0|[1-9]\d{0,2}))$' }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    PosInvoiceSearch:
+      allOf:
+        - { $ref: "#/components/schemas/PosInvoiceAuth" }
+        - { type: object, required: [search], properties: { search: { type: string, minLength: 1, maxLength: 100 } } }
+    PosInvoiceCheckout:
+      allOf:
+        - { $ref: "#/components/schemas/PosInvoiceCart" }
+        - type: object
+          required: [orderId, expectedTotalCents, quoteHash, paymentMethod, amountTenderedCents]
+          properties:
+            orderId: { type: string, format: uuid }
+            expectedTotalCents: { type: integer, minimum: 0, maximum: 100000000 }
+            quoteHash: { type: string }
+            paymentMethod: { type: string, enum: [cash, card, account_credit] }
+            amountTenderedCents: { type: integer, minimum: 0, maximum: 100000000 }
+            cardReference: { type: string, description: Reference of an already-approved external card payment; this endpoint does not charge a card }
+    CustomerCredit:
+      type: object
+      required: [approvalStatus, limitCents, balanceCents, availableCents, paymentTerms, overdueCents, hasOverdue]
+      properties:
+        approvalStatus: { type: string, enum: [pending, approved, suspended] }
+        limitCents: { type: integer }
+        balanceCents: { type: integer }
+        availableCents: { type: integer }
+        paymentTerms: { type: string }
+        overdueCents: { type: integer }
+        hasOverdue: { type: boolean }
+    PosInvoiceAuth:
+      type: object
+      required: [cashierId, pin]
+      properties:
+        cashierId: { type: string }
+        pin: { type: string, pattern: '^\d{4,8}$' }
+    PosInvoiceCustomer:
+      type: object
+      required: [id, name, code]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        code: { type: string }
+        priceLevel: { type: integer }
+    PosInvoiceCart:
+      allOf:
+        - { $ref: "#/components/schemas/PosInvoiceAuth" }
+        - type: object
+          required: [customerId, mode, lines]
+          properties:
+            customerId: { type: string }
+            mode: { type: string, enum: [retail, wholesale] }
+            lines:
+              type: array
+              minItems: 1
+              maxItems: 200
+              items:
+                type: object
+                required: [itemId, quantity]
+                properties:
+                  itemId: { type: string }
+                  variantId: { type: [string, "null"] }
+                  quantity: { type: integer, minimum: 1, maximum: 10000 }
+                  saleUnit: { type: string, enum: [pc, pack] }
+    PosInvoiceQuote:
+      type: object
+      required: [customer, credit, lines, subtotalCents, vatCents, totalCents, quoteHash]
+      properties:
+        customer: { $ref: "#/components/schemas/PosInvoiceCustomer" }
+        credit: { $ref: "#/components/schemas/CustomerCredit" }
+        subtotalCents: { type: integer }
+        vatCents: { type: integer }
+        totalCents: { type: integer }
+        quoteHash: { type: string }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [itemId, variantId, description, quantity, saleUnit, unitPrice, discountPercent, totalCents, vatCents, vatRate]
+            properties:
+              itemId: { type: string }
+              variantId: { type: [string, "null"] }
+              description: { type: string }
+              quantity: { type: number }
+              saleUnit: { type: string, enum: [pc, pack] }
+              unitPrice: { type: number }
+              discountPercent: { type: number }
+              totalCents: { type: integer }
+              vatCents: { type: integer }
+              vatRate: { type: number }
     HealthStatus:
       type: object
       properties:

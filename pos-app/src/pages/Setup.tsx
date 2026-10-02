@@ -11,6 +11,7 @@ interface SetupProps {
 export function Setup({ onComplete }: SetupProps) {
   const [serverUrl, setServerUrl]   = useState("http://");
   const [termCode, setTermCode]     = useState("");
+  const [deviceKey, setDeviceKey]   = useState("");
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);
   const [step, setStep]             = useState<"form" | "testing" | "done">("form");
@@ -26,7 +27,7 @@ export function Setup({ onComplete }: SetupProps) {
     try {
       const cfg = await registerTerminal(serverUrl.trim(), termCode.trim().toUpperCase());
       setStep("done");
-      setTimeout(() => onComplete(cfg), 800);
+      setTimeout(() => onComplete(deviceKey.trim() ? { ...cfg, voucher_device_key: deviceKey.trim() } : cfg), 800);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -97,6 +98,16 @@ export function Setup({ onComplete }: SetupProps) {
                     onKeyDown={(e) => e.key === "Enter" && handleRegister()}
                   />
                 </div>
+                <label className="block text-sm font-medium text-gray-300 mb-1.5 mt-4">Device Key (optional)</label>
+                <input
+                  type="password"
+                  value={deviceKey}
+                  onChange={(e) => setDeviceKey(e.target.value)}
+                  placeholder="Needed for customer invoices"
+                  autoComplete="off"
+                  className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-burgundy-500 placeholder:text-gray-600"
+                  data-testid="input-device-key"
+                />
                 <p className="text-xs text-gray-500 mt-1.5">
                   Find this code in GlobiPOS Admin → POS → Terminals
                 </p>

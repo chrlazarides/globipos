@@ -4,6 +4,7 @@ import type { SyncStatus, SyncTelemetry, TerminalConfig, CashierSession, Periphe
 import type { PosUiTheme } from "../hooks/usePosTheme";
 import { HeartbeatIndicator } from "./HeartbeatIndicator";
 import { SyncObservabilityPanel } from "./SyncObservabilityPanel";
+import { DeviceKeyDialog } from "./DeviceKeyDialog";
 import type { DeviceStatus } from "../hooks/useHardware";
 
 interface SyncHeaderProps {
@@ -41,6 +42,7 @@ export function SyncHeader({
 }: SyncHeaderProps) {
   const [clock, setClock] = useState<string>(formatTime());
   const [syncPanelOpen, setSyncPanelOpen] = useState(false);
+  const [deviceKeyOpen, setDeviceKeyOpen] = useState(false);
   const isLight = theme === "light";
 
   useEffect(() => {
@@ -98,6 +100,16 @@ export function SyncHeader({
           {notifications.length}
         </div>
       )}
+
+      <button
+        onClick={() => setDeviceKeyOpen(true)}
+        title={config.voucher_device_key ? "Device key saved - edit" : "Device key missing - set"}
+        className={`px-2 py-1 rounded-lg text-xs transition-colors ${config.voucher_device_key ? "text-gray-500 hover:bg-gray-800 hover:text-gray-200" : "text-amber-400 hover:bg-gray-800"}`}
+        data-testid="button-device-key"
+      >
+        Device key
+      </button>
+      {deviceKeyOpen && <DeviceKeyDialog hasKey={!!config.voucher_device_key} onClose={() => setDeviceKeyOpen(false)} />}
 
       {/* Theme toggle */}
       <button

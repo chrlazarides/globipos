@@ -18,6 +18,7 @@ import { Plus, Search, Users, Upload, Printer, TrendingUp, FileText, AlertTriang
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertCustomerSchema, type Customer, type CustomerDeliveryLocation } from "@shared/schema";
+import { CustomerCreditPanel } from "@/components/customer-credit-panel";
 import { ImportDialog } from "@/components/import-dialog";
 import { LocationMapPicker } from "@/components/location-map-picker";
 import { usePriceLevels } from "@/hooks/use-price-levels";
@@ -444,6 +445,9 @@ function CustomerProfileDialog({
             <TabsTrigger value="details" data-testid="tab-customer-details">
               <FileText className="w-3.5 h-3.5 mr-1.5" />Details
             </TabsTrigger>
+            <TabsTrigger value="credit" data-testid="tab-customer-credit">
+              <Euro className="w-3.5 h-3.5 mr-1.5" />Credit
+            </TabsTrigger>
             <TabsTrigger value="locations" data-testid="tab-customer-locations">
               <MapPin className="w-3.5 h-3.5 mr-1.5" />Locations
             </TabsTrigger>
@@ -555,6 +559,10 @@ function CustomerProfileDialog({
                 active: customer.active,
               }}
             />
+          </TabsContent>
+
+          <TabsContent value="credit">
+            <CustomerCreditPanel customerId={customer.id} open={open} />
           </TabsContent>
 
           <TabsContent value="locations">
@@ -851,11 +859,16 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames, has
             </FormItem>
           )} />
         </div>
+        {!!defaultValues && (
+          <p className="text-xs text-muted-foreground" data-testid="text-credit-edit-hint">
+            Payment terms and credit limit are managed in the Credit tab of the customer profile.
+          </p>
+        )}
         <div className="grid grid-cols-3 gap-4">
           <FormField control={form.control} name="paymentTerms" render={({ field }) => (
             <FormItem>
               <FormLabel>Payment Terms</FormLabel>
-              <Select value={field.value} onValueChange={field.onChange}>
+              <Select value={field.value} onValueChange={field.onChange} disabled={!!defaultValues}>
                 <FormControl>
                   <SelectTrigger data-testid="select-payment-terms">
                     <SelectValue />
@@ -876,7 +889,7 @@ function CustomerForm({ onSubmit, isPending, defaultValues, priceLevelNames, has
           <FormField control={form.control} name="creditLimit" render={({ field }) => (
             <FormItem>
               <FormLabel>Credit Limit</FormLabel>
-              <FormControl><Input type="number" step="0.01" {...field} data-testid="input-credit-limit" /></FormControl>
+              <FormControl><Input type="number" step="0.01" {...field} disabled={!!defaultValues} data-testid="input-credit-limit" /></FormControl>
               <FormMessage />
             </FormItem>
           )} />

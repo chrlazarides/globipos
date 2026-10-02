@@ -121,6 +121,8 @@ export interface CashierSession {
 
 export interface TerminalConfig {
   server_url: string;
+  /** Paired device key (X-Voucher-Device-Key) required for online customer invoices. */
+  voucher_device_key?: string;
   terminal_code: string;
   terminal_id: string;
   terminal_name: string;
@@ -336,6 +338,8 @@ export type ActionCode =
   | "TOTAL"
   | "SUBTOTAL"
   | "CUSTOMER_LOOKUP"
+  | "WHOLESALE_INVOICE"
+  | "CUSTOMER_ACCOUNT"
   | "CUSTOMER_CLEAR"
   | "LOYALTY_POINTS"
   | "ITEM_SEARCH"

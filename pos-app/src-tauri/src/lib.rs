@@ -1082,6 +1082,59 @@ async fn record_shift_event(
 }
 
 #[tauri::command]
+async fn record_invoice_shift_sale(
+    state: State<'_, AppState>,
+    shift_id: String,
+    order_id: String,
+    total: f64,
+    payment_method: String,
+) -> Result<(), String> {
+    if !total.is_finite() || total < 0.0 || total > 1_000_000.0 ||
+        !["cash", "card", "account_credit"].contains(&payment_method.as_str()) ||
+        order_id.is_empty() {
+        return Err("Invalid online invoice shift record".into());
+    }
+    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS pos_invoice_shift_receipts (
+            order_id TEXT PRIMARY KEY, shift_id TEXT NOT NULL,
+            total REAL NOT NULL, payment_method TEXT NOT NULL)"
+    ).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    let inserted = sqlx::query(
+        "INSERT OR IGNORE INTO pos_invoice_shift_receipts
+         (order_id, shift_id, total, payment_method) VALUES (?, ?, ?, ?)"
+    ).bind(&order_id).bind(&shift_id).bind(total).bind(&payment_method)
+        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    if inserted.rows_affected() == 0 {
+        let previous = sqlx::query(
+            "SELECT shift_id, total, payment_method FROM pos_invoice_shift_receipts WHERE order_id = ?"
+        ).bind(&order_id).fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
+        if previous.get::<String, _>("shift_id") != shift_id ||
+            (previous.get::<f64, _>("total") - total).abs() > 0.001 ||
+            previous.get::<String, _>("payment_method") != payment_method {
+            return Err("Invoice shift receipt does not match the original sale".into());
+        }
+    } else {
+        let cash = if payment_method == "cash" { total } else { 0.0 };
+        let card = if payment_method == "card" { total } else { 0.0 };
+        let updated = sqlx::query(
+            "UPDATE pos_shifts SET
+             total_cash_sales = total_cash_sales + ?,
+             total_card_sales = total_card_sales + ?,
+             total_sales = total_sales + ?,
+             order_count = order_count + 1
+             WHERE id = ? AND status = 'open'"
+        ).bind(cash).bind(card).bind(total).bind(&shift_id)
+            .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        if updated.rows_affected() != 1 {
+            return Err("Invoice issued, but its local shift is no longer open".into());
+        }
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn update_shift_totals(
     state:          State<'_, AppState>,
     shift_id:       String,
@@ -1099,6 +1152,11 @@ async fn update_shift_totals(
         )
         .bind(total).bind(total).bind(&shift_id)
         .execute(&state.db).await.map_err(|e| e.to_string())?;
+    } else if payment_method == "account_credit" {
+        sqlx::query(
+            "UPDATE pos_shifts SET total_sales = total_sales + ?, order_count = order_count + 1 WHERE id = ?"
+        ).bind(total).bind(&shift_id)
+            .execute(&state.db).await.map_err(|e| e.to_string())?;
     } else {
         sqlx::query(
             r#"UPDATE pos_shifts SET
@@ -1912,6 +1970,7 @@ pub fn run() {
             get_current_shift,
             record_shift_event,
             update_shift_totals,
+            record_invoice_shift_sale,
             get_shift_summary,
             close_shift,
             // ── Phase 3: Promotions ──────────────────────────────────────────

@@ -621,6 +621,10 @@ async function getCompletedOrderForReturn(
   ));
   const [order] = lock ? await query.for("update") : await query.limit(1);
   if (!order) throw new PosVoucherError(404, "No completed POS sale was found for this order number at this location");
+  const linked = await tx.execute(sql`SELECT invoice_id FROM pos_invoice_sales WHERE order_id = ${order.id} LIMIT 1`);
+  if (linked.rows.length) {
+    throw new PosVoucherError(409, "This sale has a customer invoice. Use a linked invoice credit note rather than a voucher return so the customer debt and invoice accounting are corrected.");
+  }
   return order;
 }
 

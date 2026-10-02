@@ -41,6 +41,8 @@ import { useResponsiveColumns, type LayoutColumnConfig } from "../hooks/useWindo
 import { SyncHeader } from "../components/SyncHeader";
 import { CategoryNav } from "../components/CategoryNav";
 import { LayoutGrid } from "../components/LayoutGrid";
+import { CustomerInvoiceDialog } from "../components/CustomerInvoiceDialog";
+import { mapCartLines, type CheckoutResult } from "../lib/customer-invoice";
 import { OrderTicket } from "../components/OrderTicket";
 import { CorrectionsPanel } from "../components/CorrectionsPanel";
 import { PriceCheckDialog } from "../components/PriceCheckDialog";
@@ -482,7 +484,7 @@ function RecallDialog({ onRecall, onClose }: {
 
 // ── Main POS Screen ───────────────────────────────────────────────────────────
 
-type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "manual_barcode" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "transaction_review" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | "age_check" | "produce" | "bottle_return" | "coupon" | "click_collect" | "customer_lookup" | null;
+type Dialog = "payment" | "numpad" | "refund" | "note_line" | "note_order" | "promo" | "manual_barcode" | "recall" | "price_check" | "cash_dialog" | "dept_sale" | "transaction_review" | "issue_credit_note" | "issue_voucher" | "stock_transfer" | "age_check" | "produce" | "bottle_return" | "coupon" | "click_collect" | "customer_lookup" | "customer_invoice" | null;
 
 function CustomerLookupDialog({
   serverUrl,
@@ -667,6 +669,7 @@ function PaymentSuccessOverlay({
 }
 
 export function POS({ config, session, sync, onLogout }: POSProps) {
+  const [invoiceMode, setInvoiceMode] = useState<"wholesale" | "retail">("wholesale");
   const engine    = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
   const perms     = usePermissions(session);
   const hw        = useHardware();
@@ -1080,6 +1083,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       case "TOTAL":
       case "SUBTOTAL":            setPaymentInitialTab("split"); setDialog("payment"); break;
       case "CUSTOMER_LOOKUP":     setDialog("customer_lookup"); break;
+      case "WHOLESALE_INVOICE":   setInvoiceMode("wholesale"); setDialog("customer_invoice"); break;
+      case "CUSTOMER_ACCOUNT":    setInvoiceMode("retail"); setDialog("customer_invoice"); break;
       case "CUSTOMER_CLEAR":      engine.setCustomer(""); setSelectedCustomer(null); break;
       // ── Quantity multiplier before scan ──────────────────────────────────
       case "NUMPAD": setNumpadModeState("qty_multiplier"); setDialog("numpad"); break;
@@ -1277,6 +1282,22 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         onExit={() => setMode("sell")}
       />
     );
+  }
+
+  async function handleInvoiceCompleted(r: CheckoutResult) {
+    const shiftRow = shift.currentShift;
+    if (shiftRow) {
+      try {
+        await invoke("record_invoice_shift_sale", {
+          shiftId: shiftRow.id, orderId: r.orderId, total: r.totalCents / 100, paymentMethod: r.paymentMethod,
+        });
+        await shift.refreshShift();
+      } catch (e) {
+        alert(`Invoice ${r.invoiceNumber} ALREADY ISSUED. The local shift totals could not be updated (${e instanceof Error ? e.message : String(e)}). Do not start a new checkout for this sale.`);
+      }
+    }
+    engine.clearOrder();
+    setSelectedCustomer(null);
   }
 
   if (mode === "shift") {
@@ -1495,6 +1516,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         orderTotal={engine.order.total}
         initialTab={paymentInitialTab}
         loyaltyPoints={selectedCustomer?.loyaltyPoints ?? 0}
+        accountCredit={0}
         onComplete={handlePaymentComplete}
         onCancel={() => setDialog(null)}
       />
@@ -1539,6 +1561,17 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onSearch={(query) => getProducts(undefined, query)}
           onLookupBarcode={(barcode) => getProductByBarcode(barcode)}
           onGetStockByLocation={(itemId) => getStockByLocation(itemId)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+
+      {dialog === "customer_invoice" && (
+        <CustomerInvoiceDialog
+          mode={invoiceMode}
+          config={config}
+          cashierId={session.cashier_id}
+          lines={mapCartLines(engine.lines.filter((l) => !l.id.startsWith("multibuy-") && !l.id.startsWith("coupon-")))}
+          onCompleted={handleInvoiceCompleted}
           onClose={() => setDialog(null)}
         />
       )}

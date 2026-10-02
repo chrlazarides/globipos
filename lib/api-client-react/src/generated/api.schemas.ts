@@ -5,6 +5,165 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+export type CustomerCreditUpdateApprovalStatus = typeof CustomerCreditUpdateApprovalStatus[keyof typeof CustomerCreditUpdateApprovalStatus];
+
+
+export const CustomerCreditUpdateApprovalStatus = {
+  pending: 'pending',
+  approved: 'approved',
+  suspended: 'suspended',
+} as const;
+
+export interface CustomerCreditUpdate {
+  approvalStatus: CustomerCreditUpdateApprovalStatus;
+  /** @pattern ^\d{1,8}(?:\.\d{1,2})?$ */
+  creditLimit: string;
+  /** @pattern ^(cash|credit_(?:0|[1-9]\d{0,2}))$ */
+  paymentTerms: string;
+  /**
+     * @minLength 1
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+export interface PosInvoiceAuth {
+  cashierId: string;
+  /** @pattern ^\d{4,8}$ */
+  pin: string;
+}
+
+export type PosInvoiceSearch = PosInvoiceAuth & {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  search: string;
+};
+
+export type PosInvoiceCheckoutPaymentMethod = typeof PosInvoiceCheckoutPaymentMethod[keyof typeof PosInvoiceCheckoutPaymentMethod];
+
+
+export const PosInvoiceCheckoutPaymentMethod = {
+  cash: 'cash',
+  card: 'card',
+  account_credit: 'account_credit',
+} as const;
+
+export type PosInvoiceCartMode = typeof PosInvoiceCartMode[keyof typeof PosInvoiceCartMode];
+
+
+export const PosInvoiceCartMode = {
+  retail: 'retail',
+  wholesale: 'wholesale',
+} as const;
+
+export type PosInvoiceCartLinesItemSaleUnit = typeof PosInvoiceCartLinesItemSaleUnit[keyof typeof PosInvoiceCartLinesItemSaleUnit];
+
+
+export const PosInvoiceCartLinesItemSaleUnit = {
+  pc: 'pc',
+  pack: 'pack',
+} as const;
+
+export type PosInvoiceCartLinesItem = {
+  itemId: string;
+  /** @nullable */
+  variantId?: string | null;
+  /**
+     * @minimum 1
+     * @maximum 10000
+     */
+  quantity: number;
+  saleUnit?: PosInvoiceCartLinesItemSaleUnit;
+};
+
+export type PosInvoiceCart = PosInvoiceAuth & {
+  customerId: string;
+  mode: PosInvoiceCartMode;
+  /**
+     * @minItems 1
+     * @maxItems 200
+     */
+  lines: PosInvoiceCartLinesItem[];
+};
+
+export type PosInvoiceCheckout = PosInvoiceCart & {
+  orderId: string;
+  /**
+     * @minimum 0
+     * @maximum 100000000
+     */
+  expectedTotalCents: number;
+  quoteHash: string;
+  paymentMethod: PosInvoiceCheckoutPaymentMethod;
+  /**
+     * @minimum 0
+     * @maximum 100000000
+     */
+  amountTenderedCents: number;
+  /** Reference of an already-approved external card payment; this endpoint does not charge a card */
+  cardReference?: string;
+};
+
+export type CustomerCreditApprovalStatus = typeof CustomerCreditApprovalStatus[keyof typeof CustomerCreditApprovalStatus];
+
+
+export const CustomerCreditApprovalStatus = {
+  pending: 'pending',
+  approved: 'approved',
+  suspended: 'suspended',
+} as const;
+
+export interface CustomerCredit {
+  approvalStatus: CustomerCreditApprovalStatus;
+  limitCents: number;
+  balanceCents: number;
+  availableCents: number;
+  paymentTerms: string;
+  overdueCents: number;
+  hasOverdue: boolean;
+}
+
+export interface PosInvoiceCustomer {
+  id: string;
+  name: string;
+  code: string;
+  priceLevel?: number;
+}
+
+export type PosInvoiceQuoteLinesItemSaleUnit = typeof PosInvoiceQuoteLinesItemSaleUnit[keyof typeof PosInvoiceQuoteLinesItemSaleUnit];
+
+
+export const PosInvoiceQuoteLinesItemSaleUnit = {
+  pc: 'pc',
+  pack: 'pack',
+} as const;
+
+export type PosInvoiceQuoteLinesItem = {
+  itemId: string;
+  /** @nullable */
+  variantId: string | null;
+  description: string;
+  quantity: number;
+  saleUnit: PosInvoiceQuoteLinesItemSaleUnit;
+  unitPrice: number;
+  discountPercent: number;
+  totalCents: number;
+  vatCents: number;
+  vatRate: number;
+};
+
+export interface PosInvoiceQuote {
+  customer: PosInvoiceCustomer;
+  credit: CustomerCredit;
+  subtotalCents: number;
+  vatCents: number;
+  totalCents: number;
+  quoteHash: string;
+  lines: PosInvoiceQuoteLinesItem[];
+}
+
 export interface HealthStatus {
   status: string;
 }
@@ -187,4 +346,39 @@ export interface DeploymentDeviceSyncResponse {
   lastInstallationHeartbeatAt?: string | null;
   devices: DeviceSyncReport[];
 }
+
+export type GetCustomerCredit200HistoryItem = { [key: string]: unknown };
+
+export type GetCustomerCredit200 = CustomerCredit & {
+  history?: GetCustomerCredit200HistoryItem[];
+};
+
+export type SearchPosInvoiceCustomers200 = {
+  customers: PosInvoiceCustomer[];
+};
+
+export type CheckoutPosCustomerInvoice201PaymentMethod = typeof CheckoutPosCustomerInvoice201PaymentMethod[keyof typeof CheckoutPosCustomerInvoice201PaymentMethod];
+
+
+export const CheckoutPosCustomerInvoice201PaymentMethod = {
+  cash: 'cash',
+  card: 'card',
+  account_credit: 'account_credit',
+} as const;
+
+export type CheckoutPosCustomerInvoice201 = {
+  orderId: string;
+  posOrderId?: string;
+  orderNumber: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  totalCents: number;
+  changeDueCents: number;
+  paymentMethod: CheckoutPosCustomerInvoice201PaymentMethod;
+  deduplicated: boolean;
+};
+
+export type EmailPosInvoiceDocument200 = {
+  sent: boolean;
+};
 

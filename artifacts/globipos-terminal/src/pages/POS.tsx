@@ -7,6 +7,8 @@ import { useToast } from "@/hooks/use-toast";
 import { BrandLogo } from "@/components/BrandLogo";
 import { calculateLine, createOrderLine, parseValidCashTender } from "@/lib/pos-calculations";
 import { effectivePrice } from "@/lib/pos-calculations";
+import { CustomerInvoiceDialog } from "../components/CustomerInvoiceDialog";
+import { mapCartLines } from "../lib/customer-invoice";
 import { VoucherDialog } from "../components/VoucherDialog";
 import { MultiLocationSearch } from "../components/MultiLocationSearch";
 import { SyncIndicator } from "../components/SyncIndicator";
@@ -23,6 +25,7 @@ function formatMoney(amount: number) {
 
 type ExternalLaunch = { type: "web" | "app" | "server"; target: string };
 type ExternalButton = { position: number; label: string; actionCode: string; launch: ExternalLaunch };
+type InvoiceButton = { position: number; label: string; actionCode: "WHOLESALE_INVOICE" | "CUSTOMER_ACCOUNT" };
 type VoucherButton = { position: number; label: string; actionCode: "GIFT_VOUCHER" | "PAY_VOUCHER" };
 
 function validLaunch(value: unknown): value is ExternalLaunch {
@@ -47,6 +50,8 @@ export function POS({ config, session, onLogout }: POSProps) {
   const [search, setSearch] = useState("");
   const [externalButtons, setExternalButtons] = useState<ExternalButton[]>([]);
   const [voucherButtons, setVoucherButtons] = useState<VoucherButton[]>([]);
+  const [invoiceButtons, setInvoiceButtons] = useState<InvoiceButton[]>([]);
+  const [invoiceMode, setInvoiceMode] = useState<"wholesale" | "retail" | null>(null);
   const [voucherMode, setVoucherMode] = useState<"issue" | "redeem" | null>(null);
   const [itemSearchAssigned, setItemSearchAssigned] = useState(false);
   const [stockInAssigned, setStockInAssigned] = useState(false);
@@ -107,7 +112,12 @@ export function POS({ config, session, onLogout }: POSProps) {
           ["GIFT_VOUCHER", "PAY_VOUCHER"].includes(button.actionCode?.toUpperCase()) &&
           approvedCodes.includes(button.actionCode?.toUpperCase()) ?
             [{ position: button.position, label: button.label || button.actionCode, actionCode: button.actionCode.toUpperCase() }] : []);
+        const invoiceLayoutButtons: InvoiceButton[] = data.buttons.flatMap((button: any) =>
+          button.buttonType === "action" &&
+          ["WHOLESALE_INVOICE", "CUSTOMER_ACCOUNT"].includes(button.actionCode?.toUpperCase()) ?
+            [{ position: button.position, label: button.label || button.actionCode, actionCode: button.actionCode.toUpperCase() }] : []);
         if (!controller.signal.aborted) {
+          setInvoiceButtons(invoiceLayoutButtons.sort((a, b) => a.position - b.position));
           setExternalButtons(buttons.sort((a, b) => a.position - b.position));
           setVoucherButtons(voucherLayoutButtons.sort((a, b) => a.position - b.position));
           setItemSearchAssigned(data.buttons.some((button: any) =>
@@ -122,6 +132,7 @@ export function POS({ config, session, onLogout }: POSProps) {
       } catch (error) {
         if (!controller.signal.aborted) {
           setExternalButtons([]);
+          setInvoiceButtons([]);
           setVoucherButtons([]);
           setItemSearchAssigned(false);
           setStockInAssigned(false);
@@ -165,6 +176,15 @@ export function POS({ config, session, onLogout }: POSProps) {
     } finally {
       setLaunchingCode(null);
     }
+  }
+
+  function openInvoice(button: InvoiceButton) {
+    if (!config.voucher_device_key) {
+      toast({ title: "Pair this Terminal first", description: "Save the device key in Terminal Settings.", variant: "destructive" });
+      return;
+    }
+    if (cart.length === 0) { toast({ title: "Add items to the cart first", variant: "destructive" }); return; }
+    setInvoiceMode(button.actionCode === "WHOLESALE_INVOICE" ? "wholesale" : "retail");
   }
 
   async function openVoucher(button: VoucherButton) {
@@ -378,6 +398,16 @@ export function POS({ config, session, onLogout }: POSProps) {
     <div className="flex flex-col h-screen bg-background">
       {stockDialogMode && <MultiLocationSearch config={config} session={session} initialMode={stockDialogMode}
         onClose={() => setStockDialogMode(null)} />}
+      {invoiceMode && <CustomerInvoiceDialog mode={invoiceMode} config={config} cashierId={session.cashier_id}
+        lines={mapCartLines(cart)}
+        onClose={() => setInvoiceMode(null)}
+        onCompleted={result => {
+          setCart([]);
+          setCheckoutId(crypto.randomUUID());
+          void writeAudit("customer_invoice", "invoice", result.invoiceNumber, `Online invoice ${result.invoiceNumber}`, session.cashier_id, session.cashier_name)
+            .catch(error => console.error("Failed to queue invoice audit record", error));
+          toast({ title: "Invoice issued", description: `Invoice ${result.invoiceNumber} recorded online.` });
+        }} />}
       {voucherMode && <VoucherDialog mode={voucherMode} config={config} session={session} cart={cart} total={total}
         onClose={() => setVoucherMode(null)}
         onRedeemed={orderNumber => {
@@ -501,6 +531,11 @@ export function POS({ config, session, onLogout }: POSProps) {
                 className="rounded border border-emerald-400 bg-emerald-950/40 px-3 py-2 text-xs font-medium text-emerald-200 hover:bg-emerald-900/50"
                 data-testid={`terminal-voucher-${button.actionCode}`}>{button.label}</button>
             ))}
+            {invoiceButtons.map(button => (
+              <button key={`${button.position}-${button.actionCode}`} type="button" onClick={() => openInvoice(button)}
+                className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
+                data-testid={`terminal-invoice-${button.actionCode}`}>{button.label}</button>
+            ))}
             {itemSearchAssigned && <button type="button" onClick={() => setStockDialogMode("lookup")}
               className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
               data-testid="terminal-item-search">Search Items · all shops</button>}
@@ -510,7 +545,7 @@ export function POS({ config, session, onLogout }: POSProps) {
             {(itemSearchAssigned || stockInAssigned) && <button type="button" onClick={() => setStockDialogMode("transfer")}
               className="rounded border border-border px-3 py-2 text-xs font-medium hover:bg-accent"
               data-testid="terminal-stock-transfer">Stock Transfer</button>}
-            {!externalButtons.length && !voucherButtons.length && !itemSearchAssigned && !stockInAssigned && <span className="text-xs text-muted-foreground">
+            {!externalButtons.length && !voucherButtons.length && !invoiceButtons.length && !itemSearchAssigned && !stockInAssigned && <span className="text-xs text-muted-foreground">
               {layoutError ? "Layout tools unavailable" : "No approved tools assigned"}
             </span>}
             <button type="button" className="ml-auto p-1" aria-label="Refresh layout tools" title={layoutError || "Refresh layout tools"}
