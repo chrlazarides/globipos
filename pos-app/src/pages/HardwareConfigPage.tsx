@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { InvoicePrintSettings } from "../components/InvoicePrintSettings";
 
 // ── Types (mirrors hardware.rs structs) ────────────────────────────────────────
 
@@ -178,6 +179,7 @@ export default function HardwareConfigPage({ onClose }: HardwareConfigPageProps)
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 max-w-2xl mx-auto w-full space-y-8">
+        <InvoicePrintSettings />
 
         {/* ── Scale ──────────────────────────────────────────────────── */}
         <section>

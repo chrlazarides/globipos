@@ -3,6 +3,7 @@ import {
   InvoiceApiError, amountTenderedCents, basketFingerprint, validateCheckout, validateQuote, euro, fetchInvoiceHtml, invoiceRequest, paymentBlockReason, termsLabel, validPin, readPendingInvoice, savePendingInvoice, clearPendingInvoice,
   type CheckoutResult, type InvoiceConn, type InvoiceCustomer, type InvoiceLineInput, type InvoiceMode, type PayMethod, type Quote,
 } from "../lib/customer-invoice";
+import { invoicePrintMode, printInvoiceFrame, type InvoicePrintMode } from "../lib/invoice-print";
 
 type Props = {
   mode: InvoiceMode;
@@ -39,6 +40,9 @@ export function CustomerInvoiceDialog({ mode, config, cashierId, lines, onClose,
   const [notice, setNotice] = useState("");
   const [completionFailed, setCompletionFailed] = useState(false);
   const [printHtml, setPrintHtml] = useState<string | null>(null);
+  const [printMode, setPrintMode] = useState<InvoicePrintMode>("dialog");
+  const [printKey, setPrintKey] = useState(0);
+  const [printReady, setPrintReady] = useState(false);
   const [quotedLines, setQuotedLines] = useState<InvoiceLineInput[]>(recovery?.request.lines ?? []);
   const keyRef = useRef(recovery?.request.orderId ?? crypto.randomUUID());
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -133,10 +137,17 @@ export function CustomerInvoiceDialog({ mode, config, cashierId, lines, onClose,
 
   async function printInvoice() {
     if (!result) return;
-    setNotice(""); setBusy(true);
+    setNotice(""); setBusy(true); setPrintReady(false);
     try {
-      setPrintHtml(await fetchInvoiceHtml(config, result.invoiceId));
+      setPrintMode(invoicePrintMode());
+      setPrintHtml((await fetchInvoiceHtml(config, result.invoiceId)).replace("</head>", "<style>.no-print{display:none!important}</style></head>"));
+      setPrintKey(k => k + 1);
     } catch (e) { setNotice(e instanceof Error ? e.message : "Could not load the invoice."); } finally { setBusy(false); }
+  }
+
+  function printLoadedInvoice() {
+    try { printInvoiceFrame(iframeRef.current); setNotice("Choose your A4 printer or Save as PDF in the system print dialog."); }
+    catch (e) { setNotice(`Printing is unavailable on this device: ${(e as Error).message}`); }
   }
 
   async function emailInvoice() {
@@ -172,16 +183,19 @@ export function CustomerInvoiceDialog({ mode, config, cashierId, lines, onClose,
               <p className="text-gray-300">Order {result.orderNumber} - {euro(result.totalCents)} - {result.paymentMethod.replace("_", " ")}</p>
               {result.changeDueCents > 0 && <p className="text-lg font-semibold text-green-400">Change due {euro(result.changeDueCents)}</p>}
               <div className="flex flex-wrap justify-center gap-2">
-                <button className={primary} disabled={busy} onClick={() => void printInvoice()} data-testid="button-print-invoice">Print invoice</button>
+                <button className={primary} disabled={busy} onClick={() => void printInvoice()} data-testid="button-print-invoice">Print A4 invoice</button>
                 <button className={ghost} disabled={busy} onClick={() => void emailInvoice()} data-testid="button-email-invoice">Email to customer</button>
                 {completionFailed && <button className={ghost} disabled={busy} onClick={() => void retryLocalCompletion()} data-testid="button-invoice-retry-completion">Retry terminal completion</button>}
                 <button className={ghost} disabled={busy} onClick={onClose} data-testid="button-invoice-done">Done</button>
               </div>
               {notice && <p role="status" className="text-sm text-amber-300" data-testid="text-invoice-notice">{notice}</p>}
               {printHtml !== null && (
-                <iframe ref={iframeRef} title="Invoice" sandbox="allow-same-origin allow-modals" srcDoc={printHtml}
-                  className="pointer-events-none absolute h-0 w-0 border-0"
-                  onLoad={() => { try { iframeRef.current?.contentWindow?.print(); } catch { setNotice("Printing was blocked on this device."); } }} />
+                <div>
+                  {printMode === "preview" && <button className={primary} disabled={!printReady || busy} onClick={printLoadedInvoice} data-testid="button-print-a4-preview">Print this A4 invoice</button>}
+                  <iframe key={printKey} ref={iframeRef} title="A4 invoice" sandbox="allow-same-origin allow-modals" srcDoc={printHtml}
+                    className={printMode === "preview" ? "mt-3 h-[65vh] w-full border bg-white" : "pointer-events-none absolute h-0 w-0 border-0"}
+                    onLoad={() => { setPrintReady(true); if (printMode === "dialog") printLoadedInvoice(); }} />
+                </div>
               )}
             </div>
           ) : !quote ? (
