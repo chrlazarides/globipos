@@ -110,6 +110,8 @@ pub struct Order {
     pub amount_tendered: Option<f64>,
     pub change_due: Option<f64>,
     pub payment_ref: Option<String>,
+    #[serde(default)]
+    pub payment_tenders: Vec<serde_json::Value>,
     pub created_at: String,
 }
 

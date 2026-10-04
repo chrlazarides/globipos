@@ -8,7 +8,7 @@
  * to finalise the order, print the receipt, and open the cash drawer.
  */
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { parseMoneyDigits } from "../lib/departmentEntry";
 import {
   Dialog,
@@ -26,6 +26,7 @@ import {
 import { CashIcon, CardIcon, VoucherIcon, LoyaltyIcon, PayIcon } from "./icons/PosIcons";
 import { usePayment, type PaymentResult, type TenderMethod } from "../hooks/usePayment";
 import { findCreditNote, findGiftVoucher } from "../lib/db";
+import { SplitTenderClaim } from "./SplitTenderClaim";
 
 const CURRENCY_RATES: Record<string, number> = {
   EUR: 1,
@@ -42,7 +43,7 @@ interface PaymentDialogProps {
   loyaltyPoints?: number;      // customer's available points
   loyaltyValuePerPoint?: number; // e.g. 0.01 = 1 cent per point
   accountCredit?: number;      // customer's available credit
-  onComplete: (result: PaymentResult) => void;
+  onComplete: (result: PaymentResult) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -55,7 +56,7 @@ const CASH_PRESETS = [5, 10, 20, 50, 100];
 
 const KEYPAD_KEYS = ["7","8","9","4","5","6","1","2","3",".","0","⌫"] as const;
 
-function PaymentKeypad({ onPress }: { onPress: (key: string) => void }) {
+function PaymentKeypad({ onPress, disabled = false }: { onPress: (key: string) => void; disabled?: boolean }) {
   return (
     <div className="grid grid-cols-3 gap-1.5">
       {KEYPAD_KEYS.map((k, i) => (
@@ -64,7 +65,7 @@ function PaymentKeypad({ onPress }: { onPress: (key: string) => void }) {
           type="button"
           data-testid={`pkpad-${k === "⌫" ? "del" : k}`}
           onClick={() => onPress(k === "⌫" ? "backspace" : k)}
-          disabled={k === "."}
+          disabled={disabled || k === "."}
           className="h-11 flex items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800
                      hover:bg-gray-200 dark:hover:bg-gray-700 text-foreground font-semibold
                      text-base transition-colors active:scale-95"
@@ -120,6 +121,10 @@ export default function PaymentDialog({
   const [creditNoteLookup, setCreditNoteLookup] = useState<{ id: string; code: string; remaining: number } | null>(null);
   const [creditNoteError, setCreditNoteError] = useState<string | null>(null);
   const [displayCurrency, setDisplayCurrency] = useState<string>("EUR");
+  const [completing, setCompleting] = useState(false);
+  const completingRef = useRef(false);
+  const [completionError, setCompletionError] = useState<string | null>(null);
+  const busy = payment.pendingCard || payment.verificationRequired || completing;
 
   // Reset on open
   useEffect(() => {
@@ -136,6 +141,7 @@ export default function PaymentDialog({
       setCreditNoteLookup(null);
       setCreditNoteError(null);
       setDisplayCurrency("EUR");
+      setCompletionError(null);
     }
   }, [open, initialTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -159,6 +165,7 @@ export default function PaymentDialog({
   // ── Cash handlers ───────────────────────────────────────────────────────────
 
   function addCash(amount: number) {
+    if (busy) return;
     payment.addCashTender(amount);
     setNumpadValue("");
   }
@@ -171,10 +178,10 @@ export default function PaymentDialog({
   // ── Card handler ────────────────────────────────────────────────────────────
 
   async function processCard() {
+    if (busy) return;
     const amount = parsedAmount > 0 ? parsedAmount : payment.balance;
     if (amount <= 0) return;
-    await payment.requestCardPayment(amount);
-    setNumpadValue("");
+    if (await payment.requestCardPayment(amount)) setNumpadValue("");
   }
 
   // ── Voucher ─────────────────────────────────────────────────────────────────
@@ -199,17 +206,21 @@ export default function PaymentDialog({
 
   function applyVoucher() {
     if (!voucherLookup) return;
-    const amount = Math.min(voucherLookup.remaining, payment.balance);
+    const claimed = payment.tenders.filter(t => t.method === "voucher" && t.settleId === voucherLookup.id)
+      .reduce((sum, t) => sum + t.amount, 0);
+    const amount = Math.min(voucherLookup.remaining - claimed, payment.balance, parsedAmount > 0 ? parsedAmount : payment.balance);
     if (amount <= 0) return;
     payment.addVoucherTender(voucherLookup.code, amount, voucherLookup.id);
     setVoucherCode("");
     setVoucherLookup(null);
+    setNumpadValue("");
   }
 
   // ── Loyalty ─────────────────────────────────────────────────────────────────
 
   function redeemLoyalty() {
-    if (loyaltyPointsToRedeem <= 0) return;
+    if (busy || loyaltyPointsToRedeem <= 0 || loyaltyPointsToRedeem > loyaltyPoints ||
+        loyaltyPointsToRedeem * loyaltyValuePerPoint > payment.balance + 0.001) return;
     payment.addLoyaltyTender(loyaltyPointsToRedeem, loyaltyValuePerPoint);
     setLoyaltyPointsToRedeem(0);
   }
@@ -245,29 +256,43 @@ export default function PaymentDialog({
 
   function applyCreditNote() {
     if (!creditNoteLookup) return;
-    const amount = Math.min(creditNoteLookup.remaining, payment.balance);
+    const claimed = payment.tenders.filter(t => t.method === "credit_note" && t.settleId === creditNoteLookup.id)
+      .reduce((sum, t) => sum + t.amount, 0);
+    const amount = Math.min(creditNoteLookup.remaining - claimed, payment.balance, parsedAmount > 0 ? parsedAmount : payment.balance);
     if (amount <= 0) return;
     payment.addCreditNoteTender(amount, creditNoteLookup.id, creditNoteLookup.code);
     setCreditNoteCode("");
     setCreditNoteLookup(null);
+    setNumpadValue("");
   }
 
   // ── Complete ────────────────────────────────────────────────────────────────
 
-  function handleComplete() {
-    if (!payment.isComplete) return;
-    onComplete(payment.finalise());
+  async function handleComplete() {
+    if (!payment.isComplete || completingRef.current || busy) return;
+    completingRef.current = true;
+    setCompleting(true);
+    setCompletionError(null);
+    try {
+      await onComplete(payment.finalise());
+      payment.resetCompletedPayment();
+    } catch (error) {
+      setCompletionError(error instanceof Error ? error.message : "The sale could not be saved. Keep the payment window open and retry saving, not charging.");
+    } finally {
+      completingRef.current = false;
+      setCompleting(false);
+    }
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
+    <Dialog open={open} onOpenChange={(o) => !o && payment.canCancel && !completing && onCancel()}>
       <DialogContent
-        className="sm:max-w-xl p-0 gap-0"
+        className="sm:max-w-xl p-0 gap-0 bg-white text-slate-900 dark:bg-gray-900 dark:text-gray-100 border-slate-200 dark:border-gray-700 max-h-[calc(100dvh-2rem)] overflow-y-auto"
         data-testid="payment-dialog"
       >
         <DialogHeader className="px-6 pt-5 pb-4 border-b">
           <DialogTitle className="flex items-center justify-between">
-            <span>Payment</span>
+            <span>{tab === "split" ? "Split payment" : "Payment"}</span>
             <div className="flex items-center gap-3">
               <select
                 data-testid="select-display-currency"
@@ -302,6 +327,7 @@ export default function PaymentDialog({
                   key={t}
                   data-testid={`tab-payment-${t}`}
                   onClick={() => setTab(t)}
+                  disabled={busy}
                   className={`flex-1 py-1.5 rounded-md text-sm font-medium capitalize transition-colors
                     ${tab === t ? "bg-white dark:bg-gray-800 shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                 >
@@ -399,6 +425,9 @@ export default function PaymentDialog({
             {/* Split tab */}
             {tab === "split" && (
               <div className="space-y-3 text-sm">
+                <SplitTenderClaim amount={parsedAmount} digits={numpadValue} balance={payment.balance}
+                  busy={busy} onDigits={setNumpadValue}
+                  onCash={() => addCash(parsedAmount)} onCard={processCard} />
                 {/* Voucher */}
                 <div className="space-y-1">
                   <p className="text-muted-foreground font-medium">Voucher / Gift Card</p>
@@ -581,6 +610,7 @@ export default function PaymentDialog({
                     <button
                       data-testid={`btn-remove-tender-${t.id}`}
                       onClick={() => payment.removeTender(t.id)}
+                      disabled={busy || (t.method.startsWith("card_") && t.approved === true)}
                       className="text-muted-foreground hover:text-destructive"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -613,7 +643,15 @@ export default function PaymentDialog({
 
           {/* Right: keypad */}
           <div className="p-4 space-y-2">
-            <PaymentKeypad onPress={handleNumpadPress} />
+            <PaymentKeypad onPress={handleNumpadPress} disabled={busy} />
+            {(payment.cardError || completionError) && (
+              <p role="alert" className="text-sm text-red-500" data-testid="payment-error">
+                {completionError || payment.cardError}
+              </p>
+            )}
+            {!payment.canCancel && !payment.pendingCard && (
+              <p className="text-xs text-amber-600">A card transaction is approved or requires verification. Do not cancel or charge it again.</p>
+            )}
 
             {/* Action buttons */}
             <div className="flex gap-2 pt-2">
@@ -622,13 +660,14 @@ export default function PaymentDialog({
                 className="flex-1"
                 data-testid="btn-payment-cancel"
                 onClick={onCancel}
+                disabled={!payment.canCancel || completing}
               >
                 <X className="h-4 w-4 mr-1" /> Cancel
               </Button>
               <Button
                 className="flex-1 bg-green-600 hover:bg-green-700 text-white"
                 data-testid="btn-payment-complete"
-                disabled={!payment.isComplete}
+                disabled={!payment.isComplete || busy}
                 onClick={handleComplete}
               >
                 Complete <PayIcon className="h-4 w-4 ml-1" />

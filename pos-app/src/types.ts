@@ -96,6 +96,7 @@ export interface Order {
   amount_tendered?: number;
   change_due?: number;
   payment_ref?: string;          // gateway auth code / transaction reference
+  payment_tenders?: import("./lib/paymentTenders").Tender[];
   created_at: string;
 }
 

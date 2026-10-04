@@ -153,10 +153,18 @@ async fn fetch_catalog_pages(
         },
         None => (since.map(str::to_owned), None, None),
     };
+    let filter_key = sqlx::query("SELECT value FROM schema_meta WHERE key = 'catalog_filter_key'")
+        .fetch_optional(pool).await.map_err(|e| e.to_string())?
+        .and_then(|row| row.try_get::<String, _>("value").ok());
+    if cursor.is_none() && filter_key.as_deref().map_or(false, |key| key.starts_with("partial:")) {
+        effective_since = None;
+    }
     let mut total = 0usize;
+    let mut filter_restarted = false;
     loop {
         let mut url = reqwest::Url::parse(&base).map_err(|e| e.to_string())?;
         url.query_pairs_mut().append_pair("limit", "250");
+        if let Some(key) = filter_key.as_deref() { url.query_pairs_mut().append_pair("filterKey", key); }
         if let Some(s) = effective_since.as_deref() { url.query_pairs_mut().append_pair("since", s); }
         if let Some(c) = cursor.as_deref() { url.query_pairs_mut().append_pair("cursor", c); }
         let response = client
@@ -179,6 +187,15 @@ async fn fetch_catalog_pages(
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::CONFLICT && body.contains("CATALOG_FILTER_CHANGED") && !filter_restarted {
+                clear_catalog_cursor_state(pool).await?;
+                effective_since = None;
+                cursor = None;
+                watermark = None;
+                total = 0;
+                filter_restarted = true;
+                continue;
+            }
             return Err(format!("Catalog sync server error {}: {}", status, body));
         }
         let content_type = resp.headers()
@@ -244,12 +261,18 @@ async fn fetch_catalog_pages(
         crate::sync_telemetry::record_catalog_received(pool, items.len() + cats.len())
             .await?;
         crate::sync_telemetry::set_phase(pool, "catalog-save").await?;
-        db::upsert_catalog_page(
+        if data["catalogFilter"]["enabled"].as_bool() == Some(true) && data["full"].as_bool() != Some(true) {
+            return Err("Partial catalog must be a complete paged snapshot".into());
+        }
+        db::upsert_catalog_page_with_filter(
             pool,
             &items,
             &cats,
             cursor_update,
             watermark_update,
+            data.get("catalogFilter"),
+            cursor.is_none(),
+            done,
         )
             .await
             .map_err(|e| e.to_string())?;

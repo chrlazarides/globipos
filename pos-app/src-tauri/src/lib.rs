@@ -10,6 +10,7 @@ mod migrations;
 mod models;
 mod orders;
 mod sync;
+mod payment_tenders;
 mod terminal_profile;
 mod sync_telemetry;
 #[cfg(test)]

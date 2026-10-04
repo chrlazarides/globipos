@@ -100,7 +100,8 @@ export interface UseOrderReturn {
     amountTendered: number,
     cashierId: string,
     cashierName: string,
-    paymentRef?: string
+    paymentRef?: string,
+    paymentTenders?: import("../lib/paymentTenders").Tender[]
   ) => Promise<Order>;
 
   // Numpad mode
@@ -154,6 +155,7 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
   const [lastLineId, setLastLineId] = useState<string | null>(null);
   const [pendingMultiplier, setPendingMultiplierState] = useState<number | null>(null);
   const timedPricesRef = useRef<Map<string, number>>(new Map());
+  const completionAttempt = useRef<{ order: Order; lines: OrderLine[] } | null>(null);
 
   // Helper: update lines and rebuild order totals
   const updateLines = useCallback((newLines: OrderLine[]) => {
@@ -495,25 +497,36 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
       amountTendered: number,
       cId: string,
       cName: string,
-      paymentRef?: string
+      paymentRef?: string,
+      paymentTenders?: import("../lib/paymentTenders").Tender[]
     ): Promise<Order> => {
-      const orderNum = await nextOrderNumber(terminalPrefix);
-      const changeDue = Math.max(0, amountTendered - order.total);
+      const previous = completionAttempt.current?.order.id === order.id ? completionAttempt.current : null;
+      if (previous && (previous.order.payment_method !== paymentMethod ||
+          previous.order.amount_tendered !== amountTendered ||
+          JSON.stringify(previous.order.payment_tenders) !== JSON.stringify(paymentTenders))) {
+        throw new Error("The original save attempt must be resolved before changing its payment data.");
+      }
+      const orderNum = previous?.order.order_number ?? await nextOrderNumber(terminalPrefix);
+      const changeDue = Math.round(Math.max(0, amountTendered - order.total) * 100) / 100;
       const completed: Order = {
         ...order,
         order_number: orderNum,
         status: "completed",
         payment_method: paymentMethod,
+        payment_tenders: paymentTenders,
         amount_tendered: amountTendered,
         change_due: changeDue,
         payment_ref: paymentRef,
         cashier_id: cId,
         cashier_name: cName,
       };
-      await saveOrder(completed, lines);
-      writeAudit("complete_order", "order", completed.id, `Order ${orderNum} — €${completed.total}`, cId, cName);
+      const attempt = previous ?? { order: completed, lines: [...lines] };
+      completionAttempt.current = attempt;
+      await saveOrder(attempt.order, attempt.lines);
+      writeAudit("complete_order", "order", attempt.order.id, `Order ${orderNum} — €${attempt.order.total}`, cId, cName).catch(error => console.error("Sale saved; audit write failed", error));
       clearOrder();
-      return completed;
+      completionAttempt.current = null;
+      return attempt.order;
     },
     [order, lines, terminalPrefix, clearOrder]
   );

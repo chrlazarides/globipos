@@ -15,7 +15,11 @@ pub fn row_to_json(row: SqliteRow) -> Value {
         let raw = row.try_get_raw(ordinal);
         let is_null = raw.map(|r| r.is_null()).unwrap_or(true);
 
-        let json_val = if is_null {
+        let json_val = if name == "payment_tenders" && !is_null {
+            row.try_get::<String, _>(ordinal).ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .unwrap_or_else(|| serde_json::json!([]))
+        } else if is_null {
             Value::Null
         } else {
             let type_name = col.type_info().name().to_uppercase();
@@ -142,8 +146,51 @@ pub async fn upsert_catalog_page(
     catalog_cursor: Option<Option<&str>>,
     last_catalog_sync: Option<Option<&str>>,
 ) -> Result<(), sqlx::Error> {
+    upsert_catalog_page_with_filter(pool, products, categories, catalog_cursor, last_catalog_sync, None, false, false).await
+}
+
+pub async fn upsert_catalog_page_with_filter(
+    pool: &sqlx::SqlitePool,
+    products: &[Value],
+    categories: &[Value],
+    catalog_cursor: Option<Option<&str>>,
+    last_catalog_sync: Option<Option<&str>>,
+    filter: Option<&Value>,
+    first_page: bool,
+    done: bool,
+) -> Result<(), sqlx::Error> {
     let _telemetry_guard = crate::sync_telemetry::acquire_write_lock().await;
     let mut tx = pool.begin().await?;
+    if let Some(filter) = filter {
+        let key = filter["key"].as_str().filter(|key| key.len() <= 100)
+            .ok_or_else(|| sqlx::Error::Protocol("Invalid catalog filter key".into()))?;
+        let enabled = filter["enabled"].as_bool()
+            .ok_or_else(|| sqlx::Error::Protocol("Invalid catalog filter mode".into()))?;
+        if enabled {
+            // The snapshot ledger commits with each page and survives an interrupted download.
+            sqlx::query("CREATE TABLE IF NOT EXISTS catalog_filter_products (server_id TEXT PRIMARY KEY)")
+                .execute(&mut *tx).await?;
+            if first_page {
+                sqlx::query("DELETE FROM catalog_filter_products").execute(&mut *tx).await?;
+            }
+            for product in products {
+                let id = product["id"].as_str().filter(|id| !id.is_empty())
+                    .ok_or_else(|| sqlx::Error::Protocol("Catalog product ID required".into()))?;
+                sqlx::query("INSERT OR IGNORE INTO catalog_filter_products (server_id) VALUES (?)")
+                    .bind(id).execute(&mut *tx).await?;
+            }
+            if done {
+                // Only cached products are removed, never orders, lines, stock ledgers or uploads.
+                sqlx::query("DELETE FROM local_products WHERE server_id NOT IN (SELECT server_id FROM catalog_filter_products)")
+                    .execute(&mut *tx).await?;
+                sqlx::query("DELETE FROM catalog_filter_products").execute(&mut *tx).await?;
+            }
+        }
+        if done {
+            sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('catalog_filter_key', ?)")
+                .bind(key).execute(&mut *tx).await?;
+        }
+    }
     for p in products {
         let id = uuid_from(p, "id");
         let server_id = str_val(p, "id");
@@ -258,6 +305,29 @@ pub async fn replace_layout(pool: &sqlx::SqlitePool, buttons: &[Value]) -> Resul
 #[cfg(test)]
 mod catalog_page_tests {
     use super::*;
+    #[tokio::test]
+    async fn partial_catalog_prunes_only_after_a_complete_snapshot() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
+            .connect("sqlite::memory:").await.unwrap();
+        crate::migrations::run_migrations(&pool).await.unwrap();
+        let initial = vec![serde_json::json!({"id":"keep", "name":"Keep", "categoryId":"fruit"}),
+            serde_json::json!({"id":"exclude", "name":"Exclude", "categoryId":"cleaning"}),
+            serde_json::json!({"id":"moved", "name":"Moved", "categoryId":"fruit"})];
+        upsert_catalog_page(&pool, &initial, &[], None, None).await.unwrap();
+        sqlx::query("INSERT INTO pos_outbox (id, order_id, payload) VALUES ('saved', 'sale', '{}')")
+            .execute(&pool).await.unwrap();
+        let filter = serde_json::json!({"enabled":true, "key":"partial:test"});
+        upsert_catalog_page_with_filter(&pool, &initial[..1], &[], None, None, Some(&filter), true, false).await.unwrap();
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM local_products").fetch_one(&pool).await.unwrap(), 3);
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM schema_meta WHERE key = 'catalog_filter_key'").fetch_one(&pool).await.unwrap(), 0);
+        upsert_catalog_page_with_filter(&pool, &[], &[], Some(None), Some(Some("2026-10-04T12:00:00Z")), Some(&filter), false, true).await.unwrap();
+        assert_eq!(sqlx::query_scalar::<_, String>("SELECT server_id FROM local_products").fetch_one(&pool).await.unwrap(), "keep");
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pos_outbox").fetch_one(&pool).await.unwrap(), 1);
+        let all = serde_json::json!({"enabled":false, "key":"all"});
+        upsert_catalog_page_with_filter(&pool, &initial, &[], None, None, Some(&all), true, true).await.unwrap();
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM local_products").fetch_one(&pool).await.unwrap(), 3);
+        assert_eq!(sqlx::query_scalar::<_, String>("SELECT value FROM schema_meta WHERE key = 'catalog_filter_key'").fetch_one(&pool).await.unwrap(), "all");
+    }
     use sqlx::sqlite::SqlitePoolOptions;
 
     #[tokio::test]

@@ -79,6 +79,20 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         tx.commit().await?;
     }
 
+    if current < 9 {
+        let mut tx = pool.begin().await?;
+        let columns = sqlx::query("PRAGMA table_info(pos_orders)").fetch_all(&mut *tx).await?;
+        if !columns.iter().any(|row| row.get::<String, _>("name") == "payment_tenders") {
+            sqlx::query("ALTER TABLE pos_orders ADD COLUMN payment_tenders TEXT NOT NULL DEFAULT '[]'")
+                .execute(&mut *tx).await?;
+        }
+        sqlx::query("CREATE TABLE IF NOT EXISTS pos_order_shift_receipts (order_id TEXT PRIMARY KEY, shift_id TEXT NOT NULL)")
+            .execute(&mut *tx).await?;
+        sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '9')")
+            .execute(&mut *tx).await?;
+        tx.commit().await?;
+    }
+
     // A process crash must not make the last run appear active forever.
     let _telemetry_write_guard = crate::sync_telemetry::acquire_write_lock().await;
     if let Some(row) = sqlx::query(

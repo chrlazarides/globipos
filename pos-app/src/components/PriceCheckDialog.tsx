@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { SearchIcon, XIcon, BarcodeIcon, MapPinIcon, Loader2Icon } from "lucide-react";
 import type { Product } from "../types";
+import type { LookupProduct } from "../lib/store-lookup";
 import { formatCurrency } from "../lib/pricing";
 import type { PosUiTheme } from "../hooks/usePosTheme";
 import type { LocationStockRow } from "../lib/db";
@@ -8,13 +9,13 @@ import type { LocationStockRow } from "../lib/db";
 interface PriceCheckDialogProps {
   priceLevel: number;
   theme?: PosUiTheme;
-  onSearch: (query: string) => Promise<Product[]>;
+  onSearch: (query: string) => Promise<LookupProduct[]>;
   onLookupBarcode: (barcode: string) => Promise<Product | null>;
   onGetStockByLocation?: (itemId: string) => Promise<LocationStockRow[]>;
   onClose: () => void;
 }
 
-function priceForLevel(p: Product, level: number): number {
+function priceForLevel(p: LookupProduct, level: number): number {
   if (p.timed_price != null) return p.timed_price;
   const prices = [p.price1, p.price2, p.price3, p.price4, p.price5];
   return prices[level - 1] || p.price1;
@@ -23,7 +24,8 @@ function priceForLevel(p: Product, level: number): number {
 export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLookupBarcode, onGetStockByLocation, onClose }: PriceCheckDialogProps) {
   const isLight = theme === "light";
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Product[]>([]);
+  const [results, setResults] = useState<LookupProduct[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -36,7 +38,7 @@ export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLook
   }, []);
 
   useEffect(() => {
-    if (!query.trim()) { setResults([]); return; }
+    if (!query.trim()) { setResults([]); setLoading(false); setSearchError(null); return; }
     let cancelled = false;
     setLoading(true);
     setExpandedId(null);
@@ -44,6 +46,7 @@ export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLook
     setStockError(null);
     const t = setTimeout(async () => {
       try {
+        setSearchError(null);
         const byBarcode = await onLookupBarcode(query.trim());
         if (cancelled) return;
         if (byBarcode) {
@@ -52,6 +55,11 @@ export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLook
           const found = await onSearch(query.trim());
           if (!cancelled) setResults(found.slice(0, 20));
         }
+      } catch (error) {
+        if (!cancelled) {
+          setResults([]);
+          setSearchError(error instanceof Error ? error.message : "Product search failed.");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -59,7 +67,7 @@ export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLook
     return () => { cancelled = true; clearTimeout(t); };
   }, [query, onSearch, onLookupBarcode]);
 
-  async function toggleStock(p: Product) {
+  async function toggleStock(p: LookupProduct) {
     if (expandedId === p.server_id) {
       setExpandedId(null);
       return;
@@ -125,9 +133,11 @@ export function PriceCheckDialog({ priceLevel, theme = "light", onSearch, onLook
         </div>
 
         {/* Results */}
+        <p className={`text-xs mb-2 ${emptyClass}`}>Online search includes products outside this terminal's partial list. Barcode lookup is also available from its local list.</p>
+        {searchError && <p role="alert" className="text-sm text-red-500 mb-2">{searchError}</p>}
         <div className="max-h-72 overflow-y-auto rounded-xl">
           {loading && <div className={`text-center py-6 text-sm ${emptyClass}`}>Searching…</div>}
-          {!loading && query.trim() && results.length === 0 && (
+          {!loading && !searchError && query.trim() && results.length === 0 && (
             <div className={`text-center py-6 text-sm ${emptyClass}`}>No matching products</div>
           )}
           {!loading && results.map((p) => (

@@ -9,9 +9,11 @@
  * Card payments call a Rust command that does HTTP to the configured gateway.
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { v4 as uuidv4 } from "uuid";
+import { cents, tenderTotals, validateTenders } from "../lib/paymentTenders";
+import { resolveCardPaymentOutcome } from "../lib/cardPayment";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -62,6 +64,8 @@ export interface UsePaymentReturn {
   isComplete: boolean;
   pendingCard: boolean;
   cardError: string | null;
+  verificationRequired: boolean;
+  canCancel: boolean;
 
   addCashTender: (amount: number) => void;
   addExactCash: () => void;              // tender exact order total in cash
@@ -73,6 +77,7 @@ export interface UsePaymentReturn {
   addCreditNoteTender: (amount: number, creditNoteId: string, creditNoteCode?: string) => void;
   removeTender: (id: string) => void;
   clearTenders: () => void;
+  resetCompletedPayment: () => void;
 
   finalise: () => PaymentResult;
 }
@@ -105,9 +110,21 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
   const [tenders, setTenders] = useState<Tender[]>([]);
   const [pendingCard, setPendingCard] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
+  const [verificationRequired, setVerificationRequired] = useState(false);
+  const cardBusy = useRef(false);
+  const tendersRef = useRef<Tender[]>([]);
+  tendersRef.current = tenders;
+  const verificationRef = useRef(false);
+  const orderTotalRef = useRef(orderTotal);
+  orderTotalRef.current = orderTotal;
+  function updateTenders(update: (previous: Tender[]) => Tender[]) {
+    const next = update(tendersRef.current);
+    tendersRef.current = next;
+    setTenders(next);
+  }
 
   const totalTendered = useMemo(
-    () => tenders.reduce((s, t) => s + t.amount, 0),
+    () => tenderTotals(tenders, orderTotal).totalTendered,
     [tenders]
   );
 
@@ -122,17 +139,17 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
   );
 
   const isComplete = useMemo(
-    () => totalTendered >= orderTotal - 0.001,
-    [totalTendered, orderTotal]
+    () => !pendingCard && !verificationRequired && tenderTotals(tenders, orderTotal).isComplete,
+    [tenders, pendingCard, verificationRequired, orderTotal]
   );
 
   // ── Cash ────────────────────────────────────────────────────────────────────
 
   const addCashTender = useCallback((amount: number) => {
-    if (amount <= 0) return;
-    setTenders((prev) => [
+    if (cardBusy.current || verificationRef.current || !Number.isFinite(amount) || cents(amount) <= 0) return;
+    updateTenders((prev) => [
       ...prev,
-      { id: uuidv4(), method: "cash", amount, label: tenderLabel("cash") },
+      { id: uuidv4(), method: "cash", amount: cents(amount) / 100, label: tenderLabel("cash") },
     ]);
   }, []);
 
@@ -146,7 +163,14 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
   // ── Card ────────────────────────────────────────────────────────────────────
 
   const requestCardPayment = useCallback(async (amount: number): Promise<boolean> => {
-    if (amount <= 0) return false;
+    if (cardBusy.current || verificationRef.current) return false;
+    const remaining = cents(orderTotalRef.current) - tendersRef.current.reduce((sum, t) => sum + cents(t.amount), 0);
+    if (!Number.isFinite(amount) || cents(amount) <= 0 || cents(amount) > remaining) {
+      setCardError("The card amount must be positive and cannot exceed the remaining balance.");
+      return false;
+    }
+    amount = cents(amount) / 100;
+    cardBusy.current = true;
     setPendingCard(true);
     setCardError(null);
 
@@ -157,7 +181,8 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
         { amount, currency: "EUR" }
       );
 
-      if (result.approved) {
+      const outcome = resolveCardPaymentOutcome(result);
+      if (outcome.kind === "complete") {
         // Map provider string returned by Rust to the correct TenderMethod
         const providerToMethod: Record<string, TenderMethod> = {
           jcc:       "card_jcc",
@@ -165,36 +190,44 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
           worldpay:  "card_worldpay",
           mock:      "card_jcc",
         };
-        const method: TenderMethod = providerToMethod[result.provider] ?? "card_jcc";
-        setTenders((prev) => [
+        const method = providerToMethod[result.provider];
+        if (!method) throw new Error("Approved payment has an unknown provider. Verify the charge before continuing.");
+        updateTenders((prev) => [
           ...prev,
           {
             id: uuidv4(),
             method,
             amount,
-            reference: result.reference,
+            reference: outcome.reference,
             approved: true,
             label: tenderLabel(method),
           },
         ]);
         return true;
       } else {
-        setCardError(result.error ?? "Card declined");
+        setCardError(outcome.message);
+        if (outcome.kind === "verification_required") {
+          verificationRef.current = true;
+          setVerificationRequired(true);
+        }
         return false;
       }
     } catch (err: any) {
-      setCardError(err?.message ?? "Card terminal error");
+      verificationRef.current = true;
+      setVerificationRequired(true);
+      setCardError(`${err?.message ?? "Card terminal error"}. Verify the terminal transaction; do not charge again.`);
       return false;
     } finally {
       setPendingCard(false);
+      cardBusy.current = false;
     }
-  }, []);
+  }, [orderTotal]);
 
   // ── Voucher ─────────────────────────────────────────────────────────────────
 
   const addVoucherTender = useCallback((barcode: string, amount: number, voucherId?: string) => {
-    if (amount <= 0) return;
-    setTenders((prev) => [
+    if (!canAddNonCash(amount)) return;
+    updateTenders((prev) => [
       ...prev,
       {
         id: uuidv4(),
@@ -211,8 +244,8 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
 
   const addLoyaltyTender = useCallback((points: number, valuePerPoint: number) => {
     const amount = Math.round(points * valuePerPoint * 100) / 100;
-    if (amount <= 0) return;
-    setTenders((prev) => [
+    if (!canAddNonCash(amount)) return;
+    updateTenders((prev) => [
       ...prev,
       {
         id: uuidv4(),
@@ -227,8 +260,8 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
   // ── Account credit ──────────────────────────────────────────────────────────
 
   const addAccountCreditTender = useCallback((amount: number) => {
-    if (amount <= 0) return;
-    setTenders((prev) => [
+    if (!canAddNonCash(amount)) return;
+    updateTenders((prev) => [
       ...prev,
       { id: uuidv4(), method: "account_credit", amount, label: tenderLabel("account_credit") },
     ]);
@@ -237,8 +270,8 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
   // ── Cheque ──────────────────────────────────────────────────────────────────
 
   const addChequeTender = useCallback((amount: number, chequeNumber: string) => {
-    if (amount <= 0) return;
-    setTenders((prev) => [
+    if (!canAddNonCash(amount)) return;
+    updateTenders((prev) => [
       ...prev,
       {
         id: uuidv4(),
@@ -253,8 +286,8 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
   // ── Credit note (store credit issued from a prior return) ────────────────────
 
   const addCreditNoteTender = useCallback((amount: number, creditNoteId: string, creditNoteCode?: string) => {
-    if (amount <= 0) return;
-    setTenders((prev) => [
+    if (!canAddNonCash(amount)) return;
+    updateTenders((prev) => [
       ...prev,
       {
         id: uuidv4(),
@@ -270,24 +303,49 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
   // ── Remove / clear ──────────────────────────────────────────────────────────
 
   const removeTender = useCallback((id: string) => {
-    setTenders((prev) => prev.filter((t) => t.id !== id));
+    if (cardBusy.current || verificationRef.current) return;
+    const tender = tendersRef.current.find(t => t.id === id);
+    if (tender?.method.startsWith("card_") && tender.approved) {
+      setCardError("An approved card payment cannot be removed here. Complete the sale, then use the authorized refund process.");
+      return;
+    }
+    updateTenders((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   const clearTenders = useCallback(() => {
-    setTenders([]);
+    if (cardBusy.current || verificationRef.current || tendersRef.current.some(t => t.approved && t.method.startsWith("card_"))) return;
+    updateTenders(() => []);
     setCardError(null);
   }, []);
+  const resetCompletedPayment = useCallback(() => {
+    updateTenders(() => []);
+    verificationRef.current = false;
+    setVerificationRequired(false);
+    setCardError(null);
+  }, []);
+
+  function canAddNonCash(amount: number) {
+    if (cardBusy.current || verificationRef.current || !Number.isFinite(amount) || cents(amount) <= 0) return false;
+    const remaining = cents(orderTotalRef.current) - tendersRef.current.reduce((sum, t) => sum + cents(t.amount), 0);
+    if (cents(amount) > remaining) {
+      setCardError("This payment cannot exceed the remaining balance.");
+      return false;
+    }
+    return true;
+  }
 
   // ── Finalise ────────────────────────────────────────────────────────────────
 
   const finalise = useCallback((): PaymentResult => {
+    if (cardBusy.current || verificationRef.current) throw new Error("The card transaction must be resolved before completing.");
+    const checked = validateTenders(tendersRef.current, orderTotal);
     return {
-      tenders,
-      totalTendered,
-      changeDue,
-      primaryMethod: primaryMethod(tenders),
+      tenders: [...tendersRef.current],
+      totalTendered: checked.totalTendered,
+      changeDue: checked.changeDue,
+      primaryMethod: primaryMethod(tendersRef.current),
     };
-  }, [tenders, totalTendered, changeDue]);
+  }, [tenders, totalTendered, changeDue, orderTotal]);
 
   return {
     tenders,
@@ -297,6 +355,8 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
     isComplete,
     pendingCard,
     cardError,
+    verificationRequired,
+    canCancel: !pendingCard && !verificationRequired && !tenders.some(t => t.approved && t.method.startsWith("card_")),
     addCashTender,
     addExactCash,
     requestCardPayment,
@@ -307,6 +367,7 @@ export function usePayment(orderTotal: number): UsePaymentReturn {
     addCreditNoteTender,
     removeTender,
     clearTenders,
+    resetCompletedPayment,
     finalise,
   };
 }

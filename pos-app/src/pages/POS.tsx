@@ -23,7 +23,7 @@ import type {
   Product, Category, LayoutButton, CashierSession, TerminalConfig,
   NumpadMode, Order as OrderType, OrderLine as OrderLineType,
 } from "../types";
-import { getProducts, getProductsByIds, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher, getStockByLocation, getPosLocations, createStockTransfer, getCustomerLive } from "../lib/db";
+import { getProducts, getProductsByIds, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, getStockByLocation, getPosLocations, createStockTransfer, getCustomerLive } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
 import { categoryBranchIds, departmentButtonAction, inheritedDepartmentVat, isWeighedProduct, parseMoneyDigits, scaleQuantity } from "../lib/departmentEntry";
 import { getCategoryProductsPage, getProductByPlu } from "../lib/db";
@@ -43,6 +43,7 @@ import type { AppliedPromo } from "../hooks/useMultiBuy";
 import type { PromoLineInput } from "../hooks/useOrder";
 import { useResponsiveColumns, type LayoutColumnConfig } from "../hooks/useWindowSize";
 import { readCachedLayoutConfig, writeCachedLayoutConfig } from "../lib/layout-config-cache";
+import { searchStoreProducts } from "../lib/store-lookup";
 import { SyncHeader } from "../components/SyncHeader";
 import { LayoutGrid } from "../components/LayoutGrid";
 import { CustomerInvoiceDialog } from "../components/CustomerInvoiceDialog";
@@ -704,6 +705,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     }
   );
   const isFresh = layoutConfig?.colorTheme === "fresh";
+  const lookupProducts = useCallback((query: string) => searchStoreProducts(config, query), [config]);
   const posTheme = isFresh ? "light" : savedPosTheme;
   const liveLayoutLoaded = useRef(false);
   const [maxButtonPos, setMaxButtonPos]   = useState(19); // default 4×5-1
@@ -916,10 +918,21 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     });
   }, []);
 
-  // Load local data on mount
+  // Refresh the browsing cache after a catalog sync, including partial-list changes.
   useEffect(() => {
-    getProducts().then(setProducts).catch(() => {});
-    getCategories().then(setCategories).catch(() => {});
+    let cancelled = false;
+    Promise.all([getProducts(), getCategories(), getProductsByIds(
+      [...new Set(layoutButtons.map(button => button.item_id).filter((id): id is string => !!id))]
+    )]).then(([nextProducts, nextCategories, nextLayoutProducts]) => {
+      if (cancelled) return;
+      setProducts(nextProducts); setCategories(nextCategories);
+      setLayoutProducts(nextLayoutProducts);
+    }).catch(error => console.error("Catalog browsing refresh failed", error));
+    return () => { cancelled = true; };
+  }, [sync.status.last_catalog_sync]);
+
+  // Load layout data on mount
+  useEffect(() => {
     getLayout().then((btns) => {
       if (liveLayoutLoaded.current) return;
       setLayoutButtons(btns);
@@ -1388,6 +1401,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
 
   // ── Payment complete ──────────────────────────────────────────────────────
   async function handlePaymentComplete(result: PaymentResult) {
+    let saleSaved = false;
     try {
       // Capture lines before completeOrder clears the order
       const saleLines = [...engine.lines];
@@ -1423,24 +1437,18 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       const completedOrder = await engine.completeOrder(
         method, result.totalTendered,
         session.cashier_id, session.cashier_name,
-        paymentRef
+        paymentRef, result.tenders
       );
+      saleSaved = true;
+      setPaymentSuccess({
+        total: completedOrder.total, method, changeDue: result.changeDue,
+        tendered: result.totalTendered, orderNumber: completedOrder.order_number ?? "",
+        cardRef: paymentRef,
+      });
       setDialog(null);
       sync.triggerOutboxFlush();
 
-      // Settle any validated voucher / credit-note tenders against their DB balance.
-      // (Free-text/legacy voucher tenders with no settleId are skipped — nothing to redeem.)
-      for (const tender of result.tenders) {
-        if (tender.method === "voucher" && tender.settleId) {
-          await redeemGiftVoucher(tender.settleId, tender.amount).catch((err) => {
-            console.error("Failed to redeem gift voucher", tender.settleId, err);
-          });
-        } else if (tender.method === "credit_note" && tender.settleId) {
-          await redeemCreditNote(tender.settleId, tender.amount).catch((err) => {
-            console.error("Failed to redeem credit note", tender.settleId, err);
-          });
-        }
-      }
+      // Tender settlement and shift allocation commit atomically with the local sale.
 
       // Publish "complete" mode to customer display after order finalised
       if (hw.config?.customer_display_enabled && cdStoreRef.current) {
@@ -1455,9 +1463,9 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         await cdStoreRef.current.save().catch(() => {});
       }
 
-      // Record sale in the current shift (updates shift totals for X/Z reports)
+      // Reload the shift totals already committed with the sale.
       if (shift.isShiftOpen) {
-        await shift.recordSale(completedOrder.total, method).catch(() => {});
+        await shift.refreshShift().catch(() => {});
       }
 
       const rc = receiptConfigRef.current ?? {
@@ -1489,17 +1497,10 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         await hw.openDrawer();
       }
 
-      // Show success overlay
-      setPaymentSuccess({
-        total: completedOrder.total,
-        method,
-        changeDue: result.changeDue,
-        tendered: result.totalTendered,
-        orderNumber: completedOrder.order_number ?? "",
-        cardRef: paymentRef,
-      });
     } catch (e) {
       console.error("Payment complete failed:", e);
+      // A printer/display failure must not invite another save or card charge.
+      if (!saleSaved) throw e;
     }
   }
 
@@ -1840,9 +1841,9 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         <PriceCheckDialog
           priceLevel={engine.order.price_level}
           theme={posTheme}
-          onSearch={(query) => getProducts(undefined, query)}
-          onLookupBarcode={(barcode) => getProductByBarcode(barcode)}
-          onGetStockByLocation={(itemId) => getStockByLocation(itemId)}
+          onSearch={lookupProducts}
+          onLookupBarcode={getProductByBarcode}
+          onGetStockByLocation={getStockByLocation}
           onClose={() => setDialog(null)}
         />
       )}

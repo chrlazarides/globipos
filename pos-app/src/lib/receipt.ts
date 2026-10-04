@@ -1,5 +1,6 @@
 import type { PrintReceiptLine } from "../hooks/useHardware";
 import type { Order, OrderLine, ReceiptConfig } from "../types";
+import { tenderLabel } from "./paymentTenders";
 
 export interface ReceiptSaleContext {
   terminalCode: string;
@@ -77,12 +78,20 @@ export function buildReceiptLines(config: ReceiptConfig, ctx: ReceiptSaleContext
   }
   lines.push({ text: rightPair(t.total, ctx.currency(ctx.order.total), width), bold: true, size: "big" });
   lines.push({ text: rightPair(t.items, String(saleLines.reduce((sum, line) => sum + line.qty, 0)), width) }, divider(width));
-  if (config.show_payment_method) lines.push({ text: `${t.payment}: ${ctx.paymentMethod.replace("card_", "Card ").replace("_", " ").toUpperCase()}` });
+  if (config.show_payment_method) {
+    lines.push({ text: `${t.payment}: ${ctx.paymentMethod.replace("card_", "Card ").replace("_", " ").toUpperCase()}` });
+    for (const tender of ctx.order.payment_tenders ?? []) {
+      lines.push({ text: rightPair(tenderLabel(tender.method), ctx.currency(tender.amount), width) });
+      if (tender.method.startsWith("card_") && tender.reference) {
+        lines.push({ text: `${t.cardRef}: ${tender.reference}` });
+      }
+    }
+  }
   if (config.show_tendered_change && (ctx.totalTendered ?? 0) > 0) {
     lines.push({ text: rightPair(t.tendered, ctx.currency(ctx.totalTendered ?? 0), width) });
     lines.push({ text: rightPair(t.change, ctx.currency(ctx.changeDue ?? 0), width) });
   }
-  if (config.show_card_ref && ctx.paymentRef) lines.push({ text: `${t.cardRef}: ${ctx.paymentRef}` });
+  if (config.show_card_ref && ctx.paymentRef && !ctx.order.payment_tenders?.length) lines.push({ text: `${t.cardRef}: ${ctx.paymentRef}` });
   const footer = config.footer_lines.filter((line) => line.trim());
   if (footer.length) lines.push(divider(width), ...footer.map((text) => ({ text: clean(text), align: "center" as const })));
   return lines;
