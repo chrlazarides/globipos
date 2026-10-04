@@ -287,7 +287,7 @@ export default function PaymentDialog({
   return (
     <Dialog open={open} onOpenChange={(o) => !o && payment.canCancel && !completing && onCancel()}>
       <DialogContent
-        className="sm:max-w-xl p-0 gap-0 bg-white text-slate-900 dark:bg-gray-900 dark:text-gray-100 border-slate-200 dark:border-gray-700 max-h-[calc(100dvh-2rem)] overflow-y-auto"
+        className="sm:!max-w-2xl !p-0 gap-0 bg-white text-slate-900 dark:bg-gray-900 dark:text-gray-100 border-slate-200 dark:border-gray-700 !max-h-[calc(100dvh-2rem)] overflow-y-auto"
         data-testid="payment-dialog"
       >
         <DialogHeader className="px-6 pt-5 pb-4 border-b">
@@ -319,7 +319,7 @@ export default function PaymentDialog({
 
         <div className="flex flex-col sm:flex-row">
           {/* Left: tender list + tabs */}
-          <div className="flex-1 p-4 space-y-4 border-r">
+          <div className="min-w-0 flex-1 p-4 space-y-4 border-r">
             {/* Tab bar */}
             <div className="flex gap-1 bg-muted p-1 rounded-lg">
               {(["cash", "card", "split"] as PaymentTab[]).map((t) => (
@@ -642,7 +642,7 @@ export default function PaymentDialog({
           </div>
 
           {/* Right: keypad */}
-          <div className="p-4 space-y-2">
+          <div className="w-full sm:w-60 shrink-0 p-4 space-y-2">
             <PaymentKeypad onPress={handleNumpadPress} disabled={busy} />
             {(payment.cardError || completionError) && (
               <p role="alert" className="text-sm text-red-500" data-testid="payment-error">

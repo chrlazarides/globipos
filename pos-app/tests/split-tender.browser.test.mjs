@@ -137,6 +137,7 @@ try {
     const dialog = page.getByTestId("payment-dialog");
     const bounds = await dialog.boundingBox();
     assert(bounds && bounds.y >= 0 && bounds.y + bounds.height <= size.height, "Payment window must fit vertically");
+    assert.equal(await dialog.evaluate(element => element.scrollWidth > element.clientWidth), false, "Payment controls must not overflow inside the dialog");
     assert.equal(await dialog.evaluate(element => getComputedStyle(element).backgroundColor), "rgb(255, 255, 255)");
     await page.getByTestId("btn-payment-complete").scrollIntoViewIfNeeded();
     assert.equal(await page.getByTestId("btn-payment-complete").isVisible(), true);
