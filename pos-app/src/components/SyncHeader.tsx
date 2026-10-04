@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { WifiIcon, WifiOffIcon, Loader2Icon, ClockIcon, RefreshCwIcon, PackageIcon, SunIcon, MoonIcon, PrinterIcon, ActivityIcon } from "lucide-react";
 import type { SyncStatus, SyncTelemetry, TerminalConfig, CashierSession, PeripheralHealth } from "../types";
 import type { PosUiTheme } from "../hooks/usePosTheme";
@@ -42,8 +42,31 @@ export function SyncHeader({
 }: SyncHeaderProps) {
   const [clock, setClock] = useState<string>(formatTime());
   const [syncPanelOpen, setSyncPanelOpen] = useState(false);
+  const syncPanelRef = useRef<HTMLDivElement>(null);
+  const syncButtonRef = useRef<HTMLButtonElement>(null);
   const [deviceKeyOpen, setDeviceKeyOpen] = useState(false);
   const isLight = theme === "light";
+
+  useEffect(() => {
+    if (!syncPanelOpen) return;
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !syncPanelRef.current?.contains(event.target)) {
+        setSyncPanelOpen(false);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSyncPanelOpen(false);
+        syncButtonRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [syncPanelOpen]);
 
   useEffect(() => {
     const t = setInterval(() => setClock(formatTime()), 1000);
@@ -109,7 +132,7 @@ export function SyncHeader({
       >
         Device key
       </button>
-      {deviceKeyOpen && <DeviceKeyDialog hasKey={!!config.voucher_device_key} onClose={() => setDeviceKeyOpen(false)} />}
+      {deviceKeyOpen && <DeviceKeyDialog config={config} hasKey={!!config.voucher_device_key} onClose={() => setDeviceKeyOpen(false)} />}
 
       {/* Theme toggle */}
       <button
@@ -122,8 +145,9 @@ export function SyncHeader({
       </button>
 
       {/* Sync button */}
-      <div className="relative">
+      <div className="relative" ref={syncPanelRef}>
         <button
+          ref={syncButtonRef}
           type="button"
           onClick={() => setSyncPanelOpen((open) => !open)}
           aria-expanded={syncPanelOpen}
@@ -146,6 +170,10 @@ export function SyncHeader({
             isLight={isLight}
             busy={syncNowBusy}
             onSyncNow={onSyncNow}
+            onClose={() => {
+              setSyncPanelOpen(false);
+              syncButtonRef.current?.focus();
+            }}
           />
         )}
       </div>

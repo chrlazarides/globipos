@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { UserIcon, DeleteIcon, AlertCircleIcon } from "lucide-react";
 import type { CashierSession, TerminalConfig } from "../types";
 import { validatePin, writeAudit } from "../lib/db";
@@ -6,19 +7,52 @@ import { validatePin, writeAudit } from "../lib/db";
 interface LoginProps {
   config: TerminalConfig;
   onLogin: (session: CashierSession) => void;
+  onConfigure?: () => void;
 }
 
 const MIN_PIN_LENGTH = 4;
 const MAX_PIN_LENGTH = 8;
 
-export function Login({ config, onLogin }: LoginProps) {
+export function Login({ config, onLogin, onConfigure }: LoginProps) {
   const [pin, setPin]       = useState("");
   const [error, setError]   = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [cashierStatus, setCashierStatus] = useState("");
+  const refreshBusy = useRef(false);
+
+  const refreshCashiers = useCallback(async () => {
+    if (refreshBusy.current) return;
+    if (!navigator.onLine) {
+      setCashierStatus("Offline — using previously synced cashier PINs.");
+      return;
+    }
+    refreshBusy.current = true;
+    setRefreshing(true);
+    setCashierStatus("Refreshing cashier PINs…");
+    try {
+      const count = await invoke<number>("sync_cashiers");
+      setCashierStatus(count === 0
+        ? "No active cashiers assigned to this location. Check back-office cashier settings."
+        : `${count} active cashier${count === 1 ? "" : "s"} synced for this location.`);
+    } catch {
+      setCashierStatus("Cashier refresh unavailable — using previously synced PINs. Check the connection and retry.");
+    } finally {
+      refreshBusy.current = false;
+      setRefreshing(false);
+    }
+  }, [config.server_url, config.terminal_code]);
+
+  useEffect(() => {
+    void refreshCashiers();
+    const online = () => { void refreshCashiers(); };
+    window.addEventListener("online", online);
+    return () => window.removeEventListener("online", online);
+  }, [refreshCashiers]);
 
   function handleDigit(d: string) {
     if (pin.length >= MAX_PIN_LENGTH || loading) return;
-    setPin(pin + d);
+    setPin(current => current.length < MAX_PIN_LENGTH ? current + d : current);
     setError(null);
   }
 
@@ -28,6 +62,7 @@ export function Login({ config, onLogin }: LoginProps) {
   }
 
   async function submitPin(p: string) {
+    if (loading || refreshBusy.current || p.length < MIN_PIN_LENGTH) return;
     setLoading(true);
     try {
       const session = await validatePin(p);
@@ -57,6 +92,10 @@ export function Login({ config, onLogin }: LoginProps) {
         </div>
         <h1 className="text-2xl font-bold text-white">{config.terminal_name}</h1>
         <p className="text-gray-400 text-sm mt-0.5">{config.location_name}</p>
+        <p className="text-gray-500 text-xs mt-2">Saved terminal: {config.terminal_code}</p>
+        {onConfigure && <button type="button" onClick={onConfigure} disabled={loading || refreshing}
+          className="mt-3 rounded-lg border border-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 disabled:opacity-40"
+          data-testid="button-configure-terminal">Configure / Switch Terminal</button>}
       </div>
 
       <div className="bg-gray-900 rounded-2xl border border-gray-800 p-8 w-full max-w-xs shadow-xl">
@@ -115,11 +154,18 @@ export function Login({ config, onLogin }: LoginProps) {
         <button
           type="button"
           onClick={() => void submitPin(pin)}
-          disabled={loading || pin.length < MIN_PIN_LENGTH}
+          disabled={loading || refreshing || pin.length < MIN_PIN_LENGTH}
           className="mt-4 h-12 w-full rounded-xl bg-burgundy-700 hover:bg-burgundy-600 text-white font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
           data-testid="button-pin-sign-in"
         >
           {loading ? "Signing in…" : "Sign In"}
+        </button>
+
+        <p className="mt-4 text-center text-xs text-gray-400" role="status">{cashierStatus}</p>
+        <button type="button" onClick={() => void refreshCashiers()} disabled={refreshing || loading}
+          className="mt-2 w-full text-sm text-burgundy-400 disabled:opacity-40"
+          data-testid="button-refresh-cashiers">
+          {refreshing ? "Refreshing…" : "Refresh cashier PINs"}
         </button>
 
         <p className="text-center text-gray-600 text-xs mt-6">

@@ -1,7 +1,35 @@
 use sha2::{Sha256, Digest};
 use sqlx::{Row, SqlitePool};
 
-use crate::models::CashierSession;
+use crate::models::{CashierSession, CashierSeed};
+
+/// Apply a complete, active cashier snapshot atomically. Missing cashiers lose
+/// local access; a failed/invalid download must leave offline credentials intact.
+pub async fn replace_synced_cashiers(pool: &SqlitePool, cashiers: &[CashierSeed]) -> Result<(), String> {
+    let mut ids = std::collections::HashSet::new();
+    for cashier in cashiers {
+        if cashier.id.trim().is_empty() || !ids.insert(&cashier.id)
+            || cashier.pin_hash.len() != 64
+            || !cashier.pin_hash.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err("Invalid cashier snapshot; cached PINs were not changed".to_string());
+        }
+    }
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE cashiers SET active = 0")
+        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    for cashier in cashiers {
+        sqlx::query(
+            "INSERT INTO cashiers (id, name, pin_hash, role, active) VALUES (?, ?, ?, ?, 1)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, pin_hash=excluded.pin_hash,
+             role=excluded.role, active=1",
+        )
+        .bind(&cashier.id).bind(&cashier.name)
+        .bind(cashier.pin_hash.to_ascii_lowercase()).bind(&cashier.role)
+        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())
+}
 
 /// Hash a plaintext PIN using SHA-256. Returns lowercase hex string.
 pub fn hash_pin(pin: &str) -> String {

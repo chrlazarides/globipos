@@ -6,6 +6,7 @@ import {
   RefreshCwIcon,
   WifiIcon,
   WifiOffIcon,
+  XIcon,
 } from "lucide-react";
 import type { SyncTelemetry } from "../types";
 
@@ -14,6 +15,7 @@ interface SyncObservabilityPanelProps {
   isLight: boolean;
   busy: boolean;
   onSyncNow: () => void;
+  onClose: () => void;
 }
 
 const phaseLabels: Record<SyncTelemetry["phase"], string> = {
@@ -35,6 +37,7 @@ export function SyncObservabilityPanel({
   isLight,
   busy,
   onSyncNow,
+  onClose,
 }: SyncObservabilityPanelProps) {
   const panel = isLight
     ? "bg-white border-slate-200 text-slate-800 shadow-xl"
@@ -64,7 +67,7 @@ export function SyncObservabilityPanel({
 
   return (
     <section
-      className={`absolute right-0 top-full z-[100] mt-2 w-[min(26rem,calc(100vw-1rem))] rounded-xl border p-4 ${panel}`}
+      className={`absolute right-0 top-full z-[100] mt-2 max-h-[calc(100dvh-5rem)] overflow-y-auto w-[min(26rem,calc(100vw-1rem))] rounded-xl border p-4 ${panel}`}
       role="dialog"
       aria-label="Synchronization details"
       data-testid="panel-sync-details"
@@ -83,6 +86,7 @@ export function SyncObservabilityPanel({
             {phaseText}
           </p>
         </div>
+        <div className="flex shrink-0 items-center gap-2">
         <button
           type="button"
           onClick={onSyncNow}
@@ -93,6 +97,12 @@ export function SyncObservabilityPanel({
           <RefreshCwIcon className={`h-3.5 w-3.5 ${busy || telemetry.syncing ? "animate-spin" : ""}`} />
           {telemetry.error ? "Retry sync" : "Sync now"}
         </button>
+        <button type="button" onClick={onClose} aria-label="Close sync details"
+          className="rounded-lg p-2 hover:bg-gray-500/15"
+          data-testid="button-close-sync">
+          <XIcon className="h-4 w-4" />
+        </button>
+        </div>
       </div>
 
       <div className={`mt-3 grid grid-cols-2 gap-2 border-y py-3 ${rule}`}>

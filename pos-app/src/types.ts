@@ -123,6 +123,7 @@ export interface CashierSession {
 // ── Terminal Config ───────────────────────────────────────────────────────────
 
 export interface TerminalConfig {
+  restart_required?: boolean;
   server_url: string;
   /** Paired device key (X-Voucher-Device-Key) required for online customer invoices. */
   voucher_device_key?: string;

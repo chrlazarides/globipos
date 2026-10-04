@@ -37,6 +37,7 @@ interface LayoutGridProps {
   onItemButton: (product: Product) => void;
   onCategoryButton: (categoryId: string | null) => boolean | void;
   onActionButton: (actionCode: string) => void;
+  paymentsEnabled?: boolean;
 }
 
 const ACTION_COLORS: Record<string, string> = {
@@ -157,8 +158,10 @@ export function LayoutGrid({
   onItemButton,
   onCategoryButton,
   onActionButton,
+  paymentsEnabled = false,
 }: LayoutGridProps) {
   const isFresh = colorTheme === "fresh";
+  const [freshAssignmentsOpen, setFreshAssignmentsOpen] = useState(false);
   const isLight = colorTheme === "light" || isFresh;
   const emptySlotClass = isLight
     ? "rounded-xl border border-dashed border-gray-300 bg-gray-200/40"
@@ -181,7 +184,9 @@ export function LayoutGrid({
       : b.sublayout_id === currentPanelId // child: matching id
   );
 
-  const totalSlots = columns * rows;
+  const totalSlots = isFresh && freshAssignmentsOpen
+    ? Math.max(columns * rows, ...panelButtons.map(b => b.position + columns * (b.rowspan ?? 1)))
+    : columns * rows;
 
   // Build a position → button map, then compute grid-area spans
   // We use CSS grid-column/row span via inline style on each rendered cell.
@@ -281,7 +286,7 @@ export function LayoutGrid({
   for (const c of isFresh ? categories.filter(c => c.active !== false && !c.parent_id) : []) {
     if (!tabs.some(tab => catByKey.get(tab.id)?.server_id === c.server_id)) tabs.push({ id: c.server_id, label: c.name });
   }
-  const showFastKeys = fastKeysOpen || !!selectedCategoryId;
+  const showFastKeys = (!isFresh || !freshAssignmentsOpen) && (fastKeysOpen || !!selectedCategoryId);
   function tabIcon(label: string) {
     if (/vegetable/i.test(label)) return "🥦";
     if (/fruit|produce/i.test(label)) return "🍎";
@@ -428,6 +433,24 @@ export function LayoutGrid({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      {isFresh && <div className={`flex flex-wrap items-center gap-2 px-3 py-2 flex-shrink-0 ${barClass}`}
+        data-testid="fresh-payment-functions">
+        {[
+          ["PAY_CASH", "Cash"], ["PAY_CARD", "Card"], ["PAY_SPLIT", "Split"],
+        ].map(([code, label]) => (
+          <button key={code} type="button" onClick={() => onActionButton(code)}
+            disabled={!paymentsEnabled}
+            data-testid={`fresh-${code.toLowerCase()}`}
+            className={`rounded-lg border px-4 py-2 text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed ${tabIdle}`}>
+            {label}
+          </button>
+        ))}
+        <button type="button" onClick={() => setFreshAssignmentsOpen(open => !open)}
+          aria-expanded={freshAssignmentsOpen} data-testid="fresh-layout-functions"
+          className={`ml-auto rounded-lg border px-3 py-2 text-sm font-bold ${tabIdle}`}>
+          {freshAssignmentsOpen ? "Back to products" : "Layout functions"}
+        </button>
+      </div>}
       {!isFresh && !showFastKeys && onOpenFastKeys && (
         <button type="button" onClick={onOpenFastKeys} data-testid="open-fast-keys"
           className={`m-2 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-bold ${tabIdle}`}>
@@ -503,7 +526,7 @@ export function LayoutGrid({
         </div>
       ) : showFastKeys && !selectedCategoryId ? (
         <div className={`p-4 text-sm ${barTextMuted}`}>Choose a category above, or type a PLU code to find an item.</div>
-      ) : selectedCategoryId ? (
+      ) : showFastKeys && selectedCategoryId ? (
         <div className="flex flex-col flex-1 min-h-0" data-testid="category-view">
           <div className={`flex items-center gap-2 px-3 py-1.5 flex-shrink-0 ${barClass}`}>
             <button
@@ -635,10 +658,12 @@ export function LayoutGrid({
 
       {/* Grid */}
       <div
-        className="flex-1 grid gap-1.5 p-2 overflow-hidden"
+        className={`flex-1 grid gap-1.5 p-2 ${isFresh && freshAssignmentsOpen ? "overflow-y-auto" : "overflow-hidden"}`}
         style={{
           gridTemplateColumns: `repeat(${columns}, 1fr)`,
-          gridTemplateRows: `repeat(${rows}, 1fr)`,
+          gridTemplateRows: isFresh && freshAssignmentsOpen
+            ? `repeat(${Math.ceil(totalSlots / columns)}, minmax(64px, 1fr))`
+            : `repeat(${rows}, 1fr)`,
         }}
       >
         {Array.from({ length: totalSlots }, (_, i) => {

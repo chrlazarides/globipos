@@ -7,7 +7,7 @@
 import { useState, useEffect } from "react";
 import type { TerminalConfig, CashierSession } from "./types";
 import { getConfig } from "./lib/db";
-import { readDeviceKey, writeDeviceKey, DEVICE_KEY_EVENT } from "./lib/deviceKey";
+import { readDeviceKey, deviceKeyScope, DEVICE_KEY_EVENT } from "./lib/deviceKey";
 import { Setup } from "./pages/Setup";
 import { Login } from "./pages/Login";
 import { POS } from "./pages/POS";
@@ -23,7 +23,7 @@ export function App() {
   const [config, setConfig]   = useState<TerminalConfig | null>(null);
   const [session, setSession] = useState<CashierSession | null>(null);
 
-  const sync        = useSync(config !== null, config);
+  const sync        = useSync(config !== null && screen !== "setup", config);
   const updateState = useUpdater();
 
   // On mount: init SQLite and check if we have a stored config
@@ -38,7 +38,7 @@ export function App() {
       try {
         const cfg = await getConfig();
         if (cfg) {
-          setConfig({ ...cfg, voucher_device_key: (await readDeviceKey()) || undefined });
+          setConfig({ ...cfg, voucher_device_key: (await readDeviceKey(cfg, true)) || undefined });
           setScreen("login");
         } else {
           setScreen("setup");
@@ -53,17 +53,17 @@ export function App() {
 
   useEffect(() => {
     const onKey = (event: Event) => {
-      const key = (event as CustomEvent<string>).detail || undefined;
-      setConfig((current) => (current ? { ...current, voucher_device_key: key } : current));
+      const { key, scope } = (event as CustomEvent<{ key: string; scope: string }>).detail;
+      setConfig((current) => current && scope === deviceKeyScope(current)
+        ? { ...current, voucher_device_key: key || undefined } : current);
     };
     window.addEventListener(DEVICE_KEY_EVENT, onKey);
     return () => window.removeEventListener(DEVICE_KEY_EVENT, onKey);
   }, []);
 
   async function handleSetupComplete(cfg: TerminalConfig) {
-    // Persist a key entered during setup; otherwise keep any key already saved on this device.
-    if (cfg.voucher_device_key) await writeDeviceKey(cfg.voucher_device_key).catch((e) => console.error("Device key not saved", e));
-    const stored = cfg.voucher_device_key || (await readDeviceKey()) || undefined;
+    // Setup persists the supplied key; never inherit one from another binding.
+    const stored = (await readDeviceKey(cfg)) || undefined;
     cfg = { ...cfg, voucher_device_key: stored };
     setConfig(cfg);
     setScreen("login");
@@ -94,7 +94,8 @@ export function App() {
   if (screen === "setup") {
     return (
       <>
-        <Setup onComplete={handleSetupComplete} />
+        <Setup initialConfig={config} onComplete={handleSetupComplete}
+          onCancel={config ? () => setScreen("login") : undefined} />
         <UpdateBanner state={updateState} />
         <BuildBadge />
       </>
@@ -104,7 +105,10 @@ export function App() {
   if (screen === "login" && config) {
     return (
       <>
-        <Login config={config} onLogin={handleLogin} />
+        <Login config={config} onLogin={handleLogin} onConfigure={() => {
+          setSession(null);
+          setScreen("setup");
+        }} />
         <UpdateBanner state={updateState} />
         <BuildBadge />
       </>

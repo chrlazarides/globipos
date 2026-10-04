@@ -10,6 +10,7 @@ mod migrations;
 mod models;
 mod orders;
 mod sync;
+mod terminal_profile;
 mod sync_telemetry;
 #[cfg(test)]
 mod tests;
@@ -49,9 +50,25 @@ fn sync_error_code(operation: &str, error: &str) -> String {
     }
 }
 
-fn store_config(app: &AppHandle, cfg: &TerminalConfig) -> Result<(), String> {
+fn selected_database(app: &AppHandle) -> Result<String, String> {
     use tauri_plugin_store::StoreExt;
     let store = app.store("config.json").map_err(|e| e.to_string())?;
+    let filename = store.get("database_profile").and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "globipos.db".into());
+    if !terminal_profile::valid_filename(&filename) { return Err("Invalid terminal database profile".into()); }
+    Ok(filename)
+}
+
+fn store_config(app: &AppHandle, cfg: &TerminalConfig, filename: &str, previous: Option<&TerminalConfig>) -> Result<(), String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("config.json").map_err(|e| e.to_string())?;
+    let mut profiles = store.get("terminal_profiles").and_then(|v| v.as_object().cloned()).unwrap_or_default();
+    if let Some(old) = previous {
+        profiles.insert(terminal_profile::profile_key(&old.server_url, &old.terminal_code), Value::String(selected_database(app)?));
+    }
+    profiles.insert(terminal_profile::profile_key(&cfg.server_url, &cfg.terminal_code), Value::String(filename.into()));
+    store.set("terminal_profiles", Value::Object(profiles));
+    store.set("database_profile", Value::String(filename.into()));
     store.set("terminal_config", serde_json::to_value(cfg).map_err(|e| e.to_string())?);
     store.save().map_err(|e| e.to_string())?;
     Ok(())
@@ -86,8 +103,38 @@ async fn register_terminal(
     state:         State<'_, AppState>,
     server_url:    String,
     terminal_code: String,
-) -> Result<TerminalConfig, String> {
-    let resp = sync::register_terminal(&state.db, &server_url, &terminal_code).await?;
+) -> Result<Value, String> {
+    use tauri_plugin_store::StoreExt;
+    let _guard = state.sync_coordinator.try_lock()
+        .map_err(|_| "Sync is running. Wait for it to finish and retry terminal setup.".to_string())?;
+    let parsed = reqwest::Url::parse(server_url.trim()).map_err(|_| "Enter a valid server URL".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || !parsed.username().is_empty() || parsed.password().is_some()
+        || parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("Use an HTTP or HTTPS server URL without credentials, query or fragment".into());
+    }
+    let server_url = parsed.to_string().trim_end_matches('/').to_string();
+    let terminal_code = terminal_code.trim().to_uppercase();
+    if terminal_code.is_empty() { return Err("Enter a terminal code".into()); }
+    let previous = state.config.lock().unwrap().clone();
+    let key = terminal_profile::profile_key(&server_url, &terminal_code);
+    let same = previous.as_ref().map(|old|
+        terminal_profile::profile_key(&old.server_url, &old.terminal_code) == key
+    ).unwrap_or(false);
+    if previous.is_some() && !same { terminal_profile::ensure_switch_ready(&state.db).await?; }
+    let filename = if same { selected_database(&app)? } else {
+        let store = app.store("config.json").map_err(|e| e.to_string())?;
+        store.get("terminal_profiles").and_then(|v| v.get(&key).and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_else(|| format!("terminal-{}.db", key))
+    };
+    if !terminal_profile::valid_filename(&filename) { return Err("Invalid terminal database profile".into()); }
+    let pool = if same { state.db.clone() } else {
+        let path = app.path().app_data_dir().map_err(|e| e.to_string())?.join(&filename);
+        let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(&path).create_if_missing(true);
+        let pool = SqlitePool::connect_with(opts).await.map_err(|e| e.to_string())?;
+        migrations::run_migrations(&pool).await.map_err(|e| e.to_string())?;
+        pool
+    };
+    let resp = sync::register_terminal(&pool, &server_url, &terminal_code).await?;
 
     let cfg = TerminalConfig {
         server_url:        server_url.clone(),
@@ -101,9 +148,23 @@ async fn register_terminal(
         sco_mode:          None,
     };
 
-    store_config(&app, &cfg)?;
-    *state.config.lock().unwrap() = Some(cfg.clone());
-    Ok(cfg)
+    store_config(&app, &cfg, &filename, previous.as_ref())?;
+    if same { *state.config.lock().unwrap() = Some(cfg.clone()); }
+    // A new profile must never run against the old process's SQLite pool.
+    let mut result = serde_json::to_value(cfg).map_err(|e| e.to_string())?;
+    result["restart_required"] = Value::Bool(!same);
+    Ok(result)
+}
+
+#[tauri::command]
+fn restart_pos(app: AppHandle) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    app.restart();
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Settings saved. Close and reopen POS to finish switching terminals.".into())
+    }
 }
 
 #[tauri::command]
@@ -434,6 +495,16 @@ async fn next_order_number(state: State<'_, AppState>, prefix: String) -> Result
 }
 
 #[tauri::command]
+async fn sync_cashiers(state: State<'_, AppState>) -> Result<usize, String> {
+    let (server_url, terminal_code) = {
+        let cfg = state.config.lock().unwrap();
+        let c = cfg.as_ref().ok_or_else(cfg_err)?;
+        (c.server_url.clone(), c.terminal_code.clone())
+    };
+    sync::sync_cashiers(&state.db, &server_url, &terminal_code).await
+}
+
+#[tauri::command]
 async fn sync_catalog(state: State<'_, AppState>) -> Result<usize, String> {
     let _guard = state.sync_coordinator.try_lock()
         .map_err(|_| "SYNC_ALREADY_RUNNING".to_string())?;
@@ -452,10 +523,16 @@ async fn sync_catalog(state: State<'_, AppState>) -> Result<usize, String> {
         s.syncing = true;
     }
 
+    let cashiers_result = sync::sync_cashiers(&state.db, &server_url, &terminal_code).await;
     let result = sync::sync_catalog(&state.db, &server_url, &terminal_code, since.as_deref()).await;
     let result = match result {
         Ok(count) => {
-            sync_telemetry::finish(&state.db, "complete", None, true).await?;
+            if let Err(error) = cashiers_result {
+                let code = sync_error_code("cashiers", &error);
+                sync_telemetry::finish(&state.db, "partial", Some(&code), true).await?;
+            } else {
+                sync_telemetry::finish(&state.db, "complete", None, true).await?;
+            }
             Ok(count)
         }
         Err(error) => {
@@ -652,6 +729,12 @@ async fn sync_now(state: State<'_, AppState>) -> Result<SyncTelemetry, String> {
     let mut failures = Vec::new();
     let mut successes = 0usize;
 
+    sync_telemetry::set_phase(&state.db, "cashiers").await?;
+    match sync::sync_cashiers(&state.db, &server_url, &terminal_code).await {
+        Ok(_) => successes += 1,
+        Err(error) => failures.push(sync_error_code("cashiers", &error)),
+    }
+    sync_telemetry::set_phase(&state.db, "catalog-download").await?;
     let since_catalog = sqlx::query("SELECT value FROM schema_meta WHERE key = 'last_catalog_sync'")
         .fetch_optional(&state.db).await.map_err(|e| e.to_string())?
         .and_then(|r| r.try_get::<String, _>("value").ok());
@@ -1960,7 +2043,8 @@ pub fn run() {
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
             std::fs::create_dir_all(&data_dir)
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-            let db_path = data_dir.join("globipos.db");
+            let db_path = data_dir.join(selected_database(app.handle())
+                .map_err(std::io::Error::other)?);
 
             let pool: SqlitePool = tauri::async_runtime::block_on(async {
                 let opts = sqlx::sqlite::SqliteConnectOptions::new()
@@ -1991,6 +2075,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // ── Phase 1 & 2 commands ─────────────────────────────────────────
             get_config,
+            restart_pos,
             register_terminal,
             validate_pin,
             reconcile_card_payment,
@@ -2009,6 +2094,7 @@ pub fn run() {
             get_recent_orders,
             next_order_number,
             sync_catalog,
+            sync_cashiers,
             sync_inbox,
             flush_outbox,
             flush_outbox_mirror,

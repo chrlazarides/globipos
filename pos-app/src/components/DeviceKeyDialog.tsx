@@ -1,14 +1,15 @@
 import { useState } from "react";
 import { writeDeviceKey } from "../lib/deviceKey";
+import type { TerminalConfig } from "../types";
 
-export function DeviceKeyDialog({ hasKey, onClose }: { hasKey: boolean; onClose: () => void }) {
+export function DeviceKeyDialog({ hasKey, onClose, config }: { hasKey: boolean; onClose: () => void; config: TerminalConfig }) {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   async function save(next: string) {
     setBusy(true); setError("");
-    try { await writeDeviceKey(next); onClose(); }
+    try { await writeDeviceKey(next, config); onClose(); }
     catch (e) { setError(e instanceof Error ? e.message : "Could not save the device key."); }
     finally { setBusy(false); }
   }

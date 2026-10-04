@@ -22,7 +22,7 @@ export function GroceryPriceDialog({ config, cashierId, cashierName, categories,
   const [printed, setPrinted] = useState(false);
   const [query, setQuery] = useState("");
   async function request<T>(action: "list" | "save" | "print-status", extra = {}): Promise<T> {
-    const key = await readDeviceKey();
+    const key = await readDeviceKey(config);
     if (!key) throw new Error("Pair this terminal with its secure device key first.");
     const response = await fetch(`${config.server_url.replace(/\/$/, "")}/api/pos/grocery-prices/${action}`, {
       method: "POST", headers: { "Content-Type": "application/json", "X-Terminal-Code": config.terminal_code, "X-Voucher-Device-Key": key },

@@ -57,11 +57,7 @@ pub async fn register_terminal(
         .map_err(|e| e.to_string())?;
 
     // Seed cashiers synced from server (server sends SHA-256 hash, stored directly)
-    for c in &data.cashiers {
-        crate::auth::upsert_cashier_with_hash(pool, &c.id, &c.name, &c.pin_hash, &c.role)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
+    crate::auth::replace_synced_cashiers(pool, &data.cashiers).await?;
 
     // Log
     sqlx::query(
@@ -76,6 +72,25 @@ pub async fn register_terminal(
 }
 
 // ── Catalog sync (delta) ─────────────────────────────────────────────────────
+
+pub async fn sync_cashiers(
+    pool: &SqlitePool, server_url: &str, terminal_code: &str,
+) -> Result<usize, String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(15))
+        .build().map_err(|e| e.to_string())?;
+    let response = client
+        .get(format!("{}/api/pos/sync/cashiers", server_url.trim_end_matches('/')))
+        .header("X-Terminal-Code", terminal_code)
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .send().await.map_err(|e| format!("Cashier refresh network error: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("Cashier refresh rejected (HTTP {})", response.status().as_u16()));
+    }
+    let cashiers: Vec<crate::models::CashierSeed> = response.json().await
+        .map_err(|_| "Invalid cashier response; cached PINs were not changed".to_string())?;
+    crate::auth::replace_synced_cashiers(pool, &cashiers).await?;
+    Ok(cashiers.len())
+}
 
 pub async fn sync_catalog(
     pool: &SqlitePool,

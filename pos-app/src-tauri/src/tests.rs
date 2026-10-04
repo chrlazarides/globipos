@@ -324,6 +324,60 @@ mod db {
         assert!(s.permissions.contains(&"price_override".to_string()));
     }
 
+    fn seed(id: &str, pin: &str) -> crate::models::CashierSeed {
+        crate::models::CashierSeed {
+            id: id.into(), name: id.into(), role: "cashier".into(),
+            pin_hash: auth::hash_pin(pin),
+        }
+    }
+
+    #[tokio::test]
+    async fn cashier_snapshot_refreshes_multiple_pins_and_revokes_missing_cashiers() {
+        let pool = setup().await;
+        auth::replace_synced_cashiers(&pool, &[seed("first", "1234"), seed("second", "567890")]).await.unwrap();
+        assert_eq!(auth::validate_pin(&pool, "1234").await.unwrap().unwrap().cashier_id, "first");
+        assert_eq!(auth::validate_pin(&pool, "567890").await.unwrap().unwrap().cashier_id, "second");
+        let mut updated = seed("second", "87654321");
+        updated.pin_hash = updated.pin_hash.to_uppercase();
+        auth::replace_synced_cashiers(&pool, &[updated]).await.unwrap();
+        assert!(auth::validate_pin(&pool, "1234").await.unwrap().is_none());
+        assert!(auth::validate_pin(&pool, "567890").await.unwrap().is_none());
+        assert!(auth::validate_pin(&pool, "87654321").await.unwrap().is_some());
+        auth::replace_synced_cashiers(&pool, &[seed("first", "1234")]).await.unwrap();
+        assert!(auth::validate_pin(&pool, "1234").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn empty_cashier_snapshot_revokes_all_cached_access() {
+        let pool = setup().await;
+        auth::upsert_cashier(&pool, "old", "Old", "1234", "cashier").await.unwrap();
+        auth::replace_synced_cashiers(&pool, &[]).await.unwrap();
+        assert!(auth::validate_pin(&pool, "1234").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn invalid_cashier_snapshot_preserves_offline_credentials() {
+        let pool = setup().await;
+        auth::upsert_cashier(&pool, "cached", "Cached", "1234", "cashier").await.unwrap();
+        let mut invalid = seed("new", "5678");
+        invalid.pin_hash = "invalid".into();
+        assert!(auth::replace_synced_cashiers(&pool, &[seed("valid", "5678"), invalid]).await.is_err());
+        assert!(auth::validate_pin(&pool, "1234").await.unwrap().is_some());
+        assert!(auth::validate_pin(&pool, "5678").await.unwrap().is_none());
+        assert!(auth::replace_synced_cashiers(&pool, &[seed("duplicate", "5678"), seed("duplicate", "9876")]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_cashier_snapshot_rolls_back_revocations_and_partial_inserts() {
+        let pool = setup().await;
+        auth::upsert_cashier(&pool, "cached", "Cached", "1234", "cashier").await.unwrap();
+        sqlx::query("CREATE TRIGGER reject_fixture BEFORE INSERT ON cashiers WHEN NEW.id='reject'
+                    BEGIN SELECT RAISE(ABORT, 'fixture rejection'); END").execute(&pool).await.unwrap();
+        assert!(auth::replace_synced_cashiers(&pool, &[seed("new", "5678"), seed("reject", "9876")]).await.is_err());
+        assert!(auth::validate_pin(&pool, "1234").await.unwrap().is_some());
+        assert!(auth::validate_pin(&pool, "5678").await.unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn upsert_updates_existing_cashier() {
         let pool = setup().await;

@@ -1724,6 +1724,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
             onItemButton={handleGroceryProduct}
             onCategoryButton={handleCategoryButton}
             onActionButton={handleAction}
+            paymentsEnabled={hasLines && engine.order.total > 0}
           />
         </div>
       </div>
