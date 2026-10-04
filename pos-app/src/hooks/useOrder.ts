@@ -18,6 +18,7 @@ import {
   getPriceForLevel,
   resolvePromoCode,
   computeLineAmounts,
+  createDepartmentLine,
 } from "../lib/pricing";
 import { saveOrder, nextOrderNumber, writeAudit } from "../lib/db";
 
@@ -106,14 +107,14 @@ export interface UseOrderReturn {
   setNumpadMode: (mode: NumpadMode) => void;
 }
 
-function makeEmptyOrder(cashierId: string, cashierName: string): Order {
+function makeEmptyOrder(cashierId: string, cashierName: string, priceLevel = 1): Order {
   return {
     id: uuidv4(),
     order_number: "",
     status: "active",
     cashier_id: cashierId,
     cashier_name: cashierName,
-    price_level: 1,
+    price_level: priceLevel,
     order_discount_pct: 0,
     order_discount_fixed: 0,
     surcharge_pct: 0,
@@ -145,8 +146,8 @@ function rebuildOrderTotals(order: Order, lines: OrderLine[]): Order {
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
-export function useOrder(cashierId: string, cashierName: string, terminalPrefix = "POS"): UseOrderReturn {
-  const [order, setOrder] = useState<Order>(() => makeEmptyOrder(cashierId, cashierName));
+export function useOrder(cashierId: string, cashierName: string, terminalPrefix = "POS", defaultPriceLevel = 1): UseOrderReturn {
+  const [order, setOrder] = useState<Order>(() => makeEmptyOrder(cashierId, cashierName, defaultPriceLevel));
   const [lines, setLines] = useState<OrderLine[]>([]);
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
   const [numpadMode, setNumpadMode] = useState<NumpadMode>("qty");
@@ -254,10 +255,10 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
   // ── #7 Clear order ──────────────────────────────────────────────────────────
   const clearOrder = useCallback(() => {
     setLines([]);
-    setOrder(makeEmptyOrder(cashierId, cashierName));
+    setOrder(makeEmptyOrder(cashierId, cashierName, defaultPriceLevel));
     setSelectedLineId(null);
     setLastLineId(null);
-  }, [cashierId, cashierName]);
+  }, [cashierId, cashierName, defaultPriceLevel]);
 
   // ── #8 Hold order ───────────────────────────────────────────────────────────
   const holdOrder = useCallback(async () => {
@@ -466,21 +467,7 @@ export function useOrder(cashierId: string, cashierName: string, terminalPrefix 
 
   // ── Department-key sale — open amount against a category, no product ───────
   const addDepartmentLine = useCallback((category: Category, amount: number) => {
-    if (amount <= 0) return;
-    const partial: Omit<OrderLine, "line_total" | "vat_amount"> = {
-      id: uuidv4(),
-      order_id: order.id,
-      description: `${category.name} (dept.)`,
-      qty: 1,
-      unit_price: amount,
-      line_discount_pct: 0,
-      line_discount_fixed: 0,
-      line_surcharge_pct: 0,
-      vat_rate: category.vat_rate,
-      voided: false,
-    };
-    const { lineTotal, vatAmount } = computeLineAmounts(partial);
-    const newLine: OrderLine = { ...partial, line_total: lineTotal, vat_amount: vatAmount };
+    const newLine = createDepartmentLine(category, amount, order.id, uuidv4());
     const newLines = [...lines, newLine];
     updateLines(newLines);
     setSelectedLineId(newLine.id);

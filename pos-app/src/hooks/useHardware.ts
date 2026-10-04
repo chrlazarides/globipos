@@ -9,6 +9,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { ScalePeripheralConfig } from "../components/ScalePeripheralSettings";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -19,7 +20,7 @@ export interface ScaleReading {
   tared: boolean;
 }
 
-export interface HardwareConfig {
+export interface HardwareConfig extends ScalePeripheralConfig {
   scale_enabled: boolean;
   scale_port: string;
   scale_baud: number;
@@ -88,11 +89,14 @@ export function useHardware(): UseHardwareReturn {
   const [printError, setPrintError] = useState<string | null>(null);
 
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollBusy = useRef(false);
 
   const loadConfig = useCallback(async () => {
     try {
       const cfg = await invoke<HardwareConfig>("get_hardware_config");
       setConfig(cfg);
+      setScaleWeight(null);
+      setScaleError(null);
     } catch {
       setConfig(null);
     }
@@ -116,7 +120,8 @@ export function useHardware(): UseHardwareReturn {
       setScaleWeight(w);
       return w;
     } catch (e: any) {
-      setScaleError(e?.message ?? "Scale error");
+      setScaleWeight(null);
+      setScaleError(e?.message ?? String(e));
       return null;
     }
   }, []);
@@ -134,12 +139,17 @@ export function useHardware(): UseHardwareReturn {
   const startWeightPolling = useCallback((intervalMs = 500) => {
     if (pollTimer.current) return; // already polling
     pollTimer.current = setInterval(async () => {
+      if (pollBusy.current) return;
+      pollBusy.current = true;
       try {
         const w = await invoke<ScaleReading>("scale_read_weight");
         setScaleWeight(w);
         setScaleError(null);
       } catch (e: any) {
-        setScaleError(e?.message ?? "Scale error");
+        setScaleWeight(null);
+        setScaleError(e?.message ?? String(e));
+      } finally {
+        pollBusy.current = false;
       }
     }, intervalMs);
   }, []);

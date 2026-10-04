@@ -68,10 +68,14 @@ pub struct OrderLine {
     pub id: String,
     pub order_id: String,
     pub product_id: Option<String>,
+    #[serde(default)]
+    pub category_id: Option<String>,
     pub description: String,
     pub sku: Option<String>,
     pub qty: f64,
     pub unit_price: f64,
+    #[serde(default)]
+    pub price_includes_vat: bool,
     pub override_price: Option<f64>,
     pub line_discount_pct: f64,
     pub line_discount_fixed: f64,
@@ -95,6 +99,8 @@ pub struct Order {
     pub price_level: i32,
     pub order_discount_pct: f64,
     pub order_discount_fixed: f64,
+    #[serde(default)]
+    pub surcharge_pct: f64,
     pub subtotal: f64,
     pub discount_amount: f64,
     pub vat_amount: f64,

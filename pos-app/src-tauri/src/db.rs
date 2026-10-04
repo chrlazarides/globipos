@@ -72,8 +72,8 @@ pub async fn upsert_product(pool: &sqlx::SqlitePool, p: &Value) -> Result<(), sq
         r#"INSERT INTO local_products
             (id, server_id, name, sku, barcode, description, category_id,
              price1, price2, price3, price4, price5, cost_price, vat_rate,
-             unit_type, pack_size, stock_quantity, active, updated_at, synced_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+             unit_type, pack_size, stock_quantity, active, updated_at, image_url, synced_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
            ON CONFLICT(server_id) DO UPDATE SET
              name=excluded.name, sku=excluded.sku, barcode=excluded.barcode,
              description=excluded.description, category_id=excluded.category_id,
@@ -81,7 +81,7 @@ pub async fn upsert_product(pool: &sqlx::SqlitePool, p: &Value) -> Result<(), sq
              price4=excluded.price4, price5=excluded.price5, cost_price=excluded.cost_price,
              vat_rate=excluded.vat_rate, unit_type=excluded.unit_type, pack_size=excluded.pack_size,
              stock_quantity=excluded.stock_quantity, active=excluded.active,
-             updated_at=excluded.updated_at, synced_at=datetime('now')"#
+             updated_at=excluded.updated_at, image_url=excluded.image_url, synced_at=datetime('now')"#
     )
     .bind(&id)
     .bind(&server_id)
@@ -102,6 +102,7 @@ pub async fn upsert_product(pool: &sqlx::SqlitePool, p: &Value) -> Result<(), sq
     .bind(p["stockQuantity"].as_i64().unwrap_or(0) as i32)
     .bind(active)
     .bind(opt_str_key(p, "updatedAt"))
+    .bind(opt_str_key(p, "imageUrl"))
     .execute(pool)
     .await?;
     Ok(())
@@ -150,8 +151,8 @@ pub async fn upsert_catalog_page(
             r#"INSERT INTO local_products
                 (id, server_id, name, sku, barcode, description, category_id,
                  price1, price2, price3, price4, price5, cost_price, vat_rate,
-                 unit_type, pack_size, stock_quantity, active, updated_at, synced_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                 unit_type, pack_size, stock_quantity, active, updated_at, image_url, synced_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                ON CONFLICT(server_id) DO UPDATE SET
                 name=excluded.name, sku=excluded.sku, barcode=excluded.barcode,
                 description=excluded.description, category_id=excluded.category_id,
@@ -159,7 +160,7 @@ pub async fn upsert_catalog_page(
                 price4=excluded.price4, price5=excluded.price5, cost_price=excluded.cost_price,
                 vat_rate=excluded.vat_rate, unit_type=excluded.unit_type, pack_size=excluded.pack_size,
                 stock_quantity=excluded.stock_quantity, active=excluded.active,
-                updated_at=excluded.updated_at, synced_at=datetime('now')"#
+                updated_at=excluded.updated_at, image_url=excluded.image_url, synced_at=datetime('now')"#
         )
         .bind(id).bind(server_id).bind(str_val(p, "name")).bind(str_val(p, "sku"))
         .bind(opt_str(p, "barcode")).bind(opt_str(p, "description")).bind(opt_str_key(p, "categoryId"))
@@ -168,6 +169,7 @@ pub async fn upsert_catalog_page(
         .bind(f64_val(p, "vatRate")).bind(p["unitType"].as_str().unwrap_or("pc"))
         .bind(p["packSize"].as_i64().unwrap_or(1) as i32).bind(p["stockQuantity"].as_i64().unwrap_or(0) as i32)
         .bind(p["active"].as_bool().unwrap_or(true) as i32).bind(opt_str_key(p, "updatedAt"))
+        .bind(opt_str_key(p, "imageUrl"))
         .execute(&mut *tx).await?;
     }
     for c in categories {

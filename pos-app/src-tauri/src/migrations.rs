@@ -43,6 +43,41 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         run_v6(pool).await?;
         set_version(pool, 6).await?;
     }
+    if current < 7 {
+        let columns = sqlx::query("PRAGMA table_info(pos_order_lines)")
+            .fetch_all(pool).await?;
+        if !columns.iter().any(|row| row.get::<String, _>("name") == "price_includes_vat") {
+            sqlx::query("ALTER TABLE pos_order_lines ADD COLUMN price_includes_vat BOOLEAN NOT NULL DEFAULT 0")
+                .execute(pool).await?;
+        }
+        if !columns.iter().any(|row| row.get::<String, _>("name") == "category_id") {
+            sqlx::query("ALTER TABLE pos_order_lines ADD COLUMN category_id TEXT")
+                .execute(pool).await?;
+        }
+        let order_columns = sqlx::query("PRAGMA table_info(pos_orders)")
+            .fetch_all(pool).await?;
+        if !order_columns.iter().any(|row| row.get::<String, _>("name") == "surcharge_pct") {
+            sqlx::query("ALTER TABLE pos_orders ADD COLUMN surcharge_pct REAL NOT NULL DEFAULT 0")
+                .execute(pool).await?;
+        }
+        set_version(pool, 7).await?;
+    }
+    if current < 8 {
+        let mut tx = pool.begin().await?;
+        let columns = sqlx::query("PRAGMA table_info(local_products)")
+            .fetch_all(&mut *tx).await?;
+        if !columns.iter().any(|row| row.get::<String, _>("name") == "image_url") {
+            sqlx::query("ALTER TABLE local_products ADD COLUMN image_url TEXT")
+                .execute(&mut *tx).await?;
+        }
+        // Fetch images for existing products too, not only subsequently edited ones.
+        // Leave cached stock, device identity, saved sales and the outbox intact.
+        sqlx::query("DELETE FROM schema_meta WHERE key IN ('last_catalog_sync', 'catalog_sync_cursor', 'catalog_bootstrap_cursor')")
+            .execute(&mut *tx).await?;
+        sqlx::query("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '8')")
+            .execute(&mut *tx).await?;
+        tx.commit().await?;
+    }
 
     // A process crash must not make the last run appear active forever.
     let _telemetry_write_guard = crate::sync_telemetry::acquire_write_lock().await;

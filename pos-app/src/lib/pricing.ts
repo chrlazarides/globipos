@@ -3,7 +3,7 @@
  * Implements all 11 pricing/discount functions.
  */
 
-import type { Product, OrderLine, Order, LineAmounts } from "../types";
+import type { Product, Category, OrderLine, Order, LineAmounts } from "../types";
 
 // ── Price level selection ─────────────────────────────────────────────────────
 
@@ -44,13 +44,31 @@ export function computeLineAmounts(line: Omit<OrderLine, "line_total" | "vat_amo
   }
 
   const vatRate = line.vat_rate / 100;
-  const vatAmount = round2(lineNet * vatRate);
-  const lineTotal = round2(lineNet + vatAmount);
+  const vatAmount = line.price_includes_vat
+    ? round2(lineNet - lineNet / (1 + vatRate))
+    : round2(lineNet * vatRate);
+  const lineTotal = line.price_includes_vat ? lineNet : round2(lineNet + vatAmount);
+  if (line.price_includes_vat) lineNet = round2(lineTotal - vatAmount);
 
   return { effectiveUnitPrice, lineSubtotal, lineDiscount, lineNet, vatAmount, lineTotal };
 }
 
 // ── Compute order totals from lines ──────────────────────────────────────────
+
+export function createDepartmentLine(category: Category, amount: number, orderId: string, id: string): OrderLine {
+  if (!Number.isFinite(amount) || amount <= 0 ||
+      !Number.isFinite(category.vat_rate) || category.vat_rate < 0 || category.vat_rate > 100) {
+    throw new Error("A department sale requires a positive amount and a valid VAT rate.");
+  }
+  const partial: Omit<OrderLine, "line_total" | "vat_amount"> = {
+    id, order_id: orderId, category_id: category.server_id, description: category.name,
+    qty: 1, unit_price: amount, price_includes_vat: true,
+    line_discount_pct: 0, line_discount_fixed: 0, line_surcharge_pct: 0,
+    vat_rate: category.vat_rate, voided: false,
+  };
+  const amounts = computeLineAmounts(partial);
+  return { ...partial, line_total: amounts.lineTotal, vat_amount: amounts.vatAmount };
+}
 
 export interface OrderTotals {
   subtotal: number;      // sum of line nets (after line discounts, before order discount)
@@ -76,7 +94,7 @@ export function computeOrderTotals(
 ): OrderTotals {
   const activeLines = lines.filter((l) => !l.voided);
 
-  const subtotal = round2(activeLines.reduce((s, l) => s + l.line_total, 0));
+  const subtotal = round2(activeLines.reduce((s, l) => s + computeLineAmounts(l).lineNet, 0));
   const lineDiscountTotal = round2(
     activeLines.reduce((s, l) => {
       const { lineDiscount } = computeLineAmounts(l);
@@ -102,10 +120,9 @@ export function computeOrderTotals(
 
   const vatAmount = round2(
     activeLines.reduce((s, l) => {
-      const { lineNet } = computeLineAmounts(l);
-      const proportion = subtotal > 0 ? lineNet / subtotal : 0;
-      const allocatedNet = round2(afterOrderDiscount * proportion);
-      return s + round2(allocatedNet * (l.vat_rate / 100));
+       const { vatAmount: lineVat } = computeLineAmounts(l);
+       const remaining = subtotal > 0 ? afterOrderDiscount / subtotal : orderDiscount === 0 ? 1 : 0;
+       return s + round2(lineVat * remaining);
     }, 0) + round2(surchargeAmount * (blendedVatRate / 100))
   );
 

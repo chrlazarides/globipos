@@ -17,10 +17,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { InvoicePrintSettings } from "../components/InvoicePrintSettings";
+import { ScalePeripheralSettings, DEFAULT_SCALE_SIMULATION, type ScalePeripheralConfig } from "../components/ScalePeripheralSettings";
+import type { ScaleReading } from "../hooks/useHardware";
 
 // ── Types (mirrors hardware.rs structs) ────────────────────────────────────────
 
-interface HardwareConfig {
+interface HardwareConfig extends ScalePeripheralConfig {
   scale_enabled: boolean;
   scale_port: string;
   scale_baud: number;
@@ -60,6 +62,7 @@ interface PaymentConfig {
 
 const DEFAULT_HW: HardwareConfig = {
   scale_enabled: false, scale_port: "", scale_baud: 9600, scale_protocol: "toledo",
+  scale_mode: "physical", scale_simulation: DEFAULT_SCALE_SIMULATION,
   printer_enabled: false, printer_port: "", printer_columns: 42, printer_logo: false,
   drawer_enabled: false, drawer_pulse_ms: 200,
   customer_display_enabled: false, customer_display_port: "",
@@ -107,11 +110,12 @@ export default function HardwareConfigPage({ onClose }: HardwareConfigPageProps)
   const [saved, setSaved]     = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const [testScale, setTestScale]   = useState<TestStatus>("idle");
+  const [scaleResult, setScaleResult] = useState("");
   const [testPrint, setTestPrint]   = useState<TestStatus>("idle");
   const [testDrawer, setTestDrawer] = useState<TestStatus>("idle");
 
   useEffect(() => {
-    invoke<HardwareConfig>("get_hardware_config").then(setHw).catch(() => {});
+    invoke<HardwareConfig>("get_hardware_config").then(value => setHw({ ...DEFAULT_HW, ...value })).catch(e => setError(String(e)));
     invoke<PaymentConfig>("get_payment_config").then(setPay).catch(() => {});
   }, []);
 
@@ -171,7 +175,7 @@ export default function HardwareConfigPage({ onClose }: HardwareConfigPageProps)
     <div className="min-h-screen bg-gray-950 text-white flex flex-col">
       {/* Header */}
       <div className="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center gap-3">
-        <button onClick={onClose} className="p-2 hover:bg-gray-800 rounded-lg transition-colors">
+        <button aria-label="Back to till" onClick={onClose} className="p-2 hover:bg-gray-800 rounded-lg transition-colors">
           <ArrowLeft className="h-5 w-5" />
         </button>
         <Settings className="h-5 w-5 text-burgundy-400" />
@@ -184,54 +188,20 @@ export default function HardwareConfigPage({ onClose }: HardwareConfigPageProps)
         {/* ── Scale ──────────────────────────────────────────────────── */}
         <section>
           <SectionHeader icon={Scale} title="Scale" />
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <Label>Scale enabled</Label>
-              <Toggle checked={hw.scale_enabled} onChange={(v) => updateHw("scale_enabled", v)} />
-            </div>
-            {hw.scale_enabled && (
-              <>
-                <div className="space-y-1">
-                  <Label>Port</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      className="bg-gray-800 border-gray-700 text-white"
-                      placeholder="/dev/ttyUSB0 or COM3"
-                      value={hw.scale_port}
-                      onChange={(e) => updateHw("scale_port", e.target.value)}
-                    />
-                    <TestBtn
-                      status={testScale}
-                      onTest={() => runTest(setTestScale, () => invoke("scale_read_weight"))}
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label>Baud rate</Label>
-                    <Input
-                      type="number"
-                      className="bg-gray-800 border-gray-700 text-white"
-                      value={hw.scale_baud}
-                      onChange={(e) => updateHw("scale_baud", parseInt(e.target.value) || 9600)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Protocol</Label>
-                    <select
-                      className="w-full bg-gray-800 border border-gray-700 text-white rounded-md px-3 py-2 text-sm"
-                      value={hw.scale_protocol}
-                      onChange={(e) => updateHw("scale_protocol", e.target.value)}
-                    >
-                      <option value="toledo">Toledo</option>
-                      <option value="mettler">Mettler</option>
-                      <option value="digi">Digi</option>
-                    </select>
-                  </div>
-                </div>
-              </>
-            )}
+          <ScalePeripheralSettings config={hw} onChange={patch => {
+            setHw(prev => ({ ...prev, ...patch })); setSaved(false); setScaleResult(""); setTestScale("idle");
+          }} />
+          <div className="mt-3 flex items-center gap-3">
+            <TestBtn status={testScale} onTest={() => runTest(setTestScale, async () => {
+              setScaleResult("");
+              try {
+                const weight = await invoke<ScaleReading>("scale_read_weight");
+                setScaleResult(`${weight.kg.toFixed(3)} kg / ${weight.grams} g — ${weight.stable ? "Stable" : "Unstable"}`);
+              } catch (e) { setScaleResult(String(e)); throw e; }
+            })} />
+            <span className="text-sm text-gray-400">Save changes before testing the scale.</span>
           </div>
+          {scaleResult && <p role="status" className="mt-2 text-sm">{scaleResult}</p>}
         </section>
 
         {/* ── Printer ────────────────────────────────────────────────── */}
@@ -532,6 +502,7 @@ export default function HardwareConfigPage({ onClose }: HardwareConfigPageProps)
             </div>
           )}
           <Button
+            data-testid="save-hardware-config"
             onClick={handleSave}
             disabled={saving}
             className="w-full bg-burgundy-700 hover:bg-burgundy-600 text-white py-3 text-base font-semibold"

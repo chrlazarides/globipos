@@ -21,6 +21,7 @@ export interface Product {
   active: boolean;
   updated_at?: string;
   timed_price?: number | null; // from price_overrides join
+  image_url?: string | null;
 }
 
 export interface Category {
@@ -57,10 +58,12 @@ export interface OrderLine {
   id: string;
   order_id: string;
   product_id?: string;
+  category_id?: string;
   description: string;
   sku?: string;
   qty: number;
   unit_price: number;
+  price_includes_vat?: boolean;
   override_price?: number;
   line_discount_pct: number;    // % discount on this line
   line_discount_fixed: number;  // fixed € discount on this line

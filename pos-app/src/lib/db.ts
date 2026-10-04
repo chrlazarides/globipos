@@ -50,10 +50,19 @@ export const getProductByBarcode = (
 export const getProductsByIds = (itemIds: string[]): Promise<Product[]> =>
   invoke<Product[]>("get_products_by_ids", { itemIds });
 
+export const getCategoryProductsPage = (
+  categoryIds: string[], limit: number, offset: number,
+): Promise<{ products: Product[]; total: number }> =>
+  invoke("get_category_products_page", { categoryIds, limit, offset });
+
 export const getActiveProductsCount = (): Promise<number> =>
   invoke<number>("get_active_products_count");
 
 // ── Categories ────────────────────────────────────────────────────────────────
+
+/** Manual PLU lookup prefers the catalogue's PLU/SKU over barcode collisions. */
+export const getProductByPlu = (plu: string): Promise<Product | null> =>
+  invoke<Product | null>("get_product_by_plu", { plu });
 
 export const getCategories = (): Promise<Category[]> =>
   invoke<Category[]>("get_categories");

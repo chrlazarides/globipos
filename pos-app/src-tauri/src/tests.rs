@@ -163,6 +163,8 @@ mod unit {
             line_discount_pct:   0.0,
             line_discount_fixed: 0.0,
             line_surcharge_pct:  0.0,
+            price_includes_vat: false,
+            category_id: None,
             vat_rate:            19.0,
             line_total:          31.00,
             vat_amount:          4.95,

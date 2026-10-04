@@ -10,7 +10,7 @@ export function useWindowWidth(): number {
   return width;
 }
 
-export type PosColorTheme = "standard" | "light";
+export type PosColorTheme = "standard" | "light" | "fresh";
 
 export interface LayoutColumnConfig {
   columns: number;    // 1024–1919 px (laptop / desktop)

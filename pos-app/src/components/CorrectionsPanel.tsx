@@ -7,8 +7,9 @@ import { StickyNoteIcon, RepeatIcon, SearchIcon, PackageIcon } from "lucide-reac
 import type { OrderLine } from "../types";
 import { formatCurrency } from "../lib/pricing";
 import type { PosUiTheme } from "../hooks/usePosTheme";
+import { parseMoneyDigits } from "../lib/departmentEntry";
 
-type CorrectionMode = "qty" | "price" | "discount";
+type CorrectionMode = "amount" | "qty" | "price" | "discount";
 
 interface CorrectionsPanelProps {
   selectedLine: OrderLine | null;
@@ -28,6 +29,8 @@ interface CorrectionsPanelProps {
   onRemoveDiscount: () => void;
   onDeptSale: () => void;
   onPriceCheck: () => void;
+  departmentEntry: string;
+  onDepartmentEntryChange: (digits: string) => void;
 }
 
 const NUMPAD_KEYS = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "⌫"];
@@ -50,15 +53,17 @@ export function CorrectionsPanel({
   onRemoveDiscount,
   onDeptSale,
   onPriceCheck,
+  departmentEntry,
+  onDepartmentEntryChange,
 }: CorrectionsPanelProps) {
   const isLight = theme === "light";
-  const [mode, setMode] = useState<CorrectionMode>("qty");
+  const [mode, setMode] = useState<CorrectionMode>("amount");
   const [display, setDisplay] = useState("");
 
   // Reset the pending entry whenever the selected line changes
   useEffect(() => {
     setDisplay("");
-    setMode("qty");
+    setMode("amount");
   }, [selectedLine?.id]);
 
   const panelClass = isLight
@@ -74,15 +79,21 @@ export function CorrectionsPanel({
   const funcLabelClass = isLight ? "text-slate-400" : "text-gray-500";
 
   function pressKey(k: string) {
+    if (mode === "amount") {
+      if (k === "⌫") onDepartmentEntryChange(departmentEntry.slice(0, -1));
+      else if (/^\d$/.test(k)) onDepartmentEntryChange((departmentEntry + k).slice(0, 8));
+      return;
+    }
     if (k === "⌫") { setDisplay((d) => d.slice(0, -1)); return; }
+    if (mode === "price" && k === ".") return;
     if (k === "." && display.includes(".")) return;
     setDisplay((d) => (d + k).slice(0, 8));
   }
 
   function applyCorrection() {
     if (!selectedLine || !display) return;
-    const val = parseFloat(display);
-    if (isNaN(val)) return;
+    const val = mode === "price" ? parseMoneyDigits(display) : parseFloat(display);
+    if (val == null || !Number.isFinite(val)) return;
     if (mode === "qty") onSetQty(Math.max(1, Math.round(val)));
     if (mode === "price") onSetPriceOverride(val);
     if (mode === "discount") onSetLineDiscountPct(Math.min(100, Math.max(0, val)));
@@ -111,6 +122,14 @@ export function CorrectionsPanel({
   return (
     <div className={`flex flex-col p-3 gap-3 overflow-y-auto ${panelClass}`} style={{ width: 320 }} data-testid="corrections-panel">
       {/* Correction context */}
+      <button
+        type="button"
+        onClick={() => { setMode("amount"); setDisplay(""); }}
+        className={`rounded-lg py-2 text-sm font-semibold ${mode === "amount" ? tabActiveClass : tabInactiveClass}`}
+        data-testid="button-department-amount-mode"
+      >
+        Department amount · cents
+      </button>
       <div className={`rounded-xl px-3 py-2.5 ${contextClass}`}>
         {selectedLine ? (
           <>
@@ -122,7 +141,7 @@ export function CorrectionsPanel({
               {(["qty", "price", "discount"] as CorrectionMode[]).map((m) => (
                 <button
                   key={m}
-                  onClick={() => { setMode(m); setDisplay(""); }}
+                  onClick={() => { setMode(m); setDisplay(""); onDepartmentEntryChange(""); }}
                   className={`flex-1 text-[11px] font-semibold rounded-lg py-1.5 capitalize transition-colors ${mode === m ? tabActiveClass : tabInactiveClass}`}
                   data-testid={`button-correction-mode-${m}`}
                 >
@@ -179,7 +198,11 @@ export function CorrectionsPanel({
         </div>
         <div className={`rounded-xl px-3 py-2 text-right mb-2 ${numDisplayClass}`}>
           <span className="text-xl font-mono font-bold tracking-tight" data-testid="text-correction-display">
-            {mode === "price" ? "€" : ""}{display || "0"}{mode === "discount" ? "%" : ""}
+            {mode === "amount"
+              ? formatCurrency(parseMoneyDigits(departmentEntry) ?? 0)
+              : mode === "price"
+                ? formatCurrency(parseMoneyDigits(display) ?? 0)
+                : `${display || "0"}${mode === "discount" ? "%" : ""}`}
           </span>
         </div>
         <div className="grid grid-cols-3 gap-2">
@@ -187,7 +210,7 @@ export function CorrectionsPanel({
             <button
               key={k}
               onClick={() => pressKey(k)}
-              disabled={!selectedLine}
+              disabled={mode !== "amount" && !selectedLine || (k === "." && (mode === "amount" || mode === "price"))}
               className={`text-lg font-bold rounded-xl py-2.5 active:scale-95 transition-transform disabled:opacity-30 ${numKeyClass}`}
               data-testid={`corrections-numpad-${k === "⌫" ? "delete" : k}`}
             >
@@ -197,12 +220,19 @@ export function CorrectionsPanel({
         </div>
         <button
           onClick={applyCorrection}
-          disabled={!selectedLine || !display}
+          disabled={mode === "amount" || !selectedLine || !display}
           className="mt-2 w-full bg-indigo-500 hover:bg-indigo-400 disabled:opacity-30 text-white text-sm font-bold rounded-xl py-2.5 transition-colors"
           data-testid="button-apply-correction"
         >
           Apply to Line
         </button>
+        {mode === "amount" && (
+          <div className="mt-2">
+            <p className={`text-xs ${contextLabelClass}`}>Enter cents, then press a department. 230 = €2.30.</p>
+            <button type="button" onClick={() => onDepartmentEntryChange("")}
+              className="mt-1 text-xs underline" data-testid="clear-department-amount">Clear amount</button>
+          </div>
+        )}
       </div>
     </div>
   );

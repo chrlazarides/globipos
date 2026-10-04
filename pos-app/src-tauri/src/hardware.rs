@@ -22,7 +22,13 @@ pub struct HardwareConfig {
     pub scale_enabled:            bool,
     pub scale_port:               String,   // "/dev/ttyUSB0" | "COM3"
     pub scale_baud:               u32,      // default 9600
-    pub scale_protocol:           String,   // "toledo" | "mettler" | "digi"
+    pub scale_protocol:           String,   // ID from the shared provision catalogue
+    #[serde(default)]
+    pub scale_profile:            String,   // model / protocol variant; never executed
+    #[serde(default)]
+    pub scale_mode: crate::scale_simulator::ScaleMode,
+    #[serde(default)]
+    pub scale_simulation: crate::scale_simulator::ScaleSimulation,
     // Printer
     pub printer_enabled:          bool,
     pub printer_port:             String,   // "/dev/usb/lp0" | "USB001"
@@ -96,6 +102,14 @@ pub async fn load_hardware_config(pool: &SqlitePool) -> HardwareConfig {
 }
 
 pub async fn save_hardware_config(pool: &SqlitePool, cfg: &HardwareConfig) -> Result<(), String> {
+    cfg.scale_simulation.validate()?;
+    if cfg.scale_enabled {
+        crate::scale_protocols::validate_protocol(&cfg.scale_protocol)?;
+        if cfg.scale_protocol == "custom" && cfg.scale_profile.trim().is_empty() {
+            return Err("Enter the model / protocol variant for a custom scale provision".into());
+        }
+    }
+    if cfg.scale_profile.chars().count() > 200 { return Err("Scale profile must be at most 200 characters".into()); }
     validate_port(&cfg.scale_port)?;
     validate_port(&cfg.printer_port)?;
     validate_port(&cfg.customer_display_port)?;
@@ -115,6 +129,12 @@ pub async fn save_hardware_config(pool: &SqlitePool, cfg: &HardwareConfig) -> Re
 /// Read the current weight from the scale.
 /// Uses separate process args — no sh -c interpolation of the port path or baud.
 pub async fn scale_read(app: &tauri::AppHandle, cfg: &HardwareConfig) -> Result<ScaleWeight, String> {
+    if !cfg.scale_enabled { return Err("Scale not configured".into()); }
+    if cfg.scale_mode == crate::scale_simulator::ScaleMode::Simulated {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        return cfg.scale_simulation.read();
+    }
+    crate::scale_protocols::require_physical_adapter(&cfg.scale_protocol)?;
     if !cfg.scale_enabled || cfg.scale_port.is_empty() {
         return Err("Scale not configured".into());
     }
@@ -144,6 +164,7 @@ pub async fn scale_read(app: &tauri::AppHandle, cfg: &HardwareConfig) -> Result<
 
 /// Send tare command (T\r\n) to the scale using a temp file to avoid interpolation.
 pub async fn scale_tare(app: &tauri::AppHandle, cfg: &HardwareConfig) -> Result<(), String> {
+    crate::scale_protocols::require_physical_adapter(&cfg.scale_protocol)?;
     if !cfg.scale_enabled || cfg.scale_port.is_empty() {
         return Err("Scale not configured".into());
     }
@@ -257,7 +278,9 @@ pub async fn build_peripheral_status(
     }
 
     if hw_cfg.scale_enabled {
-        let val = if hw_cfg.scale_port.is_empty() || validate_port(&hw_cfg.scale_port).is_err() {
+        let simulated = hw_cfg.scale_mode == crate::scale_simulator::ScaleMode::Simulated;
+        m.insert("scale_simulated".into(), Value::Bool(simulated));
+        let val = if !simulated && (hw_cfg.scale_port.is_empty() || validate_port(&hw_cfg.scale_port).is_err()) {
             "disconnected"
         } else {
             match scale_read(app, hw_cfg).await {
@@ -346,7 +369,12 @@ fn build_escpos_bytes(lines: &[Value], cols: u8) -> Vec<u8> {
 fn parse_scale_response(raw: &str, protocol: &str) -> Result<ScaleWeight, String> {
     let s = raw.trim();
     if s.is_empty() || s == "ERR" { return Err("No response from scale".into()); }
-    match protocol { "digi" => parse_digi(s), "mettler" => parse_mettler(s), _ => parse_toledo(s) }
+    match protocol {
+        "digi" => parse_digi(s),
+        "mettler" => parse_mettler(s),
+        "toledo" => parse_toledo(s),
+        _ => Err(format!("Unverified or unknown scale protocol: {}", protocol)),
+    }
 }
 
 fn parse_toledo(s: &str) -> Result<ScaleWeight, String> {

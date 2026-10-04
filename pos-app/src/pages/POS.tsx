@@ -14,6 +14,8 @@
  *  - useHardware    — receipt printing + cash drawer on payment complete
  */
 import { useState, useEffect, useCallback, useRef } from "react";
+import { GroceryPriceDialog } from "../components/GroceryPriceDialog";
+import { dailyPriceStepMatches, type GroceryMacroStep } from "../lib/groceryPrices";
 import { load as loadStore } from "@tauri-apps/plugin-store";
 import { open as openShell } from "@tauri-apps/plugin-shell";
 import { invoke } from "@tauri-apps/api/core";
@@ -23,6 +25,8 @@ import type {
 } from "../types";
 import { getProducts, getProductsByIds, getProductByBarcode, getCategories, getLayout, getHeldOrders, getOrderLines, issueCreditNote, issueGiftVoucher, redeemCreditNote, redeemGiftVoucher, getStockByLocation, getPosLocations, createStockTransfer, getCustomerLive } from "../lib/db";
 import { formatCurrency } from "../lib/pricing";
+import { categoryBranchIds, departmentButtonAction, inheritedDepartmentVat, isWeighedProduct, parseMoneyDigits, scaleQuantity } from "../lib/departmentEntry";
+import { getCategoryProductsPage, getProductByPlu } from "../lib/db";
 import {
   requestProductAddition,
   resolveAgeCheck,
@@ -38,8 +42,8 @@ import { useMultiBuy } from "../hooks/useMultiBuy";
 import type { AppliedPromo } from "../hooks/useMultiBuy";
 import type { PromoLineInput } from "../hooks/useOrder";
 import { useResponsiveColumns, type LayoutColumnConfig } from "../hooks/useWindowSize";
+import { readCachedLayoutConfig, writeCachedLayoutConfig } from "../lib/layout-config-cache";
 import { SyncHeader } from "../components/SyncHeader";
-import { CategoryNav } from "../components/CategoryNav";
 import { LayoutGrid } from "../components/LayoutGrid";
 import { CustomerInvoiceDialog } from "../components/CustomerInvoiceDialog";
 import { mapCartLines, readPendingInvoice, type CheckoutResult, type InvoiceMode } from "../lib/customer-invoice";
@@ -243,8 +247,9 @@ function DeptSaleDialog({
 }: { categories: Category[]; onConfirm: (category: Category, amount: number) => void; onClose: () => void; }) {
   const [categoryId, setCategoryId] = useState<string>(categories[0]?.id ?? "");
   const [amount, setAmount] = useState("");
-  const parsed = parseFloat(amount) || 0;
+  const parsed = parseMoneyDigits(amount) ?? 0;
   const selected = categories.find((c) => c.id === categoryId);
+  const vatRate = selected ? inheritedDepartmentVat(selected, categories) : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
@@ -261,22 +266,23 @@ function DeptSaleDialog({
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </select>
-        <label className="text-gray-400 text-xs mb-1 block">Amount</label>
+        <label className="text-gray-400 text-xs mb-1 block">Amount · enter cents (230 = €2.30)</label>
         <input
-          type="number"
-          step="0.01"
+          type="text"
+          inputMode="numeric"
           value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          placeholder="0.00"
+          onChange={(e) => { if (/^\d{0,8}$/.test(e.target.value)) setAmount(e.target.value); }}
+          placeholder="230"
           autoFocus
           className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-burgundy-500"
           data-testid="input-dept-sale-amount"
         />
+        <p className="text-white text-lg mb-3">{formatCurrency(parsed)}</p>
         <div className="flex gap-3">
           <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">Cancel</button>
           <button
-            onClick={() => { if (selected && parsed > 0) { onConfirm(selected, parsed); onClose(); } }}
-            disabled={!selected || parsed <= 0}
+            onClick={() => { if (selected && parsed > 0 && vatRate != null) { onConfirm({ ...selected, vat_rate: vatRate }, parsed); onClose(); } }}
+            disabled={!selected || parsed <= 0 || vatRate == null}
             className="flex-1 py-2.5 bg-burgundy-700 hover:bg-burgundy-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-40"
             data-testid="button-confirm-dept-sale"
           >
@@ -669,20 +675,37 @@ function PaymentSuccessOverlay({
 }
 
 export function POS({ config, session, sync, onLogout }: POSProps) {
+  const [dailyPricesOpen, setDailyPricesOpen] = useState(false);
+  const dailyPricePlans = useRef<Record<string, GroceryMacroStep[]>>({});
+  const dailyPriceFinish = useRef<((completed: boolean) => void) | null>(null);
+  const dailyMacroBusy = useRef(false);
+  const macroMounted = useRef(true);
+  useEffect(() => {
+    macroMounted.current = true;
+    return () => { macroMounted.current = false; dailyPriceFinish.current?.(false); };
+  }, []);
   const [invoiceMode, setInvoiceMode] = useState<"wholesale" | "retail">("wholesale");
   const clearedInvoices = useRef(new Set<string>());
-  const engine    = useOrder(session.cashier_id, session.cashier_name, config.terminal_code);
+  const engine    = useOrder(session.cashier_id, session.cashier_name, config.terminal_code, config.price_level);
   const perms     = usePermissions(session);
   const hw        = useHardware();
   const shift     = useShift();
   const multiBuy  = useMultiBuy();
-  const { theme: posTheme, toggleTheme } = usePosTheme();
+  const { theme: savedPosTheme, toggleTheme } = usePosTheme();
 
   const [products, setProducts]           = useState<Product[]>([]);
   const [layoutProducts, setLayoutProducts] = useState<Product[]>([]);
   const [categories, setCategories]       = useState<Category[]>([]);
   const [layoutButtons, setLayoutButtons] = useState<LayoutButton[]>([]);
-  const [layoutConfig, setLayoutConfig]   = useState<LayoutColumnConfig | null>(null);
+  const [layoutConfig, setLayoutConfig] = useState<LayoutColumnConfig | null>(
+    () => {
+      const cached = readCachedLayoutConfig(config.server_url, config.terminal_code);
+      return cached?.colorTheme === "fresh" ? cached : null;
+    }
+  );
+  const isFresh = layoutConfig?.colorTheme === "fresh";
+  const posTheme = isFresh ? "light" : savedPosTheme;
+  const liveLayoutLoaded = useRef(false);
   const [maxButtonPos, setMaxButtonPos]   = useState(19); // default 4×5-1
 
   // ── Phase 3 wiring: age check, multi-buy, click-collect ───────────────────
@@ -739,7 +762,71 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   const activeColumns = useResponsiveColumns(layoutConfig);
   const activeRows    = Math.ceil((maxButtonPos + 1) / activeColumns);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [fastKeysOpen, setFastKeysOpen] = useState(false);
+  const [pluQuery, setPluQuery] = useState("");
+  const [pluProduct, setPluProduct] = useState<Product | null>(null);
+  const [pluMatches, setPluMatches] = useState<Product[]>([]);
+  const [freshControlsOpen, setFreshControlsOpen] = useState(false);
+  const [pluLoading, setPluLoading] = useState(false);
+  const [pluError, setPluError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setPluProduct(null);
+    setPluMatches([]);
+    setPluError(null);
+    const code = pluQuery.trim();
+    setPluLoading(!!code);
+    if (!code) return;
+    // Exact, indexed PLU/SKU or barcode lookup across the whole active catalogue,
+    // not merely the current category or the first cached display page.
+    function lookup() {
+      getProductByPlu(code).then(async product => {
+        const matches = !product && isFresh ? await getProducts(undefined, code) : [];
+        if (!cancelled) {
+          setPluProduct(product); setPluMatches(matches); setPluError(null);
+        }
+      }).catch(error => {
+        if (!cancelled) {
+          setPluProduct(null);
+          setPluError(error instanceof Error ? error.message : "PLU lookup failed. Try again.");
+        }
+      }).finally(() => {
+        if (!cancelled) setPluLoading(false);
+      });
+    }
+    lookup();
+    const timer = setInterval(lookup, 30_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [pluQuery, isFresh]);
+  const [departmentEntry, setDepartmentEntry] = useState("");
+  const departmentEntryRef = useRef("");
+  const [busyProductId, setBusyProductId] = useState<string | null>(null);
+  const weighingRef = useRef(false);
+  const [groceryPage, setGroceryPage] = useState(0);
+  const [groceryColumns, setGroceryColumns] = useState(6);
+  const [groceryTotal, setGroceryTotal] = useState(0);
+  const [groceryProducts, setGroceryProducts] = useState<Product[]>([]);
+  const [groceryLoading, setGroceryLoading] = useState(false);
+  const [groceryError, setGroceryError] = useState<string | null>(null);
+  const [groceryRefresh, setGroceryRefresh] = useState(0);
+  const freshOpened = useRef(false);
+  useEffect(() => {
+    if (!isFresh) { freshOpened.current = false; return; }
+    if (freshOpened.current) return;
+    const first = categories.find(c => c.active && !c.parent_id && /fruit|produce/i.test(c.name))
+      ?? categories.find(c => c.active && !c.parent_id);
+    if (!first) return;
+    freshOpened.current = true;
+    setSelectedCategory(first.server_id);
+    setFastKeysOpen(true);
+    setGroceryPage(0);
+    setGroceryColumns(activeColumns);
+  }, [isFresh, categories, activeColumns]);
   const [dialog, setDialog]               = useState<Dialog>(null);
+  useEffect(() => {
+    departmentEntryRef.current = "";
+    setDepartmentEntry("");
+  }, [engine.order.id]);
   useEffect(() => {
     try {
       const pending = readPendingInvoice(config, session.cashier_id);
@@ -777,17 +864,25 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
 
   // Responsive column config — fetch from server once on mount.
   // Uses X-Terminal-Code header (no API key needed) to get the layout
-  // set's per-breakpoint column counts. Falls back to defaults silently.
+  // Cache only presentation for offline startup; approvals come from the live response.
   useEffect(() => {
+    let cancelled = false;
+    dailyPricePlans.current = {};
+    const cached = readCachedLayoutConfig(config.server_url, config.terminal_code);
+    setLayoutConfig(cached?.colorTheme === "fresh" ? cached : null);
     const base = config.server_url.replace(/\/$/, "");
     fetch(`${base}/api/pos/sync/layout-config`, {
       headers: { "X-Terminal-Code": config.terminal_code },
     })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
-        if (!data) return;
+        if (!data || cancelled) return;
+        dailyPricePlans.current = data.groceryPricePlans || {};
+        writeCachedLayoutConfig(config.server_url, config.terminal_code, data);
         setLayoutConfig(data);
         if (Array.isArray(data.buttons)) {
+          // Only protect Fresh's new live preset from a slower legacy local read.
+          liveLayoutLoaded.current = data.colorTheme === "fresh";
           const liveButtons: LayoutButton[] = data.buttons.map((button: any) => ({
             position: button.position,
             label: button.label,
@@ -809,7 +904,8 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           }
         }
       })
-      .catch(() => {/* no-op: defaults apply */});
+      .catch(() => {/* retain cached presentation, never cached approvals */});
+    return () => { cancelled = true; };
   }, [config.server_url, config.terminal_code]);
 
   // Load barcode structure + receipt design configs once on mount
@@ -825,6 +921,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     getProducts().then(setProducts).catch(() => {});
     getCategories().then(setCategories).catch(() => {});
     getLayout().then((btns) => {
+      if (liveLayoutLoaded.current) return;
       setLayoutButtons(btns);
       const layoutItemIds = [...new Set(btns.map((button) => button.item_id).filter((id): id is string => !!id))];
       getProductsByIds(layoutItemIds).then(setLayoutProducts).catch(() => {});
@@ -841,9 +938,30 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
     }
   }, [sync.timedPriceOverrides]);
 
-  // Reload products when category changes
+  // Fetch only the visible grocery page; include child categories without a 250-item cutoff.
   useEffect(() => {
-    getProducts(selectedCategory ?? undefined).then(setProducts).catch(() => {});
+    if (!selectedCategory) return;
+    let cancelled = false;
+    setGroceryLoading(true);
+    setGroceryError(null);
+    setGroceryProducts([]);
+    const ids = [...categoryBranchIds(categories, selectedCategory)];
+    getCategoryProductsPage(ids, groceryColumns * 4, groceryPage * groceryColumns * 4)
+      .then(page => {
+        if (cancelled) return;
+        setGroceryProducts(page.products);
+        setGroceryTotal(page.total);
+      })
+      .catch(error => {
+        if (!cancelled) { setGroceryProducts([]); setGroceryTotal(0); setGroceryError(String(error)); }
+      })
+      .finally(() => { if (!cancelled) setGroceryLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedCategory, categories, groceryPage, groceryColumns, groceryRefresh]);
+  useEffect(() => {
+    if (!selectedCategory) return;
+    const timer = window.setInterval(() => setGroceryRefresh(value => value + 1), 30_000);
+    return () => window.clearInterval(timer);
   }, [selectedCategory]);
   const productsForLayout = [
     ...new Map([...products, ...layoutProducts].map((product) => [product.server_id, product])).values(),
@@ -888,6 +1006,66 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       setAgeCheckPending,
     );
   }, [engine.addProduct]);
+
+  function changeDepartmentEntry(digits: string) {
+    departmentEntryRef.current = digits;
+    setDepartmentEntry(digits);
+  }
+
+  function handleCategoryButton(categoryId: string | null): boolean {
+    if (categoryId === null) {
+      changeDepartmentEntry("");
+      setFastKeysOpen(false);
+      setPluQuery("");
+      setSelectedCategory(null);
+      setGroceryPage(0);
+      setFastKeysOpen(true);
+      setPluQuery("");
+      return true;
+    }
+    try {
+      const action = departmentButtonAction(categoryId, departmentEntryRef.current, categories);
+      if (action.type === "sale") {
+        changeDepartmentEntry("");
+        engine.addDepartmentLine(action.category, action.amount);
+        return false;
+      }
+      setGroceryPage(0);
+      setSelectedCategory(action.category.server_id);
+      return true;
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Department unavailable.");
+      return false;
+    }
+  }
+
+  async function handleGroceryProduct(product: Product) {
+    if (weighingRef.current) return;
+    if (departmentEntryRef.current) {
+      alert("Press a department button to register the entered amount, or clear the amount before selecting an item.");
+      return;
+    }
+    weighingRef.current = true;
+    setBusyProductId(product.server_id);
+    try {
+      // Never use a stale layout/search object after a price sync.
+      const [current] = await getProductsByIds([product.server_id]);
+      if (!current) throw new Error("Item is no longer available. Refresh the catalogue.");
+      if (!isWeighedProduct(current)) {
+        handleAddProduct(current);
+        return;
+      }
+      if (!hw.config?.scale_enabled) throw new Error("Enable and connect the scale in Hardware Configuration first.");
+      const reading = await hw.readWeight();
+      const quantity = scaleQuantity(current, reading);
+      handleAddProduct(current, quantity);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Unable to read the scale. No item was added.");
+    } finally {
+      weighingRef.current = false;
+      setBusyProductId(null);
+    }
+  }
 
   // Customer display: publish order state to shared Tauri store on every change.
   // The CustomerDisplay component (in its own window or same window) polls this store.
@@ -1047,7 +1225,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   });
 
   // ── Action dispatcher ──────────────────────────────────────────────────────
-  const handleAction = useCallback((code: string) => {
+  const dispatchAction = useCallback((code: string) => {
     switch (code) {
       case "CLEAR_ORDER":
       case "NEW_SALE":
@@ -1151,8 +1329,47 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         break;
       case "SCO_MONITOR":     setMode("sco_monitor"); break;
       case "HARDWARE_CONFIG": setMode("hardware_config"); break;
+      default: throw new Error(`POS function ${code} is not supported by this till.`);
     }
   }, [engine, perms, hw, shift, toggleLanguage, multiBuy, session.cashier_id, session.cashier_name, onLogout]);
+
+  const macroUi = useRef({ dialog, mode, pin: perms.pinPromptAction, total: engine.order.total, isReturn: false });
+  macroUi.current = { dialog, mode, pin: perms.pinPromptAction, total: engine.order.total,
+    isReturn: engine.lines.some(line => !line.voided && line.qty < 0) };
+  const handleAction = useCallback((code: string) => {
+    if (dailyMacroBusy.current) return;
+    const plan = dailyPricePlans.current[code];
+    if (!plan) {
+      try {
+        if (code === "GROCERY_DAILY_PRICES" || code.startsWith("CUSTOM_"))
+          throw new Error("This function or macro is not approved or supported. Check POS Functions and reopen the till.");
+        dispatchAction(code);
+      } catch (e) { alert(String(e)); }
+      return;
+    }
+    dailyMacroBusy.current = true;
+    (async () => {
+      try {
+        for (const step of plan) {
+          if (!macroMounted.current) break;
+          if (!dailyPriceStepMatches(step, macroUi.current.total, macroUi.current.isReturn)) continue;
+          if (step.code === "GROCERY_DAILY_PRICES") {
+            const completed = await new Promise<boolean>(resolve => {
+              dailyPriceFinish.current = resolve; setDailyPricesOpen(true);
+            });
+            if (!completed) break;
+          } else {
+            dispatchAction(step.code);
+            // Wait for React to render, then do not overlap interactive macro steps.
+            await new Promise(resolve => window.setTimeout(resolve, 100));
+            while (macroMounted.current && (macroUi.current.dialog || macroUi.current.pin || macroUi.current.mode !== "sell"))
+              await new Promise(resolve => window.setTimeout(resolve, 100));
+          }
+        }
+      } catch (e) { alert(String(e)); }
+      finally { dailyMacroBusy.current = false; dailyPriceFinish.current = null; }
+    })();
+  }, [dispatchAction]);
 
   // ── Numpad confirm ────────────────────────────────────────────────────────
   function handleNumpadConfirm(value: number) {
@@ -1364,7 +1581,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
   }
 
   if (mode === "hardware_config") {
-    return <HardwareConfigPage onClose={() => setMode("sell")} />;
+    return <HardwareConfigPage onClose={() => { void hw.loadConfig(); setMode("sell"); }} />;
   }
 
   if (mode === "sco_monitor") {
@@ -1396,17 +1613,11 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
         printerEnabled={!!hw.config?.printer_enabled}
       />
 
-      {/* Category nav */}
-      <CategoryNav
-        categories={categories}
-        selectedId={selectedCategory}
-        onSelect={setSelectedCategory}
-        theme={posTheme}
-      />
 
       {/* Scale bar — shown when scale is connected */}
       {hw.config?.scale_enabled && (
         <ScaleBar
+          simulated={hw.config?.scale_mode === "simulated"}
           weight={hw.scaleWeight}
           error={hw.scaleError}
           onTare={hw.tare}
@@ -1414,6 +1625,14 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
       )}
 
       <div className={`flex items-center gap-3 px-4 py-1.5 text-xs border-b flex-shrink-0 ${isLightTheme ? "bg-white border-slate-200 text-slate-600" : "bg-gray-900 border-gray-800 text-gray-400"}`} data-testid="pos-context-strip">
+        {isFresh && <>
+          <strong className="text-green-800">Fresh</strong>
+          <button type="button" data-testid="fresh-controls" aria-expanded={freshControlsOpen}
+            onClick={() => setFreshControlsOpen(open => !open)}
+            className="rounded-lg bg-green-100 px-3 py-2 font-semibold text-green-900 hover:bg-green-200">
+            {freshControlsOpen ? "Hide keypad & functions" : "Keypad & functions"}
+          </button>
+        </>}
         <span className="font-semibold text-burgundy-500">{engine.order.customer_id ? "Member" : "Walk-in"}</span>
         {engine.order.customer_id && <span className="font-mono">{engine.order.customer_id}</span>}
         <span className={isLightTheme ? "text-slate-300" : "text-gray-700"}>|</span>
@@ -1439,7 +1658,7 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           totalSavings={totalSavings}
         />
 
-        <CorrectionsPanel
+        {(!isFresh || freshControlsOpen) && <CorrectionsPanel
           selectedLine={selectedLine ?? null}
           hasLines={hasLines}
           theme={posTheme}
@@ -1457,24 +1676,66 @@ export function POS({ config, session, sync, onLogout }: POSProps) {
           onRemoveDiscount={engine.removeDiscount}
           onDeptSale={() => setDialog("dept_sale")}
           onPriceCheck={() => setDialog("price_check")}
-        />
+          departmentEntry={departmentEntry}
+          onDepartmentEntryChange={changeDepartmentEntry}
+        />}
 
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <LayoutGrid
             buttons={layoutButtons}
-            products={productsForLayout}
+            products={selectedCategory ? groceryProducts : productsForLayout}
+            categories={categories}
+            selectedCategoryId={selectedCategory}
+            busyProductId={busyProductId}
+            imageBaseUrl={config.server_url}
+            searchProducts={isFresh ? pluMatches : []}
+            fastKeysOpen={fastKeysOpen}
+            onOpenFastKeys={() => {
+              setFastKeysOpen(true);
+              setPluQuery("");
+              const first = categories.find(c => c.active && !c.parent_id && /fruit/i.test(c.name))
+                ?? categories.find(c => c.active && !c.parent_id);
+              setSelectedCategory(first?.server_id ?? null);
+              setGroceryPage(0);
+            }}
+            pluQuery={pluQuery}
+            pluProduct={pluProduct}
+            pluLoading={pluLoading}
+            pluError={pluError}
+            onPluQueryChange={query => {
+              setPluProduct(null);
+              setPluError(null);
+              setPluLoading(!!query.trim());
+              setPluQuery(query);
+            }}
+            groceryPage={groceryPage}
+            groceryTotal={groceryTotal}
+            groceryLoading={groceryLoading}
+            groceryError={groceryError}
+            onGroceryPageChange={(page, columns) => {
+              setGroceryPage(page);
+              setGroceryColumns(columns);
+              setGroceryRefresh(value => value + 1);
+            }}
             columns={activeColumns}
             rows={activeRows}
             priceLevel={engine.order.price_level}
-            colorTheme={isLightTheme ? "light" : "standard"}
-            onItemButton={handleAddProduct}
-            onCategoryButton={setSelectedCategory}
+            colorTheme={isFresh ? "fresh" : isLightTheme ? "light" : "standard"}
+            onItemButton={handleGroceryProduct}
+            onCategoryButton={handleCategoryButton}
             onActionButton={handleAction}
           />
         </div>
       </div>
 
       {/* Action bar — with Phase 3 buttons */}
+      {dailyPricesOpen && <GroceryPriceDialog config={config} cashierId={session.cashier_id} cashierName={session.cashier_name} categories={categories} hw={hw}
+        onRefreshed={async () => {
+          setProducts(await getProducts());
+          setLayoutProducts(await getProductsByIds(layoutButtons.map(b => b.item_id).filter((id): id is string => !!id)));
+          setGroceryRefresh(value => value + 1);
+        }}
+        onClose={completed => { setDailyPricesOpen(false); dailyPriceFinish.current?.(completed); }} />}
       <ActionBar
         hasLines={hasLines}
         hasSelectedLine={!!selectedLine && !selectedLine.voided}

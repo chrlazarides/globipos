@@ -3,6 +3,8 @@ mod barcode_config;
 mod receipt_config;
 mod db;
 mod hardware;
+mod scale_simulator;
+mod scale_protocols;
 mod vfd;
 mod migrations;
 mod models;
@@ -269,6 +271,43 @@ async fn get_products_by_ids(
     Ok(rows.into_iter().map(row_to_json).collect())
 }
 
+/// The grocery grid requests one page at a time, including descendant departments.
+#[tauri::command]
+async fn get_category_products_page(
+    state: State<'_, AppState>,
+    category_ids: Vec<String>,
+    limit: i64,
+    offset: i64,
+) -> Result<Value, String> {
+    if category_ids.is_empty() {
+        return Ok(serde_json::json!({ "products": [], "total": 0 }));
+    }
+    let ids = serde_json::to_string(&category_ids).map_err(|e| e.to_string())?;
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM local_products WHERE active = 1
+         AND category_id IN (SELECT value FROM json_each(?))"
+    ).bind(&ids).fetch_one(&state.db).await.map_err(|e| e.to_string())?;
+    let rows = sqlx::query(
+        r#"SELECT p.*,
+             (SELECT po.override_price FROM price_overrides po
+              WHERE po.product_id = p.server_id
+                AND (po.valid_from IS NULL OR datetime(po.valid_from) <= datetime('now'))
+                AND (po.valid_until IS NULL OR datetime(po.valid_until) > datetime('now'))
+              ORDER BY datetime(po.valid_from) DESC, datetime(po.created_at) DESC, po.rowid DESC LIMIT 1) AS timed_price
+           FROM local_products p
+           WHERE p.active = 1 AND p.category_id IN (SELECT value FROM json_each(?))
+           ORDER BY p.name, p.server_id LIMIT ? OFFSET ?"#
+    )
+        .bind(&ids)
+        .bind(limit.clamp(1, 100))
+        .bind(offset.max(0))
+        .fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "products": rows.into_iter().map(row_to_json).collect::<Vec<_>>(),
+        "total": total,
+    }))
+}
+
 #[tauri::command]
 async fn get_active_products_count(state: State<'_, AppState>) -> Result<i64, String> {
     sqlx::query_scalar("SELECT count(*) FROM local_products WHERE active = 1")
@@ -282,11 +321,27 @@ async fn get_product_by_barcode(
     state: State<'_, AppState>,
     barcode: String,
 ) -> Result<Option<Value>, String> {
+    lookup_product(state, barcode, false).await
+}
+
+#[tauri::command]
+async fn get_product_by_plu(
+    state: State<'_, AppState>,
+    plu: String,
+) -> Result<Option<Value>, String> {
+    lookup_product(state, plu.trim().to_string(), true).await
+}
+
+async fn lookup_product(
+    state: State<'_, AppState>,
+    code: String,
+    sku_first: bool,
+) -> Result<Option<Value>, String> {
     let row = sqlx::query(
         r#"WITH match AS (
-             SELECT rowid, 0 AS priority FROM local_products WHERE barcode = ?
+             SELECT rowid, CASE WHEN ? THEN 1 ELSE 0 END AS priority FROM local_products WHERE barcode = ?
              UNION ALL
-             SELECT rowid, 1 AS priority FROM local_products WHERE sku = ?
+             SELECT rowid, CASE WHEN ? THEN 0 ELSE 1 END AS priority FROM local_products WHERE sku = ?
            )
            SELECT p.*,
              (SELECT po.override_price FROM price_overrides po
@@ -299,7 +354,7 @@ async fn get_product_by_barcode(
            WHERE p.active = 1
            ORDER BY m.priority LIMIT 1"#
     )
-    .bind(&barcode).bind(&barcode)
+    .bind(sku_first).bind(&code).bind(sku_first).bind(&code)
     .fetch_optional(&state.db)
     .await.map_err(|e| e.to_string())?;
 
@@ -1801,7 +1856,14 @@ async fn scale_tare(
     app:   AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let cfg = hardware::load_hardware_config(&state.db).await;
+    let mut cfg = hardware::load_hardware_config(&state.db).await;
+    if cfg.scale_mode == scale_simulator::ScaleMode::Simulated {
+        if !cfg.scale_enabled { return Err("Scale not configured".into()); }
+        cfg.scale_simulation.read()?;
+        cfg.scale_simulation.value = 0.0;
+        cfg.scale_simulation.tared = true;
+        return hardware::save_hardware_config(&state.db, &cfg).await;
+    }
     hardware::scale_tare(&app, &cfg).await
 }
 
@@ -1935,8 +1997,10 @@ pub fn run() {
             upsert_cashier,
             get_products,
             get_products_by_ids,
+            get_category_products_page,
             get_active_products_count,
             get_product_by_barcode,
+            get_product_by_plu,
             get_layout,
             get_categories,
             save_order,

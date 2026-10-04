@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { GroceryProductTile } from "./GroceryProductTile";
 import type { CSSProperties, ComponentType, SVGProps } from "react";
-import { ChevronLeftIcon, LayersIcon, ReceiptTextIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, HomeIcon, LayersIcon, ReceiptTextIcon, SearchIcon, XIcon } from "lucide-react";
 import {
   CashIcon, CardIcon, VoidIcon, HoldIcon, RecallIcon, DiscountIcon, SubtotalIcon,
   VoucherIcon, RefundIcon, PayIcon, LoyaltyIcon,
 } from "./icons/PosIcons";
-import type { LayoutButton, Product } from "../types";
-import { formatCurrency } from "../lib/pricing";
+import type { Category, LayoutButton, Product } from "../types";
+import { formatCurrency, getPriceForLevel } from "../lib/pricing";
 import type { PosColorTheme } from "../hooks/useWindowSize";
 
 interface LayoutGridProps {
@@ -16,8 +17,25 @@ interface LayoutGridProps {
   rows: number;
   priceLevel: number;
   colorTheme?: PosColorTheme;
+  categories?: Category[];
+  selectedCategoryId?: string | null;
+  busyProductId?: string | null;
+  groceryPage?: number;
+  groceryTotal?: number;
+  groceryLoading?: boolean;
+  groceryError?: string | null;
+  fastKeysOpen?: boolean;
+  onOpenFastKeys?: () => void;
+  pluQuery?: string;
+  pluProduct?: Product | null;
+  searchProducts?: Product[];
+  pluLoading?: boolean;
+  pluError?: string | null;
+  onPluQueryChange?: (query: string) => void;
+  imageBaseUrl?: string;
+  onGroceryPageChange?: (page: number, columns: number) => void;
   onItemButton: (product: Product) => void;
-  onCategoryButton: (categoryId: string) => void;
+  onCategoryButton: (categoryId: string | null) => boolean | void;
   onActionButton: (actionCode: string) => void;
 }
 
@@ -119,11 +137,29 @@ export function LayoutGrid({
   rows,
   priceLevel,
   colorTheme = "standard",
+  categories = [],
+  selectedCategoryId = null,
+  busyProductId = null,
+  groceryPage,
+  groceryTotal,
+  groceryLoading = false,
+  groceryError = null,
+  fastKeysOpen = false,
+  onOpenFastKeys,
+  pluQuery = "",
+  pluProduct = null,
+  searchProducts = [],
+  pluLoading = false,
+  pluError = null,
+  onPluQueryChange,
+  imageBaseUrl,
+  onGroceryPageChange,
   onItemButton,
   onCategoryButton,
   onActionButton,
 }: LayoutGridProps) {
-  const isLight = colorTheme === "light";
+  const isFresh = colorTheme === "fresh";
+  const isLight = colorTheme === "light" || isFresh;
   const emptySlotClass = isLight
     ? "rounded-xl border border-dashed border-gray-300 bg-gray-200/40"
     : "rounded-xl border border-dashed border-gray-800 bg-gray-900/30";
@@ -172,10 +208,106 @@ export function LayoutGrid({
   }
 
   function priceForLevel(p: Product): number {
-    if (p.timed_price != null) return p.timed_price;
-    const prices = [p.price1, p.price2, p.price3, p.price4, p.price5];
-    return prices[priceLevel - 1] || p.price1;
+    return getPriceForLevel(p, priceLevel);
   }
+
+  // ── Category view ──
+  const [gridCols, setGridCols] = useState<number>(isFresh ? columns : 6);
+  useEffect(() => {
+    if (isFresh) {
+      setGridCols(columns);
+      onGroceryPageChange?.(0, columns);
+    }
+  }, [isFresh, columns]);
+  const [page, setPage] = useState(0);
+
+  const catByKey = useMemo(() => {
+    const m = new Map<string, Category>();
+    for (const c of categories) { m.set(c.server_id, c); m.set(c.id, c); }
+    return m;
+  }, [categories]);
+  const selectedCat = selectedCategoryId ? catByKey.get(selectedCategoryId) ?? null : null;
+
+  const descendantKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (!selectedCategoryId) return keys;
+    const root = catByKey.get(selectedCategoryId);
+    const seen = new Set<Category>();
+    const queue: Category[] = root ? [root] : [];
+    keys.add(selectedCategoryId);
+    while (queue.length) {
+      const cur = queue.shift()!;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      keys.add(cur.id); keys.add(cur.server_id);
+      for (const c of categories) {
+        if (c.active !== false && !seen.has(c) && c.parent_id && (c.parent_id === cur.id || c.parent_id === cur.server_id)) queue.push(c);
+      }
+    }
+    return keys;
+  }, [categories, catByKey, selectedCategoryId]);
+
+  const childCats = selectedCat
+    ? categories.filter((c) => c.active !== false && c.parent_id && (c.parent_id === selectedCat.id || c.parent_id === selectedCat.server_id))
+    : [];
+  const catProducts = selectedCategoryId
+    ? products.filter((p) => p.category_id && descendantKeys.has(p.category_id))
+    : [];
+  const perPage = gridCols * 4;
+  const serverPaged = groceryPage != null && groceryTotal != null;
+  const totalCount = serverPaged ? groceryTotal : catProducts.length;
+  const pageCount = Math.max(1, Math.ceil(totalCount / perPage));
+  const safePage = Math.min(serverPaged ? groceryPage : page, pageCount - 1);
+  const pageProducts = serverPaged ? catProducts : catProducts.slice(safePage * perPage, safePage * perPage + perPage);
+  const showItems = !(serverPaged && groceryLoading);
+  function goPage(n: number) {
+    if (serverPaged) onGroceryPageChange?.(n, gridCols);
+    else setPage(n);
+  }
+  function setCols(n: number) {
+    setGridCols(n);
+    if (serverPaged) onGroceryPageChange?.(0, n);
+  }
+
+  useEffect(() => { setPage(0); }, [selectedCategoryId, gridCols]);
+
+  const assignedTabs: { id: string; label: string }[] = [];
+  for (const b of buttons) {
+    if (b.button_type === "category" && b.category_id && !assignedTabs.some((t) => t.id === b.category_id)) {
+      assignedTabs.push({ id: b.category_id, label: b.label || catByKey.get(b.category_id)?.name || "" });
+    }
+  }
+  const tabs = [...assignedTabs];
+  for (const c of isFresh ? categories.filter(c => c.active !== false && !c.parent_id) : []) {
+    if (!tabs.some(tab => catByKey.get(tab.id)?.server_id === c.server_id)) tabs.push({ id: c.server_id, label: c.name });
+  }
+  const showFastKeys = fastKeysOpen || !!selectedCategoryId;
+  function tabIcon(label: string) {
+    if (/vegetable/i.test(label)) return "🥦";
+    if (/fruit|produce/i.test(label)) return "🍎";
+    if (/bakery|bread/i.test(label)) return "🥖";
+    if (/\b(ice|bags?|packaging)\b/i.test(label)) return "🧊";
+    return "";
+  }
+
+  function pickCategory(id: string | null) {
+    if (id === null) setPanelStack([]);
+    const r = onCategoryButton(id);
+    return r;
+  }
+  const rootOfSelected = (() => {
+    let cur = selectedCat; const seen = new Set<Category>();
+    while (cur && cur.parent_id && !seen.has(cur)) { seen.add(cur); const p = catByKey.get(cur.parent_id); if (!p) break; cur = p; }
+    return cur;
+  })();
+  function isTabActive(id: string) {
+    if (!selectedCat) return false;
+    const t = catByKey.get(id);
+    return id === selectedCategoryId || (!!t && !!rootOfSelected && (t.id === rootOfSelected.id));
+  }
+  const tabIdle = isLight ? "bg-white text-gray-700 border-gray-200 hover:bg-green-50" : "bg-gray-800 text-gray-200 border-gray-700 hover:bg-gray-700";
+  const tabOn = isFresh ? "bg-green-700 text-white border-green-700 shadow-sm" : "bg-green-700 text-white border-green-700";
+  const tileFor = (t: { id: string }) => { const c = catByKey.get(t.id); const keys = new Set([t.id, c?.id, c?.server_id]); return products.find((p) => p.image_url && p.category_id && keys.has(p.category_id)); };
 
   function pushPanel(sublayoutId: string) {
     setPanelStack((s) => [...s, sublayoutId]);
@@ -230,6 +362,7 @@ export function LayoutGrid({
         <button
           key={index}
           onClick={() => btn.category_id && onCategoryButton(btn.category_id)}
+          title={btn.label}
           style={{ backgroundColor: btn.color || "#1f2937", ...spanStyle }}
           className="rounded-xl p-2 flex items-center justify-center transition-all hover:brightness-110 active:scale-95"
           data-testid={`grid-cat-${index}`}
@@ -295,6 +428,169 @@ export function LayoutGrid({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      {!isFresh && !showFastKeys && onOpenFastKeys && (
+        <button type="button" onClick={onOpenFastKeys} data-testid="open-fast-keys"
+          className={`m-2 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-bold ${tabIdle}`}>
+          <SearchIcon className="h-4 w-4" /> Fast-Keys / PLU lookup
+        </button>
+      )}
+      {showFastKeys && onPluQueryChange && (
+        <div className={`px-3 py-2 flex-shrink-0 ${barClass}`}>
+          {!isFresh && <label htmlFor="fast-key-plu" className={`block text-xs font-bold mb-1 ${barTextLabel}`}>Fast-Keys / Look-Up — PLU code</label>}
+          <div className="flex items-center gap-2">
+            <SearchIcon className={`h-4 w-4 ${barTextMuted}`} />
+            <input id="fast-key-plu" data-testid="fast-key-plu-search" value={pluQuery} inputMode={isFresh ? "text" : "numeric"}
+              onChange={event => onPluQueryChange(event.target.value)}
+              placeholder={isFresh ? "Search products or enter a PLU code" : "Type a PLU code, e.g. 4011"} autoComplete="off" maxLength={64}
+              className={`min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm ${tabIdle}`} />
+            {pluQuery && <button type="button" onClick={() => onPluQueryChange("")} aria-label="Clear PLU search" data-testid="clear-plu-search"
+              className={`rounded-lg border p-2 ${tabIdle}`}><XIcon className="h-4 w-4" /></button>}
+          </div>
+        </div>
+      )}
+      {showFastKeys && tabs.length > 0 && (
+        <div className={`flex items-center gap-1.5 px-2 py-1.5 overflow-x-auto flex-shrink-0 ${barClass}`} data-testid="category-tabs">
+          <button
+            onClick={() => pickCategory(null)}
+            className={`flex items-center gap-1 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-bold active:scale-95 ${!selectedCategoryId ? tabOn : tabIdle}`}
+            data-testid="category-tab-home"
+          >
+            <HomeIcon className="w-3.5 h-3.5" /> Home
+          </button>
+          {tabs.map((t) => {
+            const ph = isFresh ? tileFor(t) : undefined;
+            const src = ph?.image_url ? (ph.image_url.startsWith("data:image/") ? ph.image_url : (() => { try { return new URL(ph.image_url, imageBaseUrl ? `${imageBaseUrl.replace(/\/$/, "")}/` : undefined).href; } catch { return ""; } })()) : "";
+            return isFresh ? (
+              <button key={t.id} onClick={() => pickCategory(t.id)} data-testid={`category-tab-${t.id}`}
+                className={`flex w-24 flex-shrink-0 flex-col items-center gap-1 rounded-xl border p-1.5 text-xs font-bold active:scale-95 ${isTabActive(t.id) ? "border-green-700 bg-green-100 text-green-900" : "border-gray-200 bg-white text-gray-700"}`}>
+                <span className="flex h-12 w-full items-center justify-center overflow-hidden rounded-lg bg-green-50">
+                  {src ? <img src={src} alt="" className="h-full w-full object-contain" /> : <LayersIcon className="h-5 w-5 text-green-700" />}
+                </span>
+                <span className="w-full truncate text-center">{t.label}</span>
+              </button>
+            ) : (
+            <button
+              key={t.id}
+              onClick={() => pickCategory(t.id)}
+              className={`whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-bold active:scale-95 ${isTabActive(t.id) ? tabOn : tabIdle}`}
+              data-testid={`category-tab-${t.id}`}
+            >
+              {tabIcon(t.label)} {t.label}
+            </button>
+            );
+          })}
+        </div>
+      )}
+
+      {showFastKeys && pluQuery.trim() ? (
+        <div className="flex-1 min-h-0 overflow-auto p-3" aria-live="polite" data-testid="plu-results">
+          {pluLoading ? <p className={`text-sm ${barTextMuted}`}>Looking up PLU…</p>
+            : pluError ? <p className="text-sm text-red-500" role="alert">{pluError}</p>
+            : pluProduct ? <div className="h-52 w-44 flex">
+                <GroceryProductTile product={pluProduct} price={priceForLevel(pluProduct)} light={isLight}
+                  imageBaseUrl={imageBaseUrl}
+                  busy={busyProductId === pluProduct.server_id} disabled={!!busyProductId}
+                  onClick={() => onItemButton(pluProduct)} />
+              </div>
+            : isFresh && searchProducts.length ? <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))` }}>
+                {searchProducts.map(product => <div key={product.server_id} className="h-52 flex">
+                  <GroceryProductTile product={product} price={priceForLevel(product)} light={isLight}
+                    imageBaseUrl={imageBaseUrl} busy={busyProductId === product.server_id}
+                    disabled={!!busyProductId} onClick={() => onItemButton(product)} />
+                </div>)}
+              </div>
+            : <p className={`text-sm ${barTextMuted}`}>{isFresh ? "No active products match this name or PLU." : "No active item matches this PLU. Check its catalogue PLU/SKU code."}</p>}
+        </div>
+      ) : showFastKeys && !selectedCategoryId ? (
+        <div className={`p-4 text-sm ${barTextMuted}`}>Choose a category above, or type a PLU code to find an item.</div>
+      ) : selectedCategoryId ? (
+        <div className="flex flex-col flex-1 min-h-0" data-testid="category-view">
+          <div className={`flex items-center gap-2 px-3 py-1.5 flex-shrink-0 ${barClass}`}>
+            <button
+              onClick={() => pickCategory(selectedCat?.parent_id && catByKey.has(selectedCat.parent_id) ? selectedCat.parent_id : null)}
+              className={`flex items-center gap-1 text-xs font-medium active:scale-95 ${barTextMuted}`}
+              data-testid="category-back"
+            >
+              <ChevronLeftIcon className="w-4 h-4" /> Back
+            </button>
+            <span className={`text-xs font-semibold ${barTextLabel}`}>{selectedCat?.name ?? ""}</span>
+            <div className="ml-auto flex items-center gap-1">
+              {(isFresh ? [...new Set([columns, 6, 8])] : [6, 8]).map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setCols(n)}
+                  className={`rounded-md border px-2 py-0.5 text-xs font-bold ${gridCols === n ? tabOn : tabIdle}`}
+                  data-testid={`category-cols-${n}`}
+                >
+                  {n}x4
+                </button>
+              ))}
+              <button onClick={() => pickCategory(null)} className={`ml-2 text-xs ${barTextMuted}`} data-testid="category-home">Home</button>
+            </div>
+          </div>
+
+          {childCats.length > 0 && (
+            <div className="flex gap-1.5 px-2 pt-2 overflow-x-auto flex-shrink-0">
+              {childCats.map((c) => (
+                <button
+                  key={c.server_id}
+                  onClick={() => pickCategory(c.server_id)}
+                  className={`whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-bold active:scale-95 ${tabIdle}`}
+                  data-testid={`category-child-${c.server_id}`}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {groceryError ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-2 text-sm text-red-500" data-testid="category-error">
+              <span>{groceryError}</span>
+              <button onClick={() => goPage(safePage)} className={`rounded-md border px-3 py-1 text-xs font-bold ${tabIdle}`} data-testid="category-retry">Retry</button>
+            </div>
+          ) : !showItems ? (
+            <div className={`flex-1 flex items-center justify-center text-sm animate-pulse ${isLight ? "text-gray-500" : "text-gray-400"}`} data-testid="category-loading">
+              Loading products…
+            </div>
+          ) : catProducts.length === 0 ? (
+            <div className={`flex-1 flex items-center justify-center text-sm ${isLight ? "text-gray-500" : "text-gray-400"}`} data-testid="category-empty">
+              No products in this category
+            </div>
+          ) : (
+            <div
+              className="flex-1 grid gap-1.5 p-2 min-h-0 overflow-hidden"
+              style={{ gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`, gridTemplateRows: "repeat(4, minmax(0, 1fr))" }}
+            >
+              {pageProducts.map((p) => (
+                <GroceryProductTile
+                  key={p.server_id}
+                  product={p}
+                  imageBaseUrl={imageBaseUrl}
+                  price={priceForLevel(p)}
+                  light={isLight}
+                  busy={busyProductId === p.server_id || busyProductId === p.id}
+                  disabled={busyProductId != null}
+                  onClick={() => { if (busyProductId == null) onItemButton(p); }}
+                />
+              ))}
+            </div>
+          )}
+
+          {(pageCount > 1 || serverPaged) && !groceryError && (
+            <div className={`flex items-center justify-center gap-3 py-1 flex-shrink-0 ${barClass}`}>
+              <button disabled={safePage === 0 || groceryLoading} onClick={() => goPage(safePage - 1)} className={`p-1 disabled:opacity-30 ${barTextMuted}`} data-testid="category-prev">
+                <ChevronLeftIcon className="w-5 h-5" />
+              </button>
+              <span className={`text-xs font-semibold ${barTextLabel}`}>{safePage + 1} / {pageCount}</span>
+              <button disabled={safePage >= pageCount - 1 || groceryLoading} onClick={() => goPage(safePage + 1)} className={`p-1 disabled:opacity-30 ${barTextMuted}`} data-testid="category-next">
+                <ChevronRightIcon className="w-5 h-5" />
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
       {/* Breadcrumb / back bar — shown when inside a child panel */}
       {panelStack.length > 0 && (
         <div className={`flex items-center gap-2 px-3 py-1.5 flex-shrink-0 ${barClass}`}>
@@ -362,6 +658,8 @@ export function LayoutGrid({
           return renderButton(btn, i);
         })}
       </div>
+      </>
+      )}
     </div>
   );
 }

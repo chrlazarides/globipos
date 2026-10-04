@@ -15,6 +15,7 @@ interface ScaleBarProps {
   onTare: () => void;
   onWeightConfirm?: (kg: number) => void;  // callback when cashier accepts weight
   className?: string;
+  simulated?: boolean;
 }
 
 export default function ScaleBar({
@@ -24,6 +25,7 @@ export default function ScaleBar({
   onTare,
   onWeightConfirm,
   className = "",
+  simulated = false,
 }: ScaleBarProps) {
   const kg = weight?.kg ?? 0;
   const stable = weight?.stable ?? false;
@@ -40,6 +42,7 @@ export default function ScaleBar({
             : "border-yellow-300 bg-yellow-50 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-950 dark:text-yellow-300"
         } ${className}`}
     >
+      {simulated && <strong data-testid="scale-simulated" className="text-amber-600">SIMULATED — test only</strong>}
       {error ? (
         <>
           <AlertCircle className="h-4 w-4 shrink-0" />

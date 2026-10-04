@@ -3,6 +3,7 @@ import { DeleteIcon, XIcon } from "lucide-react";
 import type { NumpadMode } from "../types";
 import { formatCurrency } from "../lib/pricing";
 import type { PosUiTheme } from "../hooks/usePosTheme";
+import { parseMoneyDigits } from "../lib/departmentEntry";
 
 interface NumpadProps {
   mode: NumpadMode;
@@ -50,10 +51,12 @@ const MODE_PREFIX: Partial<Record<NumpadMode, string>> = {
 
 export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light" }: NumpadProps) {
   const isLight = theme === "light";
+  const monetary = !!MODE_PREFIX[mode];
   const [display, setDisplay] = useState(
-    currentValue != null && currentValue > 0 ? String(currentValue) : ""
+    currentValue != null && currentValue > 0
+      ? String(monetary ? Math.round(currentValue * 100) : currentValue) : ""
   );
-  const hasDecimal = mode !== "qty" && mode !== "qty_multiplier";
+  const hasDecimal = !monetary && mode !== "qty" && mode !== "qty_multiplier";
   const prefix = MODE_PREFIX[mode] ?? "";
   const suffix = MODE_SUFFIX[mode] ?? "";
   const label  = MODE_LABELS[mode] ?? "Enter Value";
@@ -65,11 +68,13 @@ export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light"
     }
     if (d === "00") {
       if (!display || display === "0") return;
+      if (monetary && display.length + 2 > 8) return;
       if (display.includes(".")) return;
       setDisplay((p) => p + d);
       return;
     }
     if (d === "." && !hasDecimal) return;
+    if (monetary && display.length + d.length > 8) return;
     if (d === "." && display.includes(".")) return;
     // Limit decimal places
     if (display.includes(".")) {
@@ -84,8 +89,8 @@ export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light"
   }
 
   function handleConfirm() {
-    const val = parseFloat(display || "0");
-    if (!isNaN(val)) onConfirm(val);
+    const val = monetary ? parseMoneyDigits(display || "0") : parseFloat(display || "0");
+    if (val != null && Number.isFinite(val)) onConfirm(val);
     onClose();
   }
 
@@ -104,7 +109,7 @@ export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light"
   });
 
   const keys = ["7","8","9","C","4","5","6","00","1","2","3",".","0","⌫"];
-  const parsedVal = parseFloat(display || "0");
+  const parsedVal = monetary ? parseMoneyDigits(display || "0") ?? 0 : parseFloat(display || "0");
 
   const panelClass = isLight ? "bg-white border border-slate-200" : "bg-gray-900 border border-gray-700";
   const labelClass = isLight ? "text-slate-600" : "text-gray-300";
@@ -129,7 +134,7 @@ export function Numpad({ mode, onConfirm, onClose, currentValue, theme = "light"
         {/* Display */}
         <div className={`rounded-xl px-4 py-3 mb-4 text-right min-h-[52px] flex items-center justify-end ${displayClass}`}>
           <span className={`text-2xl font-mono font-bold tracking-tight ${displayTextClass}`}>
-            {prefix}{display || "0"}{suffix}
+            {monetary ? formatCurrency(parsedVal) : `${prefix}${display || "0"}${suffix}`}
           </span>
         </div>
 

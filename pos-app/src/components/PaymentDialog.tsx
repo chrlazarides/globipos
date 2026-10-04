@@ -9,6 +9,7 @@
  */
 
 import { useState, useCallback, useEffect } from "react";
+import { parseMoneyDigits } from "../lib/departmentEntry";
 import {
   Dialog,
   DialogContent,
@@ -63,6 +64,7 @@ function PaymentKeypad({ onPress }: { onPress: (key: string) => void }) {
           type="button"
           data-testid={`pkpad-${k === "⌫" ? "del" : k}`}
           onClick={() => onPress(k === "⌫" ? "backspace" : k)}
+          disabled={k === "."}
           className="h-11 flex items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800
                      hover:bg-gray-200 dark:hover:bg-gray-700 text-foreground font-semibold
                      text-base transition-colors active:scale-95"
@@ -137,7 +139,7 @@ export default function PaymentDialog({
     }
   }, [open, initialTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const parsedAmount = parseFloat(numpadValue) || 0;
+  const parsedAmount = parseMoneyDigits(numpadValue) ?? 0;
 
   // ── Numpad handler ──────────────────────────────────────────────────────────
 
@@ -147,12 +149,10 @@ export default function PaymentDialog({
     } else if (key === "clear") {
       setNumpadValue("");
     } else if (key === ".") {
-      if (!numpadValue.includes(".")) setNumpadValue((v) => v + ".");
+      return; // Monetary keypad digits are cents; no decimal separator is needed.
     } else {
-      // Max 2 decimal places
-      const parts = numpadValue.split(".");
-      if (parts[1] !== undefined && parts[1].length >= 2) return;
-      setNumpadValue((v) => v + key);
+      if (!/^\d+$/.test(key)) return;
+      setNumpadValue((v) => (v + key).slice(0, 8));
     }
   }, [numpadValue]);
 
@@ -345,7 +345,7 @@ export default function PaymentDialog({
                       data-testid="input-cash-amount"
                       className="pl-7 font-mono"
                       placeholder="0.00"
-                      value={numpadValue}
+                      value={numpadValue ? parsedAmount.toFixed(2) : ""}
                       readOnly
                     />
                   </div>
@@ -373,7 +373,7 @@ export default function PaymentDialog({
                       data-testid="input-card-amount"
                       className="pl-7 font-mono"
                       placeholder={payment.balance.toFixed(2)}
-                      value={numpadValue}
+                      value={numpadValue ? parsedAmount.toFixed(2) : ""}
                       readOnly
                     />
                   </div>
