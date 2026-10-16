@@ -103,3 +103,5 @@ Only YAML/config/JavaScript syntax and configuration structure are checked in th
 Rollback is a normal reviewed revert of this configuration commit; no data or schema rollback is necessary.
 
 The required-status follow-up is tracked in [GitHub issue #8](https://github.com/chrlazarides/globipos/issues/8) and [the CI decision](decisions/2026-10-17-required-web-api-gate.md). Its branch depends on `chore/engineering-step-1`; review its incremental diff against that branch until Chris merges Step 1.
+
+The approved test/CI-only integration review is [GitHub issue #9](https://github.com/chrlazarides/globipos/issues/9). It stopped on missing application dependencies, before enabling broken workflows; see the [dependency report](decisions/2026-10-17-test-ci-integration-blocker.md). This does not remove the missing-workflow or unit-runner gaps above.
