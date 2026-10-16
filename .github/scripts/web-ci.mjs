@@ -29,7 +29,8 @@ const changed = firstPush ? [] : execFileSync("git",
 const globalChange = firstPush || changed.some(file =>
   /^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|tsconfig[^/]*\.json)$/.test(file) ||
   file === ".github/workflows/ci-web-api.yml" || file === ".github/scripts/web-ci.mjs" ||
-  file === ".github/scripts/web-ci-scope.mjs");
+  file === ".github/scripts/web-ci-scope.mjs" ||
+  file === ".github/scripts/run-workspace-tests.mjs");
 const dependencies = pkg => Object.keys({ ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies })
   .filter(name => packages.has(name));
 const affected = new Set([...packages].filter(([, pkg]) =>

@@ -43,8 +43,8 @@ Install workspace dependencies with Node 24 / pnpm 10.26.1 and `pnpm install --f
 
 | Product | Development | Quick checks |
 |---|---|---|
-| Back office / eShop / PDA web | `pnpm --filter @workspace/globipos run dev` | `pnpm --filter @workspace/globipos run typecheck`; run its unit script when supplied |
-| API | `pnpm --filter @workspace/api-server run dev` | `pnpm --filter @workspace/api-server run typecheck`; run unit/API scripts when supplied |
+| Back office / eShop / PDA web | `pnpm --filter @workspace/globipos run dev` | `pnpm --filter @workspace/globipos run typecheck`; `pnpm --filter @workspace/globipos run test:unit` |
+| API | `pnpm --filter @workspace/api-server run dev` | `pnpm --filter @workspace/api-server run typecheck`; `pnpm --filter @workspace/api-server run test:api` |
 | POS PWA | `pnpm --filter @workspace/globipos-terminal run dev` | `pnpm --filter @workspace/globipos-terminal run typecheck` and `pnpm --filter @workspace/globipos-terminal run test` |
 | Mockups | `pnpm --filter @workspace/mockup-sandbox run dev` | `pnpm --filter @workspace/mockup-sandbox run typecheck` |
 | Native frontend only | `npm --prefix pos-app run dev` | `npm --prefix pos-app run typecheck`; existing focused TS tests if a runner is supplied |
@@ -60,21 +60,21 @@ This configuration branch starts at GitHub `main` (`9e1d485`), not an unfinished
 Only configuration/documentation is added. No application/test source or dependency manifests are imported.
 
 - **Back office/API:** `ci-web-api.yml` always reports on PRs and `main` pushes. A small dependency-free detection job checks the relevant paths first. Only applicable changes install with the frozen lock, cache pnpm, follow shared dependency/consumer paths, build affected library declarations, check affected apps, run existing lint/unit/API scripts, build affected apps and check generated OpenAPI client/Zod drift (including new/deleted files). Unrelated changes skip all that work. It never runs a DB push. Node 24 and the workspace's installed pnpm 10.26.1 are pinned for repeatability.
-- **Current test-script gap:** on this base the back office and API have no unit/API `test` scripts and no lint scripts. CI explicitly reports these as **not verified**; it does not invent or import tests. When their existing development scripts are integrated, `test`, `test:unit`, `test:api`, `test:server`, `test:agoranomia` and `test:cashier-pin` are recognised. Browser/native suites are not run by this quick gate.
+- **Existing unit/API tests wired:** the back office now has `test:unit` and the API has `test:api`, both using `.github/scripts/run-workspace-tests.mjs`. All 4 back-office and 32 API source test files on this base are discovered automatically; no assertions or source tests are changed. Future test files are also discovered. API tests get one disposable Unix-socket-only PostgreSQL database per file, copied from a synthetic fixture; no shared database credentials are inherited. Source-relative reads are preserved, package dependencies are resolved from their owning workspace, and failed/timed-out/empty/skipped/TODO test files fail the gate. No lint script exists: lint remains explicitly **not verified**, not a pass. Actual test results remain **not verified** until CI is run.
 - **POS build:** PR paths cover native source, its shared POS libraries, release/branding helpers and its own workflow. Existing tag/manual release triggers and all jobs remain unchanged.
 - **POS CI:** push/PR paths include native source, shared POS libraries and the branding helper used by its smoke build. Existing jobs, advisory checks and tests are unchanged.
 - **Terminal browser scale:** adds scoped PR/`main` push paths; weekly schedule/manual triggers remain. Its test command is unchanged. Schedules cannot be path-filtered by GitHub.
 - **Verify POS release:** manual-only on this base. `workflow_dispatch` does not support `paths`; it remains manual, with no unsolicited published-release checks.
 
-Three requested workflows are **absent from GitHub main** and are not imported from unfinished application branches. Their filter changes are pending integration of their existing workflow + tested source together:
+Three requested workflow definitions are now included without importing unfinished application source. Each has an explicit applicability job: absent feature source means **NOT VERIFIED; test job skipped**, never “tests passed”. If feature source is present but a required test/script/dependency is missing, applicability **fails**, rather than quietly skipping it. The existing test job steps are preserved unchanged.
 
-| Pending workflow | Required PR/push path scope, plus its own workflow path |
+| Workflow | PR/push path scope and current execution boundary |
 |---|---|
-| `native-printer-tests.yml` | `pos-app/**`, `lib/pos-layout/**`, `lib/pos-terminal-core/**`, `scripts/pos-*`, `scripts/pos_*`, `.github/actions/check-pos-package-branding/**`; preserve its existing manual-only operation (no `paths` option for manual dispatch) |
-| `pda-scanner-browser.yml` | `artifacts/globipos/src/components/barcode-scanner.tsx`, `artifacts/globipos/src/components/pda/**`, `artifacts/globipos/src/pages/pda-*.tsx`, `artifacts/globipos/tests/pda-*.mjs`, scanner imports/config, `lib/**`, root package/lock/workspace/tsconfig; preserve manual trigger |
-| `retail-icons.yml` | `pos-app/src/retail/**`, `pos-app/src/assets/fonts/**`, `pos-app/tests/multi-device/retail-*`, `pos-app/package*.json`, `lib/pos-layout/**`, root package/lock/workspace/tsconfig; preserve push/PR branches and manual trigger |
+| `native-printer-tests.yml` | Existing manual/private-only operation preserved; `paths` cannot apply to manual dispatch. On this public repository its native test job remains skipped/not verified. In a private checkout, simulation source and the existing packaging helper must be present before the unmodified build steps run. |
+| `pda-scanner-browser.yml` | Scanner/PDA components/pages/test helpers, shared UI hooks/lib/router/styles, artifact configuration, generated API libraries and root package/lock/workspace/tsconfig, its own workflow/readiness helper; manual trigger preserved. The newer PDA workspace source is absent on this base, so the browser job is skipped/not verified. |
+| `retail-icons.yml` | Retail source, local fonts, retail tests, native manifests, shared layout library, root package/lock/workspace/tsconfig, its own workflow/readiness helper; existing push/PR branches and manual trigger preserved. Retail source is absent on this base, so the browser job is skipped/not verified. |
 
-This is a documented base mismatch, not three completed CI checks. Do not enable workflows that reference missing test scripts, and do not bring application changes into this branch just to satisfy their presence.
+This completes workflow configuration, **not runtime verification** or integration of the missing features. The new suite jobs cannot start with missing inputs; applicability jobs perform no builds, tests or device operations. Do not remove these checks, supply placeholder tests, or claim the skipped suites are green test results. The native branding composite action is configuration only; its newer validation helper is still required from the approved source branch before a private native run.
 
 ## GitHub settings Chris must configure
 
@@ -104,4 +104,4 @@ Rollback is a normal reviewed revert of this configuration commit; no data or sc
 
 The required-status follow-up is tracked in [GitHub issue #8](https://github.com/chrlazarides/globipos/issues/8) and [the CI decision](decisions/2026-10-17-required-web-api-gate.md). Its branch depends on `chore/engineering-step-1`; review its incremental diff against that branch until Chris merges Step 1.
 
-The approved test/CI-only integration review is [GitHub issue #9](https://github.com/chrlazarides/globipos/issues/9). It stopped on missing application dependencies, before enabling broken workflows; see the [dependency report](decisions/2026-10-17-test-ci-integration-blocker.md). This does not remove the missing-workflow or unit-runner gaps above.
+The approved test/CI-only integration is [GitHub issue #9](https://github.com/chrlazarides/globipos/issues/9). The [initial dependency report](decisions/2026-10-17-test-ci-integration-blocker.md) records the source mismatch; the [continuation decision](decisions/2026-10-17-test-ci-integration.md) records the completed configuration and its explicit verification limits.

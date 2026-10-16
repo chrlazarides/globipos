@@ -1,0 +1,70 @@
+name: PDA scanner browser checks
+
+on:
+  pull_request:
+    paths:
+      - 'artifacts/globipos/src/components/barcode-scanner.tsx'
+      - 'artifacts/globipos/src/components/pda/**'
+      - 'artifacts/globipos/src/pages/pda-*.tsx'
+      - 'artifacts/globipos/src/hooks/**'
+      - 'artifacts/globipos/src/lib/**'
+      - 'artifacts/globipos/src/App.tsx'
+      - 'artifacts/globipos/src/index.css'
+      - 'artifacts/globipos/tests/pda-*.mjs'
+      - 'artifacts/globipos/package.json'
+      - 'artifacts/globipos/vite.config.*'
+      - 'artifacts/globipos/tsconfig*.json'
+      - 'lib/api-client-react/**'
+      - 'lib/api-zod/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - 'tsconfig*.json'
+      - '.github/scripts/suite-readiness.mjs'
+      - '.github/workflows/pda-scanner-browser.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  availability:
+    name: PDA suite applicability (not a test result)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      ready: ${{ steps.scope.outputs.ready }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - id: scope
+        run: node .github/scripts/suite-readiness.mjs pda-scanner
+
+  scanner:
+    needs: availability
+    if: ${{ needs.availability.outputs.ready == 'true' }}
+    name: PDA scanner — ${{ matrix.browser }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+      - name: Build production PDA
+        run: pnpm --filter @workspace/globipos build
+        env:
+          PORT: 5000
+          BASE_PATH: /
+      - name: Check isolated scanner paths (no production API or stock posting)
+        run: pnpm run test:pda-scanner:${{ matrix.browser }}

@@ -8,8 +8,8 @@ Run `pnpm --filter <package> run dev` for workspace apps; quick checks:
 
 | Folder / purpose | Package / quick check |
 |---|---|
-| `artifacts/globipos` — back office, eShop and PDA web routes | `@workspace/globipos`: `run typecheck` |
-| `artifacts/api-server` — Express API | `@workspace/api-server`: `run typecheck`; unit/API scripts when present |
+| `artifacts/globipos` — back office, eShop and PDA web routes | `@workspace/globipos`: `run typecheck` + `run test:unit` |
+| `artifacts/api-server` — Express API | `@workspace/api-server`: `run typecheck` + `run test:api` (disposable PostgreSQL) |
 | `artifacts/globipos-terminal` — browser/PWA register | `@workspace/globipos-terminal`: `run typecheck` + `run test` |
 | `artifacts/globipos-mobile` — dedicated mobile app (development branch; absent on this base) | Use its package's `dev`, `typecheck`, unit scripts after integration |
 | `artifacts/mockup-sandbox` — isolated UI prototypes | `@workspace/mockup-sandbox`: `run typecheck` |

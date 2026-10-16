@@ -1,4 +1,13 @@
-# Test/CI integration: source dependencies block completion
+# Initial test/CI dependency review — superseded continuation
+
+**Update, 17 October 2026:** Chris asked “dont stop lets finish it”. The source
+findings below remain accurate for the release base, but the initial decision
+to stop all configuration work is superseded by
+[the test/CI continuation](2026-10-17-test-ci-integration.md).
+That continuation adds unit/API runners for the tests already on main and
+applicability-gated workflow definitions; it does not import the missing
+application features or claim unrun suites passed. The following is the
+historical review before those changes.
 
 - **Date:** 17 October 2026 (Europe/Nicosia).
 - **Status:** blocked at the approved application-source boundary; not completed.

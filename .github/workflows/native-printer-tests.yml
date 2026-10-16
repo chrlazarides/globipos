@@ -1,0 +1,123 @@
+name: Unpublished native printer test builds
+
+on:
+  # Manual-only: GitHub does not support paths on workflow_dispatch.
+  # Preserve the existing manual/private-only native-build boundary.
+  workflow_dispatch:
+    inputs:
+      macos_only:
+        description: Rerun only macOS without rebuilding verified Windows/Linux packages
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  availability:
+    name: Native suite applicability (not a test result)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      ready: ${{ steps.scope.outputs.ready }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - id: scope
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        run: node .github/scripts/suite-readiness.mjs native-printer
+
+  native-test:
+    needs: availability
+    if: ${{ github.event.repository.private && needs.availability.outputs.ready == 'true' }}
+    name: Test build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: >-
+          ${{ fromJSON(inputs.macos_only &&
+          '[{"platform":"macos","runner":"macos-latest","bundles":"dmg","package-root":"universal-apple-darwin/release","rust-targets":"aarch64-apple-darwin,x86_64-apple-darwin"}]' ||
+          '[{"platform":"linux","runner":"ubuntu-22.04","bundles":"deb,appimage","package-root":"release"},{"platform":"windows","runner":"windows-latest","bundles":"nsis,msi","package-root":"release"},{"platform":"macos","runner":"macos-latest","bundles":"dmg","package-root":"universal-apple-darwin/release","rust-targets":"aarch64-apple-darwin,x86_64-apple-darwin"}]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: pos-app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets || '' }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: pos-app/src-tauri
+      - name: Install Linux native libraries and extraction tools
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev squashfs-tools
+      - name: Check aligned native versions
+        run: node scripts/pos-version.mjs --check
+      - name: Install native frontend dependencies
+        working-directory: pos-app
+        run: npm ci
+      - name: Check native frontend types
+        working-directory: pos-app
+        run: npm run typecheck
+      - name: Check sample-module initialization
+        working-directory: pos-app
+        shell: bash
+        run: |
+          npx --no-install esbuild src/simulation/samples.ts --bundle --platform=node --format=cjs --outfile="$RUNNER_TEMP/native-samples.cjs"
+          node -e 'const s=require(process.argv[1]); for(const label of [...Object.values(s.scaleLabels),...s.sampleProducts.map(p=>p.barcode)]) { if(!/^\d{13}$/.test(label)||s.ean(label.slice(0,12))!==label) throw Error("Invalid native sample barcode"); }' "$RUNNER_TEMP/native-samples.cjs"
+      - name: Generate approved native icons
+        working-directory: pos-app
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            cp src-tauri/icons/icon.icns "$RUNNER_TEMP/approved-native-test.icns"
+          fi
+          npx tauri icon src-tauri/app-icon.png
+          if [ "$RUNNER_OS" = macOS ]; then
+            cp "$RUNNER_TEMP/approved-native-test.icns" src-tauri/icons/icon.icns
+          fi
+          node ../scripts/pos-branding.mjs
+      - name: Test native library and printer status mapping
+        working-directory: pos-app/src-tauri
+        run: cargo test --locked --release --lib
+      - name: Build unsigned test packages without updater artifacts
+        working-directory: pos-app
+        shell: bash
+        env:
+          TEST_BUNDLES: ${{ matrix.bundles }}
+        run: |
+          targets=()
+          if [ "$RUNNER_OS" = macOS ]; then targets+=(--target universal-apple-darwin); fi
+          npx tauri build "${targets[@]}" --bundles "$TEST_BUNDLES" --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
+      - uses: ./.github/actions/check-pos-package-branding
+        with:
+          platform: ${{ matrix.platform }}
+          packages: pos-app/src-tauri/target/${{ matrix.package-root }}/bundle
+          report: branding-test-${{ matrix.platform }}.json
+      - name: Record exact test build identity
+        shell: bash
+        run: |
+          printf 'UNPUBLISHED TEST BUILD\nPrivate snapshot commit: %s\nPlatform: %s\nNot a signed release; physical printer acceptance is still required.\n' "$GITHUB_SHA" "${{ matrix.platform }}" > BUILD-SOURCE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unpublished-native-${{ matrix.platform }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            pos-app/src-tauri/target/${{ matrix.package-root }}/bundle/**/*.exe
+            pos-app/src-tauri/target/${{ matrix.package-root }}/bundle/**/*.msi
+            pos-app/src-tauri/target/${{ matrix.package-root }}/bundle/**/*.deb
+            pos-app/src-tauri/target/${{ matrix.package-root }}/bundle/**/*.AppImage
+            pos-app/src-tauri/target/${{ matrix.package-root }}/bundle/**/*.dmg
+            branding-test-${{ matrix.platform }}.json
+            BUILD-SOURCE.txt

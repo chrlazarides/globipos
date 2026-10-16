@@ -1,0 +1,65 @@
+name: Retail offline icons
+
+on:
+  pull_request:
+    paths:
+      - 'pos-app/src/retail/**'
+      - 'pos-app/src/assets/fonts/**'
+      - 'pos-app/tests/multi-device/retail-*'
+      - 'pos-app/package*.json'
+      - 'lib/pos-layout/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig*.json'
+      - '.github/scripts/suite-readiness.mjs'
+      - '.github/workflows/retail-icons.yml'
+  push:
+    branches: [main, dev, 'feature/**', 'feat/**']
+    paths:
+      - 'pos-app/src/retail/**'
+      - 'pos-app/src/assets/fonts/**'
+      - 'pos-app/tests/multi-device/retail-*'
+      - 'pos-app/package*.json'
+      - 'lib/pos-layout/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig*.json'
+      - '.github/scripts/suite-readiness.mjs'
+      - '.github/workflows/retail-icons.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  availability:
+    name: Retail suite applicability (not a test result)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      ready: ${{ steps.scope.outputs.ready }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - id: scope
+        run: node .github/scripts/suite-readiness.mjs retail-icons
+
+  offline-icons:
+    needs: availability
+    if: ${{ needs.availability.outputs.ready == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: npm ci --prefix pos-app
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm run test:retail-icons

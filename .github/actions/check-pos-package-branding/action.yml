@@ -1,0 +1,35 @@
+name: Verify GlobiPOS package branding
+description: Extract final package artwork and write a digest-bound verification report
+inputs:
+  platform:
+    required: true
+    description: windows, macos, linux, or android
+  packages:
+    required: true
+    description: Directory containing built packages
+  report:
+    required: true
+    description: Output JSON report path
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - shell: bash
+      run: python -m pip install -r scripts/pos-branding-requirements.txt
+    - if: inputs.platform == 'linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+    - if: inputs.platform == 'android'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y apktool
+    - shell: bash
+      env:
+        BRANDING_PLATFORM: ${{ inputs.platform }}
+        BRANDING_PACKAGES: ${{ inputs.packages }}
+        BRANDING_REPORT: ${{ inputs.report }}
+      run: |
+        flags=()
+        if [ "$BRANDING_PLATFORM" = windows ]; then flags+=(--allow-install); fi
+        python scripts/pos-package-branding.py --platform "$BRANDING_PLATFORM" --packages "$BRANDING_PACKAGES" --report "$BRANDING_REPORT" "${flags[@]}"

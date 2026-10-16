@@ -63,6 +63,17 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install locked workspace dependencies
         run: pnpm install --frozen-lockfile
+      - name: Provide disposable API-test PostgreSQL binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v pg_config >/dev/null || [ ! -x "$(pg_config --bindir)/initdb" ]; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql
+          fi
+          pg_bin="$(pg_config --bindir)"
+          test -x "$pg_bin/initdb"
+          printf 'SERVER_TEST_POSTGRES_BIN=%s\n' "$pg_bin" >> "$GITHUB_ENV"
       - name: Check affected Back office / API / library packages
         run: node .github/scripts/web-ci.mjs
       - name: Regenerate OpenAPI client and validators (no database access)
