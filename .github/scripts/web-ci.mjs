@@ -25,10 +25,11 @@ if (!/^[a-f0-9]{40}$/.test(head ?? "")) throw new Error("Missing valid CI head c
 const firstPush = !base || /^0+$/.test(base);
 if (!firstPush && !/^[a-f0-9]{40}$/.test(base)) throw new Error("Invalid CI base commit");
 const changed = firstPush ? [] : execFileSync("git",
-  ["diff", "--name-only", "-z", base, head], { encoding: "utf8" }).split("\0").filter(Boolean);
+  ["diff", "--name-only", "--no-renames", "-z", base, head], { encoding: "utf8" }).split("\0").filter(Boolean);
 const globalChange = firstPush || changed.some(file =>
   /^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|tsconfig[^/]*\.json)$/.test(file) ||
-  file === ".github/workflows/ci-web-api.yml" || file === ".github/scripts/web-ci.mjs");
+  file === ".github/workflows/ci-web-api.yml" || file === ".github/scripts/web-ci.mjs" ||
+  file === ".github/scripts/web-ci-scope.mjs");
 const dependencies = pkg => Object.keys({ ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies })
   .filter(name => packages.has(name));
 const affected = new Set([...packages].filter(([, pkg]) =>

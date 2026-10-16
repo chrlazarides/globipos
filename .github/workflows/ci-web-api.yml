@@ -1,31 +1,11 @@
 name: CI — Back office and API
 
 on:
+  # Always report the required status. Expensive work is gated inside the
+  # workflow, not at the trigger, so docs-only PRs do not remain pending.
   pull_request:
-    paths:
-      - 'artifacts/globipos/**'
-      - 'artifacts/api-server/**'
-      - 'lib/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - '.npmrc'
-      - 'tsconfig*.json'
-      - '.github/workflows/ci-web-api.yml'
-      - '.github/scripts/web-ci.mjs'
   push:
     branches: [main]
-    paths:
-      - 'artifacts/globipos/**'
-      - 'artifacts/api-server/**'
-      - 'lib/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - '.npmrc'
-      - 'tsconfig*.json'
-      - '.github/workflows/ci-web-api.yml'
-      - '.github/scripts/web-ci.mjs'
 
 permissions:
   contents: read
@@ -35,8 +15,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect Back office / API changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      required: ${{ steps.scope.outputs.required }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - name: Detect applicable inputs without installing dependencies
+        id: scope
+        env:
+          DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DIFF_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node .github/scripts/web-ci-scope.mjs
+
   web-api:
     name: Back office / API quick gate
+    needs: changes
+    if: ${{ needs.changes.outputs.required == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -75,3 +77,43 @@ jobs:
             echo "::error::OpenAPI output differs. Regenerate and commit the generated client/validators."
             exit 1
           fi
+
+  required-web-api:
+    name: Required Back office / API CI
+    if: ${{ always() }}
+    needs: [changes, web-api]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require success for every applicable check
+        shell: bash
+        env:
+          DETECTION_RESULT: ${{ needs.changes.result }}
+          WEB_REQUIRED: ${{ needs.changes.outputs.required }}
+          WEB_RESULT: ${{ needs.web-api.result }}
+        run: |
+          set -euo pipefail
+          if [ "$DETECTION_RESULT" != success ]; then
+            echo "::error::Change detection did not succeed; applicability is unknown."
+            exit 1
+          fi
+          case "$WEB_REQUIRED" in
+            true)
+              if [ "$WEB_RESULT" != success ]; then
+                echo "::error::Required Back office/API checks did not succeed ($WEB_RESULT)."
+                exit 1
+              fi
+              echo "Applicable Back office/API checks passed."
+              ;;
+            false)
+              if [ "$WEB_RESULT" != skipped ]; then
+                echo "::error::Unexpected check state for unrelated changes ($WEB_RESULT)."
+                exit 1
+              fi
+              echo "No Back office/API inputs changed; application checks are not applicable."
+              ;;
+            *)
+              echo "::error::Invalid or missing applicability result."
+              exit 1
+              ;;
+          esac
