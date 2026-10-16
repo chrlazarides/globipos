@@ -5,11 +5,17 @@ on:
     branches: [ main, dev, 'feature/**' ]
     paths:
       - 'pos-app/**'
+      - 'lib/pos-layout/**'
+      - 'lib/pos-terminal-core/**'
+      - 'scripts/pos-branding.mjs'
       - '.github/workflows/ci-pos.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'pos-app/**'
+      - 'lib/pos-layout/**'
+      - 'lib/pos-terminal-core/**'
+      - 'scripts/pos-branding.mjs'
       - '.github/workflows/ci-pos.yml'
 
 concurrency:

@@ -1,0 +1,33 @@
+name: Feature
+description: Propose a focused product improvement
+title: "feat: "
+body:
+  - type: textarea
+    id: what-why
+    attributes:
+      label: What should change and why?
+      description: Describe the user need and scope.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable completion checks.
+    validations:
+      required: true
+  - type: dropdown
+    id: app
+    attributes:
+      label: App
+      options: [POS, Back office, API, PDA, Native, eShop, Mobile]
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk areas
+      multiple: true
+      options: [financial, fiscal, schema, none]
+    validations:
+      required: true

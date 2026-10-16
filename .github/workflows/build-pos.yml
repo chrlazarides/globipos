@@ -8,9 +8,14 @@ on:
     paths:
       - 'scripts/pos-*.mjs'
       - 'scripts/pos_*'
+      - 'scripts/pos-*.py'
       - 'scripts/pos-branding-requirements.txt'
+      - 'scripts/verify-pos-release*.mjs'
       - 'pos-app/**'
+      - 'lib/pos-layout/**'
+      - 'lib/pos-terminal-core/**'
       - '.github/workflows/build-pos.yml'
+      - '.github/actions/check-pos-package-branding/**'
   workflow_dispatch:
     inputs:
       tag:

@@ -1,0 +1,33 @@
+name: Bug
+description: Report a defect and its expected behaviour
+title: "fix: "
+body:
+  - type: textarea
+    id: what-why
+    attributes:
+      label: What happened and why does it matter?
+      description: Include reproduction steps, expected behaviour and actual behaviour. Do not include secrets or customer data.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What must be true to close this issue?
+    validations:
+      required: true
+  - type: dropdown
+    id: app
+    attributes:
+      label: App
+      options: [POS, Back office, API, PDA, Native, eShop, Mobile]
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk areas
+      multiple: true
+      options: [financial, fiscal, schema, none]
+    validations:
+      required: true

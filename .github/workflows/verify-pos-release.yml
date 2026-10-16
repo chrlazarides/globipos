@@ -1,5 +1,7 @@
 name: Recheck Published POS Release
 
+# Manual-only: workflow_dispatch has no paths filter. Keep published/tagged
+# verification explicit; ordinary source pushes must not recheck a release.
 on:
   workflow_dispatch:
     inputs:

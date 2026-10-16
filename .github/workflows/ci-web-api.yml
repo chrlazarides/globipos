@@ -1,0 +1,77 @@
+name: CI — Back office and API
+
+on:
+  pull_request:
+    paths:
+      - 'artifacts/globipos/**'
+      - 'artifacts/api-server/**'
+      - 'lib/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - 'tsconfig*.json'
+      - '.github/workflows/ci-web-api.yml'
+      - '.github/scripts/web-ci.mjs'
+  push:
+    branches: [main]
+    paths:
+      - 'artifacts/globipos/**'
+      - 'artifacts/api-server/**'
+      - 'lib/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - 'tsconfig*.json'
+      - '.github/workflows/ci-web-api.yml'
+      - '.github/scripts/web-ci.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-api-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-api:
+    name: Back office / API quick gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      PORT: '5000'
+      BASE_PATH: /
+      # Only commit IDs, never untrusted PR text interpolated into shell code.
+      DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      DIFF_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+          run_install: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install locked workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check affected Back office / API / library packages
+        run: node .github/scripts/web-ci.mjs
+      - name: Regenerate OpenAPI client and validators (no database access)
+        run: pnpm --filter @workspace/api-spec exec orval --config ./orval.config.ts
+      - name: Require committed generated output to match the specification
+        shell: bash
+        run: |
+          changes="$(git status --porcelain --untracked-files=all -- lib/api-client-react/src/generated lib/api-zod/src/generated)"
+          if [ -n "$changes" ]; then
+            printf '%s\n' "$changes"
+            git diff -- lib/api-client-react/src/generated lib/api-zod/src/generated
+            echo "::error::OpenAPI output differs. Regenerate and commit the generated client/validators."
+            exit 1
+          fi

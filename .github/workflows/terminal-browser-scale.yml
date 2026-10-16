@@ -1,6 +1,25 @@
 name: Terminal browser catalog scale
 
 on:
+  pull_request:
+    paths:
+      - 'artifacts/globipos-terminal/**'
+      - 'lib/pos-terminal-core/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig*.json'
+      - '.github/workflows/terminal-browser-scale.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'artifacts/globipos-terminal/**'
+      - 'lib/pos-terminal-core/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig*.json'
+      - '.github/workflows/terminal-browser-scale.yml'
   schedule:
     - cron: '17 3 * * 1'
   workflow_dispatch:

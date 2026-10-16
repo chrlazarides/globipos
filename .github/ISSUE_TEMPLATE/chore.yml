@@ -1,0 +1,33 @@
+name: Chore
+description: Track maintenance, documentation or engineering work
+title: "chore: "
+body:
+  - type: textarea
+    id: what-why
+    attributes:
+      label: What work is needed and why?
+      description: State the maintenance need and boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List the checks needed to finish.
+    validations:
+      required: true
+  - type: dropdown
+    id: app
+    attributes:
+      label: App
+      options: [POS, Back office, API, PDA, Native, eShop, Mobile]
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk areas
+      multiple: true
+      options: [financial, fiscal, schema, none]
+    validations:
+      required: true

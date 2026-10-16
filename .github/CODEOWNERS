@@ -1,0 +1,32 @@
+# Enable "Require review from Code Owners" in the main branch ruleset.
+# Safe default also covers financial logic embedded in broad route/UI files.
+* @chrlazarides
+
+# Database declarations, production migrations and native/local persistence
+/lib/db/ @chrlazarides
+**/migrations/ @chrlazarides
+**/*migration* @chrlazarides
+/pos-app/src-tauri/src/ @chrlazarides
+
+# Pricing, payment, fiscal, loyalty, credit, vouchers and device trust
+**/*pricing* @chrlazarides
+**/*Pricing* @chrlazarides
+**/*payment* @chrlazarides
+**/*Payment* @chrlazarides
+**/*fiscal* @chrlazarides
+**/*loyalty* @chrlazarides
+**/*credit* @chrlazarides
+**/*Credit* @chrlazarides
+**/*voucher* @chrlazarides
+**/*Voucher* @chrlazarides
+**/*device* @chrlazarides
+**/*pairing* @chrlazarides
+**/*trust* @chrlazarides
+/artifacts/api-server/src/routes/ @chrlazarides
+/pos-app/src/hooks/useOrder.ts @chrlazarides
+/pos-app/src/lib/ @chrlazarides
+/lib/pos-terminal-core/ @chrlazarides
+
+# Workflow and review-policy changes are protected too.
+/.github/ @chrlazarides
+/.github/CODEOWNERS @chrlazarides
