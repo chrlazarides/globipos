@@ -118,3 +118,23 @@ runner are explicitly owned by Chris in CODEOWNERS.
 Chris must enable the required **Money-path tests** status and CODEOWNERS-review
 enforcement in branch protection after review/merge. Rollback is a reviewed revert
 of these test/config/docs changes; there is no application/data migration to undo.
+
+## Approved audit-first follow-up
+
+The limitations above describe this original helper/file-storage runner, not an
+absence of coverage elsewhere in GlobiPOS. See
+`docs/decisions/money-path-test-audit.md` for the branch-aware inventory.
+
+Chris approved only uncovered cases. The follow-up extends the existing terminal
+browser and loyalty policy suites, not this broad suite:
+
+- Four actual IndexedDB bill crash/enqueue/acknowledgement cases.
+- Three actual PostgreSQL points-concurrency/replay/rollback cases, executing the
+  original storage method rather than reproducing its rules.
+
+`node scripts/test-money-gaps.mjs` runs the latter. For the former:
+`node --test --test-name-pattern='bill queue' artifacts/globipos-terminal/tests/browser-sync-scale.test.mjs`.
+The CI jobs run them on relevant changes. No new application defect was found;
+the six original quarantines remain unchanged. Neither new harness proves real
+cloud gating, native-handler parity or cross-document/report reconciliation.
+No shared database, migration or application behavior was changed.

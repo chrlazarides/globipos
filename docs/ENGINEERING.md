@@ -124,6 +124,32 @@ and card-result validation, rewards/credit policy, receiving-service retry/rollb
 canonical bill replay validation and offline sync-controller restart/recovery.
 The test fixtures and runner are CODEOWNERS-protected.
 
+### Audit-first additions
+
+See [the money-path audit](decisions/money-path-test-audit.md) before adding tests;
+extend existing suites instead of duplicating sales, payment or VAT coverage.
+The approved follow-up adds only:
+
+- Actual browser IndexedDB bill save/acknowledgement aborts, SIGKILL recovery and
+  replay of the same payload after a lost reply, in the existing terminal browser suite.
+- Actual points-redemption storage SQL: concurrent spending, same-key replay,
+  changed-key-amount refusal and rollback between debit and wallet credit,
+  in the existing loyalty policy suite.
+
+Run `node scripts/test-money-gaps.mjs` for the latter. It creates and removes a
+private PostgreSQL cluster using Unix sockets and fixed sample records; it never
+reads `DATABASE_URL`, imports app startup or runs migrations. PostgreSQL fixture
+tools must be installed. Run only the new browser cases with
+`node --test --test-name-pattern='bill queue' artifacts/globipos-terminal/tests/browser-sync-scale.test.mjs`.
+The existing terminal-browser CI runs these alongside its unchanged catalogue
+cases; Money-path tests CI runs the points cases on relevant PRs. These assertions
+and fixtures require Chris's CODEOWNERS review.
+
+No new bugs were found in these cases. Earlier known quarantines remain explicit,
+not passes. Real cloud/offline enforcement, full native-handler parity and the
+complete same-transaction receipt/A4/report matrix remain outside these added
+checks; consult the audited existing suites and their branch-specific reports.
+
 Known failures are **explicit skips, not passes**. Use
 `MONEY_KNOWN_FAILURES=1 node scripts/test-money-paths.mjs` to execute their original
 desired assertions. Chris decides fixes; re-enable each test when its fix is reviewed.

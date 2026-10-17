@@ -14,6 +14,7 @@ on:
       - 'artifacts/globipos-terminal/**'
       - 'tests/money-paths/**'
       - 'scripts/test-money-paths.mjs'
+      - 'scripts/test-money-gaps.mjs'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
@@ -62,7 +63,7 @@ jobs:
               echo 'changed=false' >> "$GITHUB_OUTPUT"
             fi
             if printf '%s\n' "$changed_paths" | grep -Eq \
-              '^(artifacts/(globipos|api-server|globipos-terminal)/|pos-app/|lib/|tests/money-paths/|scripts/test-money-paths\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig[^/]*\.json$|\.github/workflows/ci-web-api\.yml$)'; then
+              '^(artifacts/(globipos|api-server|globipos-terminal)/|pos-app/|lib/|tests/money-paths/|scripts/test-money-(paths|gaps)\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig[^/]*\.json$|\.github/workflows/ci-web-api\.yml$)'; then
               echo 'money=true' >> "$GITHUB_OUTPUT"
             else
               echo 'money=false' >> "$GITHUB_OUTPUT"
@@ -89,6 +90,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Run isolated money-path unit and integration tests
         run: node scripts/test-money-paths.mjs
+      - name: Run shared-points transaction gaps
+        run: node scripts/test-money-gaps.mjs
   web-api:
     name: Back office / API checks
     needs: scope
