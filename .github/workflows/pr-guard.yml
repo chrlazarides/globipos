@@ -1,0 +1,46 @@
+name: PR guard
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: PR guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      # No PR checkout or untrusted PR code. Base-branch policy is authoritative.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - name: Validate issue link and Conventional Commit title
+        shell: bash
+        run: |
+          if [ -f scripts/pr-guard.mjs ]; then
+            node scripts/pr-guard.mjs
+          else
+            # Bootstrap only: this new guard is not on main yet. Never fall
+            # back to executing a fork/PR's script with repository credentials.
+            node --input-type=module <<'NODE'
+          import {readFileSync} from "node:fs";
+          const pr = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")).pull_request;
+          const validTitle = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)\((pos|backoffice|api|pda|native|eshop|mobile|lib|db|ci|docs|deps)\)!?: \S.*$/.test(pr.title ?? "");
+          const validIssue = pr.user?.login === "dependabot[bot]" || /\b(?:closes|fixes|refs)\s+#([1-9]\d*)\b/i.test(pr.body ?? "");
+          if (!validTitle || !validIssue) {
+            console.error("::error::Use a Conventional Commit title with an allowed scope and Closes/Fixes/Refs #N in the body. Only Dependabot is exempt from the issue link.");
+            process.exitCode = 1;
+          }
+          NODE
+          fi

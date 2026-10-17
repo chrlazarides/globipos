@@ -2,17 +2,8 @@ name: CI — Back office and API
 
 on:
   pull_request:
-    paths:
-      - 'artifacts/globipos/**'
-      - 'artifacts/api-server/**'
-      - 'lib/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - '.npmrc'
-      - 'tsconfig*.json'
-      - '.github/workflows/ci-web-api.yml'
-      - '.github/scripts/web-ci.mjs'
+    # Always return a required status; the scope job skips actual app checks
+    # outside these paths instead of leaving a required check pending forever.
   push:
     branches: [main]
     paths:
@@ -35,8 +26,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    name: Detect Back office / API changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      changed: ${{ steps.paths.outputs.changed }}
+    env:
+      DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      DIFF_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check relevant paths
+        id: paths
+        shell: bash
+        run: |
+          if ! git cat-file -e "${DIFF_BASE}^{commit}" 2>/dev/null; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          else
+            # A git error fails this step; it must not mean "no app changes".
+            changed_paths="$(git diff --no-renames --name-only "$DIFF_BASE" "$DIFF_HEAD" --)"
+            if printf '%s\n' "$changed_paths" | grep -Eq \
+              '^(artifacts/(globipos|api-server)/|lib/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.npmrc$|tsconfig[^/]*\.json$|\.github/workflows/ci-web-api\.yml$|\.github/scripts/web-ci\.mjs$)'; then
+              echo 'changed=true' >> "$GITHUB_OUTPUT"
+            else
+              echo 'changed=false' >> "$GITHUB_OUTPUT"
+            fi
+          fi
   web-api:
-    name: Back office / API quick gate
+    name: Back office / API checks
+    needs: scope
+    if: needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -73,5 +96,31 @@ jobs:
             printf '%s\n' "$changes"
             git diff -- lib/api-client-react/src/generated lib/api-zod/src/generated
             echo "::error::OpenAPI output differs. Regenerate and commit the generated client/validators."
+            exit 1
+          fi
+  gate:
+    name: Back office / API quick gate
+    if: always()
+    needs: [scope, web-api]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    env:
+      SCOPE_RESULT: ${{ needs.scope.result }}
+      APP_RESULT: ${{ needs.web-api.result }}
+      CHANGED: ${{ needs.scope.outputs.changed }}
+    steps:
+      - name: Require applicable checks to succeed
+        shell: bash
+        run: |
+          if [ "$SCOPE_RESULT" != success ]; then
+            echo "::error::Path detection did not succeed."
+            exit 1
+          fi
+          if [ "$CHANGED" = true ] && [ "$APP_RESULT" = success ]; then
+            echo "Applicable Back office / API checks passed."
+          elif [ "$CHANGED" = false ] && [ "$APP_RESULT" = skipped ]; then
+            echo "No relevant changes; app checks intentionally skipped."
+          else
+            echo "::error::Applicable checks failed, were cancelled, or were unexpectedly skipped."
             exit 1
           fi

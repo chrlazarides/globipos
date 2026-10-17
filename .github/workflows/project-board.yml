@@ -1,0 +1,44 @@
+name: Project board automation
+
+on:
+  issues:
+    types: [opened]
+  # Required for fork PR secrets; no PR checkout or PR code is ever executed.
+  pull_request_target:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  configuration:
+    name: Check project board configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    env:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      PROJECT_URL: ${{ vars.PROJECT_URL }}
+    steps:
+      - name: Check project configuration without logging credentials
+        id: check
+        shell: bash
+        run: |
+          if [ -n "$PROJECT_TOKEN" ] && [ -n "$PROJECT_URL" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo "::notice::Project board automation skipped. Chris must set PROJECT_URL and PROJECT_TOKEN."
+          fi
+  add:
+    name: Add issue or PR to project
+    needs: configuration
+    if: needs.configuration.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Add to Projects board
+        uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0 (2026-05-04)
+        with:
+          project-url: ${{ vars.PROJECT_URL }}
+          github-token: ${{ secrets.PROJECT_TOKEN }}

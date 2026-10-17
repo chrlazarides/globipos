@@ -1,0 +1,48 @@
+version: 2
+updates:
+  # Root pnpm lockfile/workspace owns the nested npm package manifests.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: Europe/Nicosia
+    cooldown:
+      default-days: 1
+    labels: [deps]
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      workspace:
+        patterns: ['*']
+  - package-ecosystem: cargo
+    directory: /pos-app/src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: Europe/Nicosia
+    cooldown:
+      default-days: 1
+    labels: [deps]
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      native:
+        patterns: ['*']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: Europe/Nicosia
+    cooldown:
+      default-days: 1
+    labels: [deps]
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      actions:
+        patterns: ['*']

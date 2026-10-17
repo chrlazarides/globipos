@@ -1,0 +1,52 @@
+{
+  "repo": "example/project",
+  "now": "2026-10-16T04:00:00Z",
+  "since": "2026-10-09T04:00:00Z",
+  "merged": [
+    {
+      "number": 1, "url": "https://github.com/example/project/pull/1",
+      "mergedAt": "2026-10-15T10:00:00Z", "mergeCommit": "m1",
+      "files": ["pos-app/src-tauri/src/refunds.rs", ".github/workflows/ci-pos.yml"],
+      "linkedIssues": ["https://github.com/example/project/issues/7"],
+      "title": "PRIVATE-TITLE-SENTINEL", "body": "PRIVATE-BODY-SENTINEL"
+    },
+    {
+      "number": 2, "url": "https://github.com/example/project/pull/2",
+      "mergedAt": "2026-10-14T10:00:00Z", "mergeCommit": "m2",
+      "files": ["artifacts/api-server/src/routes/pricing.ts"],
+      "linkedIssues": ["https://github.com/example/project/issues/8"]
+    },
+    {
+      "number": 3, "url": "https://github.com/example/project/pull/3",
+      "mergedAt": "2026-10-13T10:00:00Z", "mergeCommit": "m3",
+      "files": ["artifacts/globipos/src/main.tsx"], "linkedIssues": []
+    },
+    {
+      "number": 4, "url": "https://github.com/example/project/pull/4",
+      "mergedAt": "2026-09-01T10:00:00Z", "mergeCommit": "m4",
+      "files": ["pos-app/src/hooks/useOrder.ts"],
+      "linkedIssues": ["https://github.com/example/project/issues/9"]
+    },
+    {
+      "number": 5, "url": "https://github.com/example/project/pull/5",
+      "mergedAt": "2026-10-12T10:00:00Z", "mergeCommit": "m5",
+      "files": ["lib/example/index.ts"], "linkedIssues": ["https://github.com/example/project/issues/10"]
+    }
+  ],
+  "openPrs": [{"number": 6, "url": "https://github.com/example/project/pull/6", "createdAt": "2026-10-01T08:00:00Z"}],
+  "inProgress": [{"number": 11, "url": "https://github.com/example/project/issues/11", "createdAt": "2026-10-15T08:00:00Z"}],
+  "protectedRules": ["/pos-app/src-tauri/src/", "/artifacts/api-server/src/routes/", "/.github/"],
+  "workflows": [{"id": 1, "name": "Web CI"}, {"id": 2, "name": "No runs"}],
+  "attempts": [
+    {"id": 101, "workflowId": 1, "name": "Web CI", "url": "https://github.com/example/project/actions/runs/101/attempts/1", "attempt": 1, "branch": "main", "event": "push", "conclusion": "failure"},
+    {"id": 101, "workflowId": 1, "name": "Web CI", "url": "https://github.com/example/project/actions/runs/101/attempts/2", "attempt": 2, "branch": "main", "event": "push", "conclusion": "success"}
+  ],
+  "tags": [{"name": "v1.0.19", "date": "2026-10-01T08:00:00Z", "sha": "tag-commit"}],
+  "comparisons": {"v1.0.19": {"verified": true, "commits": ["m1", "m4", "m5"]}},
+  "security": {
+    "dependabot": {"available": false, "alerts": []},
+    "secretScanning": {"available": true, "alerts": [{"number": 1, "url": "https://github.com/example/project/security/secret-scanning/1", "secret": "PRIVATE-SECRET-SENTINEL"}]}
+  },
+  "health": null,
+  "warnings": []
+}

@@ -1,0 +1,40 @@
+name: Weekly project report
+
+on:
+  schedule:
+    # Friday 07:00 Europe/Nicosia: 04:00 UTC in DST (UTC+3),
+    # 05:00 UTC in winter (UTC+2). Script selects the applicable invocation.
+    - cron: '0 4 * * 5'
+    - cron: '0 5 * * 5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: weekly-project-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Weekly project report
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - name: Check report logic using offline fixtures
+        run: node --test scripts/tests/project-monitoring.test.mjs
+      - name: Publish development report
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          HEALTH_URLS: ${{ vars.HEALTH_URLS }}
+        run: node scripts/weekly-project-report.mjs

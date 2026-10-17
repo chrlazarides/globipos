@@ -35,7 +35,7 @@ The existing native release/verification workflows still require legacy `v*` tag
 The back office/API currently share their stable app version. Preserve that behaviour until an explicitly approved version split. Keep a clear version for each back-office upgrade, not for rebuilds, backups or restores.
 Follow `.agents/skills/publish-pwa-tauri/SKILL.md` when integrated: web publishing and signed native updates are separate approval paths.
 
-Use Conventional Commits, e.g. `fix(api): reject duplicate invoice retries`, `feat(backoffice): add stock filter`, `chore(ci): scope workflow inputs`, `docs(engineering): record release policy`. Include the issue in the PR (`Closes #123`); approvals must be on the issue, not inferred from a commit message.
+Use Conventional Commits, e.g. `fix(api): reject duplicate invoice retries`, `feat(backoffice): add stock filter`, `chore(ci): scope workflow inputs`, `docs(docs): record release policy`. Include the issue in the PR (`Closes #123`); approvals must be on the issue, not inferred from a commit message.
 
 ## Run and quick checks
 
@@ -59,7 +59,7 @@ Dedicated mobile source/package and modern native browser harnesses exist on dev
 This configuration branch starts at GitHub `main` (`9e1d485`), not an unfinished feature branch.
 Only configuration/documentation is added. No application/test source or dependency manifests are imported.
 
-- **Back office/API:** `ci-web-api.yml` runs on relevant PRs and `main` pushes. It installs with the frozen lock, caches pnpm, follows shared dependency/consumer paths, builds affected library declarations, checks affected apps, runs existing lint/unit/API scripts, builds affected apps and checks generated OpenAPI client/Zod drift (including new/deleted files). It never runs a DB push. Node 24 and the workspace's installed pnpm 10.26.1 are pinned for repeatability.
+- **Back office/API:** `ci-web-api.yml` returns a required status on every PR; a cheap path check skips actual app work outside the relevant paths. The final gate fails if path detection or applicable checks fail/cancel. Relevant `main` pushes also run it. It installs with the frozen lock, caches pnpm, follows shared dependency/consumer paths, builds affected library declarations, checks affected apps, runs existing lint/unit/API scripts, builds affected apps and checks generated OpenAPI client/Zod drift (including new/deleted files). It never runs a DB push. Node 24 and the workspace's installed pnpm 10.26.1 are pinned for repeatability.
 - **Current test-script gap:** on this base the back office and API have no unit/API `test` scripts and no lint scripts. CI explicitly reports these as **not verified**; it does not invent or import tests. When their existing development scripts are integrated, `test`, `test:unit`, `test:api`, `test:server`, `test:agoranomia` and `test:cashier-pin` are recognised. Browser/native suites are not run by this quick gate.
 - **POS build:** PR paths cover native source, its shared POS libraries, release/branding helpers and its own workflow. Existing tag/manual release triggers and all jobs remain unchanged.
 - **POS CI:** push/PR paths include native source, shared POS libraries and the branding helper used by its smoke build. Existing jobs, advisory checks and tests are unchanged.
@@ -83,6 +83,32 @@ This is a documented base mismatch, not three completed CI checks. Do not enable
 - GitHub does not accept an author's own review as CODEOWNERS approval. If Chris authors the PR himself, agree a second trusted reviewer or use an authorised integration-authored PR; never silently bypass the rule.
 - Create the GitHub Projects board (Backlog / Ready / In progress / Review / Done), labels `app:*` (POS, Back office, API, PDA, Native, eShop, Mobile), `type:bug|feature|chore`, `risk:financial|fiscal|schema|none` and `risk:low|medium|high`. Use `none` alone. Create a first milestone, **Engineering foundation**, and link issues/PRs. This setup request has no supplied issue number; Chris should link its tracking issue before review.
 - Set release environment protections for staging/production, pilot acceptance and rollback evidence. These policy controls are not enabled merely by merging this document.
+
+## Project monitoring
+
+This monitors the **development project**, not production infrastructure.
+Production monitoring remains in `docs/deployment-and-monitoring.md`; do not duplicate it here.
+
+- **Weekly project report:** Fridays at 07:00 Europe/Nicosia, or manually. Two UTC cron entries (04:00 DST / 05:00 winter) are offset-gated so only one posts. GitHub scheduling can be delayed; the gate checks the seasonal offset, not the actual start-hour.
+- The last seven days' merged-main PRs are grouped by app, with linked issues and warnings for missing links. Explicit CODEOWNERS paths (not the catch-all default) identify protected changes, including renamed-from paths. Open PRs and `in-progress` issues warn after seven days.
+- Quality counts retained GitHub run attempts started in the reporting period, including old runs rerun this week. It warns on any failed main attempt or pass rate below 90%. Neutral, skipped, cancelled and unfinished attempts are not classified as passes/failures.
+- Releases show the latest product tag (including legacy native `v*`) and PRs whose merge commits are in tag→main history. Shared library/workspace changes count for each product. Unreleased work older than 14 days warns; diverged/unavailable comparisons are **not verified**, not zero.
+- The report uses only `GITHUB_TOKEN` with contents/PR/actions read and issues write. Security alerts are optional: inaccessible Dependabot/secret-scanning data says **not available**, never zero. No secret values, PR/issue titles/bodies, customer data or health response bodies are posted. `HEALTH_URLS` accepts comma-separated HTTPS origins; credentials/query parameters are rejected, and only `/api/healthz` status is checked.
+- It creates a `weekly-report` issue before closing previous bot-authored weekly reports. For a personally owned repository it assigns the owner, giving Chris an assignment notification. GitHub email delivery still depends on his notification settings.
+- **PR guard:** every PR needs `Closes #N`, `Fixes #N` or `Refs #N` plus a Conventional Commit title with scope `pos`, `backoffice`, `api`, `pda`, `native`, `eshop`, `mobile`, `lib`, `db`, `ci`, `docs` or `deps`. Only Dependabot is exempt from the issue link. Guard policy comes from the base branch; fork/PR code is not executed by it.
+- **Board automation:** new issues and PRs are added to Projects v2. Missing `PROJECT_TOKEN` or `PROJECT_URL` skips the add job with a notice. The token-bearing `pull_request_target` workflow never checks out or runs PR code; it invokes a pinned action only.
+- **Dependabot:** grouped weekly workspace, Cargo and Actions updates, labelled `deps`, with a one-day version-update cooldown. Existing pnpm `minimumReleaseAge: 1440` and its allowlist stay unchanged. GitHub does **not** apply cooldown to security updates: those PRs must still wait until the one-day policy is satisfied, or have Chris's written exception. Nothing auto-merges.
+- Offline fixture tests: `node --test scripts/tests/project-monitoring.test.mjs` (no network). The weekly workflow runs these before posting. Setup-task local validation is syntax-only; no application/browser/native suite is required.
+
+### Manual setup for Chris
+
+- [ ] Create the Projects v2 board with app/type/risk fields or labels and a first milestone; set repository variable `PROJECT_URL` to its URL.
+- [ ] Create a fine-grained token for the correct project owner with **Projects read/write**, selected-repository **Issues read** and **Pull requests read**. Save it as repository secret `PROJECT_TOKEN`. Never paste it into an issue, file or chat. Owner/organization policy may require token approval.
+- [ ] Create labels `deps` and `in-progress` (plus the app/type/risk labels); `weekly-report` is created automatically by the workflow.
+- [ ] Set repository variable `HEALTH_URLS` to comma-separated HTTPS origins, or leave unset to skip health checks.
+- [ ] Enable Dependabot alerts and secret scanning where the repository plan permits. `GITHUB_TOKEN` may still lack alert-read permissions: the report explicitly says **not available** rather than requesting broader credentials.
+- [ ] After merging this configuration through review, add **PR guard** and **Back office / API quick gate** as required main-branch status checks. Require PRs and CODEOWNERS review, forbid force pushes, and retain Chris's approval requirement.
+- [ ] Watch repository Issues and enable GitHub email notifications; run **Weekly project report** manually once after merge to confirm report/notification delivery.
 
 ## Database and rollback
 
