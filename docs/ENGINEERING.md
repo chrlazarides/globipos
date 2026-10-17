@@ -110,6 +110,29 @@ Production monitoring remains in `docs/deployment-and-monitoring.md`; do not dup
 - [ ] After merging this configuration through review, add **PR guard** and **Back office / API quick gate** as required main-branch status checks. Require PRs and CODEOWNERS review, forbid force pushes, and retain Chris's approval requirement.
 - [ ] Watch repository Issues and enable GitHub email notifications; run **Weekly project report** manually once after merge to confirm report/notification delivery.
 
+## Money-path tests
+
+Run `node scripts/test-money-paths.mjs` (Node 24, installed frozen workspace dependencies).
+The **Money-path tests** job in the back-office/API workflow runs for relevant PR
+changes to native/PWA POS, back office, API, shared libraries and the tests themselves.
+Tests use production functions, sample-only fixtures, a fixed clock and blocked
+network access. No Rust compilation, shared database, migration or browser is needed.
+
+Coverage includes sale/discount/void totals, the golden basket, Cyprus included VAT,
+explicit invoice net/included bases, existing levels/contracts/promotions, tender
+and card-result validation, rewards/credit policy, receiving-service retry/rollback,
+canonical bill replay validation and offline sync-controller restart/recovery.
+The test fixtures and runner are CODEOWNERS-protected.
+
+Known failures are **explicit skips, not passes**. Use
+`MONEY_KNOWN_FAILURES=1 node scripts/test-money-paths.mjs` to execute their original
+desired assertions. Chris decides fixes; re-enable each test when its fix is reviewed.
+See [Money-path coverage and findings](../tests/money-paths/README.md) for the
+quarantine list and gaps: real PostgreSQL transaction/concurrency checks for stock
+and shared balances, actual IndexedDB crash recovery, and rendered receipt/A4/report
+comparisons. This unit gate alone is **not** a live-store release certification.
+After merging through review, Chris should add **Money-path tests** to required checks.
+
 ## Database and rollback
 
 Production schema changes use reviewed, versioned migrations, never ad-hoc schema push.
