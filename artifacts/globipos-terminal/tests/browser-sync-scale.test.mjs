@@ -4,10 +4,58 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { withBillQueueServer } from "./browser-bill-queue-server.mjs";
 
 const artifactRoot = path.resolve(import.meta.dirname, "..");
 const port = 43117;
 const baseUrl = `http://127.0.0.1:${port}/terminal/tests/browser-sync-scale.html`;
+
+test("bill queue: committed sale survives SIGKILL and retains its identity after acknowledgement", { timeout: 45_000 }, async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), "globipos-bill-crash-"));
+  try {
+    await withBillQueueServer(port, async () => {
+      const saved = await runBrowser(profile, `${baseUrl}?billScenario=save`, { stopAtStatus: "saved", killSignal: "SIGKILL" });
+      const recovered = await runBrowser(profile, `${baseUrl}?billScenario=recover`);
+      assert.deepEqual(recovered.before, saved.before);
+      assert.equal(recovered.sent.length, 1);
+      assert.equal(recovered.after.outbox.length, 0);
+    });
+  } finally { await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
+});
+
+test("bill queue: accepted-but-lost reply retries the identical persisted payload after SIGKILL", { timeout: 45_000 }, async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), "globipos-bill-lost-reply-"));
+  try {
+    await withBillQueueServer(port, async () => {
+      const lost = await runBrowser(profile, `${baseUrl}?billScenario=lost-ack`, { stopAtStatus: "accepted", killSignal: "SIGKILL" });
+      const recovered = await runBrowser(profile, `${baseUrl}?billScenario=recover`);
+      assert.deepEqual(recovered.sent, [lost.payload]);
+      assert.equal(recovered.after.orders.length, 1);
+      assert.equal(recovered.after.outbox.length, 0);
+    });
+  } finally { await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
+});
+
+test("bill queue: aborted acknowledgement keeps the queue and does not record false success", { timeout: 45_000 }, async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), "globipos-bill-ack-abort-"));
+  try {
+    await withBillQueueServer(port, async () => {
+      const result = await runBrowser(profile, `${baseUrl}?billScenario=ack-abort`);
+      assert.deepEqual(result.sent[0], result.sent[1]);
+      assert.equal(result.after.outbox.length, 0);
+    });
+  } finally { await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
+});
+
+test("bill queue: aborted local save rejects instead of leaving checkout pending", { timeout: 45_000 }, async () => {
+  const profile = await mkdtemp(path.join(tmpdir(), "globipos-bill-save-abort-"));
+  try {
+    await withBillQueueServer(port, async () => {
+      const result = await runBrowser(profile, `${baseUrl}?billScenario=save-abort`);
+      assert.equal(result.settled, "rejected");
+    });
+  } finally { await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
+});
 
 async function waitForServer(server) {
   for (let attempt = 0; attempt < 100; attempt += 1) {

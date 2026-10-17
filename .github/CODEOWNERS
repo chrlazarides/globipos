@@ -30,3 +30,12 @@
 # Workflow and review-policy changes are protected too.
 /.github/ @chrlazarides
 /.github/CODEOWNERS @chrlazarides
+
+# Money-path assertions, fixtures, quarantine notes and test runner.
+/tests/money-paths/ @chrlazarides
+/scripts/test-money-paths.mjs @chrlazarides
+/scripts/test-money-gaps.mjs @chrlazarides
+/artifacts/api-server/src/loyalty-policy.test.ts @chrlazarides
+/artifacts/api-server/tests/loyalty-concurrency.fixture.ts @chrlazarides
+/artifacts/globipos-terminal/tests/browser-bill-queue* @chrlazarides
+/artifacts/globipos-terminal/tests/browser-sync-scale.test.mjs @chrlazarides
