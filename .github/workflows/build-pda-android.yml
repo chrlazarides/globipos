@@ -1,0 +1,79 @@
+name: Build PDA Android test installer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'pda-native/**'
+      - '.github/workflows/build-pda-android.yml'
+  push:
+    branches: ['pda/android-tauri']
+    paths:
+      - 'pda-native/**'
+      - '.github/workflows/build-pda-android.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pda-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: PDA Android APK (test only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check PDA isolation
+        run: node --test pda-native/tests/config.test.mjs
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: pda-native/src-tauri -> target
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: platform-tools
+      - name: Install Android NDK and pinned Tauri CLI
+        run: |
+          sdkmanager "ndk;27.0.12077973"
+          cargo install tauri-cli --version 2.11.0 --locked
+      - name: Initialize separate PDA Android project
+        working-directory: pda-native
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: |
+          cargo tauri android init --ci
+          cargo tauri icon ../pos-app/src-tauri/app-icon.png
+      - name: Build installable debug APK (no release signing or publication)
+        working-directory: pda-native
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+          cargo tauri android build --debug --apk
+          git diff --exit-code -- src-tauri/Cargo.lock
+      - name: Keep APK and build identity for review
+        run: |
+          mkdir -p pda-native/build-report
+          printf 'commit=%s\napp=com.globipos.pda\nversion=0.1.0\ntype=debug-test-only\ndeployment=https://globipos.shop/pda/\n' "$GITHUB_SHA" > pda-native/build-report/build.txt
+          find pda-native/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -exec sha256sum {} \; > pda-native/build-report/SHA256SUMS
+          test -s pda-native/build-report/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: globipos-pda-android-test-${{ github.sha }}
+          path: |
+            pda-native/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            pda-native/build-report/
+          if-no-files-found: error
+          retention-days: 14
