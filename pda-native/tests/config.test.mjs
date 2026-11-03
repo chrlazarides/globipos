@@ -29,6 +29,7 @@ test("PDA release does not share the POS updater or signing configuration", () =
   const workflow = readFileSync(new URL("../.github/workflows/build-pda-android.yml", root), "utf8");
   assert.match(workflow, /permissions:\s*\n\s*contents: read/);
   assert.match(workflow, /--debug --apk/);
+  assert.match(workflow, /cargo metadata --manifest-path src-tauri\/Cargo\.toml --locked/);
   assert.doesNotMatch(workflow, /gh release|secrets\.ANDROID_|TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(workflow, /if-no-files-found: error/);
 });

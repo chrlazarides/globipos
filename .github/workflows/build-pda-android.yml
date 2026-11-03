@@ -60,7 +60,7 @@ jobs:
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: |
-          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+          cargo metadata --manifest-path src-tauri/Cargo.toml --locked --no-deps --format-version 1 > /dev/null
           cargo tauri android build --debug --apk
           git diff --exit-code -- src-tauri/Cargo.lock
       - name: Keep APK and build identity for review
