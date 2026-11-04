@@ -33,3 +33,12 @@ test("PDA release does not share the POS updater or signing configuration", () =
   assert.doesNotMatch(workflow, /gh release|secrets\.ANDROID_|TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(workflow, /if-no-files-found: error/);
 });
+
+test("PDA manifest and locked Tauri packages use compatible pinned versions", () => {
+  const manifest = readFileSync(new URL("src-tauri/Cargo.toml", root), "utf8");
+  const lock = readFileSync(new URL("src-tauri/Cargo.lock", root), "utf8");
+  for (const [name, version] of [["tauri", "2.12.5"], ["tauri-build", "2.7.4"]]) {
+    assert.ok(manifest.includes(`${name} = { version = "=${version}"`), `${name} must be pinned`);
+    assert.ok(lock.includes(`name = "${name}"\nversion = "${version}"`), `${name} lock must match manifest`);
+  }
+});
